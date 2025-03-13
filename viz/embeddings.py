@@ -27,7 +27,7 @@ def load_embeddings(n_subjects, time_segment):
     for subject, embed in tqdm(embeddings.items()):
         for time_segment_id, time_segment_embedding in embed.items():
             # load only 20points for each subject:
-            if time_segment_id > 20:
+            if time_segment_id > 10:
                 break
             embeddings_array.append(time_segment_embedding['embedding'][0])
             subjetcs_array.append(subject)
