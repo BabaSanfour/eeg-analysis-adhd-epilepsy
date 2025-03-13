@@ -22,3 +22,5 @@ This repository contains scripts and data for comparing EEG signals between psyc
 - Incorporate additional features.
 - Conduct further experiments with the reve_model to diagnose and resolve issues (Test the reve_model on sleep and eyes open/closed EEG data; Fine tune the model on the data?).
 - Develop an automated analysis workflow that tests different conditions (e.g., with/without specific factors like ADHD, Epilepsy, TSA), considers age groups, and analyzes different medication types. This may include generating selections via a JSON configuration file.
+- Normalize the data before feeding it to REVE!
+- Test finetuning strategies (REVE)!
