@@ -50,7 +50,7 @@ def process_subject(raw: mne.io.BaseRaw) -> mne.io.BaseRaw:
     channels_to_drop = [ch for ch in raw.ch_names if ch not in sensors_to_keep]
     if channels_to_drop:
         raw.drop_channels(channels_to_drop)
-
+    raw.set_eeg_reference("average")
     raw.filter(0.5, 99.5, verbose=False)
     montage = mne.channels.make_standard_montage("standard_1020")
     raw.set_montage(montage)
