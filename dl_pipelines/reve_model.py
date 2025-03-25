@@ -33,13 +33,12 @@ def segment_and_process(eeg_path, segment_duration=60):
 
     # Limit processing to 20 minutes of data
     selected_duration = 20 * 60  
-    total_duration = raw.times[-1]
     n_segments = int(selected_duration / segment_duration)
     embeddings = {}
 
     raw_data = raw.get_data()
-    # z-score normalization
-    raw_data = (raw_data - raw_data.mean(axis=1, keepdims=True)) / raw_data.std(axis=1, keepdims=True)
+
+    raw_data = (raw_data - raw_data.mean(axis=0, keepdims=True)) / raw_data.std(axis=0, keepdims=True)
     n_samples = raw_data.shape[1]
     n_timepoints = segment_duration * 200
     n_segments = n_samples // n_timepoints
@@ -89,7 +88,6 @@ def parse_args():
 
 def process_subject(subject_id, segment_duration):
     subject = f"sub-{subject_id}"
-    embedding_path = os.path.join(results_dir, "embeddings", f"embeddings_{subject_id}_{segment_duration}.pkl")
 
     bids_path = BIDSPath(
         root=derivatives_dir,
