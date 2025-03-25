@@ -38,6 +38,8 @@ def segment_and_process(eeg_path, segment_duration=60):
     embeddings = {}
 
     raw_data = raw.get_data()
+    # z-score normalization
+    raw_data = (raw_data - raw_data.mean(axis=1, keepdims=True)) / raw_data.std(axis=1, keepdims=True)
     n_samples = raw_data.shape[1]
     n_timepoints = segment_duration * 200
     n_segments = n_samples // n_timepoints
