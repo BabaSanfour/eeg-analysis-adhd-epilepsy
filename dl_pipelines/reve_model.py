@@ -68,8 +68,7 @@ def save_embeddings(embeddings, subject_id, segment_duration):
     Save the embeddings for a single subject.
     """
     output_dir = os.path.join(results_dir, "embeddings")
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_file = output_dir / f"embeddings_{subject_id}_{segment_duration}.pkl"
+    output_file = os.path.join(output_dir, f"embeddings_{subject_id}_{segment_duration}.pkl")
     try:
         with open(output_file, "wb") as f:
             pickle.dump(embeddings, f)
@@ -88,6 +87,7 @@ def parse_args():
 
 def process_subject(subject_id, segment_duration):
     subject = f"sub-{subject_id}"
+    embedding_path = os.path.join(results_dir, "embeddings", f"embeddings_{subject_id}_{segment_duration}.pkl")
 
     bids_path = BIDSPath(
         root=derivatives_dir,
