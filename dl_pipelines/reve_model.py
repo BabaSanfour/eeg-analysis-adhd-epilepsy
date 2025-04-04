@@ -6,11 +6,13 @@ import logging
 
 import mne
 import torch
+import torch
 from mne_bids import BIDSPath
 from goofi.data import to_data
 from goofi.nodes.analysis.reveeeg import ReveEEG
 
 import sys
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from utils.config import derivatives_dir, results_dir
 
@@ -43,6 +45,7 @@ def segment_and_process(eeg_path, segment_duration=60):
     n_timepoints = segment_duration * 200
     n_segments = n_samples // n_timepoints
     node = ReveEEG.create_standalone()
+    node.params.reve.device.value = "cuda" if torch.cuda.is_available() else "cpu"
     node.params.reve.device.value = "cuda" if torch.cuda.is_available() else "cpu"
     node.setup()
     for seg in range(n_segments):
