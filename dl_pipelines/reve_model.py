@@ -109,8 +109,6 @@ def process_subject(subject_id, segment_duration):
         logging.info(f"Processed {subject} in {time.time() - start_time:.2f} seconds")
     else:
         logging.error(f"Error processing {subject}")
-    end_time = time.time()
-    logging.info(f"Total time for {subject}: {time.strftime('%H:%M:%S', time.gmtime(end_time - start_time))}")
 
 def main():
     args = parse_args()
