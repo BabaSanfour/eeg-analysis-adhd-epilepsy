@@ -21,7 +21,7 @@ logging.basicConfig(
 )
 
 
-def segment_and_process(eeg_path, segment_duration=60):
+def segment_and_process(eeg_path, segment_duration=60, data_length=20):
     """
     Segment and process the EEG data to obtain embeddings.
     """
@@ -31,8 +31,8 @@ def segment_and_process(eeg_path, segment_duration=60):
         logging.error(f"Error reading file {eeg_path}: {e}")
         return None
 
-    # Limit processing to 20 minutes of data
-    selected_duration = 20 * 60  
+    # Limit processing to 30 minutes of data
+    selected_duration = data_length * 60  
     n_segments = int(selected_duration / segment_duration)
     embeddings = {}
 

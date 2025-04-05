@@ -1,4 +1,5 @@
 import os 
+import numpy as np
 
 user = os.path.expanduser('~')
 # Path to the directory where the data is stored
