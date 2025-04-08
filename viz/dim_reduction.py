@@ -181,7 +181,7 @@ def main():
     reduction_methods =  ["umap", "pca", "tsne"]
 
     # Apply each reduction and save results
-    for method, in reduction_methods:
+    for method in reduction_methods:
         logging.info(f"Applying {method.upper()} dimensionality reduction...")
         reduced_embedding = dimensionality_reduction(embeddings, method=method)
         logging.info(f"{method.upper()} reduced shape: {reduced_embedding.shape}")
