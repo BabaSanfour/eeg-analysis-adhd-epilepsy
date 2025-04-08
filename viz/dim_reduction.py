@@ -7,6 +7,7 @@ import sys
 import argparse
 import logging
 from pathlib import Path
+from typing import Tuple
 
 import numpy as np
 
@@ -21,12 +22,16 @@ from viz.embeddings import load_embeddings, reshape_embeddings
 from utils.config import results_dir
 
 
-def load_and_reshape_embeddings(num_embeddings=253, time_segment=10):
+def load_and_reshape_embeddings(n_subjects: int,
+                    segment_duration: int = 10,
+                    z_score: bool = True,
+                    z_score_axis: int = 1,
+                    n_time_segments: int = 100) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Loads embeddings along with subjects and time segments,
     and reshapes the embeddings.
     """
-    embeddings, subjects, time_segments = load_embeddings(num_embeddings, time_segment)
+    embeddings, subjects, time_segments = load_embeddings(n_subjects, segment_duration, z_score, z_score_axis, n_time_segments)
     embeddings = reshape_embeddings(embeddings)
     return embeddings, subjects, time_segments
 
@@ -64,12 +69,12 @@ def save_cleaned_data(embeddings, subjects, time_segments, results_dir=results_d
     logging.info(f"Cleaned data saved to {save_path}")
 
 
-def umap_reduction(embeddings, n_components=2, n_neighbors=15, min_dist=0.1, metric='euclidean'):
+def umap_reduction(embeddings, n_components=2):
     """
     Applies UMAP dimensionality reduction to the embeddings.
     """
     import umap
-    reducer = umap.UMAP(n_components=n_components, n_neighbors=n_neighbors, min_dist=min_dist, metric=metric)
+    reducer = umap.UMAP(n_components=n_components)
     return reducer.fit_transform(embeddings)
 
 
@@ -82,7 +87,7 @@ def pca_reduction(embeddings, n_components=2):
     return pca.fit_transform(embeddings)
 
 
-def tsne_reduction(embeddings, n_components=2, perplexity=30):
+def tsne_reduction(embeddings, n_components=2):
     """
     Applies t-SNE dimensionality reduction to the embeddings.
     """
@@ -136,18 +141,14 @@ def main():
                         default="umap", help="Dimensionality reduction method")
     parser.add_argument("--n_components", type=int, default=2,
                         help="Number of components for reduction")
-    parser.add_argument("--n_neighbors", type=int, default=15,
-                        help="Number of neighbors for UMAP")
-    parser.add_argument("--min_dist", type=float, default=0.1,
-                        help="Minimum distance for UMAP")
-    parser.add_argument("--perplexity", type=float, default=30,
-                        help="Perplexity for t-SNE")
     args = parser.parse_args()
-
-    # Update data loading and reduction with parsed arguments
+    n_time_segments = 20 * 60 // args.segment_duration
     embeddings, subjects, time_segments = load_and_reshape_embeddings(
-        num_embeddings=args.num_embeddings,
-        time_segment=args.time_segment
+        n_subjects = args.n_subjects,
+        segment_duration = args.segment_duration,
+        z_score = args.z_score,
+        z_score_axis = args.z_score_axis,
+        n_time_segments = n_time_segments
     )
     logging.info(f"Initial shapes: {embeddings.shape}, {subjects.shape}, {time_segments.shape}")
 
@@ -167,7 +168,6 @@ def main():
     logging.info(f"{args.method.upper()} reduced shape: {reduced_embedding.shape}")
     save_reduced_data(reduced_embedding, subjects, time_segments, method=args.method)
     # use max 20 minutes of data
-    n_time_segments = 20 * 60 // args.segment_duration
     embeddings, subjects, time_segments = load_and_reshape_embeddings(
         n_subjects=args.n_subjects, 
         segment_duration=args.segment_duration, 
