@@ -161,13 +161,9 @@ def main():
         embeddings,
         method=args.method,
         n_components=args.n_components,
-        n_neighbors=args.n_neighbors,
-        min_dist=args.min_dist,
-        perplexity=args.perplexity
     )
     logging.info(f"{args.method.upper()} reduced shape: {reduced_embedding.shape}")
     save_reduced_data(reduced_embedding, subjects, time_segments, method=args.method)
-    # use max 20 minutes of data
     embeddings, subjects, time_segments = load_and_reshape_embeddings(
         n_subjects=args.n_subjects, 
         segment_duration=args.segment_duration, 
@@ -186,6 +182,7 @@ def main():
 
     # Apply each reduction and save results
     for method, in reduction_methods:
+        logging.info(f"Applying {method.upper()} dimensionality reduction...")
         reduced_embedding = dimensionality_reduction(embeddings, method=method)
         logging.info(f"{method.upper()} reduced shape: {reduced_embedding.shape}")
         save_reduced_data(reduced_embedding, subjects, time_segments, method=method)
