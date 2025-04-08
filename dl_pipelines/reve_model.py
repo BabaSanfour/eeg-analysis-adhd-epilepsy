@@ -89,31 +89,50 @@ def segment_and_process(eeg_path: str, z_score: bool = True, z_score_axis: int =
     return embeddings
 
 
-def save_embeddings(embeddings, subject_id, segment_duration):
+def save_embeddings(embeddings: dict, subject_id: str, segment_duration: int, z_score: bool, z_score_axis):
     """
-    Save the embeddings for a single subject.
+    Save the computed embeddings for a subject to a pickle file.
     """
     output_dir = os.path.join(results_dir, "embeddings")
-    output_file = os.path.join(output_dir, f"embeddings_{subject_id}_{segment_duration}.pkl")
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(
+        output_dir,
+        f"embeddings_sub-{subject_id}_dur-{segment_duration}s_zscore-{z_score}_axis-{z_score_axis}.pkl"
+    )
+    
     try:
         with open(output_file, "wb") as f:
             pickle.dump(embeddings, f)
         logging.info(f"Embeddings saved to {output_file}")
     except Exception as e:
-        logging.error(f"Could not save embeddings for {subject_id}: {e}")
+        logging.error(f"Could not save embeddings for subject {subject_id}: {e}")
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Segment and process EEG data.")
-    parser.add_argument("--n_subjects", type=int, default=15, help="Number of subjects to process.")
-    parser.add_argument("--start_subject", type=int, default=1, help="Subject ID to start processing.")
-    parser.add_argument("--segment_duration", type=int, default=60, help="Duration of each segment in seconds.")
+def parse_args() -> argparse.Namespace:
+    """
+    Parse command-line arguments for processing the EEG data.
+    """
+    parser = argparse.ArgumentParser(
+        description="Segment and process EEG data to generate embeddings."
+    )
+    parser.add_argument("--n_subjects", type=int, default=15, 
+                        help="Number of subjects to process (default: 15)")
+    parser.add_argument("--start_subject", type=int, default=1, 
+                        help="Subject ID to start processing from (default: 1)")
+    parser.add_argument("--segment_duration", type=int, default=60, 
+                        help="Duration (in seconds) of each segment to process (default: 60)")
+    parser.add_argument("--z_score", type=bool, default=True,
+                        help="Whether to perform z-score normalization on the data (default: True)")
+    parser.add_argument("--z_score_axis", type=int, default=1,
+                        help="Axis along which to calculate z-score (default: 1)")
     return parser.parse_args()
 
 
-def process_subject(subject_id, segment_duration):
+def process_subject(subject_id: int, segment_duration: int, z_score: bool = True, z_score_axis: int = 1) -> None:
+    """
+    Process EEG data for a single subject: segment the data, compute embeddings, and save them.
+    """
     subject = f"sub-{subject_id}"
-    embedding_path = os.path.join(results_dir, "embeddings", f"embeddings_{subject_id}_{segment_duration}.pkl")
 
     bids_path = BIDSPath(
         root=derivatives_dir,
@@ -129,16 +148,25 @@ def process_subject(subject_id, segment_duration):
 
     logging.info(f"Processing {subject} using file {bids_path.fpath}")
     start_time = time.time()
-    embeddings = segment_and_process(bids_path.fpath, True, segment_duration)
-    if embeddings is not None:
+    
+    embeddings = segment_and_process(bids_path.fpath, z_score=z_score, z_score_axis=z_score_axis, segment_duration=segment_duration)
+    
+    # Check if embeddings were successfully computed.
+    if embeddings:
         save_embeddings(embeddings, subject, segment_duration)
         logging.info(f"Processed {subject} in {time.time() - start_time:.2f} seconds")
     else:
-        logging.error(f"Error processing {subject}")
+        logging.error(f"Failed to compute embeddings for {subject}")
 
-def main():
+
+def main() -> None:
+    """
+    Main function to parse arguments and process a batch of subjects.
+    """
     args = parse_args()
-    logging.info(f"Processing {args.n_subjects} subjects starting from subject {args.start_subject}")
+    logging.info(
+        f"Starting processing for {args.n_subjects} subjects beginning with subject {args.start_subject}"
+    )
     for subject_id in range(args.start_subject, args.start_subject + args.n_subjects):
         process_subject(subject_id, args.segment_duration)
 
