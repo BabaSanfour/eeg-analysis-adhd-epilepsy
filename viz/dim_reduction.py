@@ -22,11 +22,16 @@ from viz.embeddings import load_embeddings, reshape_embeddings
 from utils.config import results_dir
 
 
+def check_exists(filepath: str) -> bool:
+    """Helper to check if a file already exists."""
+    return os.path.isfile(filepath)
+
+
 def load_and_reshape_embeddings(n_subjects: int,
-                    segment_duration: int = 10,
-                    z_score: bool = True,
-                    z_score_axis: int = 1,
-                    n_time_segments: int = 100) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+                                segment_duration: int = 10,
+                                z_score: bool = True,
+                                z_score_axis: int = 1,
+                                n_time_segments: int = 100) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Loads embeddings along with subjects and time segments,
     and reshapes the embeddings.
@@ -40,7 +45,6 @@ def clean_nan_data(embeddings, subjects, time_segments):
     """
     Removes rows from data arrays that contain NaN values.
     """
-    # Find indices of rows containing any NaN
     nan_indices = np.unique(np.where(np.isnan(embeddings))[0])
     if nan_indices.size > 0:
         logging.info(f"NaN values found in row indices: {nan_indices}. Cleaning data...")
@@ -53,7 +57,7 @@ def clean_nan_data(embeddings, subjects, time_segments):
     return embeddings, subjects, time_segments
 
 
-def save_cleaned_data(embeddings, subjects, time_segments, results_dir=results_dir, segment_duration=10, z_score=True, z_score_axis=1):
+def save_cleaned_data(embeddings, subjects, time_segments, segment_duration=10, z_score=True, z_score_axis=1):
     """
     Saves the cleaned arrays as a compressed .npz file.
     """
@@ -67,6 +71,7 @@ def save_cleaned_data(embeddings, subjects, time_segments, results_dir=results_d
         time_segments_array=time_segments,
     )
     logging.info(f"Cleaned data saved to {save_path}")
+    return save_path
 
 
 def umap_reduction(embeddings, n_components=2):
@@ -92,8 +97,9 @@ def tsne_reduction(embeddings, n_components=2):
     Applies t-SNE dimensionality reduction to the embeddings.
     """
     from sklearn.manifold import TSNE
-    tsne = TSNE(n_components=n_components, perplexity=perplexity)
+    tsne = TSNE(n_components=n_components)
     return tsne.fit_transform(embeddings)
+
 
 def dimensionality_reduction(embeddings, method='umap', **kwargs):
     """
@@ -111,7 +117,7 @@ def dimensionality_reduction(embeddings, method='umap', **kwargs):
     return func(embeddings, **kwargs)
 
 
-def save_reduced_data(embedding, subjects, time_segments, method, results_dir=results_dir, segment_duration=10, z_score=True, z_score_axis=1):
+def save_reduced_data(embedding, subjects, time_segments, method, segment_duration=10, z_score=True, z_score_axis=1):
     """
     Saves the reduced data as a compressed .npz file.
     """
@@ -125,6 +131,7 @@ def save_reduced_data(embedding, subjects, time_segments, method, results_dir=re
         time_segments=time_segments,
     )
     logging.info(f"{method.upper()} reduced data saved to {save_path}")
+    return save_path
 
 
 def main():
@@ -137,55 +144,59 @@ def main():
                         help="Whether the data was z-scored")
     parser.add_argument("--z_score_axis", type=int, default=1,
                         help="Axis to which we applied z-score normalization")
-    parser.add_argument("--method", type=str, choices=["umap", "pca", "tsne"],
-                        default="umap", help="Dimensionality reduction method")
     parser.add_argument("--n_components", type=int, default=2,
                         help="Number of components for reduction")
     args = parser.parse_args()
+
     n_time_segments = 20 * 60 // args.segment_duration
-    embeddings, subjects, time_segments = load_and_reshape_embeddings(
-        n_subjects = args.n_subjects,
-        segment_duration = args.segment_duration,
-        z_score = args.z_score,
-        z_score_axis = args.z_score_axis,
-        n_time_segments = n_time_segments
+
+    # Cleaned data file path
+    cleaned_file = os.path.join(
+        results_dir, f"embeddings_cleaned_dur-{args.segment_duration}s_zscore-{args.z_score}_axis-{args.z_score_axis}.npz"
     )
-    logging.info(f"Initial shapes: {embeddings.shape}, {subjects.shape}, {time_segments.shape}")
 
-    embeddings, subjects, time_segments = clean_nan_data(embeddings, subjects, time_segments)
-    logging.info(f"Cleaned shapes: {embeddings.shape}, {subjects.shape}, {time_segments.shape}")
+    # Load or compute cleaned data
+    if check_exists(cleaned_file):
+        logging.info(f"Cleaned data already computed at {cleaned_file}. Loading...")
+        data = np.load(cleaned_file)
+        embeddings = data["embeddings_array"]
+        subjects = data["subjects_array"]
+        time_segments = data["time_segments_array"]
+        logging.info(f"Loaded cleaned shapes: {embeddings.shape}, {subjects.shape}, {time_segments.shape}")
+    else:
+        logging.info("Cleaned data not found, loading raw embeddings...")
+        embeddings, subjects, time_segments = load_and_reshape_embeddings(
+            n_subjects=args.n_subjects,
+            segment_duration=args.segment_duration,
+            z_score=args.z_score,
+            z_score_axis=args.z_score_axis,
+            n_time_segments=n_time_segments
+        )
+        logging.info(f"Initial shapes: {embeddings.shape}, {subjects.shape}, {time_segments.shape}")
+        embeddings, subjects, time_segments = clean_nan_data(embeddings, subjects, time_segments)
+        logging.info(f"Cleaned shapes: {embeddings.shape}, {subjects.shape}, {time_segments.shape}")
+        save_cleaned_data(embeddings, subjects, time_segments, segment_duration=args.segment_duration,
+                          z_score=args.z_score, z_score_axis=args.z_score_axis)
 
-    save_cleaned_data(embeddings, subjects, time_segments)
+    reduction_methods = ["umap", "pca", "tsne"]
 
-    reduced_embedding = dimensionality_reduction(
-        embeddings,
-        method=args.method,
-        n_components=args.n_components,
-    )
-    logging.info(f"{args.method.upper()} reduced shape: {reduced_embedding.shape}")
-    save_reduced_data(reduced_embedding, subjects, time_segments, method=args.method)
-    embeddings, subjects, time_segments = load_and_reshape_embeddings(
-        n_subjects=args.n_subjects, 
-        segment_duration=args.segment_duration, 
-        z_score=args.z_score, 
-        z_score_axis=args.z_score_axis, 
-        n_time_segments=n_time_segments
-    )
-    logging.info(f"Initial shapes: {embeddings.shape}, {subjects.shape}, {time_segments.shape}")
-
-    embeddings, subjects, time_segments = clean_nan_data(embeddings, subjects, time_segments)
-    logging.info(f"Cleaned shapes: {embeddings.shape}, {subjects.shape}, {time_segments.shape}")
-
-    save_cleaned_data(embeddings, subjects, time_segments)
-
-    reduction_methods =  ["umap", "pca", "tsne"]
-
-    # Apply each reduction and save results
     for method in reduction_methods:
-        logging.info(f"Applying {method.upper()} dimensionality reduction...")
-        reduced_embedding = dimensionality_reduction(embeddings, method=method)
-        logging.info(f"{method.upper()} reduced shape: {reduced_embedding.shape}")
-        save_reduced_data(reduced_embedding, subjects, time_segments, method=method)
+        reduced_file = os.path.join(
+            results_dir, f"embeddings_{method}_reduced_dur-{args.segment_duration}s_zscore-{args.z_score}_axis-{args.z_score_axis}.npz"
+        )
+        if check_exists(reduced_file):
+            logging.info(f"{method.upper()} reduced data already computed at {reduced_file}. Skipping...")
+        else:
+            logging.info(f"Applying {method.upper()} dimensionality reduction...")
+            reduced_embedding = dimensionality_reduction(
+                embeddings,
+                method=method,
+                n_components=args.n_components
+            )
+            logging.info(f"{method.upper()} reduced shape: {reduced_embedding.shape}")
+            save_reduced_data(reduced_embedding, subjects, time_segments, method=method,
+                              segment_duration=args.segment_duration, z_score=args.z_score, z_score_axis=args.z_score_axis)
+
 
 if __name__ == "__main__":
     main()
