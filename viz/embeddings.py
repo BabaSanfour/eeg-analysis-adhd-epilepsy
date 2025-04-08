@@ -15,7 +15,9 @@ def load_embeddings(n_subjects, time_segment):
     """
     embeddings = {}
     for subject in tqdm(range(1, n_subjects+1)):
-        embeddings_file = os.path.join(embeddings_dir, f'embeddings_test_sub-{subject}_{time_segment}.pkl')
+        if subject == 133:
+            continue
+        embeddings_file = os.path.join(embeddings_dir, f'embeddings_sub-{subject}_{time_segment}.pkl')
         try:
             with open(embeddings_file, 'rb') as f:
                 embeddings[subject] = pickle.load(f)
@@ -27,7 +29,7 @@ def load_embeddings(n_subjects, time_segment):
     for subject, embed in tqdm(embeddings.items()):
         for time_segment_id, time_segment_embedding in embed.items():
             # load only 20points for each subject:
-            if time_segment_id > 10:
+            if time_segment_id > 100:
                 break
             embeddings_array.append(time_segment_embedding['embedding'][0])
             subjetcs_array.append(subject)
