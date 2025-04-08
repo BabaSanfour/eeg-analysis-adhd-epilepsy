@@ -23,13 +23,14 @@ logging.basicConfig(
 )
 
 
-def segment_and_process(eeg_path: str, z_score: bool = True, segment_duration: int = 60) -> dict:
+def segment_and_process(eeg_path: str, z_score: bool = True, z_score_axis: int = 1, segment_duration: int = 60) -> dict:
     """
     Segments and processes EEG data to generate embeddings for each segment.
 
     Parameters:
         eeg_path (str): Path to the EEG BrainVision file.
         z_score (bool, optional): Whether to perform z-score normalization on the data. Defaults to True.
+        z_score_axis (int, optional): Axis along which to calculate z-score. Defaults to 1 (over channels)
         segment_duration (int, optional): Duration (in seconds) of each segment to process. Defaults to 60.
         data_length (int, optional): Unused parameter reserved for future use. Defaults to 20.
 
@@ -49,9 +50,9 @@ def segment_and_process(eeg_path: str, z_score: bool = True, segment_duration: i
 
     # Normalize the data if z_score is True
     if z_score:
-        # Calculate per-channel mean and std over all time points
-        channel_means = raw_data.mean(axis=1, keepdims=True)
-        channel_stds = raw_data.std(axis=1, keepdims=True)
+        # Calculate mean and std over the specified axis (0 or 1)
+        channel_means = raw_data.mean(axis=z_score_axis, keepdims=True)
+        channel_stds = raw_data.std(axis=z_score_axis, keepdims=True)
         # Perform z-score normalization and clip values exceeding 15 standard deviations
         raw_data = np.clip((raw_data - channel_means) / channel_stds, -15, 15)
 
