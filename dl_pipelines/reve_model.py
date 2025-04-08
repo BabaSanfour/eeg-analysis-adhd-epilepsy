@@ -13,6 +13,8 @@ from goofi.nodes.analysis.reveeeg import ReveEEG
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from utils.config import derivatives_dir, results_dir
+import numpy as np
+from tqdm import tqdm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,44 +23,67 @@ logging.basicConfig(
 )
 
 
-def segment_and_process(eeg_path, segment_duration=60, data_length=20):
+def segment_and_process(eeg_path: str, z_score: bool = True, segment_duration: int = 60) -> dict:
     """
-    Segment and process the EEG data to obtain embeddings.
+    Segments and processes EEG data to generate embeddings for each segment.
+
+    Parameters:
+        eeg_path (str): Path to the EEG BrainVision file.
+        z_score (bool, optional): Whether to perform z-score normalization on the data. Defaults to True.
+        segment_duration (int, optional): Duration (in seconds) of each segment to process. Defaults to 60.
+        data_length (int, optional): Unused parameter reserved for future use. Defaults to 20.
+
+    Returns:
+        dict: A dictionary where keys are segment indices (int) and values are the corresponding embeddings.
+              Returns an empty dict if no segments are processed or if an error occurs.
     """
     try:
         raw = mne.io.read_raw_brainvision(eeg_path, preload=True)
     except Exception as e:
         logging.error(f"Error reading file {eeg_path}: {e}")
-        return None
+        return {}
 
-    # Limit processing to 30 minutes of data
-    selected_duration = data_length * 60  
-    n_segments = int(selected_duration / segment_duration)
-    embeddings = {}
-
+    # Retrieve EEG data and sampling frequency
     raw_data = raw.get_data()
+    sfreq = raw.info["sfreq"]
 
-    raw_data = (raw_data - raw_data.mean(axis=0, keepdims=True)) / raw_data.std(axis=0, keepdims=True)
+    # Normalize the data if z_score is True
+    if z_score:
+        # Calculate per-channel mean and std over all time points
+        channel_means = raw_data.mean(axis=1, keepdims=True)
+        channel_stds = raw_data.std(axis=1, keepdims=True)
+        # Perform z-score normalization and clip values exceeding 15 standard deviations
+        raw_data = np.clip((raw_data - channel_means) / channel_stds, -15, 15)
+
     n_samples = raw_data.shape[1]
-    n_timepoints = segment_duration * 200
-    n_segments = n_samples // n_timepoints
+    n_timepoints_per_segment = int(segment_duration * sfreq)
+    n_segments = n_samples // n_timepoints_per_segment
+
+    if n_segments == 0:
+        logging.warning(f"No segments extracted from file {eeg_path} with segment_duration {segment_duration} seconds.")
+        return {}
+
     node = ReveEEG.create_standalone()
     node.params.reve.device.value = "cuda" if torch.cuda.is_available() else "cpu"
     node.setup()
-    for seg in range(n_segments):
-        tmin = seg * n_timepoints
-        tmax = (seg + 1) * n_timepoints
+
+    embeddings = {}
+    for seg in tqdm(range(n_segments), desc="Processing segments"):
+        tmin = seg * n_timepoints_per_segment
+        tmax = (seg + 1) * n_timepoints_per_segment
         segment_data = raw_data[:, tmin:tmax]
-        embedding = node.process(
-            to_data(
-                segment_data,
-                {
-                    "sfreq": raw.info["sfreq"],
-                    "channels": {"dim0": raw.ch_names},
-                },
-            )
+        data_container = to_data(
+            segment_data,
+            {
+                "sfreq": sfreq,
+                "channels": {"dim0": raw.ch_names},
+            },
         )
-        embeddings[seg] = embedding
+        try:
+            result = node.process(data_container)
+            embeddings[seg] = result['embedding'][0]
+        except Exception as e:
+            logging.error(f"Error processing segment {seg} in file {eeg_path}: {e}")
 
     return embeddings
 
@@ -103,7 +128,7 @@ def process_subject(subject_id, segment_duration):
 
     logging.info(f"Processing {subject} using file {bids_path.fpath}")
     start_time = time.time()
-    embeddings = segment_and_process(bids_path.fpath, segment_duration)
+    embeddings = segment_and_process(bids_path.fpath, True, segment_duration)
     if embeddings is not None:
         save_embeddings(embeddings, subject, segment_duration)
         logging.info(f"Processed {subject} in {time.time() - start_time:.2f} seconds")
