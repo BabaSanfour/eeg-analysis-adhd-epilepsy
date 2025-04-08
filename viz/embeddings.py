@@ -1,3 +1,7 @@
+#!/usr/bin/env python3
+"""
+utils for loading and reshaping EEG embeddings.
+"""
 import pickle
 import logging
 from pathlib import Path
@@ -39,11 +43,8 @@ def load_embeddings(n_subjects: int,
     for subject_id in tqdm(range(1, n_subjects + 1), desc="Loading subjects"):
         file_name = f'embeddings_sub-{subject_id}_dur-{segment_duration}s_zscore-{z_score}_axis-{z_score_axis}.pkl'
         embeddings_file = os.path.join(embeddings_dir, file_name)
-        if not embeddings_file.exists():
-            logger.info(f"Embeddings file not found for subject {subject_id}")
-            continue
         try:
-            with embeddings_file.open('rb') as f:
+            with open(embeddings_file, 'rb') as f:
                 embeddings[subject_id] = pickle.load(f)
         except Exception as e:
             logger.error(f"Error loading subject {subject_id}: {e}")
