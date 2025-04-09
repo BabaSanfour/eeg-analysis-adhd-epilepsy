@@ -47,7 +47,7 @@ def segment_and_process(eeg_path: str, z_score: bool = True, z_score_axis: int =
     # Retrieve EEG data and sampling frequency
     raw_data = raw.get_data()
     sfreq = raw.info["sfreq"]
-
+    # TODO: move normalization to preprocessing and change loading / saving ! 
     # Normalize the data if z_score is True
     if z_score:
         # Calculate mean and std over the specified axis (0 or 1)
