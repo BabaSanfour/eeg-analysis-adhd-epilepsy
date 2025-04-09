@@ -97,7 +97,7 @@ def save_embeddings(embeddings: dict, subject_id: str, segment_duration: int, z_
     os.makedirs(output_dir, exist_ok=True)
     output_file = os.path.join(
         output_dir,
-        f"embeddings_sub-{subject_id}_dur-{segment_duration}s_zscore-{z_score}_axis-{z_score_axis}.pkl"
+        f"embeddings_{subject_id}_dur-{segment_duration}s_zscore-{z_score}_axis-{z_score_axis}.pkl"
     )
     
     try:
@@ -153,7 +153,7 @@ def process_subject(subject_id: int, segment_duration: int, z_score: bool = True
     
     # Check if embeddings were successfully computed.
     if embeddings:
-        save_embeddings(embeddings, subject, segment_duration)
+        save_embeddings(embeddings, subject, segment_duration, z_score, z_score_axis)
         logging.info(f"Processed {subject} in {time.time() - start_time:.2f} seconds")
     else:
         logging.error(f"Failed to compute embeddings for {subject}")
@@ -168,7 +168,7 @@ def main() -> None:
         f"Starting processing for {args.n_subjects} subjects beginning with subject {args.start_subject}"
     )
     for subject_id in range(args.start_subject, args.start_subject + args.n_subjects):
-        process_subject(subject_id, args.segment_duration)
+        process_subject(subject_id, args.segment_duration, args.z_score, args.z_score_axis)
 
 
 if __name__ == "__main__":
