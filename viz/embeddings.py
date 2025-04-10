@@ -57,7 +57,7 @@ def load_embeddings(n_subjects: int,
         for time_segment_id, time_segment_embedding in embed.items():
             if time_segment_id > n_time_segments:
                 break
-            embeddings_array.append(time_segment_embedding['embedding'][0])
+            embeddings_array.append(time_segment_embedding)
             subjects_array.append(subject)
             time_segments_array.append(time_segment_id)
 
