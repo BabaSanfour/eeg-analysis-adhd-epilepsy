@@ -238,6 +238,56 @@ def create_analysis_dataframe(df, analysis_type, include_potential=True):
                 count1, count2, label1, label2 = get_counts_by_med_analysis(
                     df, sex_key, age_key, diag_filters, analysis_type, include_potential
                 )
+                
+                sub_df = df.copy()
+                sub_df = sex_filters[sex_key](sub_df)
+                sub_df = age_filters[age_key](sub_df)
+                for diag in diagnosis_columns:
+                    sub_df = apply_diagnosis_filter(sub_df, diag, diag_filters.get(diag, 'combined'), include_potential)
+                
+                M_count = sub_df[sub_df['Sex'] == 'M'].shape[0]
+                F_count = sub_df[sub_df['Sex'] == 'F'].shape[0]
+                
+                overall_age_mean = sub_df['Age'].mean() if not sub_df.empty else np.nan
+                overall_age_std = sub_df['Age'].std() if not sub_df.empty else np.nan
+                
+                female_subset = sub_df[sub_df['Sex'] == 'F']
+                female_age_mean = female_subset['Age'].mean() if not female_subset.empty else np.nan
+                female_age_std = female_subset['Age'].std() if not female_subset.empty else np.nan
+
+                male_subset = sub_df[sub_df['Sex'] == 'M']
+                male_age_mean = male_subset['Age'].mean() if not male_subset.empty else np.nan
+                male_age_std = male_subset['Age'].std() if not male_subset.empty else np.nan
+
+                # Calculate age statistics for group1 and group2 separately.
+                # Recreate the splitting logic as per the analysis type.
+                if analysis_type == 'ctrl_vs_all':
+                    is_control = sub_df['Psychostimulant (y/n)'].apply(lambda x: pd.isna(x) or x == 0)
+                    group1_df = sub_df[is_control]
+                    group2_df = sub_df[~is_control]
+                elif analysis_type == 'med1_vs_med2':
+                    med_df = sub_df[sub_df['psychostimulant_category'].isin([1, 2])]
+                    group1_df = med_df[med_df['psychostimulant_category'] == 1]
+                    group2_df = med_df[med_df['psychostimulant_category'] == 2]
+                elif analysis_type == 'ctrl_vs_med1':
+                    sub_sub_df = sub_df[sub_df['psychostimulant_category'].isin([0, 1])]
+                    group1_df = sub_sub_df[sub_sub_df['psychostimulant_category'].apply(lambda x: pd.isna(x) or x == 0)]
+                    group2_df = sub_sub_df[sub_sub_df['psychostimulant_category'] == 1]
+                elif analysis_type == 'ctrl_vs_med2':
+                    sub_sub_df = sub_df[sub_df['psychostimulant_category'].isin([0, 2])]
+                    group1_df = sub_sub_df[sub_sub_df['psychostimulant_category'].apply(lambda x: pd.isna(x) or x == 0)]
+                    group2_df = sub_sub_df[sub_sub_df['psychostimulant_category'] == 2]
+                else:
+                    group1_df = pd.DataFrame()
+                    group2_df = pd.DataFrame()
+
+                # Compute age statistics for group1
+                age_mean_group1 = group1_df['Age'].mean() if not group1_df.empty else np.nan
+                age_std_group1  = group1_df['Age'].std()  if not group1_df.empty else np.nan
+                # Compute age statistics for group2
+                age_mean_group2 = group2_df['Age'].mean() if not group2_df.empty else np.nan
+                age_std_group2  = group2_df['Age'].std()  if not group2_df.empty else np.nan
+
                 results.append({
                     'med_analysis': analysis_type,
                     'sex': sex_key,
@@ -245,6 +295,18 @@ def create_analysis_dataframe(df, analysis_type, include_potential=True):
                     'TDAH_filter': diag_filters['TDAH'],
                     'Epilepsy_filter': diag_filters['Epilepsy'],
                     'TSA_filter': diag_filters['TSA'],
+                    'M_count': M_count,
+                    'F_count': F_count,
+                    'age_mean_overall': overall_age_mean,
+                    'age_std_overall': overall_age_std,
+                    'age_mean_female': female_age_mean,
+                    'age_std_female': female_age_std,
+                    'age_mean_male': male_age_mean,
+                    'age_std_male': male_age_std,
+                    'age_mean_group1': age_mean_group1,
+                    'age_std_group1': age_std_group1,
+                    'age_mean_group2': age_mean_group2,
+                    'age_std_group2': age_std_group2,
                     label1: count1,
                     label2: count2
                 })
@@ -271,7 +333,7 @@ def main():
     parser.add_argument(
         "--csv_file",
         type=str,
-        default=csv_dir,
+        default=os.path.join(csv_dir, "patients_controls_new.csv"),
         help="Name of the CSV file to process (located in the csv_dir)"
     )
     parser.add_argument(
