@@ -47,7 +47,7 @@ def load_csv_file(file_path):
     Returns:
         pd.DataFrame: Loaded DataFrame.
     """
-    df = pd.read_csv(file_path)
+    df = pd.read_csv(file_path, sep=";", encoding="utf-8", low_memory=False)
     report_lines = []
 
     base_name = os.path.basename(file_path)
@@ -82,7 +82,19 @@ def load_csv_file(file_path):
     # Log value counts for each column (excluding the first column)
     for column in df.columns[1:]:
         count_msg = f"Value counts for '{column}':\n{df[column].value_counts()}"
-        logging.info(count_msg)
+        # if column is Pt ID, return each Pt ID values that has more than 1 value counts only and their respective Study ID
+        if column == 'Pt ID':
+            pt_id_counts = df[column].value_counts()
+            pt_id_duplicates = pt_id_counts[pt_id_counts > 1]
+            if not pt_id_duplicates.empty:
+                pt_ids = df[df[column].isin(pt_id_duplicates.index)][['Pt ID', 'Study ID']]
+                pt_ids_mapped = pt_ids.groupby('Pt ID')['Study ID'].apply(list).to_dict()
+                logging.info(f"Pt IDs with duplicates:\n{pt_ids_mapped}")
+                report_lines.append(f"Pt IDs with duplicates:\n{pt_ids_mapped}")
+            else:
+                logging.info("No duplicate Pt IDs found.")
+        else:
+            logging.info(count_msg)
         report_lines.append(count_msg)
     
     # Generate PDF report of the logged information
@@ -245,8 +257,6 @@ def create_analysis_dataframe(df, analysis_type, include_potential=True):
                 for diag in diagnosis_columns:
                     sub_df = apply_diagnosis_filter(sub_df, diag, diag_filters.get(diag, 'combined'), include_potential)
                 
-                M_count = sub_df[sub_df['Sex'] == 'M'].shape[0]
-                F_count = sub_df[sub_df['Sex'] == 'F'].shape[0]
                 
                 overall_age_mean = sub_df['Age'].mean() if not sub_df.empty else np.nan
                 overall_age_std = sub_df['Age'].std() if not sub_df.empty else np.nan
@@ -280,6 +290,12 @@ def create_analysis_dataframe(df, analysis_type, include_potential=True):
                 else:
                     group1_df = pd.DataFrame()
                     group2_df = pd.DataFrame()
+                M_count_group1 = group1_df[group1_df['Sex'] == 'M'].shape[0] if not group1_df.empty else 0
+                F_count_group1 = group1_df[group1_df['Sex'] == 'F'].shape[0] if not group1_df.empty else 0
+                M_count_group2 = group2_df[group2_df['Sex'] == 'M'].shape[0] if not group2_df.empty else 0
+                F_count_group2 = group2_df[group2_df['Sex'] == 'F'].shape[0] if not group2_df.empty else 0
+                M_count = M_count_group1 + M_count_group2
+                F_count = F_count_group1 + F_count_group2
 
                 # Compute age statistics for group1
                 age_mean_group1 = group1_df['Age'].mean() if not group1_df.empty else np.nan

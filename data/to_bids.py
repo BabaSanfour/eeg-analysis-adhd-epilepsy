@@ -147,7 +147,7 @@ def main():
     mapping_df = pd.read_csv(mapping_file, header=None, names=["patient", "ID"], sep=';')
     
     subjects_file = os.path.join(data_dir, "csv", "subjects.csv")
-    subjects_df = pd.read_csv(subjects_file)
+    subjects_df = pd.read_csv(subjects_file, sep=";", encoding="utf-8", low_memory=False)
     subjects_df.rename(columns={"Study ID": "ID"}, inplace=True)
     
     for subject_id in subjects_ids:
