@@ -17,6 +17,8 @@ from mne_bids import write_raw_bids, BIDSPath
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from utils.config import data_dir, bids_dir
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from tqdm import tqdm
 
 logging.basicConfig(
     level=logging.INFO,
@@ -150,12 +152,24 @@ def main():
     subjects_df = pd.read_csv(subjects_file, sep=";", encoding="utf-8", low_memory=False)
     subjects_df.rename(columns={"Study ID": "ID"}, inplace=True)
     
-    for subject_id in subjects_ids:
-        try:
-            read_subject_data(subject_id, raw_data_dir, bids_dir, mapping_df)
-        except Exception as e:
-            logging.error("Error processing control subject %s: %s", subject_id, e)
-    
+    failed_subjects = []
+    with ProcessPoolExecutor() as executor:
+        futures = {
+            executor.submit(read_subject_data, subject_id, raw_data_dir, bids_dir, mapping_df): subject_id
+            for subject_id in subjects_ids
+        }
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing subjects"):
+            subject_id = futures[future]
+            try:
+                future.result()
+            except Exception as e:
+                logging.error("Error processing subject %s: %s", subject_id, e)
+                failed_subjects.append(subject_id)
+                
+    if failed_subjects:
+        logging.error("Failed to process the following subjects: %s", failed_subjects)
+        raise RuntimeError(f"Failed to process subjects: {failed_subjects}")
+        
     logging.info("Finished BIDS conversion for all subjects")
     logging.info("Subjects metadata head:\n%s", subjects_df.head())
     
