@@ -97,7 +97,7 @@ def read_subject_data(subject_id: str, source_dir: str, bids_root: str, mapping_
         new_subject_id = int(mapped["patient"].values[0])
         logging.info("Subject %s mapped to %s", subject_id, new_subject_id)
 
-    new_subject_id = str(new_subject_id)
+    new_subject_id = f"{int(new_subject_id):04d}"
     bids_path = BIDSPath(
         root=bids_root,
         subject=new_subject_id,
@@ -138,29 +138,21 @@ def update_participants_tsv(bids_dir: str, subjects_df: pd.DataFrame):
 
 
 def main():
-    patient_dir = os.path.join(data_dir, source_dirs["patients"])
-    control_dir = os.path.join(data_dir, source_dirs["control"])
+    raw_data_dir = os.path.join(source_dirs, "raw")
 
-    patient_ids = get_subject_ids(patient_dir)
-    control_ids = get_subject_ids(control_dir)
-    logging.info("Found %d patient IDs and %d control IDs", len(patient_ids), len(control_ids))
+    subjects_ids = get_subject_ids(raw_data_dir)
+    logging.info("Found %s subjects in %s", len(subjects_ids), raw_data_dir)
     
     mapping_file = os.path.join(data_dir, "csv", "match_missing_control.csv")
     mapping_df = pd.read_csv(mapping_file, header=None, names=["patient", "ID"], sep=';')
     
     subjects_file = os.path.join(data_dir, "csv", "subjects.csv")
     subjects_df = pd.read_csv(subjects_file)
-    subjects_df.rename(columns={"Study ID": "ID", "Psychostimulant (y/n)": "group"}, inplace=True)
+    subjects_df.rename(columns={"Study ID": "ID"}, inplace=True)
     
-    for subject_id in patient_ids:
+    for subject_id in subjects_ids:
         try:
-            read_subject_data(subject_id, patient_dir, bids_dir, mapping_df)
-        except Exception as e:
-            logging.error("Error processing patient %s: %s", subject_id, e)
-    
-    for subject_id in control_ids:
-        try:
-            read_subject_data(subject_id, control_dir, bids_dir, mapping_df)
+            read_subject_data(subject_id, raw_data_dir, bids_dir, mapping_df)
         except Exception as e:
             logging.error("Error processing control subject %s: %s", subject_id, e)
     
@@ -168,6 +160,7 @@ def main():
     logging.info("Subjects metadata head:\n%s", subjects_df.head())
     
     update_participants_tsv(bids_dir, subjects_df)
+    logging.info("Participants TSV updated successfully.")
 
 
 if __name__ == "__main__":
