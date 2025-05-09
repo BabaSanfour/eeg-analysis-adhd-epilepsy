@@ -4,11 +4,12 @@ import numpy as np
 user = os.path.expanduser('~')
 # Path to the directory where the data is stored
 if user == '/home/hamza97':
-    data_dir = os.path.join(user, 'projects/rrg-shahabkb/EEG_ADHD_epilepsy_psychostimulants')
+    data_dir = os.path.join(user, 'projects/rrg-shahabkb/cocolab_data/EEG_ADHD_epilepsy_psychostimulants')
 elif user == '/Users/hamzaabdelhedi':
     data_dir = os.path.join(user, 'Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02') 
 embeddings_dir = os.path.join(data_dir, 'embeddings')
 results_dir = os.path.join(data_dir, 'results')
+source_dirs = {"control": "Controls", "patients": "patients", }
 csv_dir = os.path.join(data_dir, 'csv')
 bids_dir = os.path.join(data_dir, 'BIDS')
 derivatives_dir = os.path.join(data_dir, 'derivatives')
@@ -30,4 +31,3 @@ MAPPING_PSYCHOSTIMULANT = {
     'Dextroamphetamine (Dexedrine)': 4,
     'Amphetamine/dextroamphetamine salt (Adderall)': 5,
 }
-
