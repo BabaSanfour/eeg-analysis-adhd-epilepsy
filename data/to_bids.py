@@ -81,7 +81,7 @@ def read_subject_data(subject_id: str, source_dir: str, bids_root: str, mapping_
     except Exception as e:
         raise RuntimeError(f"Error reading EEG file for {subject_id}: {e}")
 
-    if new_subject_id in ['2.2', '999']:
+    if new_subject_id in ['2.2']:
         return
 
     if new_subject_id.endswith('.2') or new_subject_id.endswith('.1'):
@@ -89,8 +89,8 @@ def read_subject_data(subject_id: str, source_dir: str, bids_root: str, mapping_
 
     raw.info["line_freq"] = 60
 
-    # Map subject IDs if necessary
-    if len(new_subject_id) > 3:
+    # Map subject IDs if necessary check also 
+    if len(new_subject_id) > 4:
         logging.info("Found subject ID: %s", new_subject_id)
         mapped = mapping_df[mapping_df["ID"] == int(new_subject_id)]
         if mapped.empty:
@@ -139,6 +139,19 @@ def update_participants_tsv(bids_dir: str, subjects_df: pd.DataFrame):
     logging.info("Updated participants.tsv at %s", tsv_path)
 
 
+def find_unconverted_subjects(bids_dir: str) -> List[str]:
+    """
+    Find subjects that were not completely converted to BIDS format.
+    """
+    unconverted_subjects = []
+    for subject_dir in os.listdir(bids_dir):
+        if subject_dir.startswith("sub-"):
+            bids_path = os.path.join(bids_dir, subject_dir)
+            if not os.path.exists(os.path.join(bids_path, "eeg")):
+                unconverted_subjects.append(subject_dir)
+    return unconverted_subjects
+
+
 def main():
     raw_data_dir = os.path.join(data_dir, "raw")
 
@@ -176,6 +189,11 @@ def main():
     update_participants_tsv(bids_dir, subjects_df)
     logging.info("Participants TSV updated successfully.")
 
+    unconverted_subjects = find_unconverted_subjects(bids_dir)
+    if unconverted_subjects:
+        logging.warning("Unconverted subjects found: %s", unconverted_subjects)
+    else:
+        logging.info("All subjects converted successfully.")
 
 if __name__ == "__main__":
     main()
