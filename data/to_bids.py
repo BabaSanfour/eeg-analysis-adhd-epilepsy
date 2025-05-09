@@ -16,7 +16,7 @@ import pandas as pd
 from mne_bids import write_raw_bids, BIDSPath
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from utils.config import data_dir, source_dirs, bids_dir
+from utils.config import data_dir, bids_dir
 
 logging.basicConfig(
     level=logging.INFO,
@@ -138,7 +138,7 @@ def update_participants_tsv(bids_dir: str, subjects_df: pd.DataFrame):
 
 
 def main():
-    raw_data_dir = os.path.join(source_dirs, "raw")
+    raw_data_dir = os.path.join(data_dir, "raw")
 
     subjects_ids = get_subject_ids(raw_data_dir)
     logging.info("Found %s subjects in %s", len(subjects_ids), raw_data_dir)
