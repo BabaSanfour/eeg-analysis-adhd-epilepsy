@@ -1,25 +1,23 @@
 #!/usr/bin/env python3
 """
-Script to read subject EEG and metadata files, convert them to BIDS format,
-and update the participants.tsv file.
+Convert raw EEG + metadata to BIDS.
 """
 
-import os
-import sys
-import glob
-import re
+import argparse
 import logging
+import re
+from pathlib import Path
+from concurrent.futures import ProcessPoolExecutor, as_completed, TimeoutError
 from typing import List, Set
 
 import mne
 import pandas as pd
 from mne_bids import write_raw_bids, BIDSPath
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from utils.config import data_dir, bids_dir
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from tqdm import tqdm
 
+# -----------------------------------------------------------------------------
+# CONFIGURE LOGGER
+# -----------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -27,173 +25,159 @@ logging.basicConfig(
 )
 
 
-def get_subject_ids(source_dir: str) -> List[str]:
+# -----------------------------------------------------------------------------
+# HELPERS
+# -----------------------------------------------------------------------------
+def get_subject_ids(source_dir: Path) -> List[str]:
     """
-    Scan the source directory and return a sorted list of unique subject IDs.
-    Assumes each file or folder name begins with a subject ID followed by a dot.
+    Scan source_dir and return sorted unique subject IDs.
+    Assumes files/folders start with ID plus a dot.
     """
-    subject_ids: Set[str] = set()
-    for item in os.listdir(source_dir):
-        match = re.match(r"^([A-Z]{2}\d{5,6}[A-Z]?)\.", item)
-        if match:
-            subject_ids.add(match.group(1))
+    ids: Set[str] = set()
+    for item in source_dir.iterdir():
+        m = re.match(r"^([A-Z]{2}\d{5,6}[A-Z]?)\.", item.name)
+        if m:
+            ids.add(m.group(1))
         else:
-            parts = item.split('.')
-            if parts and parts[0]:
-                subject_ids.add(parts[0])
-    subject_ids.discard('DskUUID')
-    subject_ids.discard('')
-    return sorted(subject_ids)
+            prefix = item.stem
+            if prefix:
+                ids.add(prefix)
+    # drop unwanted
+    ids.discard("DskUUID")
+    return sorted(ids)
 
 
-def read_subject_data(subject_id: str, source_dir: str, bids_root: str, mapping_df: pd.DataFrame):
+def read_subject_data(subject_id: str,
+                      raw_dir: Path,
+                      bids_root: Path,
+                      mapping_df: pd.DataFrame) -> None:
     """
-    Read files for a single subject, convert EEG data to BIDS format,
-    and update participants.tsv with subject metadata.
+    Convert one subject’s EEG to BIDS. Raises on failure.
     """
-    pnt_file = os.path.join(source_dir, f"{subject_id}.pnt")
-    if not os.path.exists(pnt_file):
-        logging.error("No .pnt file found for %s", subject_id)
-        raise RuntimeError(f"No .pnt file found for {subject_id}")
+    # -- load .pnt and extract new ID
+    pnt = raw_dir / f"{subject_id}.pnt"
+    if not pnt.exists():
+        raise FileNotFoundError(f".pnt not found for {subject_id}")
+    raw_bytes = pnt.read_bytes()
+    text = raw_bytes.decode("ISO-8859-1", errors="ignore").replace("\x00", "")
+    m = re.search(r"ID(\d{1,8}(?:\.\d)?)[EN]", text)
+    if not m:
+        raise ValueError(f"Could not parse new ID in {subject_id}")
+    new_id = m.group(1).rstrip(".1").rstrip(".2")
+    if new_id == "2.2":
+        return  # skip special case
 
-    with open(pnt_file, "rb") as f:
-        subject_info = f.read()
+    # -- map via CSV if needed
+    if len(new_id) > 4:
+        mapped = mapping_df[mapping_df["ID"] == int(new_id)]
+        if mapped.empty:
+            raise KeyError(f"No mapping for subject {new_id}")
+        new_id = str(int(mapped["patient"].iat[0]))
 
-    decoded_data = subject_info.decode("ISO-8859-1", errors="ignore")
-    cleaned_data = decoded_data.replace("\x00", "")
+    new_id = f"{int(new_id):04d}"
 
-    match = re.search(r"ID(\d{1,8}(?:\.\d)?)[EN]", cleaned_data)
-    if not match:
-        logging.error("Could not find subject ID in %s", subject_id)
+    # -- skip if already exists
+    bids_subj = bids_root / f"sub-{new_id}" / "eeg"
+    if bids_subj.exists():
+        logging.info("Skipping %s (already converted)", subject_id)
         return
 
-    new_subject_id = match.group(1)
-
-    eeg_files = glob.glob(os.path.join(source_dir, f"{subject_id}.EEG"))
-    logging.info("Found %d EEG files for subject %s", len(eeg_files), subject_id)
-    if not eeg_files:
-        logging.error("No EEG files found for %s", subject_id)
-        raise RuntimeError(f"No EEG file found for {subject_id}")
-
-    eeg_file_path = eeg_files[0]
-    try:
-        raw = mne.io.read_raw_nihon(eeg_file_path, preload=True)
-    except Exception as e:
-        raise RuntimeError(f"Error reading EEG file for {subject_id}: {e}")
-
-    if new_subject_id in ['2.2']:
-        return
-
-    if new_subject_id.endswith('.2') or new_subject_id.endswith('.1'):
-        new_subject_id = new_subject_id[:-2]
-
+    # -- read EEG
+    eeg_glob = list(raw_dir.glob(f"{subject_id}.EEG"))
+    if not eeg_glob:
+        raise FileNotFoundError(f"No .EEG for {subject_id}")
+    raw = mne.io.read_raw_nihon(str(eeg_glob[0]), preload=True)
     raw.info["line_freq"] = 60
 
-    # Map subject IDs if necessary check also 
-    if len(new_subject_id) > 4:
-        logging.info("Found subject ID: %s", new_subject_id)
-        mapped = mapping_df[mapping_df["ID"] == int(new_subject_id)]
-        if mapped.empty:
-            logging.warning("Mapping not found for subject %s", new_subject_id)
-            return
-        new_subject_id = int(mapped["patient"].values[0])
-        logging.info("Subject %s mapped to %s", subject_id, new_subject_id)
-
-    new_subject_id = f"{int(new_subject_id):04d}"
+    # -- write BIDS
     bids_path = BIDSPath(
-        root=bids_root,
-        subject=new_subject_id,
+        root=str(bids_root),
+        subject=new_id,
         session="01",
         task="RESTING",
         run="01",
         suffix="eeg",
         extension=".vhdr",
     )
-
-    write_raw_bids(
-        raw,
-        bids_path=bids_path,
-        format="BrainVision",
-        overwrite=True,
-        allow_preload=True,
-        verbose=False,
-    )
-    logging.info("Finished BIDS conversion for subject %s", subject_id)
+    write_raw_bids(raw, bids_path=bids_path, format="BrainVision",
+                   overwrite=True, allow_preload=True, verbose=False)
+    logging.info("Converted %s → sub-%s", subject_id, new_id)
 
 
-def update_participants_tsv(bids_dir: str, subjects_df: pd.DataFrame):
-    """
-    Update the participants.tsv file in the BIDS directory with subject metadata.
-    """
-    tsv_path = os.path.join(bids_dir, "participants.tsv")
-    participants_df = pd.read_csv(tsv_path, sep='\t')
-    
-    matched_ids = {id_: f"sub-{id_}" for id_ in subjects_df['ID'].values}
-    subjects_df['participant_id'] = subjects_df['ID'].map(matched_ids)
-    
-    merged_df = pd.merge(participants_df, subjects_df, on="participant_id", how="left")
-    merged_df.drop(columns=['age', 'ID', 'sex'], inplace=True, errors='ignore')
-    merged_df.rename(columns={"Age": "age", "Sex": "sex"}, inplace=True)
-    
-    merged_df.to_csv(tsv_path, sep='\t', index=False)
-    logging.info("Updated participants.tsv at %s", tsv_path)
+def update_participants_tsv(bids_root: Path, subjects_df: pd.DataFrame):
+    tsv = bids_root / "participants.tsv"
+    df = pd.read_csv(tsv, sep="\t")
+    subjects_df = subjects_df.rename(columns={"Study ID": "ID"})
+    subjects_df["participant_id"] = subjects_df["ID"].apply(lambda i: f"sub-{int(i):04d}")
+    merged = df.merge(subjects_df, on="participant_id", how="left")
+    merged = merged.drop(columns=["age", "ID", "sex"], errors="ignore")
+    merged = merged.rename(columns={"Age": "age", "Sex": "sex"})
+    merged.to_csv(tsv, sep="\t", index=False)
+    logging.info("Updated %s", tsv)
 
 
-def find_unconverted_subjects(bids_dir: str) -> List[str]:
-    """
-    Find subjects that were not completely converted to BIDS format.
-    """
-    unconverted_subjects = []
-    for subject_dir in os.listdir(bids_dir):
-        if subject_dir.startswith("sub-"):
-            bids_path = os.path.join(bids_dir, subject_dir)
-            if not os.path.exists(os.path.join(bids_path, "eeg")):
-                unconverted_subjects.append(subject_dir)
-    return unconverted_subjects
+def find_unconverted(bids_root: Path) -> List[str]:
+    missing = []
+    for subdir in bids_root.glob("sub-*"):
+        if not (subdir / "eeg").exists():
+            missing.append(subdir.name)
+    return missing
 
 
+# -----------------------------------------------------------------------------
+# MAIN
+# -----------------------------------------------------------------------------
 def main():
-    raw_data_dir = os.path.join(data_dir, "raw")
+    p = argparse.ArgumentParser(description="EEG → BIDS converter")
+    p.add_argument("--raw",    type=Path, required=True, help="raw data dir")
+    p.add_argument("--bids",   type=Path, required=True, help="BIDS root")
+    p.add_argument("--map",    type=Path, required=True, help="mapping CSV")
+    p.add_argument("--subs",   type=Path, required=True, help="subjects CSV")
+    p.add_argument("--workers",type=int, default=None, help="# parallel workers")
+    p.add_argument("--timeout",type=int, default=300,
+                   help="per-subject timeout in seconds")
+    args = p.parse_args()
 
-    subjects_ids = get_subject_ids(raw_data_dir)
-    logging.info("Found %s subjects in %s", len(subjects_ids), raw_data_dir)
-    
-    mapping_file = os.path.join(data_dir, "csv", "match_missing_control.csv")
-    mapping_df = pd.read_csv(mapping_file, header=None, names=["patient", "ID"], sep=';')
-    
-    subjects_file = os.path.join(data_dir, "csv", "subjects.csv")
-    subjects_df = pd.read_csv(subjects_file, sep=";", encoding="utf-8", low_memory=False)
-    subjects_df.rename(columns={"Study ID": "ID"}, inplace=True)
-    
-    failed_subjects = []
-    with ProcessPoolExecutor() as executor:
+    raw_dir     = args.raw
+    bids_root   = args.bids
+    mapping_df  = pd.read_csv(args.map, header=None, names=["patient","ID"], sep=";")
+    subjects_df = pd.read_csv(args.subs, sep=";", encoding="utf-8", low_memory=False)
+
+    subj_ids = get_subject_ids(raw_dir)
+    logging.info("Found %d subjects", len(subj_ids))
+
+    failed = []
+    with ProcessPoolExecutor(max_workers=args.workers) as exe:
         futures = {
-            executor.submit(read_subject_data, subject_id, raw_data_dir, bids_dir, mapping_df): subject_id
-            for subject_id in subjects_ids
+            exe.submit(read_subject_data, sid, raw_dir, bids_root, mapping_df): sid
+            for sid in subj_ids
         }
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Processing subjects"):
-            subject_id = futures[future]
+        for fut in tqdm(as_completed(futures), total=len(futures), desc="Subjects"):
+            sid = futures[fut]
             try:
-                future.result()
+                fut.result(timeout=args.timeout)
+            except TimeoutError:
+                logging.error("Timeout for %s", sid)
+                failed.append(sid)
             except Exception as e:
-                logging.error("Error processing subject %s: %s", subject_id, e)
-                failed_subjects.append(subject_id)
-                
-    if failed_subjects:
-        logging.error("Failed to process the following subjects: %s", failed_subjects)
-        raise RuntimeError(f"Failed to process subjects: {failed_subjects}")
-        
-    logging.info("Finished BIDS conversion for all subjects")
-    logging.info("Subjects metadata head:\n%s", subjects_df.head())
-    
-    update_participants_tsv(bids_dir, subjects_df)
-    logging.info("Participants TSV updated successfully.")
+                logging.error("Error %s: %s", sid, e)
+                failed.append(sid)
 
-    unconverted_subjects = find_unconverted_subjects(bids_dir)
-    if unconverted_subjects:
-        logging.warning("Unconverted subjects found: %s", unconverted_subjects)
+    if failed:
+        logging.warning("Failed subjects: %s", failed)
     else:
-        logging.info("All subjects converted successfully.")
+        logging.info("All subjects processed successfully")
+
+    # participants.tsv
+    update_participants_tsv(bids_root, subjects_df)
+
+    # detect any unconverted
+    missing = find_unconverted(bids_root)
+    if missing:
+        logging.warning("Unconverted directories: %s", missing)
+    else:
+        logging.info("All BIDS directories complete")
+
 
 if __name__ == "__main__":
     main()
