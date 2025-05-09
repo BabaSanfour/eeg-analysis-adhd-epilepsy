@@ -9,3 +9,4 @@ plots/
 
 utils/config.py
 slurm_EEG_psycho/
+decoding*
