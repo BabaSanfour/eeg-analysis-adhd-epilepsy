@@ -140,10 +140,10 @@ def main():
 
     if args.subjects:
         import pandas as pd
-        df = pd.read_csv(args.subjects)
-        subs: List[str] = df["subject_id"].astype(str).tolist()
+        df = pd.read_csv(args.subjects, sep="\t", encoding="utf-8", low_memory=False)
+        subs: List[str] = df["participant_id"].astype(str).tolist()
     else:
-        subs = [f"{i:02d}" for i in range(1, args.n_subjects + 1)]
+        subs = [f"{i:04d}" for i in range(1, args.n_subjects + 1)]
 
     args.deriv_root.mkdir(parents=True, exist_ok=True)
 
