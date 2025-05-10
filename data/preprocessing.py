@@ -81,6 +81,13 @@ def process_one_subject(
     if total_duration > MAX_DURATION_SEC:
         raw.crop(tmin=0, tmax=MAX_DURATION_SEC, include_tmax=False)
         logging.info("Cropped %s to first %d seconds", subject_id, MAX_DURATION_SEC)
+        if raw.annotations is not None and len(raw.annotations.onset):
+            keep = [i for i, on in enumerate(raw.annotations.onset)
+                    if on < MAX_DURATION_SEC]
+            if len(keep) < len(raw.annotations.onset):
+                raw.set_annotations(raw.annotations[keep])
+                logging.info("Dropped %d out‑of‑range events for %s",
+                            len(raw.annotations.onset) - len(keep), subject_id)
 
     raw.pick_types(eeg=True)
     to_drop = [ch for ch in raw.ch_names if ch not in SENSORS_1020]
