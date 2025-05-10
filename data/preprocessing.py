@@ -67,10 +67,10 @@ def process_one_subject(
     components = [
         comp for cond, comp in (
             (notch, "notch"),
-            (z_score, f"zscore_axis{z_score_axis}")
+            (z_score, f"zscoreaxis{z_score_axis}")
         ) if cond
     ]
-    processing_str = "cleaned_" + ("_".join(components) if components else "raw")
+    processing_str = "cleaned" + (''.join(components) if components else "raw")
     
     dst = BIDSPath(
         root=str(deriv_root),
@@ -124,7 +124,7 @@ def process_one_subject(
         normed = np.clip((data - means) / stds, -15, 15)
         raw._data = normed
         logging.info("Applied z-score normalization axis=%d for %s", z_score_axis, subject_id)
-        
+
     write_raw_bids(
         raw,
         bids_path=dst,
@@ -188,7 +188,7 @@ def main():
         import pandas as pd
         subs = pd.read_csv(args.subjects)["subject_id"].astype(str).tolist()
     else:
-        subs = [f"{i:02d}" for i in range(1, args.n_subjects + 1)]
+        subs = [f"{i:04}" for i in range(1, args.n_subjects + 1)]
 
     # Ensure output directory exists
     args.deriv_root.mkdir(parents=True, exist_ok=True)
