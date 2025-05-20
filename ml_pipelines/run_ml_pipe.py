@@ -1,282 +1,103 @@
-#!/usr/bin/env python3
-"""
-Script to run machine learning pipelines for classification tasks.
-"""
-
-import os
-import pickle
-import argparse
-import logging
+import yaml
+import numpy as np
 import pandas as pd
+from coco_pipe.io import load, select_features
+from coco_pipe.ml.pipeline import MLPipeline
+from copy import deepcopy
 
-import sys
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from utils.config import data_dir, results_dir
-from ml_pipelines.pipelines import (
-    pipeline_baseline,
-    pipeline_feature_selection,
-    pipeline_HP_search,
-    pipeline_feature_selection_HP_search,
-    pipeline_unsupervised,
-)
+import logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
-
-def load_and_preprocess_features(analysis_type):
-    """Load features CSV, filter based on age group and preprocess columns."""
-    features_file = os.path.join(data_dir, "csv", "features_with_age_group.csv")
-    features = pd.read_csv(features_file)
-    if analysis_type == "adolescent":
-        logging.info("Running analysis for adolescent group.")
-        features = features[features["age_group"] == "adolescent"]
-    elif analysis_type == "child":
-        logging.info("Running analysis for child group.")
-        features = features[features["age_group"] == "child"]
-    else:
-        logging.info("Running analysis for all ages.")
-    drop_cols = ["dataset", "id", "age", "sex", "task", "subject", "age_group"]
-    features = features.drop(columns=drop_cols)
-    features["group"] = features["group"].replace({"PAT": 1, "CTR": 0})
-    return features
-
-def get_clean_features(columns):
-    """Returns a list of clean feature names based on column names."""
-    seen = set()
-    clean_features = []
-    for col in columns:
-        feat = col.split(".spaces-")[0].replace("feature-", "")
-        if feat not in seen and feat != "group":
-            seen.add(feat)
-            clean_features.append(feat)
-    return clean_features
-
-def get_columns_for_feature(columns, feature):
-    """Return list of columns that contain the feature name."""
-    return [col for col in columns if feature in col]
-
-def save_results(results, fname):
-    """Save results to a pickle file."""
-    with open(os.path.join(results_dir, fname), "wb") as f:
-        pickle.dump(results, f)
-
-def run_analysis0(features, analysis_type):
-    """Baseline single feature per sensor."""
-    X = features.drop("group", axis=1)
-    y = features["group"]
-    feature_results = {}
-    for feature in X.columns:
-        logging.info(f"Running pipeline for feature: {feature}")
-        acc = pipeline_baseline(X[[feature]], y)
-        feature_results[feature] = acc
-    fname = f"single_feature_baseline_results_{analysis_type}.pkl"
-    save_results(feature_results, fname)
-    logging.info("Done analysis 0!")
-
-def run_analysis1(features, analysis_type):
-    """Single feature HP search per sensor."""
-    X = features.drop("group", axis=1)
-    y = features["group"]
-    model_results = {}
-    for model in ["Decision Tree", "Random Forest", "Gradient Boosting", "K-Nearest Neighbors"]:
-        logging.info(f"Running pipeline for model: {model}")
-        feature_results = {}
-        for feature in X.columns:
-            logging.info(f"Running pipeline for feature: {feature}")
-            acc = pipeline_HP_search(X[[feature]], y, model)
-            feature_results[feature] = acc
-        model_results[model] = feature_results
-    fname = f"single_feature_HP_results_{analysis_type}.pkl"
-    save_results(model_results, fname)
-    logging.info("Done analysis 1!")
-
-
-def run_analysis2(features, analysis_type):
-    """Single feature HP search using all sensors (grouped by feature)."""
-    feature_results = {}
-    columns = features.columns
-    clean_features = get_clean_features(columns)
-    for feature in clean_features:
-        select_cols = get_columns_for_feature(columns, feature)
-        X = features[select_cols]
-        y = features["group"]
-        logging.info(f"Running classification for feature: {feature}")
-        models_result = {}
-        for model in ["Decision Tree", "Random Forest", "Gradient Boosting", "K-Nearest Neighbors"]:
-            logging.info(f"Running HP search for model: {model}")
-            models_result[model] = pipeline_HP_search(X, y, model)
-        feature_results[feature] = models_result
-    fname = f"single_feature_all_sensors_HP_results_{analysis_type}.pkl"
-    save_results(feature_results, fname)
-    logging.info("Done analysis 2!")
-
-
-def run_analysis3(features, analysis_type):
-    """Sensor selection per feature using feature selection."""
-    feature_results = {}
-    columns = features.columns
-    clean_features = get_clean_features(columns)
-    for feature in clean_features:
-        select_cols = get_columns_for_feature(columns, feature)
-        X = features[select_cols]
-        y = features["group"]
-        logging.info(f"Running feature selection for feature: {feature}")
-        models_result = {}
-        for model in ["Decision Tree", "Random Forest", "Gradient Boosting", "K-Nearest Neighbors"]:
-            logging.info(f"Running pipeline for model: {model}")
-            models_result[model] = pipeline_feature_selection(X, y, 20, model)
-        feature_results[feature] = models_result
-    fname = f"sensor_selection_per_feature_{analysis_type}.pkl"
-    save_results(feature_results, fname)
-    logging.info("Done analysis 3!")
-
-
-def run_analysis4(features, analysis_type):
-    """Sensor selection per feature followed by HP search."""
-    feature_results = {}
-    columns = features.columns
-    clean_features = get_clean_features(columns)
-    for feature in clean_features:
-        select_cols = get_columns_for_feature(columns, feature)
-        X = features[select_cols]
-        y = features["group"]
-        logging.info(f"Running selection + HP search for feature: {feature}")
-        models_result = {}
-        for model in ["Decision Tree", "Random Forest", "Gradient Boosting", "K-Nearest Neighbors"]:
-            logging.info(f"Running pipeline for model: {model}")
-            models_result[model] = pipeline_feature_selection_HP_search(X, y, 0, 7, model)
-        feature_results[feature] = models_result
-    fname = f"sensor_selection_per_feature_HP_search_{analysis_type}.pkl"
-    save_results(feature_results, fname)
-    logging.info("Done analysis 4!")
-
-
-def run_analysis5(features, analysis_type):
-    """Baseline multi-features using all sensors."""
-    X = features.drop("group", axis=1)
-    y = features["group"]
-    results, saved_models = pipeline_baseline(X, y)
-    combined_results = {"results": results, "models": saved_models}
-    fname = f"baseline_results_all_feat_all_sensors_{analysis_type}.pkl"
-    save_results(combined_results, fname)
-    logging.info("Done analysis 5!")
-
-
-def run_analysis6(features, analysis_type):
-    """Multi-features with HP search for all models."""
-    X = features.drop("group", axis=1)
-    y = features["group"]
-    model_results = {}
-    for model in ["Decision Tree", "Random Forest", "Gradient Boosting", "K-Nearest Neighbors"]:
-        logging.info(f"Running HP search for model: {model}")
-        model_results[model] = pipeline_HP_search(X, y, model)
-    fname = f"HP_results_all_feat_all_sensors_{analysis_type}.pkl"
-    save_results(model_results, fname)
-    logging.info("Done analysis 6!")
-
-
-def run_analysis7(features, analysis_type):
-    """Multi-feature feature selection (up to 40 features)."""
-    X = features.drop("group", axis=1)
-    y = features["group"]
-    models_result = {}
-    for model in ["Decision Tree", "Random Forest", "Gradient Boosting", "K-Nearest Neighbors"]:
-        logging.info(f"Running feature selection for model: {model}")
-        models_result[model] = pipeline_feature_selection(X, y, 40, model)
-    fname = f"feature_selection_all_feat_all_sensors_{analysis_type}.pkl"
-    save_results(models_result, fname)
-    logging.info("Done analysis 7!")
-
-
-def run_analysis8(features, analysis_type):
-    """Multi-feature feature selection (up to 40 features) with HP search."""
-    X = features.drop("group", axis=1)
-    y = features["group"]
-    models_result = {}
-    for model in ["Decision Tree", "Random Forest", "Gradient Boosting", "K-Nearest Neighbors"]:
-        logging.info(f"Running feature selection + HP search for model: {model}")
-        models_result[model] = pipeline_feature_selection_HP_search(X, y, 0, 40, model)
-    fname = f"feature_selection_HP_search_all_feat_all_sensors_{analysis_type}.pkl"
-    save_results(models_result, fname)
-    logging.info("Done analysis 8!")
-
-
-def run_analysis9(features, analysis_type):
-    """Unsupervised learning using all features and sensors."""
-    X = features.drop("group", axis=1)
-    clusters_results = {}
-    for n_clusters in range(2, 11):
-        logging.info(f"Running unsupervised pipeline for {n_clusters} clusters")
-        silhouette, cluster_labels = pipeline_unsupervised(X, n_clusters)
-        clusters_results[n_clusters] = {
-            "silhouette": silhouette,
-            "cluster_labels": cluster_labels,
+def run_analysis(X, y, analysis_cfg):
+    """Run a single analysis with given config"""
+    X = X.values
+    y = y.values
+    
+    # Extract MLPipeline specific arguments
+    pipeline_args = {
+        'X': X,
+        'y': y,
+        'config': {
+            'task': analysis_cfg.get('task'),
+            'analysis_type': analysis_cfg.get('analysis_type'),
+            'models': analysis_cfg.get('models'),
+            'metrics': analysis_cfg.get('metrics'),
+            'cv_strategy': analysis_cfg.get('cv_kwargs', {}).get('cv_strategy'),
+            'n_splits': analysis_cfg.get('cv_kwargs', {}).get('n_splits'),
+            'n_features': analysis_cfg.get('n_features'),
+            'direction': analysis_cfg.get('direction'),
+            'search_type': analysis_cfg.get('search_type'),
+            'n_iter': analysis_cfg.get('n_iter'),
+            'scoring': analysis_cfg.get('scoring'),
+            'n_jobs': analysis_cfg.get('n_jobs'),
+            'results_dir': analysis_cfg.get('results_dir'),
+            'results_file': analysis_cfg.get('results_file'),
+            'cv_kwargs': analysis_cfg.get('cv_kwargs'),
+            'save_intermediate': analysis_cfg.get('save_intermediate')
         }
-    fname = f"unsupervised_single_feature_all_sensors_{analysis_type}.pkl"
-    save_results(clusters_results, fname)
-    logging.info("Done analysis 9!")
-
-
-def run_analysis10(features, analysis_type):
-    """Unsupervised learning for each clean feature using all sensors."""
-    feature_results = {}
-    columns = features.columns
-    clean_features = get_clean_features(columns)
-    for feature in clean_features:
-        select_cols = get_columns_for_feature(columns, feature)
-        X = features[select_cols]
-        cluster_results = {}
-        for n_clusters in range(2, 11):
-            logging.info(f"Running unsupervised for feature '{feature}' with {n_clusters} clusters")
-            silhouette, cluster_labels = pipeline_unsupervised(X, n_clusters)
-            cluster_results[n_clusters] = {"silhouette": silhouette, "cluster_labels": cluster_labels}
-        feature_results[feature] = cluster_results
-    fname = f"unsupervised_single_feature_all_sensors_{analysis_type}.pkl"
-    save_results(feature_results, fname)
-    logging.info("Done analysis 10!")
-
-
-def run_analysis11(features, analysis_type):
-    """Placeholder for analysis 11."""
-    logging.info("TODO: Get best features from feature selection and run unsupervised learning")
-    # Implement as needed
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Run machine learning pipelines.")
-    parser.add_argument("--analysis", type=int, default=1, help="Analysis number to run (1 to 11).")
-    parser.add_argument("--analysis_type", type=str, default="all_ages", help="Analysis type (e.g., adolescent, child, all_ages).")
-    args = parser.parse_args()
-    
-    analysis = args.analysis
-    analysis_type = args.analysis_type
-    
-    features = load_and_preprocess_features(analysis_type)
-    
-    analysis_map = {
-        0: run_analysis0,
-        1: run_analysis1,
-        2: run_analysis2,
-        3: run_analysis3,
-        4: run_analysis4,
-        5: run_analysis5,
-        6: run_analysis6,
-        7: run_analysis7,
-        8: run_analysis8,
-        9: run_analysis9,
-        10: run_analysis10,
-        11: run_analysis11,
     }
     
-    if analysis in analysis_map:
-        analysis_func = analysis_map[analysis]
-        analysis_func(features, analysis_type)
-    else:
-        logging.error("Invalid analysis number. Choose from 0 to 11.")
+    # Remove None values from config
+    pipeline_args['config'] = {k: v for k, v in pipeline_args['config'].items() if v is not None}
+    
+    pipeline = MLPipeline(**pipeline_args)
+    results = pipeline.run()
+    logger.info(f"Analysis {analysis_cfg['id']} completed")
+    return results
 
+def main():
+    # 0) Load config & data
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, required=True, help="Path to config file")
+    args = parser.parse_args()
+    
+    cfg = yaml.safe_load(open(args.config))
+    df = load("tabular", cfg["data_path"])
+    all_results = {}
+
+    # Get default parameters
+    defaults = cfg["defaults"]
+
+    # Run different analyses based on config
+    for analysis in cfg["analyses"]:
+        # Create analysis config starting with defaults
+        analysis_cfg = deepcopy(defaults)
+        
+        # Update with analysis-specific settings
+        analysis_cfg.update(analysis)
+
+        # 1) Select features & target based on analysis config
+        X, y = select_features(
+            df,
+            target_columns=analysis_cfg["target_columns"],
+            covariates=analysis_cfg.get("covariates"),
+            spatial_units=analysis_cfg.get("spatial_units"),
+            feature_names=analysis_cfg.get("feature_names", "all"),
+            row_filter=analysis_cfg.get("row_filter"),
+            sep=".spaces-",
+            reverse=True,
+        )
+
+        # 1.1) Print the shape of the selected features and target
+        logger.info(f"Analysis {analysis['id']} selected {X.shape[1]} features and {y.shape[0]} samples")
+        features_to_print = X.columns.tolist() if len(X.columns) <= 5 else X.columns.tolist()[:5]
+        logger.info(f"Analysis {analysis['id']} first five selected features: {features_to_print}...")
+        logger.info(f"Analysis {analysis['id']} selected target: {y.name}")
+
+        # 2) Run analysis
+        analysis_cfg["results_dir"] = cfg["results_dir"]
+        analysis_cfg["results_file"] = cfg["results_file"]
+        results = run_analysis(X, y, analysis_cfg)
+        
+        # Store results with analysis identifier
+        all_results[analysis["id"]] = results
+
+    # 3) Save all results
+    results_file = f"{cfg['results_dir']}/{cfg['global_experiment_id']}.pkl"
+    logger.info(f"Saving results to {results_file}")
+    pd.to_pickle(all_results, results_file)
 
 if __name__ == "__main__":
     main()

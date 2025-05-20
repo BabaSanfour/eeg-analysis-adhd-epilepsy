@@ -1,0 +1,147 @@
+# -----------------------------------------------------------------------------
+# config for MLPipeline on ADHD dataset
+# -----------------------------------------------------------------------------
+
+# Global parameters shared across analyses
+global_experiment_id: "exploratory_analysis_ADHD_20_05_2025"
+data_path: "/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/csv/demo_psychostim_vs_none.csv"
+results_dir: "./results_"
+results_file: "exploratory_analysis_ADHD_20_05_2025"
+
+# Default analysis parameters (can be overridden per analysis)
+defaults:
+  random_state: 42
+  n_jobs: -1
+  cv_kwargs:
+    cv_strategy: "stratified"
+    n_splits: 5
+    shuffle: true
+    random_state: 42
+  target_columns: ["target"]
+  spatial_units: ['C3', 'C4', 'Cz', 'F3', 'F4', 'F7', 'F8', 'Fp1', 'Fp2', 'Fz', 'O1',
+       'O2', 'P3', 'P4', 'Pz', 'T3', 'T4', 'T5', 'T6']
+  feature_names: [
+      # "feature-BandRatiosFromAverageFooof.bands_pairs-('alpha', 'beta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('alpha', 'delta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('alpha', 'gamma')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('alpha', 'theta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('beta', 'alpha')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('beta', 'delta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('beta', 'gamma')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('beta', 'theta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('delta', 'alpha')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('delta', 'beta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('delta', 'gamma')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('delta', 'theta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('gamma', 'alpha')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('gamma', 'beta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('gamma', 'delta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('gamma', 'theta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('theta', 'alpha')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('theta', 'beta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('theta', 'delta')",
+      #  "feature-BandRatiosFromAverageFooof.bands_pairs-('theta', 'gamma')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'beta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'delta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'gamma')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'theta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'alpha')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'delta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'gamma')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'theta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'alpha')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'beta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'gamma')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'theta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'alpha')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'beta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'delta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'theta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'alpha')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'beta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'delta')",
+      #  "feature-BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'gamma')",
+      #  "feature-RelativeBandPowerFromAverageFooof.bands-alpha",
+      #  'feature-RelativeBandPowerFromAverageFooof.bands-beta',
+      #  'feature-RelativeBandPowerFromAverageFooof.bands-delta',
+      #  'feature-RelativeBandPowerFromAverageFooof.bands-gamma',
+       'feature-RelativeBandPowerFromAverageFooof.bands-theta',
+       'feature-RelativeBandPowerFromAverageSpectrum.bands-alpha',
+       'feature-RelativeBandPowerFromAverageSpectrum.bands-beta',
+      #  'feature-RelativeBandPowerFromAverageSpectrum.bands-delta',
+      #  'feature-RelativeBandPowerFromAverageSpectrum.bands-gamma',
+      #  'feature-RelativeBandPowerFromAverageSpectrum.bands-theta',
+      #  'feature-appEntropyMeanEpochs', 
+      #  'feature-entropyMultiscaleMeanEpochs',
+      #  'feature-foofOffset', 
+      #  'feature-fooofExponent',
+      #  'feature-higuchiFdMeanEpochs', 
+      #  'feature-higuchiFdVarEpochs',
+      #  'feature-hjorthComplexityMeanEpochs',
+      #  'feature-hjorthMobilityMeanEpochs', 
+      #  'feature-katzFdMeanEpochs',
+      #  'feature-katzFdSDEpochs', 
+      #  'feature-lzivComplexityMeanEpochs',
+      #  'feature-numZerocrossMeanEpochs', 
+      #  'feature-permEntropyMeanEpochs',
+      #  'feature-petrosianFdMeanEpochs', 
+      #  'feature-sampleEntropyMeanEpochs',
+      #  'feature-spectralEntropyMeanEpochs', 
+      #  'feature-svdEntropyMeanEpochs'
+       ]
+
+# List of analyses to run
+analyses:
+  - id: "classification_baseline"
+    task: "classification"
+    analysis_type: "baseline"
+    # row_filter:
+    #   - column: "age"
+    #     values: 13
+    #     operator: ">"
+    #   - column: "sex"
+    #     values: ["male"]
+    models:
+      # - "Logistic Regression"
+      - "Random Forest"
+    metrics:
+      - "accuracy" 
+      - "roc_auc"
+      - "f1"
+    scoring: "f1"
+
+  - id: "classification_feature_selection"
+    task: "classification"
+    analysis_type: "feature_selection"
+    # row_filter:
+    #   column: "age"
+    #   values: 40
+    #   operator: "<"
+    models:
+      - "Random Forest"
+    metrics:
+      - "f1"
+      - "roc_auc"
+      - "accuracy"
+    n_features: 5
+    direction: "forward"
+    scoring: "f1"
+    # cv_kwargs:
+    #   cv_strategy: "stratified"
+
+  # - id: "regression_hp_search"
+  #   task: "regression" 
+  #   analysis_type: "hp_search"
+  #   target_columns: ["target_reg"]
+  #   feature_names: ["feat1"]
+  #   spatial_units: ["regionX"]
+  #   models: "all"
+  #   metrics:
+  #     - "r2"
+  #     - "neg_mse"
+  #   cv_kwargs:
+  #     cv_strategy: "kfold"
+  #     n_splits: 3
+  #   search_type: "grid"
+  #   n_iter: 20
+  #   scoring: "r2"
