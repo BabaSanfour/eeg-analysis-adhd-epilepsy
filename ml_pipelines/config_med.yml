@@ -120,6 +120,7 @@ analyses:
     #   operator: "<"
     models:
       - "Random Forest"
+      - "Logistic Regression"
     metrics:
       - "f1"
       - "roc_auc"
