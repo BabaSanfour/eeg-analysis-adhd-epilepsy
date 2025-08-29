@@ -15,7 +15,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 import os
 import sys
 sys.path.insert(0, str(BASE_DIR))
-from utils.config import embeddings_dir
+try:
+    from utils.config import embeddings_dir
+except EnvironmentError as e:
+    raise RuntimeError(
+        "EEG_DATA_DIR environment variable must be set before running this script."
+    ) from e
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

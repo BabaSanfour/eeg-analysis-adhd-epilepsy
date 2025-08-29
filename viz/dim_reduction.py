@@ -19,7 +19,12 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE_DIR))
 
 from viz.embeddings import load_embeddings, reshape_embeddings
-from utils.config import results_dir
+try:
+    from utils.config import results_dir
+except EnvironmentError as e:
+    raise RuntimeError(
+        "EEG_DATA_DIR environment variable must be set before running this script."
+    ) from e
 
 
 def check_exists(filepath: str) -> bool:

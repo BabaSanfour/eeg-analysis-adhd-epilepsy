@@ -1,20 +1,49 @@
-import os 
+import os
 import numpy as np
 
-user = os.path.expanduser('~')
-# Path to the directory where the data is stored
-if user == '/home/hamza97':
-    data_dir = os.path.join(user, 'projects/rrg-shahabkb/cocolab_data/EEG_ADHD_epilepsy_psychostimulants')
-elif user == '/Users/hamzaabdelhedi':
-    data_dir = os.path.join(user, 'Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02') 
-embeddings_dir = os.path.join(data_dir, 'embeddings')
-results_dir = os.path.join(data_dir, 'results')
-source_dirs = {"control": "Controls", "patients": "patients", }
-csv_dir = os.path.join(data_dir, 'csv')
-bids_dir = os.path.join(data_dir, 'BIDS')
-derivatives_dir = os.path.join(data_dir, 'derivatives')
-sensors_to_keep = ["Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8", "A1", "T3", "C3", "Cz",
-                "C4", "T4", "A2", "T5", "P3", "Pz", "P4", "T6", "O1", "O2"]
+
+# ---------------------------------------------------------------------------
+# Environment-based configuration
+# ---------------------------------------------------------------------------
+
+def _get_env_path(var_name: str, default: str | None = None) -> str:
+    """Return the path from an environment variable or a default value.
+
+    Args:
+        var_name: Name of the environment variable to read.
+        default: Default path to use if the environment variable is unset.
+
+    Returns:
+        The resolved path as a string.
+
+    Raises:
+        EnvironmentError: If the variable is not set and no default is provided.
+    """
+
+    value = os.environ.get(var_name, default)
+    if value is None:
+        raise EnvironmentError(
+            f"Required environment variable '{var_name}' is not set."
+        )
+    return value
+
+
+# Base directory for EEG data
+data_dir = _get_env_path("EEG_DATA_DIR")
+
+# Subdirectories with sensible defaults that can also be overridden
+embeddings_dir = _get_env_path("EEG_EMBEDDINGS_DIR", os.path.join(data_dir, "embeddings"))
+results_dir = _get_env_path("EEG_RESULTS_DIR", os.path.join(data_dir, "results"))
+csv_dir = _get_env_path("EEG_CSV_DIR", os.path.join(data_dir, "csv"))
+bids_dir = _get_env_path("EEG_BIDS_DIR", os.path.join(data_dir, "BIDS"))
+derivatives_dir = _get_env_path("EEG_DERIVATIVES_DIR", os.path.join(data_dir, "derivatives"))
+
+source_dirs = {"control": "Controls", "patients": "patients"}
+
+sensors_to_keep = [
+    "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8", "A1", "T3", "C3", "Cz",
+    "C4", "T4", "A2", "T5", "P3", "Pz", "P4", "T6", "O1", "O2"
+]
 
 n_subjects = 253
 

@@ -36,7 +36,12 @@ logging.basicConfig(
 
 # Update system path to import configuration
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from utils.config import csv_dir, MAPPING_PSYCHOSTIMULANT
+try:
+    from utils.config import csv_dir, MAPPING_PSYCHOSTIMULANT
+except EnvironmentError as e:
+    raise RuntimeError(
+        "EEG_DATA_DIR environment variable must be set before running this script."
+    ) from e
 
 
 def load_csv(file_path):
