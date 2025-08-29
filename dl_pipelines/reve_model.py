@@ -151,17 +151,15 @@ def save_embeddings(
         ) if cond
     ]
     processing_str = "embeddings" + (''.join(components) if components else "raw")
-    subject_dir = output_dir / f"sub-{subject}"
     # Create the output directory if it doesn't exist
-    subject_dir.mkdir(parents=True, exist_ok=True)
-    file_path = output_dir / f"sub-{subject}" / f"sub-{subject}_task-RESTING_run-01_{processing_str}.pkl"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    file_path = output_dir / f"sub-{subject}_task-RESTING_run-01_{processing_str}.pkl"
 
     try:
         with open(file_path, "wb") as f:
             pickle.dump(embeddings, f)
         logging.info("Saved embeddings to %s", file_path)
     except Exception as e:
-        logging.error("Could not save embeddings for %s: %s", subject, e)
         logging.error("Could not save embeddings for %s: %s", subject, e)
 
 
@@ -213,7 +211,7 @@ def process_subject(subject_idx: int, args: argparse.Namespace, node: ReveEEG) -
     output_dir = args.embeddings_dir / f"sub-{subject}"
     save_embeddings(
         embeddings,
-        args.embeddings_dir,
+        output_dir,
         subject,
         args.segment_duration,
         args.z_score,
