@@ -1,0 +1,37 @@
+{
+  "task": "binary",
+  "analysis_type": "feature_selection",
+  "models": [
+    "SVC"
+  ],
+  "metrics": [
+    "f1",
+    "roc_auc",
+    "accuracy"
+  ],
+  "random_state": 42,
+  "cv_strategy": "stratified",
+  "n_splits": 5,
+  "n_features": 9,
+  "direction": "forward",
+  "search_type": "grid",
+  "n_iter": 100,
+  "n_jobs": -1,
+  "X_shape": [
+    968,
+    19
+  ],
+  "y_shape": [
+    968
+  ],
+  "start_time": "2025-05-21T02:43:44.298285",
+  "completed_models": [
+    "SVC"
+  ],
+  "failed_models": [],
+  "status": "completed",
+  "end_time": "2025-05-21T02:43:56.157906",
+  "total_models": 1,
+  "successful_models": 1,
+  "failed_models_count": 0
+}

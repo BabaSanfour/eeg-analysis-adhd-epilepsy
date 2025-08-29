@@ -1,0 +1,40 @@
+{
+  "task": "multiclass",
+  "analysis_type": "feature_selection",
+  "models": [
+    "Random Forest"
+  ],
+  "metrics": [
+    "f1",
+    "roc_auc",
+    "accuracy"
+  ],
+  "random_state": 42,
+  "cv_strategy": "stratified",
+  "n_splits": 5,
+  "n_features": 1,
+  "direction": "forward",
+  "search_type": "grid",
+  "n_iter": 100,
+  "n_jobs": -1,
+  "X_shape": [
+    968,
+    19
+  ],
+  "y_shape": [
+    968
+  ],
+  "start_time": "2025-05-21T03:32:48.425965",
+  "completed_models": [],
+  "failed_models": [
+    {
+      "model": "Random Forest",
+      "error": "Target is multiclass but average='binary'. Please choose another average setting, one of [None, 'micro', 'macro', 'weighted']."
+    }
+  ],
+  "status": "partial_failure",
+  "end_time": "2025-05-21T03:32:54.730639",
+  "total_models": 1,
+  "successful_models": 0,
+  "failed_models_count": 1
+}
