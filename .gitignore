@@ -5,12 +5,6 @@ __pycache__/
 .ipynb_checkpoints/
 .cache/
 .vscode/
+data/
 plots/
 
-utils/config.py
-slurm_EEG_psycho/
-decoding*
-*err
-*out
-
-ml_pipelines/results_*/
