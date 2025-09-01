@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-utils for loading and reshaping EEG embeddings.
+Utils for loading and reshaping EEG embeddings.
 """
 import pickle
 import logging
@@ -10,20 +10,11 @@ from typing import Tuple
 import numpy as np
 from tqdm import tqdm
 
-# Append project root to sys.path
-BASE_DIR = Path(__file__).resolve().parent.parent
-import os
-import sys
-sys.path.insert(0, str(BASE_DIR))
-try:
-    from utils.config import embeddings_dir
-except EnvironmentError as e:
-    raise RuntimeError(
-        "EEG_DATA_DIR environment variable must be set before running this script."
-    ) from e
+from eeg_adhd_epilepsy_psychostimulant.utils.config import embeddings_dir
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 
 def load_embeddings(n_subjects: int,
                     segment_duration: int = 10,
@@ -47,7 +38,7 @@ def load_embeddings(n_subjects: int,
     # Load embeddings per subject.
     for subject_id in tqdm(range(1, n_subjects + 1), desc="Loading subjects"):
         file_name = f'embeddings_sub-{subject_id}_dur-{segment_duration}s_zscore-{z_score}_axis-{z_score_axis}.pkl'
-        embeddings_file = os.path.join(embeddings_dir, file_name)
+        embeddings_file = Path(embeddings_dir) / file_name
         try:
             with open(embeddings_file, 'rb') as f:
                 embeddings[subject_id] = pickle.load(f)
@@ -70,6 +61,7 @@ def load_embeddings(n_subjects: int,
             np.array(subjects_array),
             np.array(time_segments_array))
 
+
 def reshape_embeddings(embeddings_array: np.ndarray, sensorwise: bool = False) -> np.ndarray:
     """
     Reshape the embeddings array.
@@ -87,6 +79,7 @@ def reshape_embeddings(embeddings_array: np.ndarray, sensorwise: bool = False) -
     if sensorwise:
         return embeddings_array.reshape(embeddings_array.shape[0], embeddings_array.shape[1], -1)
     return embeddings_array.reshape(embeddings_array.shape[0], -1)
+
 
 if __name__ == '__main__':
     # Example usage:
@@ -114,3 +107,4 @@ if __name__ == '__main__':
     logger.info(f"Subjects array shape: {subjects_array.shape}")
     logger.info(f"Time segments array shape: {time_segments_array.shape}")
     logger.info(f"Reshaped embeddings array shape: {reshaped.shape}")
+

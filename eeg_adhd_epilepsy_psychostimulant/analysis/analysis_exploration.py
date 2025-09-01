@@ -1,20 +1,14 @@
 """
 analysis_exploration.py
 
-This script is part of the analysis-design repository. It reads an input CSV file, 
-performs data cleaning and transformation, and then generates various analysis CSV files 
-and a PDF report for quality control. The output files are designed for use in ML pipelines.
+Reads an input CSV file, performs data cleaning and transformation, and then generates
+various analysis CSV files and a PDF report for quality control. The output files are
+designed for use in ML pipelines.
 
 Usage:
-    python analysis_exploration.py --csv_file <filename> [--potential_in_with]
-
-Arguments:
-    --csv_file           Path to the CSV file (default is set from the config csv_dir)
-    --potential_in_with  Flag to include potential diagnoses in the 'with' condition
+    python -m eeg_adhd_epilepsy_psychostimulant.analysis.analysis_exploration --csv_file <filename> [--potential_in_with]
 """
 
-import os
-import sys
 import argparse
 import itertools
 import warnings
@@ -23,14 +17,7 @@ import numpy as np
 import pandas as pd
 from fpdf import FPDF
 
-# Update system path to import configuration
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-try:
-    from utils.config import csv_dir, MAPPING_PSYCHOSTIMULANT
-except EnvironmentError as e:
-    raise RuntimeError(
-        "EEG_DATA_DIR environment variable must be set before running this script."
-    ) from e
+from eeg_adhd_epilepsy_psychostimulant.utils.config import csv_dir, MAPPING_PSYCHOSTIMULANT
 
 # Configure logging
 logging.basicConfig(
@@ -39,28 +26,18 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 
-# ----------------------------------------------------------------------
-# Data Loading and Report Generation Functions
-# ----------------------------------------------------------------------
+
 def load_csv_file(file_path):
     """
     Load a CSV file into a DataFrame, log its statistics, and generate a PDF report.
-    
-    Args:
-        file_path (str): Full path to the CSV file.
-        
-    Returns:
-        pd.DataFrame: Loaded DataFrame.
     """
     df = pd.read_csv(file_path, sep=";", encoding="utf-8", low_memory=False)
     report_lines = []
 
-    base_name = os.path.basename(file_path)
-    header_message = f"Loaded file: {base_name} with {df.shape[0]} rows and {df.shape[1]} columns"
+    header_message = f"Loaded file: {file_path} with {df.shape[0]} rows and {df.shape[1]} columns"
     logging.info(header_message)
     report_lines.append(header_message)
 
-    # Log key details about the dataset
     info_messages = [
         f"First 5 rows:\n{df.head()}",
         f"Columns:\n{df.columns.tolist()}",
@@ -72,22 +49,18 @@ def load_csv_file(file_path):
         logging.info(msg)
         report_lines.append(msg)
     
-    # Log unique values for each column (excluding the first column)
     for column in df.columns[1:]:
         unique_msg = f"Unique values for '{column}':\n{df[column].unique()}"
         logging.info(unique_msg)
         report_lines.append(unique_msg)
     
-    # Log age range details if 'Age' column exists
     if 'Age' in df.columns:
         age_msg = f"Age range: {df['Age'].min()} - {df['Age'].max()}"
         logging.info(age_msg)
         report_lines.append(age_msg)
     
-    # Log value counts for each column (excluding the first column)
     for column in df.columns[1:]:
         count_msg = f"Value counts for '{column}':\n{df[column].value_counts()}"
-        # if column is Pt ID, return each Pt ID values that has more than 1 value counts only and their respective Study ID
         if column == 'Pt ID':
             pt_id_counts = df[column].value_counts()
             pt_id_duplicates = pt_id_counts[pt_id_counts > 1]
@@ -102,7 +75,6 @@ def load_csv_file(file_path):
             logging.info(count_msg)
         report_lines.append(count_msg)
     
-    # Generate PDF report of the logged information
     try:
         pdf = FPDF()
         pdf.add_page()
@@ -118,51 +90,31 @@ def load_csv_file(file_path):
     
     return df
 
+
 def clean_data(df):
     """
-    Clean and transform the input DataFrame:
-      - Map 'psychostimulant_description' to a numeric category.
-      - Create age groups using defined bins.
-    
-    Args:
-        df (pd.DataFrame): Original DataFrame.
-    
-    Returns:
-        pd.DataFrame: Cleaned and transformed DataFrame.
+    Clean and transform the input DataFrame.
     """
     df["psychostimulant_category"] = df["psychostimulant_description"].map(MAPPING_PSYCHOSTIMULANT)
     df["age_groups"] = pd.cut(df["Age"], bins=[0, 12, 19], labels=[1, 2], right=False)
     return df
 
-# ----------------------------------------------------------------------
-# Helper Filtering Functions
-# ----------------------------------------------------------------------
-# Define filters for Sex and Age
+
 sex_filters = {
     'F': lambda d: d[d['Sex'] == 'F'],
     'M': lambda d: d[d['Sex'] == 'M'],
-    'Combined': lambda d: d  # No filtering for combined
+    'Combined': lambda d: d
 }
 
 age_filters = {
     1: lambda d: d[d['age_groups'] == 1],
     2: lambda d: d[d['age_groups'] == 2],
-    'Combined': lambda d: d  # No filtering for combined
+    'Combined': lambda d: d
 }
 
+
 def apply_diagnosis_filter(df, diag_col, condition, include_potential=True):
-    """
-    Filter the DataFrame based on a diagnosis condition.
-    
-    Args:
-        df (pd.DataFrame): Input DataFrame.
-        diag_col (str): Column name containing diagnosis data.
-        condition (str): Filter condition: 'with', 'without', or 'combined'.
-        include_potential (bool): If True, include potential diagnoses in the 'with' condition.
-        
-    Returns:
-        pd.DataFrame: Filtered DataFrame.
-    """
+    """Filter the DataFrame based on a diagnosis condition."""
     if condition == 'combined':
         return df
 
@@ -175,37 +127,18 @@ def apply_diagnosis_filter(df, diag_col, condition, include_potential=True):
 
     return df[df[diag_col].isin(valid_values)]
 
-# Define diagnosis filter options and target diagnosis columns
+
 diag_filter_options = ['with', 'without', 'combined']
 diagnosis_columns = ['TDAH', 'Epilepsy', 'TSA']
 
-# ----------------------------------------------------------------------
-# Analysis Functions
-# ----------------------------------------------------------------------
+
 def get_counts_by_med_analysis(df, sex_key, age_key, diag_filters, analysis_type, include_potential=True):
-    """
-    Calculate subject counts based on medication analysis type and filters.
-    
-    Args:
-        df (pd.DataFrame): Input DataFrame.
-        sex_key (str): Key for sex filter ('F', 'M', or 'Combined').
-        age_key (int or str): Key for age filter (1, 2, or 'Combined').
-        diag_filters (dict): Dictionary mapping diagnosis to filter condition.
-        analysis_type (str): Analysis type ('ctrl_vs_all', 'med1_vs_med2', etc.).
-        include_potential (bool): Flag to include potential diagnoses.
-        
-    Returns:
-        tuple: (count_group1, count_group2, label_group1, label_group2)
-    """
-    # Apply sex and age filters
+    """Calculate subject counts based on analysis type and filters."""
     filtered_df = sex_filters[sex_key](df)
     filtered_df = age_filters[age_key](filtered_df)
-    
-    # Apply each diagnosis filter
     for diag in diagnosis_columns:
         filtered_df = apply_diagnosis_filter(filtered_df, diag, diag_filters.get(diag, 'combined'), include_potential)
 
-    # Define control group: rows with 'Psychostimulant (y/n)' equal to 0 or missing
     is_control = filtered_df['Psychostimulant (y/n)'].apply(lambda x: pd.isna(x) or x == 0)
     
     if analysis_type == 'ctrl_vs_all':
@@ -233,39 +166,27 @@ def get_counts_by_med_analysis(df, sex_key, age_key, diag_filters, analysis_type
     
     return None, None, None, None
 
+
 def create_analysis_dataframe(df, analysis_type, include_potential=True):
-    """
-    Create a summary DataFrame with counts for each combination of filters.
-    
-    Args:
-        df (pd.DataFrame): Cleaned input DataFrame.
-        analysis_type (str): Type of medication analysis.
-        include_potential (bool): Flag to include potential diagnoses.
-        
-    Returns:
-        pd.DataFrame: DataFrame summarizing counts across filter combinations.
-    """
+    """Create a summary DataFrame with counts for each combination of filters."""
     results = []
-    # Iterate over sex and age filter options
     for sex_key in sex_filters.keys():
         for age_key in age_filters.keys():
-            # Generate all combinations of diagnosis filter conditions (3^3 = 27 combinations)
             for diag_combo in itertools.product(diag_filter_options, repeat=3):
                 diag_filters = dict(zip(diagnosis_columns, diag_combo))
                 count1, count2, label1, label2 = get_counts_by_med_analysis(
                     df, sex_key, age_key, diag_filters, analysis_type, include_potential
                 )
-                
+
                 sub_df = df.copy()
                 sub_df = sex_filters[sex_key](sub_df)
                 sub_df = age_filters[age_key](sub_df)
                 for diag in diagnosis_columns:
                     sub_df = apply_diagnosis_filter(sub_df, diag, diag_filters.get(diag, 'combined'), include_potential)
-                
-                
+
                 overall_age_mean = sub_df['Age'].mean() if not sub_df.empty else np.nan
                 overall_age_std = sub_df['Age'].std() if not sub_df.empty else np.nan
-                
+
                 female_subset = sub_df[sub_df['Sex'] == 'F']
                 female_age_mean = female_subset['Age'].mean() if not female_subset.empty else np.nan
                 female_age_std = female_subset['Age'].std() if not female_subset.empty else np.nan
@@ -274,8 +195,6 @@ def create_analysis_dataframe(df, analysis_type, include_potential=True):
                 male_age_mean = male_subset['Age'].mean() if not male_subset.empty else np.nan
                 male_age_std = male_subset['Age'].std() if not male_subset.empty else np.nan
 
-                # Calculate age statistics for group1 and group2 separately.
-                # Recreate the splitting logic as per the analysis type.
                 if analysis_type == 'ctrl_vs_all':
                     is_control = sub_df['Psychostimulant (y/n)'].apply(lambda x: pd.isna(x) or x == 0)
                     group1_df = sub_df[is_control]
@@ -295,6 +214,7 @@ def create_analysis_dataframe(df, analysis_type, include_potential=True):
                 else:
                     group1_df = pd.DataFrame()
                     group2_df = pd.DataFrame()
+
                 M_count_group1 = group1_df[group1_df['Sex'] == 'M'].shape[0] if not group1_df.empty else 0
                 F_count_group1 = group1_df[group1_df['Sex'] == 'F'].shape[0] if not group1_df.empty else 0
                 M_count_group2 = group2_df[group2_df['Sex'] == 'M'].shape[0] if not group2_df.empty else 0
@@ -302,10 +222,8 @@ def create_analysis_dataframe(df, analysis_type, include_potential=True):
                 M_count = M_count_group1 + M_count_group2
                 F_count = F_count_group1 + F_count_group2
 
-                # Compute age statistics for group1
                 age_mean_group1 = group1_df['Age'].mean() if not group1_df.empty else np.nan
                 age_std_group1  = group1_df['Age'].std()  if not group1_df.empty else np.nan
-                # Compute age statistics for group2
                 age_mean_group2 = group2_df['Age'].mean() if not group2_df.empty else np.nan
                 age_std_group2  = group2_df['Age'].std()  if not group2_df.empty else np.nan
 
@@ -333,28 +251,18 @@ def create_analysis_dataframe(df, analysis_type, include_potential=True):
                 })
     return pd.DataFrame(results)
 
+
 def remove_small_count_rows(df, min_count=20):
-    """
-    Filter out rows where either of the last two count columns is less than min_count.
-    
-    Args:
-        df (pd.DataFrame): DataFrame with count columns.
-        min_count (int): Minimum threshold for counts.
-        
-    Returns:
-        pd.DataFrame: Filtered DataFrame.
-    """
+    """Filter out rows where either of the last two count columns is < min_count."""
     return df[(df.iloc[:, -2] >= min_count) & (df.iloc[:, -1] >= min_count)]
 
-# ----------------------------------------------------------------------
-# Main Execution Flow
-# ----------------------------------------------------------------------
+
 def main():
     parser = argparse.ArgumentParser(description="Generate analysis CSV files and PDF report from input CSV data.")
     parser.add_argument(
         "--csv_file",
         type=str,
-        default=os.path.join(csv_dir, "patients_controls_new.csv"),
+        default=f"{csv_dir}/patients_controls_new.csv",
         help="Name of the CSV file to process (located in the csv_dir)"
     )
     parser.add_argument(
@@ -364,35 +272,29 @@ def main():
     )
     args = parser.parse_args()
     
-    # Log the flag status
     warnings.warn(f"Potential in with flag set to: {args.potential_in_with}", UserWarning)
     
-    # Construct full file path
-    input_file = os.path.join(csv_dir, args.csv_file)
-    if not os.path.exists(input_file):
-        raise FileNotFoundError(f"File {input_file} does not exist")
+    input_file = args.csv_file
     
-    # Load and preprocess the data
     df = load_csv_file(input_file)
     df = clean_data(df)
     
-    # Define analysis types to process
     med_analyses = ['ctrl_vs_all', 'med1_vs_med2']
     
     for analysis in med_analyses:
         logging.info(f"Starting analysis: {analysis}")
         analysis_df = create_analysis_dataframe(df.copy(), analysis, include_potential=args.potential_in_with)
         
-        # Save full analysis results
-        output_csv = os.path.join(csv_dir, f"{analysis}_results.csv")
+        output_csv = f"{csv_dir}/{analysis}_results.csv"
         analysis_df.to_csv(output_csv, index=False)
         logging.info(f"Results saved to {output_csv}")
         
-        # Filter out rows with counts below threshold and save
         filtered_df = remove_small_count_rows(analysis_df)
-        filtered_csv = os.path.join(csv_dir, f"{analysis}_filtered_results.csv")
+        filtered_csv = f"{csv_dir}/{analysis}_filtered_results.csv"
         filtered_df.to_csv(filtered_csv, index=False)
         logging.info(f"Filtered results saved to {filtered_csv}")
 
+
 if __name__ == "__main__":
     main()
+

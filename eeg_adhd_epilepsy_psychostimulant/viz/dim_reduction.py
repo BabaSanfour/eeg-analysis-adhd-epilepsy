@@ -3,28 +3,17 @@
 Dimensionality reduction script.
 """
 import os
-import sys
 import argparse
 import logging
-from pathlib import Path
 from typing import Tuple
 
 import numpy as np
 
+from eeg_adhd_epilepsy_psychostimulant.viz.embeddings import load_embeddings, reshape_embeddings
+from eeg_adhd_epilepsy_psychostimulant.utils.config import results_dir
+
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
-# Append project root to sys.path
-BASE_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(BASE_DIR))
-
-from viz.embeddings import load_embeddings, reshape_embeddings
-try:
-    from utils.config import results_dir
-except EnvironmentError as e:
-    raise RuntimeError(
-        "EEG_DATA_DIR environment variable must be set before running this script."
-    ) from e
 
 
 def check_exists(filepath: str) -> bool:
@@ -155,12 +144,10 @@ def main():
 
     n_time_segments = 20 * 60 // args.segment_duration
 
-    # Cleaned data file path
     cleaned_file = os.path.join(
         results_dir, f"embeddings_cleaned_dur-{args.segment_duration}s_zscore-{args.z_score}_axis-{args.z_score_axis}.npz"
     )
 
-    # Load or compute cleaned data
     if check_exists(cleaned_file):
         logging.info(f"Cleaned data already computed at {cleaned_file}. Loading...")
         data = np.load(cleaned_file)
@@ -205,3 +192,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

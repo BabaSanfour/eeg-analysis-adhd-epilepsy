@@ -1,9 +1,7 @@
-"""Utility configuration variables exposed for convenient import.
+"""Convenience re-exports for common config names.
 
-This module imports selected names from :mod:`utils.config` explicitly to
-avoid polluting the namespace with wildcard imports.
+Used by the legacy `utils/__init__.py` that lived at repo top-level.
 """
-
 from .config import (
     data_dir,
     embeddings_dir,
@@ -29,3 +27,4 @@ __all__ = [
     "n_subjects",
     "MAPPING_PSYCHOSTIMULANT",
 ]
+

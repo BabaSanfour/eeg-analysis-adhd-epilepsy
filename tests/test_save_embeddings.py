@@ -42,7 +42,7 @@ sys.modules["tqdm"] = tqdm_module
 # Ensure the project root is on the Python path
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from dl_pipelines.reve_model import save_embeddings
+from eeg_adhd_epilepsy_psychostimulant.dl.reve_model import save_embeddings
 
 
 def test_save_embeddings_writes_to_output(tmp_path):
@@ -63,4 +63,3 @@ def test_save_embeddings_writes_to_output(tmp_path):
     with open(expected_file, "rb") as f:
         loaded = pickle.load(f)
     assert loaded == embeddings
-

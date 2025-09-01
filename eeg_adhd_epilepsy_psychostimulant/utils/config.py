@@ -60,3 +60,4 @@ MAPPING_PSYCHOSTIMULANT = {
     'Dextroamphetamine (Dexedrine)': 4,
     'Amphetamine/dextroamphetamine salt (Adderall)': 5,
 }
+

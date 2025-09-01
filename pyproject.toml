@@ -1,0 +1,64 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eeg-adhd-epilepsy-psychostimulant"
+version = "0.1.0"
+description = "EEG analysis, ML/DL pipelines, and visualization for ADHD/Epilepsy psychostimulant study."
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "Proprietary"}
+authors = [
+  { name = "Hamza Abdelhedi" }
+]
+keywords = ["EEG", "ADHD", "Epilepsy", "psychostimulant", "machine-learning", "deep-learning"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "numpy",
+  "pandas",
+  "mne",
+  "mne-bids",
+  "torch",
+  "tqdm",
+  "scikit-learn",
+  "umap-learn",
+  "fpdf",
+  "coco-pipe",
+]
+
+[project.urls]
+Homepage = "https://github.com/"
+
+[project.scripts]
+eeg-embeddings = "eeg_adhd_epilepsy_psychostimulant.dl.reve_model:main"
+eeg-dim-reduce = "eeg_adhd_epilepsy_psychostimulant.viz.dim_reduction:main"
+eeg-analysis-design = "eeg_adhd_epilepsy_psychostimulant.analysis.analysis_design:main"
+eeg-analysis-explore = "eeg_adhd_epilepsy_psychostimulant.analysis.analysis_exploration:main"
+eeg-ml-run = "eeg_adhd_epilepsy_psychostimulant.ml.run_ml_pipe:main"
+
+[tool.setuptools]
+packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy_psychostimulant*"], exclude = ["tests*"] } }
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E203",  # whitespace before ':' (black compat)
+    "E266",
+]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+

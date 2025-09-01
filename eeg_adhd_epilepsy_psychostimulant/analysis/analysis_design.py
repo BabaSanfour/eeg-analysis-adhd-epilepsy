@@ -14,18 +14,19 @@ Based on the specified analysis type:
     - "general": Subjects are classified as control (0) or psychostimulant (1) based on their "Psychostimulant (y/n)" status.
 
 Usage:
-    python analysis_design.py --demographic_csv path/to/demographic.csv \
+    python -m eeg_adhd_epilepsy_psychostimulant.analysis.analysis_design --demographic_csv path/to/demographic.csv \
         --features_csv path/to/features.csv --sex F --age_groups 1 --ADHD with --TSA combined \
         --Epilepsy without --analysis_type medications
 """
 
-import os
-import sys
 import argparse
 import logging
+import sys
 import warnings
 import pandas as pd
 import numpy as np
+
+from eeg_adhd_epilepsy_psychostimulant.utils.config import csv_dir, MAPPING_PSYCHOSTIMULANT
 
 # Configure logging for the script
 logging.basicConfig(
@@ -33,15 +34,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-
-# Update system path to import configuration
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-try:
-    from utils.config import csv_dir, MAPPING_PSYCHOSTIMULANT
-except EnvironmentError as e:
-    raise RuntimeError(
-        "EEG_DATA_DIR environment variable must be set before running this script."
-    ) from e
 
 
 def load_csv(file_path):
@@ -56,7 +48,7 @@ def load_csv(file_path):
     """
     try:
         df = pd.read_csv(file_path)
-        logging.info(f"Loaded {os.path.basename(file_path)} with {df.shape[0]} rows and {df.shape[1]} columns.")
+        logging.info(f"Loaded {file_path} with {df.shape[0]} rows and {df.shape[1]} columns.")
         return df
     except Exception as e:
         logging.error(f"Error loading file {file_path}: {e}")
@@ -271,3 +263,4 @@ if __name__ == "__main__":
     # Display a warning if needed
     warnings.warn("Ensure that both CSV files have the required columns and that 'Study ID' exists in both.", UserWarning)
     main()
+
