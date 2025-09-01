@@ -24,3 +24,4 @@ This repository contains scripts and data for comparing EEG signals between psyc
 - Develop an automated analysis workflow that tests different conditions (e.g., with/without specific factors like ADHD, Epilepsy, TSA), considers age groups, and analyzes different medication types. This may include generating selections via a JSON configuration file.
 - Normalize the data before feeding it to REVE!
 - Test finetuning strategies (REVE)!
+

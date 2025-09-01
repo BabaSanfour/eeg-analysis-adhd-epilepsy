@@ -53,7 +53,8 @@ def main():
     parser.add_argument("--config", type=str, required=True, help="Path to config file")
     args = parser.parse_args()
     
-    cfg = yaml.safe_load(open(args.config))
+    with open(args.config) as f:
+        cfg = yaml.safe_load(f)
     df = load("tabular", cfg["data_path"])
     all_results = {}
 
@@ -101,3 +102,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

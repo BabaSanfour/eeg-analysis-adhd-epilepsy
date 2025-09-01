@@ -12,3 +12,5 @@ slurm_EEG_psycho/
 decoding*
 *err
 *out
+
+ml_pipelines/results_*/
