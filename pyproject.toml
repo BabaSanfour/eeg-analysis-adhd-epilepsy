@@ -7,7 +7,7 @@ name = "eeg-adhd-epilepsy-psychostimulant"
 version = "0.1.0"
 description = "EEG analysis, ML/DL pipelines, and visualization for ADHD/Epilepsy psychostimulant study."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "Proprietary"}
 authors = [
   { name = "Hamza Abdelhedi" }
@@ -27,7 +27,6 @@ dependencies = [
   "scikit-learn",
   "umap-learn",
   "fpdf",
-  "coco-pipe",
 ]
 
 [project.urls]
@@ -36,7 +35,7 @@ Homepage = "https://github.com/"
 [project.scripts]
 eeg-embeddings = "eeg_adhd_epilepsy_psychostimulant.dl.reve_model:main"
 eeg-dim-reduce = "eeg_adhd_epilepsy_psychostimulant.viz.dim_reduction:main"
-eeg-analysis-explore = "eeg_adhd_epilepsy_psychostimulant.analysis.analysis_exploration:main"
+eeg-analysis-explore = "eeg_adhd_epilepsy_psychostimulant.explore.analysis_exploration:main"
 eeg-ml-run = "eeg_adhd_epilepsy_psychostimulant.ml.run_ml_pipe:main"
 eeg-analysis = "eeg_psychostimulant.analysis.design:main"
 
@@ -45,7 +44,7 @@ packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy_psychostimula
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 select = [
     "E",   # pycodestyle errors
     "F",   # pyflakes
@@ -61,4 +60,3 @@ ignore = [
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
-

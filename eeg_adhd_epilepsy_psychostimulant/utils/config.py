@@ -28,8 +28,11 @@ def _get_env_path(var_name: str, default: str | None = None) -> str:
     return value
 
 
-# Base directory for EEG data
-data_dir = _get_env_path("EEG_DATA_DIR")
+# Base directory for EEG data (default to repo-local ./data if unset)
+_default_data_dir = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "data")
+)
+data_dir = _get_env_path("EEG_DATA_DIR", _default_data_dir)
 
 # Subdirectories with sensible defaults that can also be overridden
 embeddings_dir = _get_env_path("EEG_EMBEDDINGS_DIR", os.path.join(data_dir, "embeddings"))
@@ -60,4 +63,3 @@ MAPPING_PSYCHOSTIMULANT = {
     'Dextroamphetamine (Dexedrine)': 4,
     'Amphetamine/dextroamphetamine salt (Adderall)': 5,
 }
-

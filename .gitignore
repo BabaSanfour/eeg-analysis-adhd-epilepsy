@@ -7,4 +7,6 @@ __pycache__/
 .vscode/
 data/
 plots/
+.venv/
+*egg-info/
 

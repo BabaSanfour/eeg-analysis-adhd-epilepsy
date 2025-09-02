@@ -5,6 +5,7 @@ This repository contains scripts and data for comparing EEG signals between psyc
 ## Directory Structure and Scripts
 - **data**: Contains scripts to convert raw EEG files and metadata into BIDS format and performs minimal processing (e.g., filtering, channel removal, montage setting).
 - **utils**: Utility scripts.
+- **explore**: Data exploration utilities for CSVs and analysis setup.
 - **ml_pipelines**: Scripts for building general machine learning pipelines and executing them for various analyses.
 - **dl_pipelines**: Scripts for running the reve_model and extracting embeddings.
 - **viz**: Visualization tools and scripts.
@@ -25,3 +26,15 @@ This repository contains scripts and data for comparing EEG signals between psyc
 - Normalize the data before feeding it to REVE!
 - Test finetuning strategies (REVE)!
 
+## Quick CSV Exploration
+
+Use the patients CSV explorer to print dataset info, counts, and confusion matrices (e.g., TDAH x Psychostimulant):
+
+```
+python -m eeg_adhd_epilepsy_psychostimulant.explore.patients_csv_explorer \
+  --csv_file data/csv/EEG_Psychostimulants_PatientList_08-2025.csv --grouped --save
+```
+
+Notes:
+- The loader auto-detects comma/semicolon separators and drops empty trailing columns.
+- If the environment variable `EEG_DATA_DIR` is unset, it defaults to the repo-local `data` directory.
