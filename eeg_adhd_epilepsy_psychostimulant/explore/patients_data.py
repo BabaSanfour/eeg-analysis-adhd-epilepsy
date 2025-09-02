@@ -6,7 +6,7 @@ columns (TDAH, Epilepsy, TSA, Psychostimulant), and confusion matrices such as
 TDAH x Psychostimulant. Optionally groups by Sex/Age groups and saves outputs.
 
 Usage:
-  python -m eeg_adhd_epilepsy_psychostimulant.explore.patients_csv_explorer \
+  python -m eeg_adhd_epilepsy_psychostimulant.explore.patients_data \
     --csv_file <path> [--grouped] [--save]
 """
 
