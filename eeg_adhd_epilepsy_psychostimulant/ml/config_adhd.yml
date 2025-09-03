@@ -1,11 +1,11 @@
 # -----------------------------------------------------------------------------
-# config for MLPipeline on Epilepsy classification using merged features+patients
+# Config for MLPipeline on ADHD (TDAH) classification using merged features+patients
 # -----------------------------------------------------------------------------
 
-global_experiment_id: "epilepsy_merged_features"
+global_experiment_id: "adhd_preliminary_results_all"
 data_path: "data/results/merged/features_patients.csv"
 results_dir: "data/results/ml"
-results_file: "epilepsy_merged"
+results_file: "adhd_all"
 
 defaults:
   random_state: 42
@@ -17,20 +17,29 @@ defaults:
     random_state: 42
   # Feature cleaning configuration (applied after selection)
   clean_cfg:
-    mode: "any"
+    mode: "sensor_wide"
     sep: ".spaces-"
     reverse: true
     verbose: true
-    min_abs_value: 
-    min_abs_fraction: 0.0
+    min_abs_value: 1e-6
+    min_abs_fraction: 0.15
   # Grid balance flags (if supported by coco-pipe)
-  grid_balance: false
-  require_full_grid: false
-  target_columns: ["Epilepsy"]
+  grid_balance: 
+    - 'Sex'
+  require_full_grid: true
+  balance:
+    strategy: "undersample"
+    covariates: ["Age", "Sex"]
+    qbins: 5
+    binning: "quantile"
+    seed: 42
+    prefer_clean_rows: true
+  target_columns: ["TDAH"]
   sep: ".spaces-"
   reverse: true
-  spatial_units: ['C3', 'C4', 'Cz', 'F3', 'F4', 'F7', 'F8', 'Fp1', 'Fp2', 'Fz', 'O1', 'O2', 'P3', 'P4', 'Pz', 'T3', 'T4', 'T5', 'T6']
-  # Base feature names (run_ml_pipe will prefix with 'feature-')
+  # analysis_unit: feature
+  spatial_units: ['C3', 'C4', 'Cz', 'F3', 'F4', 'F7', 'F8', 'Fp1', 'Fp2', 'Fz', 'O1',
+       'O2', 'P3', 'P4', 'Pz', 'T3', 'T4', 'T5', 'T6']
   feature_names:
     - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'beta')"
     - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'delta')"
@@ -99,42 +108,73 @@ defaults:
     - "sampleEntropyMeanEpochs"
     - "spectralEntropyMeanEpochs"
     - "svdEntropyMeanEpochs"
-  balance:
-    strategy: "undersample"
-    covariates: ["Age", "Sex"]
-    qbins: 5
-    binning: "quantile"
-    seed: 42
-    prefer_clean: true
-
 analyses:
-  - id: "classification_baseline"
+  - id: "classification"
     task: "classification"
     analysis_type: "baseline"
+    # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
     row_filter:
-      - column: "TDAH"
-        values: "0"
+      - column: "Epilepsy"
+        values: 0
         operator: "=="
       - column: "TSA"
-        values: "0"
+        values: 0
         operator: "=="
+      - column: "TDAH"
+        values: 2
+        operator: "!="
     models:
-      - "Random Forest"
+      - "Logistic Regression"
     metrics:
-      - "accuracy" 
-      - "roc_auc"
-      - "f1"
+      - "accuracy"
     scoring: "accuracy"
 
-  - id: "classification_feature_selection"
-    task: "classification"
-    analysis_type: "feature_selection"
-    models:
-      - "Random Forest"
-    metrics:
-      - "f1"
-      - "roc_auc"
-      - "accuracy"
-    n_features: 5
-    direction: "forward"
-    scoring: "accuracy"
+#   - id: "classification_feature_selection"
+#     task: "classification"
+#     analysis_type: "feature_selection"
+#     models:
+#       - "Random Forest"
+#     metrics:
+#       - "f1"
+#       - "roc_auc"
+#       - "accuracy"
+#     n_features: 5
+#     direction: "forward"
+#     scoring: "accuracy"
+
+
+# analyses:
+#   - id: "classification_baseline"
+#     task: "classification"
+#     analysis_type: "baseline"
+#     # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+#     row_filter:
+#       - column: "Epilepsy"
+#         values: 0
+#         operator: "=="
+#       - column: "TSA"
+#         values: 0
+#         operator: "=="
+#       - column: "TDAH"
+#         values: 2
+#         operator: "!="
+#     models:
+#       - "Random Forest"
+#     metrics:
+#       - "accuracy"
+#       - "roc_auc"
+#       - "f1"
+#     scoring: "accuracy"
+
+#   - id: "classification_feature_selection"
+#     task: "classification"
+#     analysis_type: "feature_selection"
+#     models:
+#       - "Random Forest"
+#     metrics:
+#       - "f1"
+#       - "roc_auc"
+#       - "accuracy"
+#     n_features: 5
+#     direction: "forward"
+#     scoring: "accuracy"

@@ -9,4 +9,5 @@ data/
 plots/
 .venv/
 *egg-info/
+results/
 

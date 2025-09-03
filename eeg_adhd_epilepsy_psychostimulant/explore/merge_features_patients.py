@@ -118,7 +118,14 @@ def main() -> None:
     if "subject" in merged.columns and "Study ID" in merged.columns:
         drop_cols.append("Study ID")
     # Patient ID not needed downstream
-    for c in ["Pt ID", "psychostimulant_description", "Psychostimulant (y/n)"]:
+    for c in [
+        "Pt ID",
+        "psychostimulant_description",
+        "Psychostimulant (y/n)",
+        "dataset",
+        "id",
+        "task",
+    ]:
         if c in merged.columns:
             drop_cols.append(c)
     if drop_cols:

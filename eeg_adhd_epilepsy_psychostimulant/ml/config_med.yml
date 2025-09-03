@@ -3,10 +3,10 @@
 # -----------------------------------------------------------------------------
 
 # Global parameters shared across analyses
-global_experiment_id: "exploratory_analysis_ADHD_20_05_2025"
-data_path: "/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/csv/demo_med.csv"
-results_dir: "./results_"
-results_file: "exploratory_analysis_ADHD_20_05_2025"
+global_experiment_id: "meds_preliminary_results"
+data_path: "data/results/merged/features_patients.csv"
+results_dir: "data/results/ml_meds"
+results_file: "meds"
 
 # Default analysis parameters (can be overridden per analysis)
 defaults:
@@ -17,37 +17,132 @@ defaults:
     n_splits: 5
     shuffle: true
     random_state: 42
+  # Feature cleaning configuration (applied after selection)
+  clean_cfg:
+    mode: "sensor_wide"
+    sep: ".spaces-"
+    reverse: true
+    verbose: true
+    min_abs_value: 1e-6
+    min_abs_fraction: 0.15
+  # Grid balance flags (if supported by coco-pipe)
+  grid_balance: 
+    - 'Sex'
+  require_full_grid: true
+  balance:
+    strategy: "undersample"
+    covariates: ["Age", "Sex"]
+    qbins: 5
+    binning: "quantile"
+    seed: 42
+    prefer_clean: true
   target_columns: ["psychostimulant_category"]
+  sep: ".spaces-"
+  reverse: true
+  analysis_unit: sensor
   spatial_units: ['C3', 'C4', 'Cz', 'F3', 'F4', 'F7', 'F8', 'Fp1', 'Fp2', 'Fz', 'O1',
        'O2', 'P3', 'P4', 'Pz', 'T3', 'T4', 'T5', 'T6']
-  feature_names: [
-       'feature-lzivComplexityMeanEpochs'
-       ]
+  feature_names:
+    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'beta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'delta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'gamma')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'theta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'alpha')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'delta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'gamma')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'theta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'alpha')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'beta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'gamma')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'theta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'alpha')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'beta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'delta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'theta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'alpha')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'beta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'delta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'gamma')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'beta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'delta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'gamma')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'theta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'alpha')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'delta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'gamma')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'theta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'alpha')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'beta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'gamma')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'theta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'alpha')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'beta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'delta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'theta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'alpha')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'beta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'delta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'gamma')"
+    - "RelativeBandPowerFromAverageFooof.bands-alpha"
+    - "RelativeBandPowerFromAverageFooof.bands-beta"
+    - "RelativeBandPowerFromAverageFooof.bands-delta"
+    - "RelativeBandPowerFromAverageFooof.bands-gamma"
+    - "RelativeBandPowerFromAverageFooof.bands-theta"
+    - "RelativeBandPowerFromAverageSpectrum.bands-alpha"
+    - "RelativeBandPowerFromAverageSpectrum.bands-beta"
+    - "RelativeBandPowerFromAverageSpectrum.bands-delta"
+    - "RelativeBandPowerFromAverageSpectrum.bands-gamma"
+    - "RelativeBandPowerFromAverageSpectrum.bands-theta"
+    - "appEntropyMeanEpochs"
+    - "entropyMultiscaleMeanEpochs"
+    - "foofOffset"
+    - "fooofExponent"
+    - "higuchiFdMeanEpochs"
+    - "higuchiFdVarEpochs"
+    - "hjorthComplexityMeanEpochs"
+    - "hjorthMobilityMeanEpochs"
+    - "katzFdMeanEpochs"
+    - "katzFdSDEpochs"
+    - "lzivComplexityMeanEpochs"
+    - "numZerocrossMeanEpochs"
+    - "permEntropyMeanEpochs"
+    - "petrosianFdMeanEpochs"
+    - "sampleEntropyMeanEpochs"
+    - "spectralEntropyMeanEpochs"
+    - "svdEntropyMeanEpochs"
 
 # List of analyses to run
 analyses:
-  - id: "classification_baseline"
+  - id: "classification"
     task: "classification"
     analysis_type: "baseline"
+    # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+    row_filter:
+      # - column: "Epilepsy"
+      #   values: 0
+      #   operator: "=="
+      # - column: "TSA"
+      #   values: 0
+      #   operator: "=="
+      - column: "psychostimulant_category"
+        values: [1, 2]
+        operator: in
     models:
-      - "Random Forest"
-    metrics:
-      - "accuracy" 
-      - "roc_auc"
-      - "f1"
-    scoring: "accuracy"
-
-  - id: "classification_feature_selection"
-    task: "classification"
-    analysis_type: "feature_selection"
-    models:
-      - "Random Forest"
       - "Logistic Regression"
     metrics:
-      - "f1"
-      - "roc_auc"
-      - "accuracy"
-    n_features: 1
-    direction: "forward"
+      - "accuracy" 
     scoring: "accuracy"
 
+  # - id: "classification_feature_selection"
+  #   task: "classification"
+  #   analysis_type: "feature_selection"
+  #   models:
+  #     - "Random Forest"
+  #     - "Logistic Regression"
+  #   metrics:
+  #     - "f1"
+  #     - "roc_auc"
+  #     - "accuracy"
+  #   n_features: 1
+  #   direction: "forward"
+  #   scoring: "accuracy"

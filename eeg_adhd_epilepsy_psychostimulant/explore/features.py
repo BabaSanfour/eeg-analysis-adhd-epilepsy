@@ -62,8 +62,10 @@ def find_bad_values_by_feature(df: pd.DataFrame, subject_col: str = "subject") -
 
     for base, cols in sorted(groups.items()):
         sub = data[cols].apply(pd.to_numeric, errors="coerce")
-        isinf = pd.DataFrame(np.isinf(sub.to_numpy()), index=sub.index, columns=sub.columns)
-        bad = sub.isna() | isinf
+        arr = sub.to_numpy()
+        isinf = pd.DataFrame(np.isinf(arr), index=sub.index, columns=sub.columns)
+        zeros = pd.DataFrame(arr == 0, index=sub.index, columns=sub.columns)
+        bad = sub.isna() | isinf | zeros
         rows_bad = bad.any(axis=1)
         if not rows_bad.any():
             continue
@@ -107,7 +109,8 @@ def rank_subjects_by_bad_values(
     counts: Dict[object, int] = {}
     for base, cols in groups.items():
         sub = data[cols].apply(pd.to_numeric, errors="coerce")
-        bad = np.isnan(sub.to_numpy()) | np.isinf(sub.to_numpy())
+        arr = sub.to_numpy()
+        bad = np.isnan(arr) | np.isinf(arr) | (arr == 0)
         # Any bad across sensors for each row
         row_has_bad = bad.any(axis=1)
         # Unique subjects that have this base feature bad in any row
