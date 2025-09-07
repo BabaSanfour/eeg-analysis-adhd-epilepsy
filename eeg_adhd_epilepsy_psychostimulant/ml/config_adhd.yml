@@ -2,10 +2,10 @@
 # Config for MLPipeline on ADHD (TDAH) classification using merged features+patients
 # -----------------------------------------------------------------------------
 
-global_experiment_id: "adhd_finetune_nocomorbidities_results"
+global_experiment_id: "adhd_finetune_featureselection_nocomorbidities_results"
 data_path: "data/results/merged/features_patients.csv"
 results_dir: "data/results/ml"
-results_file: "adhd_finetune_nocomorbidities"
+results_file: "adhd_finetune_nocomorbidities_featureselection"
 
 defaults:
   random_state: 42
@@ -97,11 +97,43 @@ defaults:
     - "spectralEntropyMeanEpochs"
     - "svdEntropyMeanEpochs"
 analyses:
-  - id: "classification_hpsearch_all"
+  # - id: "classification_hpsearch_all"
+  #   task: "classification"
+  #   analysis_type: "hp_search"
+  #   analysis_unit: all
+  #   # Restrict to ADHD without comorbid epilepsy/TSA; exclude missing/unknown class
+  #   row_filter:
+  #     - column: "Epilepsy"
+  #       values: 0
+  #       operator: "=="
+  #     - column: "TSA"
+  #       values: 0
+  #       operator: "=="
+  #     - column: "TDAH"
+  #       values: 2
+  #       operator: "!="
+  #   models:
+  #     - "Logistic Regression"
+  #   metrics:
+  #     - "accuracy"
+  #     - "roc_auc"
+  #   scoring: "accuracy"
+  #   search_type: "grid"
+  #   n_iter: 100
+  #   # Prefer keeping more data during balancing
+  #   balance:
+  #     strategy: "undersample"
+  #     covariates: ["Age", "Sex"]
+  #     qbins: 5
+  #     binning: "quantile"
+  #     seed: 42
+  #     prefer_clean_rows: true
+  #   require_full_grid: false
+
+  - id: "classification_feature_selection_top10"
     task: "classification"
-    analysis_type: "hp_search"
+    analysis_type: "feature_selection"
     analysis_unit: all
-    # Restrict to ADHD without comorbid epilepsy/TSA; exclude missing/unknown class
     row_filter:
       - column: "Epilepsy"
         values: 0
@@ -114,10 +146,9 @@ analyses:
         operator: "!="
     models:
       - "Logistic Regression"
+      - "Random Forest"
     metrics:
       - "accuracy"
-      - "roc_auc"
-    scoring: "accuracy"
     search_type: "grid"
     n_iter: 100
     # Prefer keeping more data during balancing
@@ -129,21 +160,9 @@ analyses:
       seed: 42
       prefer_clean_rows: true
     require_full_grid: false
-
-  # - id: "classification_feature_selection_top10"
-  #   task: "classification"
-  #   analysis_type: "feature_selection"
-  #   analysis_unit: all
-  #   models:
-  #     - "Random Forest"
-  #   metrics:
-  #     - "accuracy"
-  #     - "balanced_accuracy"
-  #     - "roc_auc"
-  #     - "f1"
-  #   n_features: 10
-  #   direction: "forward"
-  #   scoring: "roc_auc"
+    n_features: 10
+    direction: "forward"
+    scoring: "accuracy"
 
 #   - id: "classification_feature_selection"
 #     task: "classification"
