@@ -2,10 +2,10 @@
 # Config for MLPipeline on ADHD (TDAH) classification using merged features+patients
 # -----------------------------------------------------------------------------
 
-global_experiment_id: "adhd_preliminary_results_all"
+global_experiment_id: "adhd_finetune_nocomorbidities_results"
 data_path: "data/results/merged/features_patients.csv"
 results_dir: "data/results/ml"
-results_file: "adhd_all"
+results_file: "adhd_finetune_nocomorbidities"
 
 defaults:
   random_state: 42
@@ -40,6 +40,14 @@ defaults:
   # analysis_unit: feature
   spatial_units: ['C3', 'C4', 'Cz', 'F3', 'F4', 'F7', 'F8', 'Fp1', 'Fp2', 'Fz', 'O1',
        'O2', 'P3', 'P4', 'Pz', 'T3', 'T4', 'T5', 'T6']
+  # Optional PCA step (applied after cleaning/balancing, before modeling)
+  pca:
+    enabled: false       # set true to enable
+    n_components: 0.95   # float (explained variance) or int
+    scale: true          # standardize features before PCA
+    whiten: false        # PCA whitening (can help some models)
+    feature_prefix: "PC"
+    suffix_results_file: true
   feature_names:
     - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'theta')"
     - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'alpha')"
@@ -89,10 +97,11 @@ defaults:
     - "spectralEntropyMeanEpochs"
     - "svdEntropyMeanEpochs"
 analyses:
-  - id: "classification"
+  - id: "classification_hpsearch_all"
     task: "classification"
-    analysis_type: "baseline"
-    # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+    analysis_type: "hp_search"
+    analysis_unit: all
+    # Restrict to ADHD without comorbid epilepsy/TSA; exclude missing/unknown class
     row_filter:
       - column: "Epilepsy"
         values: 0
@@ -107,7 +116,34 @@ analyses:
       - "Logistic Regression"
     metrics:
       - "accuracy"
+      - "roc_auc"
     scoring: "accuracy"
+    search_type: "grid"
+    n_iter: 100
+    # Prefer keeping more data during balancing
+    balance:
+      strategy: "undersample"
+      covariates: ["Age", "Sex"]
+      qbins: 5
+      binning: "quantile"
+      seed: 42
+      prefer_clean_rows: true
+    require_full_grid: false
+
+  # - id: "classification_feature_selection_top10"
+  #   task: "classification"
+  #   analysis_type: "feature_selection"
+  #   analysis_unit: all
+  #   models:
+  #     - "Random Forest"
+  #   metrics:
+  #     - "accuracy"
+  #     - "balanced_accuracy"
+  #     - "roc_auc"
+  #     - "f1"
+  #   n_features: 10
+  #   direction: "forward"
+  #   scoring: "roc_auc"
 
 #   - id: "classification_feature_selection"
 #     task: "classification"

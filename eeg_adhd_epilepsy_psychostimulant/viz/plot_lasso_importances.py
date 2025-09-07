@@ -59,7 +59,7 @@ def pick_model(results_per_model: Dict[str, dict], preferred: Optional[Sequence[
 
 
 def _greekify(text: str) -> str:
-    rep = {"alpha": "α", "beta": "β", "gamma": "γ", "theta": "θ", "delta": "δ"}
+    rep = {"alpha": "alpha", "beta": "beta", "gamma": "gamma", "theta": "theta", "delta": "delta"}
     for k, v in rep.items():
         text = re.sub(rf"\b{k}\b", v, text, flags=re.IGNORECASE)
     return text
@@ -72,11 +72,11 @@ def make_label_map_keep_sensor(cols: Sequence[str]) -> Dict[str, str]:
     Keeps '<SENSOR>' and abbreviates '<FEATURE>'.
     """
     abbrev = {
-        "BandRatiosFromAverageFooof": "BR Fooof",
-        "BandRatiosFromAverageSpectrum": "BR Spec",
-        "RelativeBandPowerFromAverageFooof": "RBP Fooof",
-        "RelativeBandPowerFromAverageSpectrum": "RBP Spec",
-        "higuchiFd": "Higuchi FD",
+        "BandRatiosFromAverageFooof": "(Fooof)",
+        "BandRatiosFromAverageSpectrum": "(Spec)",
+        "RelativeBandPowerFromAverageFooof": "(Fooof)",
+        "RelativeBandPowerFromAverageSpectrum": "(Spec)",
+        "higuchiFd": "Higuchi FD ",
         "katzFd": "Katz FD",
         "petrosianFd": "Petrosian FD",
         "hjorthComplexity": "Hjorth Complexity",
@@ -88,8 +88,8 @@ def make_label_map_keep_sensor(cols: Sequence[str]) -> Dict[str, str]:
         "permEntropy": "Perm Entropy",
         "entropyMultiscale": "MSE",
         "fooofExponent": "FOOOF Exp",
-        "foofOffset": "FOOOF Off",
-        "fooofOffset": "FOOOF Off",
+        "foofOffset": "FOOOF Offset",
+        "fooofOffset": "FOOOF Offset",
     }
 
     out: Dict[str, str] = {}
@@ -103,6 +103,10 @@ def make_label_map_keep_sensor(cols: Sequence[str]) -> Dict[str, str]:
         if m_sensor:
             sensor = m_sensor.group(1)
             s = s[: m_sensor.start()]  # strip the sensor suffix
+        # Replace '.bands-' with a single space to simplify labels
+        s = s.replace(".bands-", " ")
+        # when there is epochs in s remove it
+        s = s.replace("Epochs", " ")
         # Abbreviate feature part
         m_pair = re.search(r"bands_pairs-\((.+)\)", s)
         if m_pair:
@@ -119,7 +123,8 @@ def make_label_map_keep_sensor(cols: Sequence[str]) -> Dict[str, str]:
             feat_label = _greekify(feat_label)
             feat_label = feat_label.replace("MeanEpochs", "")
             feat_label = re.sub(r"[_.-]+$", "", feat_label).strip()
-
+        # Final tidy-up: collapse repeated spaces
+        feat_label = re.sub(r"\s+", " ", feat_label).strip()
         out[raw] = f"{sensor or ''} — {feat_label}".strip(" —")
     return out
 
@@ -204,24 +209,33 @@ def main():
     title_parts = [f"{model_name}"]
     if acc_mean is not None:
         title_parts.append(f"{metric_name.capitalize()}: {acc_mean:.3f}")
-    title_parts.append(f"Zeroed features: {zeros}")
-    title = " — ".join(title_parts)
+    title_parts.append(f"Zeroed features: {zeros} / {len(s)}")
+    # title = " — ".join(title_parts)
+    title = "Feature importance (Logistic Regression)"
 
     fig, ax = plot_bar(
         s_top,
         labels=s_top.index.tolist(),
         label_map=label_map,
-        top_n=30,  # already trimmed
+        top_n=15,  # already trimmed
         ascending=False,
-        orientation="vertical",
+        orientation="horizontal",
         title=title,
         xlabel=xlabel,
         cmap="magma",
-        figsize=(10, 6)
+        figsize=(6, 8),
+        abs_values=True,
+        nice_axis_limits=True,
+        remove_spines="right top",
+        remove_ticks="both",
     )
 
     if args.save:
-        fig.savefig(args.save, dpi=150, bbox_inches="tight")
+        fig.savefig(args.save, dpi=300, bbox_inches="tight")
+        # save as pdf and svg too
+        if args.save.lower().endswith((".png", ".jpg", ".jpeg")):
+            fig.savefig(f"{os.path.splitext(args.save)[0]}.pdf", dpi=300, bbox_inches="tight")
+            fig.savefig(f"{os.path.splitext(args.save)[0]}.svg", dpi=300, bbox_inches="tight")
     if not args.no_show:
         plt.show()
     plt.close(fig)
