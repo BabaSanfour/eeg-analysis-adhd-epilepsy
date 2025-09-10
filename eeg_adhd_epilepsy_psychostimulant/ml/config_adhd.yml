@@ -2,10 +2,10 @@
 # Config for MLPipeline on ADHD (TDAH) classification using merged features+patients
 # -----------------------------------------------------------------------------
 
-global_experiment_id: "adhd_finetune_featureselection_nocomorbidities_onesensorallfeatures_results5"
+global_experiment_id: "adhd_finetune_featureselection_nocomorbidities_onefeatureallsensors_results4"
 data_path: "data/results/merged/features_patients.csv"
 results_dir: "data/results/ml"
-results_file: "adhd_finetune_nocomorbidities_onesensorallfeatures_featureselection5"
+results_file: "adhd_finetune_nocomorbidities_onefeatureallsensors_featureselection4"
 
 defaults:
   random_state: 42
@@ -22,7 +22,7 @@ defaults:
     reverse: true
     verbose: true
     min_abs_value: 1e-6
-    min_abs_fraction: 0.20
+    min_abs_fraction: 0.5
   # Grid balance flags (if supported by coco-pipe)
   grid_balance: 
     - 'Sex'
@@ -133,7 +133,7 @@ analyses:
   # - id: "classification_feature_selection_top10_osaf"
   #   task: "classification"
   #   analysis_type: "feature_selection"
-  #   analysis_unit: sensor
+  #   analysis_unit: feature
   #   row_filter:
   #     - column: "Epilepsy"
   #       values: 0
@@ -162,10 +162,76 @@ analyses:
   #   direction: "forward"
   #   scoring: "accuracy"
 
-  - id: "classification_feature_selection_top16_osaf"
+  # - id: "classification_feature_selection_top11_ofas"
+  #   task: "classification"
+  #   analysis_type: "feature_selection"
+  #   analysis_unit: feature
+  #   row_filter:
+  #     - column: "Epilepsy"
+  #       values: 0
+  #       operator: "=="
+  #     - column: "TSA"
+  #       values: 0
+  #       operator: "=="
+  #     - column: "TDAH"
+  #       values: 2
+  #       operator: "!="
+  #   models:
+  #     - "Logistic Regression"
+  #     # - "Random Forest"
+  #   metrics:
+  #     - "accuracy"
+  #   # Prefer keeping more data during balancing
+  #   balance:
+  #     strategy: "undersample"
+  #     covariates: ["Age", "Sex"]
+  #     qbins: 5
+  #     binning: "quantile"
+  #     seed: 42
+  #     prefer_clean_rows: true
+  #   require_full_grid: false
+  #   n_features: 11
+  #   direction: "forward"
+  #   scoring: "accuracy"
+
+  # - id: "classification_feature_selection_top12_osaf"
+  #   task: "classification"
+  #   analysis_type: "feature_selection"
+  #   analysis_unit: feature
+  #   row_filter:
+  #     - column: "Epilepsy"
+  #       values: 0
+  #       operator: "=="
+  #     - column: "TSA"
+  #       values: 0
+  #       operator: "=="
+  #     - column: "TDAH"
+  #       values: 2
+  #       operator: "!="
+  #   models:
+  #     - "Logistic Regression"
+  #     # - "Random Forest"
+  #   metrics:
+  #     - "accuracy"
+  #   # Prefer keeping more data during balancing
+  #   balance:
+  #     strategy: "undersample"
+  #     covariates: ["Age", "Sex"]
+  #     qbins: 5
+  #     binning: "quantile"
+  #     seed: 42
+  #     prefer_clean_rows: true
+  #   require_full_grid: false
+  #   n_features: 12
+  #   direction: "forward"
+  #   scoring: "accuracy"
+
+
+
+  - id: "classification_feature_selection_top18_osaf"
     task: "classification"
     analysis_type: "feature_selection"
-    analysis_unit: sensor
+    analysis_unit: feature
     row_filter:
       - column: "Epilepsy"
         values: 0
@@ -190,14 +256,15 @@ analyses:
       seed: 42
       prefer_clean_rows: true
     require_full_grid: false
-    n_features: 16
+    n_features: 18
     direction: "forward"
     scoring: "accuracy"
+
 
   - id: "classification_feature_selection_top17_osaf"
     task: "classification"
     analysis_type: "feature_selection"
-    analysis_unit: sensor
+    analysis_unit: feature
     row_filter:
       - column: "Epilepsy"
         values: 0
@@ -228,10 +295,10 @@ analyses:
 
 
 
-  - id: "classification_feature_selection_top18_osaf"
+  - id: "classification_feature_selection_top16_osaf"
     task: "classification"
     analysis_type: "feature_selection"
-    analysis_unit: sensor
+    analysis_unit: feature
     row_filter:
       - column: "Epilepsy"
         values: 0
@@ -256,73 +323,6 @@ analyses:
       seed: 42
       prefer_clean_rows: true
     require_full_grid: false
-    n_features: 18
-    direction: "forward"
-    scoring: "accuracy"
-
-
-  - id: "classification_feature_selection_top19_osaf"
-    task: "classification"
-    analysis_type: "feature_selection"
-    analysis_unit: sensor
-    row_filter:
-      - column: "Epilepsy"
-        values: 0
-        operator: "=="
-      - column: "TSA"
-        values: 0
-        operator: "=="
-      - column: "TDAH"
-        values: 2
-        operator: "!="
-    models:
-      - "Logistic Regression"
-      # - "Random Forest"
-    metrics:
-      - "accuracy"
-    # Prefer keeping more data during balancing
-    balance:
-      strategy: "undersample"
-      covariates: ["Age", "Sex"]
-      qbins: 5
-      binning: "quantile"
-      seed: 42
-      prefer_clean_rows: true
-    require_full_grid: false
-    n_features: 19
-    direction: "forward"
-    scoring: "accuracy"
-
-
-
-  - id: "classification_feature_selection_top20_osaf"
-    task: "classification"
-    analysis_type: "feature_selection"
-    analysis_unit: sensor
-    row_filter:
-      - column: "Epilepsy"
-        values: 0
-        operator: "=="
-      - column: "TSA"
-        values: 0
-        operator: "=="
-      - column: "TDAH"
-        values: 2
-        operator: "!="
-    models:
-      - "Logistic Regression"
-      # - "Random Forest"
-    metrics:
-      - "accuracy"
-    # Prefer keeping more data during balancing
-    balance:
-      strategy: "undersample"
-      covariates: ["Age", "Sex"]
-      qbins: 5
-      binning: "quantile"
-      seed: 42
-      prefer_clean_rows: true
-    require_full_grid: false
-    n_features: 20
+    n_features: 16
     direction: "forward"
     scoring: "accuracy"

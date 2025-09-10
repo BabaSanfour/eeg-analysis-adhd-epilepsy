@@ -185,11 +185,11 @@ def analysis_to_sensor(analysis_id: str, known_sensors: Sequence[str]) -> Option
 
 def _greekify(text: str) -> str:
     rep = {
-        "alpha": "α",
-        "beta": "β",
-        "gamma": "γ",
-        "theta": "θ",
-        "delta": "δ",
+        "alpha": "Alpha",
+        "beta": "Beta",
+        "gamma": "Gamma",
+        "theta": "Theta",
+        "delta": "Delta",
     }
     for k, v in rep.items():
         text = re.sub(rf"\b{k}\b", v, text, flags=re.IGNORECASE)
@@ -206,11 +206,11 @@ def make_label_map(items: Sequence[str], sensor: Optional[str] = None) -> Dict[s
     - Remove boilerplate suffixes
     """
     abbrev = {
-        "BandRatiosFromAverageFooof": "BR Fooof",
-        "BandRatiosFromAverageSpectrum": "BR Spec",
-        "RelativeBandPowerFromAverageFooof": "RBP Fooof",
-        "RelativeBandPowerFromAverageSpectrum": "RBP Spec",
-        "higuchiFd": "Higuchi FD",
+        "BandRatiosFromAverageFooof": "(Corrected)",
+        "BandRatiosFromAverageSpectrum": "",
+        "RelativeBandPowerFromAverageFooof": "(Corrected)",
+        "RelativeBandPowerFromAverageSpectrum": "",
+        "higuchiFd": "Higuchi FD ",
         "katzFd": "Katz FD",
         "petrosianFd": "Petrosian FD",
         "hjorthComplexity": "Hjorth Complexity",
@@ -222,8 +222,8 @@ def make_label_map(items: Sequence[str], sensor: Optional[str] = None) -> Dict[s
         "permEntropy": "Perm Entropy",
         "entropyMultiscale": "MSE",
         "fooofExponent": "FOOOF Exp",
-        "foofOffset": "FOOOF Off",
-        "fooofOffset": "FOOOF Off",
+        "foofOffset": "FOOOF Offset",
+        "fooofOffset": "FOOOF Offset",
     }
 
     label_map: Dict[str, str] = {}
@@ -236,6 +236,11 @@ def make_label_map(items: Sequence[str], sensor: Optional[str] = None) -> Dict[s
         if sensor:
             s = re.sub(rf"\.spaces-{re.escape(sensor)}$", "", s)
         s = re.sub(r"\.spaces-[A-Za-z0-9]+$", "", s)
+        # Replace '.bands-' with a single space to simplify labels
+        s = s.replace(".bands-", " ")
+        # when there is epochs in s remove it
+        s = s.replace("Epochs", " ")
+        # Abbreviate feature part
 
         # compress band pair tuple to Greek, e.g., α/β
         m = re.search(r"bands_pairs-\((.+)\)", s)
@@ -243,17 +248,30 @@ def make_label_map(items: Sequence[str], sensor: Optional[str] = None) -> Dict[s
             pair = m.group(1).replace("'", "").replace(" ", "").replace(",", "/")
             pair = _greekify(pair)
             head = s[: m.start()].rstrip(".")
+            corrected = False
             for k, v in abbrev.items():
-                head = head.replace(k, v)
-            s = f"{head} {pair}".strip()
+                if k in head:
+                    head = head.replace(k, v)
+            if "(Corrected)" in head or "(corrected)" in head:
+                corrected = True
+                head = head.replace("(Corrected)", "").replace("(corrected)", "").strip()
+            s_disp = f"{head} {pair}".strip()
+            if corrected:
+                s_disp = f"{s_disp} (Corrected)"
         else:
+            corrected = False
             for k, v in abbrev.items():
-                s = s.replace(k, v)
+                if k in s:
+                    s = s.replace(k, v)
+            if "(Corrected)" in s or "(corrected)" in s:
+                corrected = True
+                s = s.replace("(Corrected)", "").replace("(corrected)", "").strip()
             s = _greekify(s)
             s = s.replace("MeanEpochs", "")
             s = re.sub(r"[_.-]+$", "", s).strip()
+            s_disp = s + (" (Corrected)" if corrected else "")
 
-        label_map[raw] = s
+        label_map[raw] = s_disp
     return label_map
 
 
@@ -318,7 +336,7 @@ def main():
     model_name_used: Optional[str] = None
     metric_name = args.metric
 
-    for analysis_id, results_per_model in all_results['classification'].items():
+    for analysis_id, results_per_model in all_results['classification_feature_selection_osaf_9feature'].items():
         sensor = analysis_to_sensor(analysis_id, sensor_names)
         if not sensor:
             continue
@@ -337,27 +355,39 @@ def main():
     if not sensor_acc:
         raise RuntimeError("No sensor accuracies found. Ensure analysis IDs include sensor names and coords match.")
 
+    # Pick best sensor (highest metric value)
+    best_sensor = max(sensor_acc, key=sensor_acc.get)
+
     # Topomap
     fig1, ax1 = plot_topomap(
         sensor_acc,
         coords_df[["x", "y"]],
-        title=f"Sensor {metric_name.capitalize()} ({model_name_used})",
+        title=f" MPH vs AMPH\n(LR / n=70)",
         cbar_label=metric_name.capitalize(),
         sensors="markers",
         cmap="viridis",
         symmetric=False,
+        text_size=20,
     )
+    # Highlight best sensor with a larger filled circle
+    try:
+        bx, by = float(coords_df.loc[best_sensor, "x"]), float(coords_df.loc[best_sensor, "y"])
+        ax1.scatter([bx], [by], s=380, marker='o', facecolors='white', edgecolors='black', linewidths=1.8, zorder=10)
+    except Exception:
+        pass
     if args.save_topo:
-        fig1.savefig(args.save_topo, dpi=150)
+        # Save PNG (as given), plus SVG and PDF variants at 300 dpi
+        root, _ = os.path.splitext(args.save_topo)
+        for out_path in (args.save_topo, f"{root}.svg", f"{root}.pdf"):
+            fig1.savefig(out_path, dpi=300)
     if not args.no_show:
         plt.show()
     plt.close(fig1)
 
     # Best sensor feature importances
-    best_sensor = max(sensor_acc, key=sensor_acc.get)
     # find the analysis id for this sensor
-    best_analysis_id = next(a for a in all_results['classification'] if analysis_to_sensor(a, sensor_names) == best_sensor)
-    best_model_results = all_results['classification'][best_analysis_id][model_name_used]
+    best_analysis_id = next(a for a in all_results['classification_feature_selection_osaf_9feature'] if analysis_to_sensor(a, sensor_names) == best_sensor)
+    best_model_results = all_results['classification_feature_selection_osaf_9feature'][best_analysis_id][model_name_used]
     fi_dict = best_model_results.get("feature_importances", {})
 
     if not fi_dict:
@@ -370,17 +400,27 @@ def main():
 
     fig2, ax2 = plot_bar(
         imp_mean,
-        errors=imp_std,
-        orientation="vertical",
-        top_n=args.top_n,
+        errors=None,
         title=f"{best_sensor} Feature Importance ({model_name_used})",
         xlabel="Importance",
         cmap="magma",
         label_map=label_map,
-        figsize=(10,4)
+        top_n=15,  # already trimmed
+        ascending=False,
+        orientation="vertical",
+        figsize=(10, 6),
+        abs_values=True,
+        nice_axis_limits=True,
+        remove_spines="right top",
+        remove_ticks="both",
+        text_size=20,
+
     )
     if args.save_bar:
-        fig2.savefig(args.save_bar, dpi=150)
+        # Save PNG (as given), plus SVG and PDF variants at 300 dpi
+        root, _ = os.path.splitext(args.save_bar)
+        for out_path in (args.save_bar, f"{root}.svg", f"{root}.pdf"):
+            fig2.savefig(out_path, dpi=300)
     if not args.no_show:
         plt.show()
     plt.close(fig2)

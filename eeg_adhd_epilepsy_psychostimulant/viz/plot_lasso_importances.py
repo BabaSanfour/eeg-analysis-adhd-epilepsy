@@ -59,7 +59,7 @@ def pick_model(results_per_model: Dict[str, dict], preferred: Optional[Sequence[
 
 
 def _greekify(text: str) -> str:
-    rep = {"alpha": "alpha", "beta": "beta", "gamma": "gamma", "theta": "theta", "delta": "delta"}
+    rep = {"alpha": "Alpha", "beta": "Beta", "gamma": "Gamma", "theta": "Theta", "delta": "Delta"}
     for k, v in rep.items():
         text = re.sub(rf"\b{k}\b", v, text, flags=re.IGNORECASE)
     return text
@@ -72,10 +72,10 @@ def make_label_map_keep_sensor(cols: Sequence[str]) -> Dict[str, str]:
     Keeps '<SENSOR>' and abbreviates '<FEATURE>'.
     """
     abbrev = {
-        "BandRatiosFromAverageFooof": "(Fooof)",
-        "BandRatiosFromAverageSpectrum": "(Spec)",
-        "RelativeBandPowerFromAverageFooof": "(Fooof)",
-        "RelativeBandPowerFromAverageSpectrum": "(Spec)",
+        "BandRatiosFromAverageFooof": "(Corrected)",
+        "BandRatiosFromAverageSpectrum": "",
+        "RelativeBandPowerFromAverageFooof": "(Corrected)",
+        "RelativeBandPowerFromAverageSpectrum": "",
         "higuchiFd": "Higuchi FD ",
         "katzFd": "Katz FD",
         "petrosianFd": "Petrosian FD",
@@ -85,11 +85,11 @@ def make_label_map_keep_sensor(cols: Sequence[str]) -> Dict[str, str]:
         "svdEntropy": "SVD Entropy",
         "spectralEntropy": "Spectral Entropy",
         "sampleEntropy": "Sample Entropy",
-        "permEntropy": "Perm Entropy",
-        "entropyMultiscale": "MSE",
-        "fooofExponent": "FOOOF Exp",
-        "foofOffset": "FOOOF Offset",
-        "fooofOffset": "FOOOF Offset",
+        "permEntropy": "Perm Entropy ",
+        "entropyMultiscale": "MSE ",
+        "fooofExponent": "1/f slope",
+        "foofOffset": "1/f Offset",
+        "fooofOffset": "1/f Offset",
     }
 
     out: Dict[str, str] = {}
@@ -113,16 +113,30 @@ def make_label_map_keep_sensor(cols: Sequence[str]) -> Dict[str, str]:
             pair = m_pair.group(1).replace("'", "").replace(" ", "").replace(",", "/")
             pair = _greekify(pair)
             head = s[: m_pair.start()].rstrip(".")
+            corrected = False
             for k, v in abbrev.items():
-                head = head.replace(k, v)
+                if k in head:
+                    head = head.replace(k, v)
+            if "(Corrected)" in head or "(corrected)" in head:
+                corrected = True
+                head = head.replace("(Corrected)", "").replace("(corrected)", "").strip()
             feat_label = f"{head} {pair}".strip()
+            if corrected:
+                feat_label = f"{feat_label} (Corrected)"
         else:
             feat_label = s
+            corrected = False
             for k, v in abbrev.items():
-                feat_label = feat_label.replace(k, v)
+                if k in feat_label:
+                    feat_label = feat_label.replace(k, v)
+            if "(Corrected)" in feat_label or "(corrected)" in feat_label:
+                corrected = True
+                feat_label = feat_label.replace("(Corrected)", "").replace("(corrected)", "").strip()
             feat_label = _greekify(feat_label)
             feat_label = feat_label.replace("MeanEpochs", "")
             feat_label = re.sub(r"[_.-]+$", "", feat_label).strip()
+            if corrected:
+                feat_label = f"{feat_label} (Corrected)"
         # Final tidy-up: collapse repeated spaces
         feat_label = re.sub(r"\s+", " ", feat_label).strip()
         out[raw] = f"{sensor or ''} — {feat_label}".strip(" —")
@@ -211,7 +225,7 @@ def main():
         title_parts.append(f"{metric_name.capitalize()}: {acc_mean:.3f}")
     title_parts.append(f"Zeroed features: {zeros} / {len(s)}")
     # title = " — ".join(title_parts)
-    title = "Feature importance (Logistic Regression)"
+    title = "Feature importance\n(Logistic Regression)"
 
     fig, ax = plot_bar(
         s_top,
@@ -223,11 +237,14 @@ def main():
         title=title,
         xlabel=xlabel,
         cmap="magma",
-        figsize=(6, 8),
+        figsize=(7, 8),
         abs_values=True,
         nice_axis_limits=True,
         remove_spines="right top",
         remove_ticks="both",
+        text_size=20,
+        grid_axis="x",
+        title_loc="center",
     )
 
     if args.save:
