@@ -11,6 +11,9 @@ import numpy as np
 import itertools
 from coco_pipe.io import load, select_features, balance_dataset, clean_features
 from coco_pipe.ml.pipeline import MLPipeline
+from coco_pipe.io import clean_features
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -272,6 +275,64 @@ def main():
                     report.get("n_before"),
                     report.get("n_after"),
                 )
+        # 2c) Optional: PCA transform after cleaning/balancing
+        pca_cfg = analysis_cfg.get("pca")
+        use_pca = False
+        if isinstance(pca_cfg, dict):
+            use_pca = pca_cfg.get("enabled", True)
+        elif isinstance(pca_cfg, bool):
+            use_pca = pca_cfg
+            pca_cfg = {}
+        elif pca_cfg is not None:
+            # any truthy non-dict non-bool: enable with defaults
+            use_pca = True
+            pca_cfg = {}
+
+        if use_pca:
+            # Defaults
+            n_components = pca_cfg.get("n_components", 0.95)  # float (variance) or int
+            scale = pca_cfg.get("scale", True)
+            whiten = pca_cfg.get("whiten", False)
+            feature_prefix = pca_cfg.get("feature_prefix", "PC")
+            add_suffix = pca_cfg.get("suffix_results_file", True)
+
+            logger.info(
+                "Applying PCA (n_components=%r, scale=%s, whiten=%s) to X shape %s",
+                n_components, scale, whiten, X.shape
+            )
+
+            X_mat = X.values
+            if scale:
+                scaler = StandardScaler(with_mean=True, with_std=True)
+                X_mat = scaler.fit_transform(X_mat)
+            pca = PCA(n_components=n_components, whiten=whiten)
+            X_pca = pca.fit_transform(X_mat)
+            # Rebuild DataFrame with PC names
+            ncomp_real = X_pca.shape[1]
+            pc_cols = [f"{feature_prefix}{i+1}" for i in range(ncomp_real)]
+            X = pd.DataFrame(X_pca, index=X.index, columns=pc_cols)
+
+            # Ensure slicing won't attempt per-sensor/feature on PCA features
+            analysis_cfg["analysis_unit"] = "all"
+            # feature_names list no longer applies to PCA features
+            if "feature_names" in analysis_cfg:
+                analysis_cfg["feature_names"] = []
+            # Make results filename reflect PCA
+            if add_suffix and analysis_cfg.get("results_file"):
+                base_name, ext = os.path.splitext(analysis_cfg["results_file"])
+                analysis_cfg["results_file"] = f"{base_name}_pca{ext}"
+
+            # Expose PCA explained variance in logs
+            try:
+                evr_cum = np.cumsum(pca.explained_variance_ratio_)
+                logger.info(
+                    "PCA kept %d comps; cumulative EVR (first 5): %s",
+                    ncomp_real,
+                    np.array2string(evr_cum[:5], precision=3)
+                )
+            except Exception:
+                pass
+
         # 2d) Sync analysis_cfg.feature_names to remaining columns (useful for per-feature slicing)
         orig_feats = analysis_cfg.get("feature_names")
         if isinstance(orig_feats, (list, tuple)):
@@ -291,7 +352,7 @@ def main():
                     "Filtered feature_names based on X columns: %d -> %d",
                     len(orig_feats), len(filtered)
                 )
-        # 3) Persist the exact X/y used for this analysis to CSV (after cleaning/balancing)
+        # 3) Persist the exact X/y used for this analysis to CSV (after cleaning/balancing and optional PCA)
         try:
             tcols = analysis_cfg.get("target_columns")
             target_name = (

@@ -3,10 +3,10 @@
 # -----------------------------------------------------------------------------
 
 # Global parameters shared across analyses
-global_experiment_id: "meds_preliminary_results"
+global_experiment_id: "meds__results_feature_selection_ofas2"
 data_path: "data/results/merged/features_patients.csv"
 results_dir: "data/results/ml_meds"
-results_file: "meds"
+results_file: "meds_results_feature_selection_ofas2"
 
 # Default analysis parameters (can be overridden per analysis)
 defaults:
@@ -31,58 +31,39 @@ defaults:
   require_full_grid: true
   balance:
     strategy: "undersample"
-    covariates: ["Age", "Sex"]
+    # covariates: ["Age", "Sex"]
     qbins: 5
     binning: "quantile"
     seed: 42
-    prefer_clean: true
+    # prefer_clean: true
   target_columns: ["psychostimulant_category"]
   sep: ".spaces-"
   reverse: true
-  analysis_unit: sensor
+  analysis_unit: feature
   spatial_units: ['C3', 'C4', 'Cz', 'F3', 'F4', 'F7', 'F8', 'Fp1', 'Fp2', 'Fz', 'O1',
        'O2', 'P3', 'P4', 'Pz', 'T3', 'T4', 'T5', 'T6']
   feature_names:
-    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'beta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'delta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'gamma')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'theta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'alpha')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'delta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'gamma')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'theta')"
+    # Keep only canonical ascending-frequency ratios: delta < theta < alpha < beta < gamma
+    - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'theta')"
     - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'alpha')"
     - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'beta')"
     - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'gamma')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'theta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'alpha')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'beta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'delta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'theta')"
     - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'alpha')"
     - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'beta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'delta')"
     - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'gamma')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'beta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'delta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'gamma')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'theta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'alpha')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'delta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'gamma')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'theta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'beta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'gamma')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'gamma')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'theta')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'alpha')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'beta')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'gamma')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'theta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'alpha')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'beta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'delta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'theta')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'alpha')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'beta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'delta')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'gamma')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'beta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'gamma')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'gamma')"
     - "RelativeBandPowerFromAverageFooof.bands-alpha"
     - "RelativeBandPowerFromAverageFooof.bands-beta"
     - "RelativeBandPowerFromAverageFooof.bands-delta"
@@ -113,14 +94,14 @@ defaults:
 
 # List of analyses to run
 analyses:
-  - id: "classification"
+  - id: "classification_feature_selection_ofas_11sensor"
     task: "classification"
-    analysis_type: "baseline"
+    analysis_type: "feature_selection"
     # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
     row_filter:
-      # - column: "Epilepsy"
-      #   values: 0
-      #   operator: "=="
+      - column: "Epilepsy"
+        values: 0
+        operator: "=="
       # - column: "TSA"
       #   values: 0
       #   operator: "=="
@@ -132,17 +113,204 @@ analyses:
     metrics:
       - "accuracy" 
     scoring: "accuracy"
+    n_features: 11
+    direction: "forward"
 
-  # - id: "classification_feature_selection"
+  - id: "classification_feature_selection_ofas_12sensor"
+    task: "classification"
+    analysis_type: "feature_selection"
+    # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+    row_filter:
+      - column: "Epilepsy"
+        values: 0
+        operator: "=="
+      # - column: "TSA"
+      #   values: 0
+      #   operator: "=="
+      - column: "psychostimulant_category"
+        values: [1, 2]
+        operator: in
+    models:
+      - "Logistic Regression"
+    metrics:
+      - "accuracy" 
+    scoring: "accuracy"
+    n_features: 12
+    direction: "forward"
+
+  - id: "classification_feature_selection_ofas_13sensor"
+    task: "classification"
+    analysis_type: "feature_selection"
+    # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+    row_filter:
+      - column: "Epilepsy"
+        values: 0
+        operator: "=="
+      # - column: "TSA"
+      #   values: 0
+      #   operator: "=="
+      - column: "psychostimulant_category"
+        values: [1, 2]
+        operator: in
+    models:
+      - "Logistic Regression"
+    metrics:
+      - "accuracy" 
+    scoring: "accuracy"
+    n_features: 13
+    direction: "forward"
+
+  - id: "classification_feature_selection_ofas_14sensor"
+    task: "classification"
+    analysis_type: "feature_selection"
+    # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+    row_filter:
+      - column: "Epilepsy"
+        values: 0
+        operator: "=="
+      # - column: "TSA"
+      #   values: 0
+      #   operator: "=="
+      - column: "psychostimulant_category"
+        values: [1, 2]
+        operator: in
+    models:
+      - "Logistic Regression"
+    metrics:
+      - "accuracy" 
+    scoring: "accuracy"
+    n_features: 14
+    direction: "forward"
+
+  - id: "classification_feature_selection_ofas_15sensor"
+    task: "classification"
+    analysis_type: "feature_selection"
+    # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+    row_filter:
+      - column: "Epilepsy"
+        values: 0
+        operator: "=="
+      # - column: "TSA"
+      #   values: 0
+      #   operator: "=="
+      - column: "psychostimulant_category"
+        values: [1, 2]
+        operator: in
+    models:
+      - "Logistic Regression"
+    metrics:
+      - "accuracy" 
+    scoring: "accuracy"
+    n_features: 15
+    direction: "forward"
+
+
+  # - id: "classification_feature_selection_ofas_6sensor"
   #   task: "classification"
   #   analysis_type: "feature_selection"
+  #   # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+  #   row_filter:
+  #     - column: "Epilepsy"
+  #       values: 0
+  #       operator: "=="
+  #     # - column: "TSA"
+  #     #   values: 0
+  #     #   operator: "=="
+  #     - column: "psychostimulant_category"
+  #       values: [1, 2]
+  #       operator: in
   #   models:
-  #     - "Random Forest"
   #     - "Logistic Regression"
   #   metrics:
-  #     - "f1"
-  #     - "roc_auc"
-  #     - "accuracy"
-  #   n_features: 1
-  #   direction: "forward"
+  #     - "accuracy" 
   #   scoring: "accuracy"
+  #   n_features: 6
+  #   direction: "forward"
+
+  # - id: "classification_feature_selection_ofas_7sensor"
+  #   task: "classification"
+  #   analysis_type: "feature_selection"
+  #   # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+  #   row_filter:
+  #     - column: "Epilepsy"
+  #       values: 0
+  #       operator: "=="
+  #     # - column: "TSA"
+  #     #   values: 0
+  #     #   operator: "=="
+  #     - column: "psychostimulant_category"
+  #       values: [1, 2]
+  #       operator: in
+  #   models:
+  #     - "Logistic Regression"
+  #   metrics:
+  #     - "accuracy" 
+  #   scoring: "accuracy"
+  #   n_features: 7
+  #   direction: "forward"
+
+  # - id: "classification_feature_selection_ofas_8sensor"
+  #   task: "classification"
+  #   analysis_type: "feature_selection"
+  #   # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+  #   row_filter:
+  #     - column: "Epilepsy"
+  #       values: 0
+  #       operator: "=="
+  #     # - column: "TSA"
+  #     #   values: 0
+  #     #   operator: "=="
+  #     - column: "psychostimulant_category"
+  #       values: [1, 2]
+  #       operator: in
+  #   models:
+  #     - "Logistic Regression"
+  #   metrics:
+  #     - "accuracy" 
+  #   scoring: "accuracy"
+  #   n_features: 8
+  #   direction: "forward"
+
+  # - id: "classification_feature_selection_ofas_9sensor"
+  #   task: "classification"
+  #   analysis_type: "feature_selection"
+  #   # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+  #   row_filter:
+  #     - column: "Epilepsy"
+  #       values: 0
+  #       operator: "=="
+  #     # - column: "TSA"
+  #     #   values: 0
+  #     #   operator: "=="
+  #     - column: "psychostimulant_category"
+  #       values: [1, 2]
+  #       operator: in
+  #   models:
+  #     - "Logistic Regression"
+  #   metrics:
+  #     - "accuracy" 
+  #   scoring: "accuracy"
+  #   n_features: 9
+  #   direction: "forward"
+
+  # - id: "classification_feature_selection_ofas_10sensor"
+  #   task: "classification"
+  #   analysis_type: "feature_selection"
+  #   # Optional: restrict to non-epilepsy and non-TSA for pure ADHD
+  #   row_filter:
+  #     - column: "Epilepsy"
+  #       values: 0
+  #       operator: "=="
+  #     # - column: "TSA"
+  #     #   values: 0
+  #     #   operator: "=="
+  #     - column: "psychostimulant_category"
+  #       values: [1, 2]
+  #       operator: in
+  #   models:
+  #     - "Logistic Regression"
+  #   metrics:
+  #     - "accuracy" 
+  #   scoring: "accuracy"
+  #   n_features: 10
+  #   direction: "forward"

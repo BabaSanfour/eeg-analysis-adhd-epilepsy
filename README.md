@@ -9,7 +9,7 @@ This repository contains scripts and data for comparing EEG signals between psyc
 - **ml_pipelines**: Scripts for building general machine learning pipelines and executing them for various analyses.
 - **dl_pipelines**: Scripts for running the reve_model and extracting embeddings.
 - **viz**: Visualization tools and scripts.
-- **get_umap.ipynb**: Notebook for running experiments and visualizing reve embeddings.
+
 
 ## To-Do (Scripts)
 - Add comprehensive documentation for each script.
