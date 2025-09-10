@@ -3,8 +3,8 @@
 # -----------------------------------------------------------------------------
 
 global_experiment_id: "epilepsy_merged_features"
-data_path: "data/results/merged/features_patients.csv"
-results_dir: "data/results/ml"
+data_path: "/home/mat/EEG_psychostimulant/data/results/merged/features_patients.csv"
+results_dir: "/home/mat/EEG_psychostimulant/data/results/ml"
 results_file: "epilepsy_merged"
 
 defaults:
@@ -32,46 +32,26 @@ defaults:
   spatial_units: ['C3', 'C4', 'Cz', 'F3', 'F4', 'F7', 'F8', 'Fp1', 'Fp2', 'Fz', 'O1', 'O2', 'P3', 'P4', 'Pz', 'T3', 'T4', 'T5', 'T6']
   # Base feature names (run_ml_pipe will prefix with 'feature-')
   feature_names:
-    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'beta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'delta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'gamma')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'theta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'alpha')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'delta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'gamma')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'theta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'theta')"
     - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'alpha')"
     - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'beta')"
     - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'gamma')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('delta', 'theta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'alpha')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'beta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'delta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('gamma', 'theta')"
     - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'alpha')"
     - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'beta')"
-    - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'delta')"
     - "BandRatiosFromAverageFooof.bands_pairs-('theta', 'gamma')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'beta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'delta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'gamma')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'theta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'alpha')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'delta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'gamma')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'theta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'beta')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('alpha', 'gamma')"
+    - "BandRatiosFromAverageFooof.bands_pairs-('beta', 'gamma')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'theta')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'alpha')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'beta')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'gamma')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('delta', 'theta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'alpha')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'beta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'delta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('gamma', 'theta')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'alpha')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'beta')"
-    - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'delta')"
     - "BandRatiosFromAverageSpectrum.bands_pairs-('theta', 'gamma')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'beta')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('alpha', 'gamma')"
+    - "BandRatiosFromAverageSpectrum.bands_pairs-('beta', 'gamma')"
     - "RelativeBandPowerFromAverageFooof.bands-alpha"
     - "RelativeBandPowerFromAverageFooof.bands-beta"
     - "RelativeBandPowerFromAverageFooof.bands-delta"
@@ -105,7 +85,7 @@ defaults:
     qbins: 5
     binning: "quantile"
     seed: 42
-    prefer_clean: true
+    prefer_clean_rows: true
 
 analyses:
   - id: "classification_baseline"
@@ -118,8 +98,12 @@ analyses:
       - column: "TSA"
         values: "0"
         operator: "=="
+      - column: "Epilepsy"
+        values: "2"
+        operator: "!="
+
     models:
-      - "Random Forest"
+      - "Logistic Regression"
     metrics:
       - "accuracy" 
       - "roc_auc"

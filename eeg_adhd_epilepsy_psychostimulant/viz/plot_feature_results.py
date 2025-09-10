@@ -251,7 +251,7 @@ def main():
     # Collect per-feature metric values and produce topomaps
     feature_metric: Dict[str, float] = {}
 
-    for analysis_id, results_per_model in all_results['classification'].items():
+    for analysis_id, results_per_model in all_results['classification_feature_selection'].items():
         model_name = pick_model(results_per_model, preferred=(args.model,) if args.model else None)
         res = results_per_model[model_name]
 

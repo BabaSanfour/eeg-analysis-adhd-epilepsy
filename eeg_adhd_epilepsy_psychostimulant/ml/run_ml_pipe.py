@@ -9,10 +9,8 @@ import yaml
 import pandas as pd
 import numpy as np
 import itertools
-
-from coco_pipe.io import load, select_features, balance_dataset
+from coco_pipe.io import load, select_features, balance_dataset, clean_features
 from coco_pipe.ml.pipeline import MLPipeline
-from coco_pipe.io import clean_features
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

@@ -318,7 +318,7 @@ def main():
     model_name_used: Optional[str] = None
     metric_name = args.metric
 
-    for analysis_id, results_per_model in all_results['classification'].items():
+    for analysis_id, results_per_model in all_results['classification_feature_selection'].items():
         sensor = analysis_to_sensor(analysis_id, sensor_names)
         if not sensor:
             continue
