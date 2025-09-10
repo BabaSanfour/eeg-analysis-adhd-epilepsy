@@ -114,7 +114,7 @@ def pick_model(results_per_model: Dict[str, dict], preferred: Optional[Sequence[
 
 
 def _greekify(text: str) -> str:
-    rep = {"alpha": "α", "beta": "β", "gamma": "γ", "theta": "θ", "delta": "δ"}
+    rep = {"alpha": "Alpha", "beta": "Beta", "gamma": "Gamma", "theta": "Theta", "delta": "Delta"}
     for k, v in rep.items():
         text = re.sub(rf"\b{k}\b", v, text, flags=re.IGNORECASE)
     return text
@@ -129,24 +129,26 @@ def make_label_map(items: Sequence[str]) -> Dict[str, str]:
     - Trim boilerplate suffixes
     """
     abbrev = {
-        "BandRatiosFromAverageFooof": "BR Fooof",
-        "BandRatiosFromAverageSpectrum": "BR Spec",
-        "RelativeBandPowerFromAverageFooof": "RBP Fooof",
-        "RelativeBandPowerFromAverageSpectrum": "RBP Spec",
-        "higuchiFd": "Higuchi FD",
-        "katzFd": "Katz FD",
-        "petrosianFd": "Petrosian FD",
-        "hjorthComplexity": "Hjorth Complexity",
-        "hjorthMobility": "Hjorth Mobility",
-        "numZerocross": "ZeroCross",
-        "svdEntropy": "SVD Entropy",
-        "spectralEntropy": "Spectral Entropy",
-        "sampleEntropy": "Sample Entropy",
-        "permEntropy": "Perm Entropy",
-        "entropyMultiscale": "MSE",
-        "fooofExponent": "FOOOF Exp",
-        "foofOffset": "FOOOF Off",
-        "fooofOffset": "FOOOF Off",
+        "BandRatiosFromAverageFooof": "(Corrected)",
+        "BandRatiosFromAverageSpectrum": "",
+        "RelativeBandPowerFromAverageFooof": "(Corrected)",
+        "RelativeBandPowerFromAverageSpectrum": "",
+        "higuchiFd": "Higuchi FD ",
+        "katzFd": "Katz FD ",
+        "petrosianFd": "Petrosian FD ",
+        "hjorthComplexity": "Hjorth Complexity ",
+        "hjorthMobility": "Hjorth Mobility ",
+        "numZerocross": "ZeroCross ",
+        "svdEntropy": "SVD Entropy ",
+        "spectralEntropy": "Spectral Entropy ",
+        "sampleEntropy": "Sam Entropy ",
+        "permEntropy": "Perm Entropy ",
+        "appEntropy": "App Entropy ",
+        "entropyMultiscale": "MSE ",
+        "fooofExponent": "1/f slope",
+        "foofOffset": "1/f Offset",
+        "fooofOffset": "1/f Offset",
+        "lzivComplexity": "LZ Complexity ",
     }
     out: Dict[str, str] = {}
     for raw in items:
@@ -154,21 +156,40 @@ def make_label_map(items: Sequence[str]) -> Dict[str, str]:
         if s.startswith("feature-"):
             s = s[len("feature-") :]
         # Replace band pair like bands_pairs-('alpha','beta')
+        # Replace '.bands-' with a single space to simplify labels
+        s = s.replace(".bands-", " ")
+        # when there is epochs in s remove it
+        s = s.replace("Epochs", " ")
+        # Abbreviate feature part
+
         m = re.search(r"bands_pairs-\((.+)\)", s)
         if m:
             pair = m.group(1).replace("'", "").replace(" ", "").replace(",", "/")
             pair = _greekify(pair)
             head = s[: m.start()].rstrip(".")
+            corrected = False
             for k, v in abbrev.items():
-                head = head.replace(k, v)
-            s = f"{head} {pair}".strip()
+                if k in head:
+                    head = head.replace(k, v)
+            if "(Corrected)" in head or "(corrected)" in head:
+                corrected = True
+                head = head.replace("(Corrected)", "").replace("(corrected)", "").strip()
+            s_disp = f"{head} {pair}".strip()
+            if corrected:
+                s_disp = f"{s_disp} (Corrected)"
         else:
+            corrected = False
             for k, v in abbrev.items():
-                s = s.replace(k, v)
+                if k in s:
+                    s = s.replace(k, v)
+            if "(Corrected)" in s or "(corrected)" in s:
+                corrected = True
+                s = s.replace("(Corrected)", "").replace("(corrected)", "").strip()
             s = _greekify(s)
             s = s.replace("MeanEpochs", "")
             s = re.sub(r"[_.-]+$", "", s).strip()
-        out[raw] = s
+            s_disp = s + (" (Corrected)" if corrected else "")
+        out[raw] = s_disp
     return out
 
 
@@ -218,6 +239,9 @@ def main():
     parser.add_argument("--out-dir", default="results/feature_analysis_plots", help="Directory to save plots")
     parser.add_argument("--label-map", default=None, help="Optional JSON mapping from feature name to display label")
     parser.add_argument("--no-show", action="store_true", help="Do not open interactive windows; save only")
+    parser.add_argument("--abs", dest="use_abs", action="store_true", help="Use absolute importances for topomaps (default)")
+    parser.add_argument("--no-abs", dest="use_abs", action="store_false", help="Use signed importances for topomaps")
+    parser.set_defaults(use_abs=True)
 
     args = parser.parse_args()
 
@@ -250,8 +274,9 @@ def main():
 
     # Collect per-feature metric values and produce topomaps
     feature_metric: Dict[str, float] = {}
+    feature_sensor_imp: Dict[str, Dict[str, float]] = {}
 
-    for analysis_id, results_per_model in all_results['classification'].items():
+    for analysis_id, results_per_model in all_results['classification_feature_selection_ofas_12sensor'].items():
         model_name = pick_model(results_per_model, preferred=(args.model,) if args.model else None)
         res = results_per_model[model_name]
 
@@ -281,25 +306,33 @@ def main():
                 val = stats.get("mean")
             if val is None:
                 continue
-            sensor_imp[sname] = float(val)
+            v = float(val)
+            sensor_imp[sname] = abs(v) if args.use_abs else v
 
         if not sensor_imp:
             continue
-
+        # cache for multi-topomap grid later
+        feature_sensor_imp[feat_name] = sensor_imp
         # Plot topomap for this computed feature
-        disp_name = feature_label_map.get(feat_name, feat_name)
+        # Use auto-generated label map for readability, overridden by optional user map
+        auto_disp = make_label_map([feat_name]).get(feat_name, feat_name)
+        disp_name = feature_label_map.get(feat_name, auto_disp)
         fig, ax = plot_topomap(
             sensor_imp,
             coords_df[["x", "y"]],
-            title=f"{disp_name} – Sensor Importances ({model_name})",
+            title=f"{disp_name}",
             cbar_label="Importance",
             sensors="markers",
             cmap="magma",
-            symmetric=False,
+            symmetric=not args.use_abs,
+            text_size=20,
 
         )
-        out_path = os.path.join(args.out_dir, f"topomap_{re.sub(r'[^A-Za-z0-9_.-]+','_', disp_name)}.png")
-        fig.savefig(out_path, dpi=150)
+        out_path = os.path.join(args.out_dir, f"meds-multi-sensor-single-feat-topomap_{re.sub(r'[^A-Za-z0-9_.-]+','_', disp_name)}_bigtext.png")
+        # Save PNG, plus SVG and PDF at 300 dpi
+        root, _ = os.path.splitext(out_path)
+        for p in (out_path, f"{root}.svg", f"{root}.pdf"):
+            fig.savefig(p, dpi=300)
         plt.close(fig)
 
         # Store metric (use original feature key; labels are added at plot time)
@@ -318,15 +351,92 @@ def main():
     fig2, ax2 = plot_bar(
         s,
         orientation="vertical",
-        title=f"Per-Feature {args.metric.capitalize()} ({args.model or 'auto'})",
-        xlabel=args.metric.capitalize(),
+        title=f"Per-Feature Decoding {args.metric.capitalize()} (LR / N=70)",
+        ylabel=f"Decoding {args.metric.capitalize()}",
         cmap="viridis",
         label_map=label_map,
+        top_n=12,  # already trimmed
+        nice_axis_limits=True,
+        remove_spines="right top",
+        remove_ticks="both",
+        text_size=20,
+        figsize=(10, 6),
+        axis_lim=(.5,.65)
+
     )
-    fig2.savefig(os.path.join(args.out_dir, f"features_{args.metric}_bar.png"), dpi=150)
+    out_bar = os.path.join(args.out_dir, f"meds-multi-sensor-single-feat-features_{args.metric}_bar_bigtext.png")
+    root_bar, _ = os.path.splitext(out_bar)
+    for p in (out_bar, f"{root_bar}.svg", f"{root_bar}.pdf"):
+        fig2.savefig(p, dpi=300)
     if not args.no_show:
         plt.show()
     plt.close(fig2)
+
+    # Grid of top-12 feature topomaps with a unified colorbar
+    top_k = min(12, len(s))
+    if top_k > 0:
+        top_feats = s.head(top_k).index.tolist()
+        # Positions array from coords_df in a consistent ordering
+        sensors_order = coords_df.index.tolist()
+        pos = coords_df[["x", "y"]].values
+        # Build data vectors per feature
+        data_list = []
+        for fname in top_feats:
+            imp_map = feature_sensor_imp.get(fname, {})
+            vec = np.array([imp_map.get(ch, np.nan) for ch in sensors_order], dtype=float)
+            if args.use_abs:
+                vec = np.abs(vec)
+            data_list.append(vec)
+        # Symmetric global limits across selected features
+        if data_list:
+            if args.use_abs:
+                all_vals = np.concatenate([np.nan_to_num(v, nan=0.0) for v in data_list])
+            else:
+                all_vals = np.concatenate([np.abs(np.nan_to_num(v, nan=0.0)) for v in data_list])
+            vmax = float(np.nanmax(all_vals)) if all_vals.size else 1.0
+        else:
+            vmax = 1.0
+        vmin = 0.0 if args.use_abs else -vmax
+        # Display labels using label map
+        grid_labels = [label_map.get(f, make_label_map([f]).get(f, f)) for f in top_feats]
+
+        n_rows, n_cols = 3, 4
+        fig_grid, axes = plt.subplots(n_rows, n_cols, figsize=(16, 10))
+        axes = np.atleast_2d(axes)
+        im_last = None
+        import mne  # type: ignore
+        for ax, data, title in zip(axes.ravel(), data_list, grid_labels):
+            valid = np.isfinite(data)
+            im, cn = mne.viz.plot_topomap(
+                data[valid],
+                pos[valid],
+                axes=ax,
+                show=False,
+                contours=0,
+                cmap="magma",
+                vlim=(vmin, vmax),
+                extrapolate="head",
+                image_interp="linear",
+            )
+            im_last = im
+            ax.set_title(title, fontsize=22)
+            ax.set_xticks([]); ax.set_yticks([])
+        # Leave space on the right for a dedicated colorbar
+        fig_grid.tight_layout(rect=[0, 0.03, 0.9, 0.95])
+        if im_last is not None:
+            cax = fig_grid.add_axes([0.92, 0.15, 0.02, 0.7])
+            cbar = fig_grid.colorbar(im_last, cax=cax)
+            cbar.set_label("Importance", rotation=90, fontsize=25)
+            cbar.ax.tick_params(labelsize=20)
+        fig_grid.suptitle(f"Top {top_k} Features – Sensor Importances", fontsize=30)
+
+        out_top12 = os.path.join(args.out_dir, f"meds-multi-sensor-single-feat-features_top{top_k}_topomaps_grid.png")
+        root_top12, _ = os.path.splitext(out_top12)
+        for p in (out_top12, f"{root_top12}.svg", f"{root_top12}.pdf"):
+            fig_grid.savefig(p, dpi=300)
+        if not args.no_show:
+            plt.show()
+        plt.close(fig_grid)
 
 
 if __name__ == "__main__":
