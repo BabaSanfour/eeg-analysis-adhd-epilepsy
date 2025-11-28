@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "EEG analysis, ML/DL pipelines, and visualization for ADHD/Epilepsy psychostimulant study."
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Proprietary"}
+license = {text = "MIT"}
 authors = [
   { name = "Hamza Abdelhedi" }
 ]
@@ -26,7 +26,6 @@ dependencies = [
   "tqdm",
   "scikit-learn",
   "umap-learn",
-  "fpdf",
 ]
 
 [project.urls]
