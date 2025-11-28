@@ -1,5 +1,7 @@
 # EEG Analysis for ADHD and Epilepsy
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 This repository provides a comprehensive framework for analyzing EEG data from patients with ADHD and/or Epilepsy, with a particular focus on the effects of psychostimulant medication. It includes tools for data preprocessing, feature extraction, machine learning, and visualization.
 
 ## Features
