@@ -34,6 +34,7 @@ from eeg_adhd_epilepsy.utils.config import (
     MAPPING_PSYCHOSTIMULANT,
     results_dir,
     data_dir,
+    bids_dir as default_bids_dir,
 )
 
 logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
@@ -106,6 +107,49 @@ def _normalize_psychostim_label(desc: str | float | None) -> str:
         "Lisdexamfetamine, Methylphenidate": "Lisdexamfetamine + Methylphenidate",
     }
     return replacements.get(s, s)
+
+
+def _study_id_to_bids_folder(study_id) -> str | None:
+    """Convert a Study ID to sub-XXXX BIDS folder name (4-digit zero padded)."""
+    sid = pd.to_numeric(study_id, errors="coerce")
+    if pd.isna(sid):
+        return None
+    try:
+        sid_int = int(sid)
+    except (TypeError, ValueError):
+        return None
+    return f"sub-{sid_int:04d}"
+
+
+def check_bids_subject_folders(df: pd.DataFrame, bids_root: Path) -> dict[str, object]:
+    """Check that BIDS subject folders exist for Study IDs present in df."""
+    results: dict[str, object] = {}
+    if "Study ID" not in df.columns:
+        return results
+
+    bids_root = Path(bids_root)
+    sid_series = df["Study ID"].dropna().unique()
+    expected = []
+    for sid in sid_series:
+        folder = _study_id_to_bids_folder(sid)
+        if folder:
+            expected.append(folder)
+
+    missing = []
+    present = []
+    for folder in expected:
+        path = bids_root / folder
+        if path.exists():
+            present.append(folder)
+        else:
+            missing.append(folder)
+
+    results["bids_present"] = present
+    results["bids_missing"] = missing
+    results["bids_root"] = str(bids_root)
+    results["expected_count"] = len(expected)
+    results["missing_count"] = len(missing)
+    return results
 
 
 def _normalize_psychostim_label(desc: str | float | None) -> str:
@@ -1448,6 +1492,7 @@ def generate_html_report(
     pt_id_info: dict[str, object],
     med_mismatches: dict[str, object],
     total_subjects: int,
+    bids_check: dict[str, object],
     figures: list[Path] | None = None,
 ) -> None:
     """Lightweight HTML report with the key tables/figures."""
@@ -1461,6 +1506,18 @@ def generate_html_report(
     if pt_id_info.get("missing_pt_id") is not None:
         quality_items.append(
             {"text": f"Rows with missing Pt ID: {pt_id_info.get('missing_pt_id')}"}
+        )
+    if bids_check:
+        missing = bids_check.get("bids_missing", [])
+        expected = bids_check.get("expected_count", 0)
+        quality_items.append(
+            {
+                "text": (
+                    f"BIDS subject folders at {bids_check.get('bids_root')}: "
+                    f"{expected} expected, {len(missing)} missing"
+                ),
+                "sub": [f"Missing folders: {missing}" if missing else "All folders present"],
+            }
         )
     dup_info = pt_id_info.get("duplicate_pt_id")
     if dup_info:
@@ -1629,6 +1686,12 @@ def main():
         default=str(Path(results_dir) / "reports" / "explore"),
         help="Directory to save the HTML report (default: results/reports/explore)",
     )
+    parser.add_argument(
+        "--bids_dir",
+        type=str,
+        default=str(default_bids_dir),
+        help="Path to the BIDS root containing subject folders (default: env/config BIDS dir)",
+    )
 
     parser.add_argument(
         "--data_dir",
@@ -1642,6 +1705,7 @@ def main():
     df = _drop_empty_columns(df)
     potential_counts = _log_potential_entries(df)
     pt_id_info = log_pt_id_issues(df)
+    bids_check = check_bids_subject_folders(df, Path(args.bids_dir))
 
     # Derive psychostimulant flags using the mapping first, then normalize
     df = _ensure_psychostimulant_flags(df)
@@ -1650,8 +1714,8 @@ def main():
         df, include_potential=args.potential_in_with
     )
 
-    df = _drop_mismatches_and_duplicates(df, med_mismatches, Path(args.data_dir))
-    
+    df = drop_mismatches_and_duplicates(df, med_mismatches, Path(args.data_dir))
+
     df = _normalize_values_and_types(df)
     df = _normalize_sex_values(df)
     df = _add_medication_flags(df)
@@ -1733,6 +1797,7 @@ def main():
             pt_id_info=pt_id_info,
             med_mismatches=med_mismatches,
             total_subjects=len(df),
+            bids_check=bids_check,
             figures=confusion_paths,
         )
     if args.grouped:
