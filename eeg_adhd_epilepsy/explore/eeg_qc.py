@@ -143,7 +143,7 @@ def load_raw(filepath: Path, bids_root: Path, args: argparse.Namespace) -> mne.i
         suffix="eeg",
         extension=".vhdr",
     )
-    return read_raw_bids(bids_path, preload=False, verbose="ERROR")
+    return read_raw_bids(bids_path)
 
 
 def extract_metadata(raw: mne.io.BaseRaw) -> Dict[str, object]:
@@ -411,6 +411,7 @@ def process_file(
 
     try:
         raw = load_raw(filepath, args.input_dir, args)
+        raw.load_data()
     except Exception as exc:  # pragma: no cover - defensive branch
         err_msg = f"Failed to read {filepath.name}: {exc}"
         logger.error(err_msg)
