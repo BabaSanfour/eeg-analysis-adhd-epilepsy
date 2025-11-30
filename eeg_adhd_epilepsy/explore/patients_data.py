@@ -1710,6 +1710,7 @@ def generate_html_report(
   {"".join(f"<h4>{name}</h4>{_df_to_html(tbl)}" for name, tbl in grouping_tables.items())}
 
   <h2>Analysis Opportunities (>= min count per group)</h2>
+  <p>Number of analysis possibilities: {len(analysis_opportunities)}</p>
   {_df_to_html(analysis_opportunities)}
 
   <h2>Figures</h2>
@@ -1762,7 +1763,7 @@ def main():
     parser.add_argument(
         "--html_report",
         action="store_true",
-        help="Generate an HTML summary report with key tables/figures.",
+        help="Generate an HTML summary report with key tables.",
     )
     parser.add_argument(
         "--report_dir",
@@ -1885,7 +1886,6 @@ def main():
             total_subjects=len(df),
             bids_check=bids_check,
             analysis_opportunities=analysis_filtered,
-            figures=[],
         )
     if args.grouped:
         print_grouped_summaries(df)
