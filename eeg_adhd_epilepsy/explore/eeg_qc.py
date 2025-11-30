@@ -39,6 +39,11 @@ BAND_LIMITS = {
     "gamma": (30, 45),
 }
 
+BASIC_1020_CHANNELS = [
+    "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8", "A1", "T3", "C3", "Cz",
+    "C4", "T4", "A2", "T5", "P3", "Pz", "P4", "T6", "O1", "O2"
+]
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Automated EEG QC (no preprocessing).")
@@ -85,6 +90,17 @@ def setup_logging(log_file: Path, level: str) -> logging.Logger:
         handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stdout)],
     )
     return logging.getLogger("eeg_qc")
+
+
+def get_basic_1020_picks(raw: mne.io.BaseRaw) -> List[str]:
+    """Return channel names present in raw that belong to the 19-channel 10-20 set."""
+    lower_map = {name.lower(): name for name in raw.ch_names}
+    picks: List[str] = []
+    for ch in BASIC_1020_CHANNELS:
+        name = lower_map.get(ch.lower())
+        if name:
+            picks.append(name)
+    return picks
 
 
 def discover_bids_files(
@@ -162,9 +178,9 @@ def extract_metadata(raw: mne.io.BaseRaw) -> Dict[str, object]:
 
 def validate_montage(raw: mne.io.BaseRaw, standard_names: set[str]) -> Dict[str, object]:
     eeg_chs = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True)).ch_names
-    matched = [ch for ch in eeg_chs if ch in standard_names]
-    non_standard = [ch for ch in eeg_chs if ch not in standard_names]
-    pct_missing = (1.0 - (len(matched) / max(len(eeg_chs), 1))) * 100.0
+    matched = [ch for ch in eeg_chs if ch.lower() in standard_names]
+    non_standard = [ch for ch in eeg_chs if ch.lower() not in standard_names]
+    pct_missing = (1.0 - (len(matched) / max(len(BASIC_1020_CHANNELS), 1))) * 100.0
     return {
         "n_channels_1020_match": len(matched),
         "non_standard_channels": non_standard,
@@ -172,8 +188,17 @@ def validate_montage(raw: mne.io.BaseRaw, standard_names: set[str]) -> Dict[str,
     }
 
 
-def compute_channel_amplitude_stats(raw: mne.io.BaseRaw) -> Dict[str, object]:
-    data = raw.get_data(picks="eeg") * 1e6  # uV
+def compute_channel_amplitude_stats(raw: mne.io.BaseRaw, picks: List[str]) -> Dict[str, object]:
+    if not picks:
+        return {
+            "mean": float("nan"),
+            "median": float("nan"),
+            "std": float("nan"),
+            "min": float("nan"),
+            "max": float("nan"),
+            "per_channel": np.array([]),
+        }
+    data = raw.get_data(picks=picks) * 1e6  # uV
     ptp = np.ptp(data, axis=1)
     return {
         "mean": float(ptp.mean()),
@@ -185,14 +210,23 @@ def compute_channel_amplitude_stats(raw: mne.io.BaseRaw) -> Dict[str, object]:
     }
 
 
-def detect_flat_and_noisy_channels(raw: mne.io.BaseRaw) -> Dict[str, object]:
-    data = raw.get_data(picks="eeg") * 1e6  # uV
+def detect_flat_and_noisy_channels(raw: mne.io.BaseRaw, picks: List[str]) -> Dict[str, object]:
+    if not picks:
+        return {
+            "flat_channels": [],
+            "noisy_channels": [],
+            "n_flat_channels": 0,
+            "n_noisy_channels": 0,
+            "pct_bad_channels": float("nan"),
+            "variances": np.array([]),
+        }
+    data = raw.get_data(picks=picks) * 1e6  # uV
     variances = np.var(data, axis=1)
     low_thresh = np.percentile(variances, 1)
     high_thresh = np.percentile(variances, 99)
     flat_idx = np.where(variances < low_thresh)[0]
     noisy_idx = np.where(variances > high_thresh)[0]
-    eeg_chs = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True)).ch_names
+    eeg_chs = picks
     n_channels = len(eeg_chs)
     return {
         "flat_channels": [eeg_chs[i] for i in flat_idx],
@@ -205,9 +239,12 @@ def detect_flat_and_noisy_channels(raw: mne.io.BaseRaw) -> Dict[str, object]:
 
 
 def compute_psd_metrics(
-    raw: mne.io.BaseRaw, fmin: float = 1.0, fmax: float = 60.0
-) -> Tuple[mne.time_frequency.Spectrum, np.ndarray, np.ndarray, float, Dict[str, float]]:
-    spec = raw.compute_psd(picks="eeg", fmin=fmin, fmax=fmax, verbose="ERROR")
+    raw: mne.io.BaseRaw, picks: List[str], fmin: float = 1.0, fmax: float = 60.0
+) -> Tuple[mne.time_frequency.Spectrum | None, np.ndarray, np.ndarray, float, Dict[str, float]]:
+    if not picks:
+        empty = np.array([])
+        return None, empty, empty, float("nan"), {k: float("nan") for k in BAND_LIMITS}
+    spec = raw.compute_psd(picks=picks, fmin=fmin, fmax=fmax, verbose="ERROR")
     psd, freqs = spec.get_data(return_freqs=True)
     alpha_mask = (freqs >= 8) & (freqs <= 13)
     if alpha_mask.any():
@@ -228,8 +265,10 @@ def compute_psd_metrics(
     return spec, psd, freqs, alpha_peak, band_powers
 
 
-def detect_signal_onset(raw: mne.io.BaseRaw, threshold_var_uv2: float = 5.0) -> Tuple[float, float]:
-    data = raw.get_data(picks="eeg") * 1e6  # uV
+def detect_signal_onset(raw: mne.io.BaseRaw, picks: List[str], threshold_var_uv2: float = 5.0) -> Tuple[float, float]:
+    if not picks:
+        return float("nan"), float("nan")
+    data = raw.get_data(picks=picks) * 1e6  # uV
     sfreq = float(raw.info["sfreq"])
     window = int(sfreq)
     if window <= 0:
@@ -268,7 +307,7 @@ def plot_amplitude_histogram(amp_stats: Dict[str, object]) -> matplotlib.figure.
 
 
 def plot_channel_variance_topomap(raw: mne.io.BaseRaw) -> matplotlib.figure.Figure:
-    data = raw.get_data(picks="eeg")
+    data = raw.get_data()
     variances = np.var(data, axis=1)
     fig, ax = plt.subplots(figsize=(5, 4))
     mne.viz.plot_topomap(variances, raw.info, axes=ax, show=False)
@@ -422,13 +461,14 @@ def process_file(
         meta = extract_metadata(raw)
         metrics.update(meta)
 
+        basic_picks = get_basic_1020_picks(raw)
         montage_info = validate_montage(raw, standard_names)
         metrics["n_channels_1020_match"] = montage_info["n_channels_1020_match"]
         metrics["non_standard_channels"] = ",".join(montage_info["non_standard_channels"])
         metrics["channel_names"] = ",".join(meta.get("channel_names", []))
         pct_missing_1020 = montage_info["pct_missing_1020"]
 
-        amp_stats = compute_channel_amplitude_stats(raw)
+        amp_stats = compute_channel_amplitude_stats(raw, basic_picks)
         metrics.update(
             {
                 "amplitude_mean_uv": amp_stats["mean"],
@@ -439,16 +479,16 @@ def process_file(
             }
         )
 
-        noise_info = detect_flat_and_noisy_channels(raw)
+        noise_info = detect_flat_and_noisy_channels(raw, basic_picks)
         metrics["n_flat_channels"] = noise_info["n_flat_channels"]
         metrics["n_noisy_channels"] = noise_info["n_noisy_channels"]
         metrics["pct_bad_channels"] = noise_info["pct_bad_channels"]
 
-        empty_start_sec, onset_sec = detect_signal_onset(raw)
+        empty_start_sec, onset_sec = detect_signal_onset(raw, basic_picks)
         metrics["empty_start_sec"] = empty_start_sec
         metrics["actual_signal_start_sec"] = onset_sec
 
-        spec, psd, freqs, alpha_peak, band_powers = compute_psd_metrics(raw)
+        spec, psd, freqs, alpha_peak, band_powers = compute_psd_metrics(raw, basic_picks)
         metrics["alpha_peak_hz"] = alpha_peak
         metrics.update({f"band_power_{k}": v for k, v in band_powers.items()})
 
@@ -468,6 +508,8 @@ def process_file(
             reasons.append("long_empty_start")
         if np.isnan(metrics["alpha_peak_hz"]):
             reasons.append("no_alpha_peak")
+        if not basic_picks:
+            reasons.append("no_basic_1020_channels")
 
         metrics["flag_bad"] = bool(reasons)
         metrics["flag_reasons"] = ";".join(reasons)
@@ -475,10 +517,15 @@ def process_file(
         if args.generate_subject_reports and not args.skip_figures:
             fig_psd_all = fig_psd_avg = fig_amp_hist = fig_var_topo = fig_raw_segment = None
             try:
-                fig_psd_all, fig_psd_avg = plot_psd_figures(spec, freqs, psd)
-                fig_amp_hist = plot_amplitude_histogram(amp_stats)
-                fig_var_topo = plot_channel_variance_topomap(raw)
-                fig_raw_segment = plot_raw_segment(raw, max(onset_sec, 0.0))
+                if spec is not None and psd.size > 0:
+                    fig_psd_all, fig_psd_avg = plot_psd_figures(spec, freqs, psd)
+                if amp_stats["per_channel"].size > 0:
+                    fig_amp_hist = plot_amplitude_histogram(amp_stats)
+                if basic_picks:
+                    raw_basic = raw.copy().pick(basic_picks)
+                    fig_var_topo = plot_channel_variance_topomap(raw_basic)
+                    safe_onset = onset_sec if np.isfinite(onset_sec) else 0.0
+                    fig_raw_segment = plot_raw_segment(raw_basic, max(safe_onset, 0.0))
                 report_path = output_dirs["subject_reports"] / f"{subject_id}_qc_report.html"
                 create_subject_report(
                     raw,
@@ -657,7 +704,7 @@ def main() -> None:
         logger.error("No BIDS EEG (.vhdr) files found in %s with specified filters", args.input_dir)
         sys.exit(1)
 
-    standard_names = set(mne.channels.make_standard_montage("standard_1020").ch_names)
+    standard_names = {ch.lower() for ch in BASIC_1020_CHANNELS}
     logger.info("Found %d files to process", len(files))
 
     output_dirs = {"subject_reports": subject_reports_dir, "figures": fig_dir, "logs": log_dir}
