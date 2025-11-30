@@ -37,9 +37,10 @@ eeg-dim-reduce = "eeg_adhd_epilepsy_psychostimulant.viz.dim_reduction:main"
 eeg-analysis-explore = "eeg_adhd_epilepsy_psychostimulant.explore.analysis_exploration:main"
 eeg-ml-run = "eeg_adhd_epilepsy_psychostimulant.ml.run_ml_pipe:main"
 eeg-analysis = "eeg_psychostimulant.analysis.design:main"
+eeg-qc = "eeg_adhd_epilepsy.explore.eeg_qc:main"
 
 [tool.setuptools]
-packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy_psychostimulant*", "eeg_psychostimulant*"], exclude = ["tests*"] } }
+packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy*", "eeg_psychostimulant*"], exclude = ["tests*"] } }
 
 [tool.ruff]
 line-length = 100
