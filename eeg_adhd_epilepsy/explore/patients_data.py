@@ -1,9 +1,9 @@
 """
 patients_csv_explorer.py
 
-Explore the ADHD/Epilepsy patients CSV with psychostimulant + anti-seizure medication columns.
-Prints dataset info, value counts, medication summaries, confusion matrices, and
-optionally exports CSV/plots plus an HTML report.
+Explore the ADHD/Epilepsy patients CSV with psychostimulant + anti-seizure
+medication columns. Prints dataset info, value counts, medication summaries, and
+optionally exports CSVs plus an HTML report.
 
 Usage:
   python -m eeg_adhd_epilepsy_psychostimulant.explore.patients_data \
@@ -24,10 +24,6 @@ import pickle
 
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
 from eeg_adhd_epilepsy.io.csv import load
 from eeg_adhd_epilepsy.utils.config import (
     csv_dir,
@@ -358,11 +354,10 @@ def _drop_mismatches_and_duplicates(
 def _add_age_groups(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     if "Age" in out.columns:
-        # Keep consistent with the analysis_exploration binning
         out["age_group"] = pd.cut(
             out["Age"],
-            bins=[0, 12, 19],
-            labels=["child", "teen"],
+            bins=[5, 9, 13, 19],
+            labels=["late_childhood_5_8", "early_ado_9_12", "ado_13_18"],
             right=False,
         )
     return out
@@ -388,11 +383,11 @@ def _normalize_values_and_types(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _ensure_age_groups_numeric(df: pd.DataFrame) -> pd.DataFrame:
-    """Add numeric age_groups column: 1=child [0,12), 2=teen [12,19)."""
+    """Add numeric age_groups column matching categorical age_group."""
     out = df.copy()
     if "Age" in out.columns:
-        bins = [0, 12, 19]
-        labels = [1, 2]
+        bins = [5, 9, 13, 19]
+        labels = [1, 2, 3]
         out["age_groups"] = pd.cut(out["Age"], bins=bins, labels=labels, right=False)
         # Cast to numeric ints where possible
         out["age_groups"] = pd.to_numeric(out["age_groups"], errors="coerce")
@@ -647,8 +642,24 @@ def create_analysis_dataframe(
     ]
     age_groups = [
         ("All ages", None),
-        ("child", lambda d: d[d["age_group"] == "child"]) if "age_group" in df.columns else ("child", None),
-        ("teen", lambda d: d[d["age_group"] == "teen"]) if "age_group" in df.columns else ("teen", None),
+        (
+            "late_childhood_5_8",
+            (lambda d: d[d["age_group"] == "late_childhood_5_8"])
+            if "age_group" in df.columns
+            else None,
+        ),
+        (
+            "early_ado_9_12",
+            (lambda d: d[d["age_group"] == "early_ado_9_12"])
+            if "age_group" in df.columns
+            else None,
+        ),
+        (
+            "ado_13_18",
+            (lambda d: d[d["age_group"] == "ado_13_18"])
+            if "age_group" in df.columns
+            else None,
+        ),
     ]
     constraints = [
         ("none", None),
@@ -1464,58 +1475,6 @@ def print_grouped_summaries(df: pd.DataFrame) -> None:
         logging.info(f"Counts — Anti-seizure meds by {group_cols}:\n{med}")
 
 
-def plot_confusion(
-    df: pd.DataFrame,
-    row_col: str,
-    col_col: str,
-    save_path: Path,
-    title: Optional[str] = None,
-) -> None:
-    """Build and save a confusion heatmap for two columns using a single helper."""
-    ct = pd.crosstab(
-        df[row_col], df[col_col],
-        rownames=[row_col], colnames=[col_col], dropna=False,
-    )
-    # Order boolean columns as False, True if present; keep others after
-    cols = list(ct.columns)
-    ordered = [c for c in (False, True) if c in cols]
-    others = [c for c in cols if c not in ordered]
-    if ordered:
-        ct = ct.reindex(columns=ordered + others)
-
-    fig, ax = plt.subplots(figsize=(6, 4))
-    im = ax.imshow(ct.values, cmap="Blues")
-    ax.set_title(title or f"{row_col} vs {col_col}")
-    ax.set_xticks(range(ct.shape[1]))
-    ax.set_yticks(range(ct.shape[0]))
-    ax.set_xticklabels([str(c) for c in ct.columns])
-    ax.set_yticklabels([str(i) for i in ct.index])
-    for i in range(ct.shape[0]):
-        for j in range(ct.shape[1]):
-            ax.text(j, i, str(ct.iat[i, j]), ha="center", va="center", color="black")
-    ax.set_xlabel(col_col)
-    ax.set_ylabel(row_col)
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
-    plt.tight_layout()
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(save_path, dpi=200)
-    plt.close(fig)
-
-
-def save_confusion_figures(df: pd.DataFrame, out_dir: Path) -> None:
-    """Create and save confusion matrix figures under out_dir using one plotter.
-
-    Generated PNGs when columns are present:
-      - confusion_TDAH_x_Psychostimulant.png and/or confusion_ADHD_x_Psychostimulant.png
-    """
-    # ADHD/TDAH vs Psychostimulant
-    for tdah_col in [c for c in ("TDAH", "ADHD") if c in df.columns]:
-        if "has_psychostimulant" in df.columns:
-            path = out_dir / f"confusion_{tdah_col}_x_Psychostimulant.png"
-            plot_confusion(df, tdah_col, "has_psychostimulant", path)
-            logging.info(f"Saved figure: {path}")
-
-
 def print_exclusive_diagnosis_counts(df: pd.DataFrame) -> None:
     """Print counts for patients who have only one diagnosis: ADHD, Epilepsy, or TSA.
 
@@ -1878,12 +1837,8 @@ def main():
     logging.info(f"Stratified prevalence (first rows):\n{stratified_prevalence.head()}")
 
     if args.save or args.html_report:
-        plots_dir = Path(results_dir) / "plots" / "explore"
-        save_confusion_figures(df, plots_dir)
-        # Save requested groupings to results/groupings/explore
         groupings_dir = Path(results_dir) / "groupings" / "explore"
         save_custom_groupings(grouping_tables, groupings_dir)
-        # Generate analysis datasets to results/analysis/explore
         analysis_dir = Path(results_dir) / "analysis" / "explore"
         analysis_filtered = generate_med_analysis_datasets(
             df,
@@ -1907,10 +1862,9 @@ def main():
             summary_dir,
         )
     else:
-        plots_dir = Path(results_dir) / "plots" / "explore"
+        analysis_filtered = pd.DataFrame()
     if args.html_report:
         report_dir = Path(args.report_dir)
-        confusion_paths = sorted(plots_dir.glob("confusion_*")) if plots_dir.exists() else []
         html_path = report_dir / "patients_data_report.html"
         generate_html_report(
             html_path=html_path,
@@ -1931,7 +1885,7 @@ def main():
             total_subjects=len(df),
             bids_check=bids_check,
             analysis_opportunities=analysis_filtered,
-            figures=confusion_paths,
+            figures=[],
         )
     if args.grouped:
         print_grouped_summaries(df)
