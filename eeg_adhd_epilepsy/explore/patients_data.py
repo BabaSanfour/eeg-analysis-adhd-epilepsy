@@ -514,55 +514,55 @@ def create_analysis_dataframe(
             return 0
         return int(sub[col].sum())
 
-def apply_constraint(df: pd.DataFrame, constraint: str) -> pd.DataFrame:
-    """
-    Apply a flexible constraint expression on a dataset.
-    Constraint syntax:
-        - Tokens joined by "_and_"
-        - Supported tokens automatically mapped to boolean conditions:
-            no_epilepsy, no_tsa, no_adhd,
-            psychostim_true, psychostim_false,
-            asm_true, asm_false
-    """
+    def apply_constraint(df: pd.DataFrame, constraint: str) -> pd.DataFrame:
+        """
+        Apply a flexible constraint expression on a dataset.
+        Constraint syntax:
+            - Tokens joined by "_and_"
+            - Supported tokens automatically mapped to boolean conditions:
+                no_epilepsy, no_tsa, no_adhd,
+                psychostim_true, psychostim_false,
+                asm_true, asm_false
+        """
 
-    if not constraint or constraint.strip() == "":
-        return df  # No constraint → no filtering
+        if not constraint or constraint.strip() == "":
+            return df  # No constraint → no filtering
 
-    tokens = constraint.split("_and_")
-    conditions = []
+        tokens = constraint.split("_and_")
+        conditions = []
 
-    # Mapping from token prefix to (column, expected value)
-    mapping = {
-        "no_epilepsy": ("has_epilepsy", False),
-        "no_tsa": ("has_tsa", False),
-        "no_adhd": ("has_adhd", False),
-        "psychostim_true": ("has_psychostimulant", True),
-        "psychostim_false": ("has_psychostimulant", False),
-        "asm_true": ("has_epilepsy_med", True),
-        "asm_false": ("has_epilepsy_med", False),
-    }
+        # Mapping from token prefix to (column, expected value)
+        mapping = {
+            "no_epilepsy": ("has_epilepsy", False),
+            "no_tsa": ("has_tsa", False),
+            "no_adhd": ("has_adhd", False),
+            "psychostim_true": ("has_psychostimulant", True),
+            "psychostim_false": ("has_psychostimulant", False),
+            "asm_true": ("has_epilepsy_med", True),
+            "asm_false": ("has_epilepsy_med", False),
+        }
 
-    # Build mask dynamically
-    for tok in tokens:
-        if tok not in mapping:
-            raise ValueError(f"Unknown constraint token: '{tok}'")
+        # Build mask dynamically
+        for tok in tokens:
+            if tok not in mapping:
+                raise ValueError(f"Unknown constraint token: '{tok}'")
 
-        col, expected = mapping[tok]
+            col, expected = mapping[tok]
 
-        # Skip missing columns gracefully
-        if col not in df.columns:
-            continue
+            # Skip missing columns gracefully
+            if col not in df.columns:
+                continue
 
-        conditions.append(df[col] == expected)
+            conditions.append(df[col] == expected)
 
-    if not conditions:
-        return df
+        if not conditions:
+            return df
 
-    mask = conditions[0]
-    for c in conditions[1:]:
-        mask &= c
+        mask = conditions[0]
+        for c in conditions[1:]:
+            mask &= c
 
-    return df[mask]
+        return df[mask]
 
     # Analysis specifications
     def spec_bool(col: str, label_true: str, label_false: str):
@@ -663,35 +663,35 @@ def apply_constraint(df: pd.DataFrame, constraint: str) -> pd.DataFrame:
             else None,
         ),
     ]
+    mapping = {
+        "no_epilepsy": ("has_epilepsy", False),
+        "no_tsa": ("has_tsa", False),
+        "no_adhd": ("has_adhd", False),
+        "psychostim_true": ("has_psychostimulant", True),
+        "psychostim_false": ("has_psychostimulant", False),
+        "asm_true": ("has_epilepsy_med", True),
+        "asm_false": ("has_epilepsy_med", False),
+    }
+
+    tokens = list(mapping.keys())
+
+    def is_valid(combo):
+        c = set(combo)
+        # Remove contradictions
+        if {"psychostim_true", "psychostim_false"} <= c:
+            return False
+        if {"asm_true", "asm_false"} <= c:
+            return False
+        return True
+
     constraints = [
         ("none", None),
-
-        # Single clinical constraints
-        ("no_epilepsy", "no_epilepsy"),
-        ("no_tsa", "no_tsa"),
-        ("adhd_true", "adhd_true"),
-        ("adhd_false", "adhd_false"),
-
-        # Combined clinical constraints
-        ("no_epilepsy_no_tsa", "no_epilepsy_and_no_tsa"),
-
-        # Psychostimulant constraints
-        ("psychostim_true", "psychostim_true"),
-        ("psychostim_false", "psychostim_false"),
-
-        # ASM constraints
-        ("asm_true", "asm_true"),
-        ("asm_false", "asm_false"),
-
-        # Pair combinations (psychostim × asm)
-        ("psychostim_and_asm_true", "psychostim_true_and_asm_true"),
-        ("psychostim_true_asm_false", "psychostim_true_and_asm_false"),
-        ("psychostim_false_asm_true", "psychostim_false_and_asm_true"),
-
-        # ADHD × treatments
-        ("adhd_and_psychostim_true", "adhd_true_and_psychostim_true"),
-        ("adhd_and_asm_true", "adhd_true_and_asm_true"),
     ]
+    for r in range(1, len(tokens)+1):
+        for combo in itertools.combinations(tokens, r):
+            if is_valid(combo):
+                constraint_label = "_and_".join(combo)
+                constraints.append((constraint_label, constraint_label))
 
     rows = []
     for sex_label, sex_fn in sex_groups:
@@ -767,6 +767,42 @@ def apply_constraint(df: pd.DataFrame, constraint: str) -> pd.DataFrame:
                     )
 
     out = pd.DataFrame(rows)
+    if out.empty and not df.empty:
+        # Fallback: basic opportunities without constraints/strata
+        for name, builder in analysis_specs:
+            res = builder(df)
+            if res is None:
+                continue
+            mask1, mask2, label1, label2 = res
+            g1, g2 = df[mask1], df[mask2]
+            if len(g1) == 0 or len(g2) == 0:
+                continue
+            m1, f1 = sex_counts(g1)
+            m2, f2 = sex_counts(g2)
+            out = pd.concat(
+                [
+                    out,
+                    pd.DataFrame(
+                        [
+                            {
+                                "analysis": name,
+                                "constraint": "none",
+                                "sex": "Combined",
+                                "age_group": "All ages",
+                                "group1_label": label1,
+                                "group2_label": label2,
+                                "group1_n": len(g1),
+                                "group2_n": len(g2),
+                                "group1_male": m1,
+                                "group1_female": f1,
+                                "group2_male": m2,
+                                "group2_female": f2,
+                            }
+                        ]
+                    ),
+                ],
+                ignore_index=True,
+            )
     if min_count > 0 and not out.empty:
         out = out[(out["group1_n"] >= min_count) & (out["group2_n"] >= min_count)]
     return out.reset_index(drop=True)
@@ -794,17 +830,19 @@ def generate_med_analysis_datasets(
     out_dir: Path,
     include_potential: bool = True,
     min_count: int = 20,
-) -> None:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Generate analysis opportunity datasets and save CSVs."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    res = create_analysis_dataframe(df.copy(), min_count=0)
+    full = create_analysis_dataframe(df.copy(), min_count=0)
+    if full is None:
+        full = pd.DataFrame()
     full_path = out_dir / "analysis_opportunities_full.csv"
-    res.to_csv(full_path, index=False)
-    filtered = remove_small_count_rows(res, min_count=min_count, count_cols=["group1_n", "group2_n"])
+    full.to_csv(full_path, index=False)
+    filtered = remove_small_count_rows(full, min_count=min_count, count_cols=["group1_n", "group2_n"])
     fil_path = out_dir / "analysis_opportunities_filtered.csv"
     filtered.to_csv(fil_path, index=False)
     logging.info(f"Saved analysis CSVs: {full_path}, {fil_path}")
-    return filtered
+    return full, filtered
 
 
 def build_diagnosis_overview(df: pd.DataFrame) -> pd.DataFrame:
@@ -1783,8 +1821,8 @@ def main():
     parser.add_argument(
         "--bids_dir",
         type=str,
-        default=str(default_bids_dir),
-        help="Path to the BIDS root containing subject folders (default: env/config BIDS dir)",
+        default="",
+        help="Path to the BIDS root containing subject folders (optional; skips check when empty)",
     )
 
     parser.add_argument(
@@ -1799,7 +1837,9 @@ def main():
     df = _drop_empty_columns(df)
     potential_counts = _log_potential_entries(df)
     pt_id_info = log_pt_id_issues(df)
-    bids_check = check_bids_subject_folders(df, Path(args.bids_dir))
+    bids_check = {}
+    if args.bids_dir:
+        bids_check = check_bids_subject_folders(df, Path(args.bids_dir))
 
     # Derive psychostimulant flags using the mapping first, then normalize
     df = _ensure_psychostimulant_flags(df)
@@ -1850,7 +1890,7 @@ def main():
         groupings_dir = Path(results_dir) / "groupings" / "explore"
         save_custom_groupings(grouping_tables, groupings_dir)
         analysis_dir = Path(results_dir) / "analysis" / "explore"
-        analysis_filtered = generate_med_analysis_datasets(
+        analysis_full, analysis_filtered = generate_med_analysis_datasets(
             df,
             analysis_dir,
             include_potential=args.potential_in_with,
@@ -1872,6 +1912,7 @@ def main():
             summary_dir,
         )
     else:
+        analysis_full = pd.DataFrame()
         analysis_filtered = pd.DataFrame()
     if args.html_report:
         report_dir = Path(args.report_dir)
