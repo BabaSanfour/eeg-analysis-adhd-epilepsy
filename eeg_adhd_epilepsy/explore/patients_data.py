@@ -514,53 +514,55 @@ def create_analysis_dataframe(
             return 0
         return int(sub[col].sum())
 
-    def apply_constraint(data: pd.DataFrame, constraint: str) -> pd.DataFrame:
-        d = data
-        has = d.columns
-        if constraint == "no_epilepsy" and "has_epilepsy" in has:
-            d = d[d["has_epilepsy"] == False]
-        elif constraint == "no_tsa" and "has_tsa" in has:
-            d = d[d["has_tsa"] == False]
-        elif constraint == "no_epilepsy_no_tsa" and {"has_epilepsy", "has_tsa"}.issubset(has):
-            d = d[(d["has_epilepsy"] == False) & (d["has_tsa"] == False)]
-        elif constraint == "psychostim_true" and "has_psychostimulant" in has:
-            d = d[d["has_psychostimulant"] == True]
-        elif constraint == "psychostim_false" and "has_psychostimulant" in has:
-            d = d[d["has_psychostimulant"] == False]
-        elif constraint == "asm_true" and "has_epilepsy_med" in has:
-            d = d[d["has_epilepsy_med"] == True]
-        elif constraint == "asm_false" and "has_epilepsy_med" in has:
-            d = d[d["has_epilepsy_med"] == False]
-        elif constraint == "adhd_true" and "has_adhd" in has:
-            d = d[d["has_adhd"] == True]
-        elif constraint == "adhd_false" and "has_adhd" in has:
-            d = d[d["has_adhd"] == False]
-        elif constraint == "psychostim_and_asm_true" and {
-            "has_psychostimulant",
-            "has_epilepsy_med",
-        }.issubset(has):
-            d = d[(d["has_psychostimulant"] == True) & (d["has_epilepsy_med"] == True)]
-        elif constraint == "psychostim_true_asm_false" and {
-            "has_psychostimulant",
-            "has_epilepsy_med",
-        }.issubset(has):
-            d = d[(d["has_psychostimulant"] == True) & (d["has_epilepsy_med"] == False)]
-        elif constraint == "psychostim_false_asm_true" and {
-            "has_psychostimulant",
-            "has_epilepsy_med",
-        }.issubset(has):
-            d = d[(d["has_psychostimulant"] == False) & (d["has_epilepsy_med"] == True)]
-        elif constraint == "adhd_and_psychostim_true" and {
-            "has_adhd",
-            "has_psychostimulant",
-        }.issubset(has):
-            d = d[(d["has_adhd"] == True) & (d["has_psychostimulant"] == True)]
-        elif constraint == "adhd_and_asm_true" and {
-            "has_adhd",
-            "has_epilepsy_med",
-        }.issubset(has):
-            d = d[(d["has_adhd"] == True) & (d["has_epilepsy_med"] == True)]
-        return d
+def apply_constraint(df: pd.DataFrame, constraint: str) -> pd.DataFrame:
+    """
+    Apply a flexible constraint expression on a dataset.
+    Constraint syntax:
+        - Tokens joined by "_and_"
+        - Supported tokens automatically mapped to boolean conditions:
+            no_epilepsy, no_tsa, no_adhd,
+            psychostim_true, psychostim_false,
+            asm_true, asm_false
+    """
+
+    if not constraint or constraint.strip() == "":
+        return df  # No constraint → no filtering
+
+    tokens = constraint.split("_and_")
+    conditions = []
+
+    # Mapping from token prefix to (column, expected value)
+    mapping = {
+        "no_epilepsy": ("has_epilepsy", False),
+        "no_tsa": ("has_tsa", False),
+        "no_adhd": ("has_adhd", False),
+        "psychostim_true": ("has_psychostimulant", True),
+        "psychostim_false": ("has_psychostimulant", False),
+        "asm_true": ("has_epilepsy_med", True),
+        "asm_false": ("has_epilepsy_med", False),
+    }
+
+    # Build mask dynamically
+    for tok in tokens:
+        if tok not in mapping:
+            raise ValueError(f"Unknown constraint token: '{tok}'")
+
+        col, expected = mapping[tok]
+
+        # Skip missing columns gracefully
+        if col not in df.columns:
+            continue
+
+        conditions.append(df[col] == expected)
+
+    if not conditions:
+        return df
+
+    mask = conditions[0]
+    for c in conditions[1:]:
+        mask &= c
+
+    return df[mask]
 
     # Analysis specifications
     def spec_bool(col: str, label_true: str, label_false: str):
@@ -663,20 +665,32 @@ def create_analysis_dataframe(
     ]
     constraints = [
         ("none", None),
+
+        # Single clinical constraints
         ("no_epilepsy", "no_epilepsy"),
         ("no_tsa", "no_tsa"),
-        ("no_epilepsy_no_tsa", "no_epilepsy_no_tsa"),
-        ("psychostim_true", "psychostim_true"),
-        ("psychostim_false", "psychostim_false"),
-        ("asm_true", "asm_true"),
-        ("asm_false", "asm_false"),
         ("adhd_true", "adhd_true"),
         ("adhd_false", "adhd_false"),
-        ("psychostim_and_asm_true", "psychostim_and_asm_true"),
-        ("psychostim_true_asm_false", "psychostim_true_asm_false"),
-        ("psychostim_false_asm_true", "psychostim_false_asm_true"),
-        ("adhd_and_psychostim_true", "adhd_and_psychostim_true"),
-        ("adhd_and_asm_true", "adhd_and_asm_true"),
+
+        # Combined clinical constraints
+        ("no_epilepsy_no_tsa", "no_epilepsy_and_no_tsa"),
+
+        # Psychostimulant constraints
+        ("psychostim_true", "psychostim_true"),
+        ("psychostim_false", "psychostim_false"),
+
+        # ASM constraints
+        ("asm_true", "asm_true"),
+        ("asm_false", "asm_false"),
+
+        # Pair combinations (psychostim × asm)
+        ("psychostim_and_asm_true", "psychostim_true_and_asm_true"),
+        ("psychostim_true_asm_false", "psychostim_true_and_asm_false"),
+        ("psychostim_false_asm_true", "psychostim_false_and_asm_true"),
+
+        # ADHD × treatments
+        ("adhd_and_psychostim_true", "adhd_true_and_psychostim_true"),
+        ("adhd_and_asm_true", "adhd_true_and_asm_true"),
     ]
 
     rows = []
@@ -1573,13 +1587,10 @@ def generate_html_report(
     total_subjects: int,
     bids_check: dict[str, object],
     analysis_opportunities: pd.DataFrame,
-    figures: list[Path] | None = None,
 ) -> None:
-    """Lightweight HTML report with the key tables/figures."""
-    figures = figures or []
+    """Lightweight HTML report with the key tables."""
     html_path.parent.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    img_block = "\n".join([_embed_image(p) for p in figures if p.exists()])
     quality_items = []
     if potential_counts:
         quality_items.append({"text": f"Columns with '0 (potentiel)': {potential_counts}"})
@@ -1713,8 +1724,6 @@ def generate_html_report(
   <p>Number of analysis possibilities: {len(analysis_opportunities)}</p>
   {_df_to_html(analysis_opportunities)}
 
-  <h2>Figures</h2>
-  {img_block or "<p>No figures available.</p>"}
 </body>
 </html>
 """
