@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, parallel
 from tqdm import tqdm
+from mne_bids import BIDSPath, read_raw_bids
 
 # Headless-friendly backend for figure generation.
 matplotlib.use("Agg")
@@ -42,13 +43,10 @@ BAND_LIMITS = {
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Automated EEG QC (no preprocessing).")
     parser.add_argument(
-        "--input_dir", required=True, type=Path, help="Directory with raw EEG files."
+        "--input_dir", required=True, type=Path, help="BIDS root directory with raw EEG files."
     )
     parser.add_argument(
         "--output_dir", required=True, type=Path, help="Directory to store QC outputs."
-    )
-    parser.add_argument(
-        "--file_pattern", default="*.fif", help="Glob pattern for files (e.g., '*.edf')."
     )
     parser.add_argument(
         "--n_jobs", type=int, default=1, help="Jobs for parallel processing (-1 for all cores)."
@@ -70,6 +68,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--min_duration", type=float, default=5.0, help="Minimum duration in minutes.")
     parser.add_argument("--max_duration", type=float, default=60.0, help="Maximum duration in minutes.")
+    parser.add_argument("--bids_session", default=None, help="BIDS session entity, e.g., '01'.")
+    parser.add_argument("--bids_task", default="RESTING", help="BIDS task entity, e.g., 'RESTING'.")
+    parser.add_argument("--bids_run", default=None, help="BIDS run entity, e.g., '01'.")
+    parser.add_argument("--bids_acq", default=None, help="BIDS acquisition entity if any.")
+    parser.add_argument("--bids_proc", default=None, help="BIDS processing label if any.")
     parser.add_argument("--log_level", default="INFO", help="Logging level (DEBUG, INFO, WARNING...).")
     return parser.parse_args()
 
@@ -84,8 +87,33 @@ def setup_logging(log_file: Path, level: str) -> logging.Logger:
     return logging.getLogger("eeg_qc")
 
 
-def discover_files(input_dir: Path, pattern: str) -> List[Path]:
-    return sorted(input_dir.rglob(pattern))
+def discover_bids_files(
+    bids_root: Path, args: argparse.Namespace, subjects_filter: set[str] | None = None
+) -> List[Path]:
+    """Use BIDSPath matching to find EEG BrainVision files under a BIDS root."""
+    template = BIDSPath(
+        root=bids_root,
+        subject=None,
+        session=args.bids_session,
+        task=args.bids_task,
+        run=args.bids_run,
+        acquisition=args.bids_acq,
+        processing=args.bids_proc,
+        datatype="eeg",
+        suffix="eeg",
+        extension=".vhdr",
+    )
+    matches = template.match()
+    files: List[Path] = []
+    for match in matches:
+        subj = match.subject or ""
+        subj_tag = f"sub-{subj}" if subj else ""
+        if subjects_filter:
+            if subj_tag not in subjects_filter and subj not in subjects_filter:
+                continue
+        if match.fpath is not None and match.fpath.exists():
+            files.append(match.fpath)
+    return sorted(files)
 
 
 def read_subjects_list(path: Path) -> set[str]:
@@ -99,15 +127,23 @@ def parse_subject_id(filepath: Path) -> str:
     return filepath.stem
 
 
-def load_raw(filepath: Path) -> mne.io.BaseRaw:
-    ext = filepath.suffix.lower()
-    if ext == ".fif":
-        return mne.io.read_raw_fif(filepath, preload=False, verbose="ERROR")
-    if ext == ".edf":
-        return mne.io.read_raw_edf(filepath, preload=False, verbose="ERROR")
-    if ext == ".bdf":
-        return mne.io.read_raw_bdf(filepath, preload=False, verbose="ERROR")
-    raise ValueError(f"Unsupported file extension: {ext}")
+def load_raw(filepath: Path, bids_root: Path, args: argparse.Namespace) -> mne.io.BaseRaw:
+    if filepath.suffix.lower() != ".vhdr":
+        raise ValueError(f"Unsupported file extension (only .vhdr supported): {filepath.suffix}")
+    subject_clean = parse_subject_id(filepath).replace("sub-", "")
+    bids_path = BIDSPath(
+        root=bids_root,
+        subject=subject_clean,
+        session=args.bids_session,
+        task=args.bids_task,
+        run=args.bids_run,
+        acquisition=args.bids_acq,
+        processing=args.bids_proc,
+        datatype="eeg",
+        suffix="eeg",
+        extension=".vhdr",
+    )
+    return read_raw_bids(bids_path, preload=False, verbose="ERROR")
 
 
 def extract_metadata(raw: mne.io.BaseRaw) -> Dict[str, object]:
@@ -208,8 +244,8 @@ def detect_signal_onset(raw: mne.io.BaseRaw, threshold_var_uv2: float = 5.0) -> 
     if len(above_thresh) == 0:
         return float(n_windows), float(n_windows)
     first_idx = int(above_thresh[0])
-    onset_sec = first_idx
-    return float(onset_sec), float(onset_sec)
+    onset_sec = float(first_idx)
+    return float(first_idx), onset_sec
 
 
 def plot_amplitude_histogram(amp_stats: Dict[str, object]) -> matplotlib.figure.Figure:
@@ -374,7 +410,7 @@ def process_file(
     metrics.update(band_power_fields)
 
     try:
-        raw = load_raw(filepath)
+        raw = load_raw(filepath, args.input_dir, args)
     except Exception as exc:  # pragma: no cover - defensive branch
         err_msg = f"Failed to read {filepath.name}: {exc}"
         logger.error(err_msg)
@@ -614,12 +650,10 @@ def main() -> None:
     logger = setup_logging(log_dir / "qc_processing.log", args.log_level)
     logger.info("Starting EEG QC")
 
-    files = discover_files(args.input_dir, args.file_pattern)
-    if args.subjects_list:
-        wanted = read_subjects_list(args.subjects_list)
-        files = [f for f in files if parse_subject_id(f) in wanted]
+    subjects_filter = read_subjects_list(args.subjects_list) if args.subjects_list else None
+    files = discover_bids_files(args.input_dir, args, subjects_filter)
     if not files:
-        logger.error("No files found with pattern %s in %s", args.file_pattern, args.input_dir)
+        logger.error("No BIDS EEG (.vhdr) files found in %s with specified filters", args.input_dir)
         sys.exit(1)
 
     standard_names = set(mne.channels.make_standard_montage("standard_1020").ch_names)
