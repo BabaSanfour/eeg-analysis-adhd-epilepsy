@@ -521,20 +521,50 @@ def create_analysis_dataframe(
 
     def apply_constraint(data: pd.DataFrame, constraint: str) -> pd.DataFrame:
         d = data
-        if constraint == "no_epilepsy" and "has_epilepsy" in d.columns:
+        has = d.columns
+        if constraint == "no_epilepsy" and "has_epilepsy" in has:
             d = d[d["has_epilepsy"] == False]
-        elif constraint == "no_tsa" and "has_tsa" in d.columns:
+        elif constraint == "no_tsa" and "has_tsa" in has:
             d = d[d["has_tsa"] == False]
-        elif constraint == "no_epilepsy_no_tsa" and {"has_epilepsy", "has_tsa"}.issubset(d.columns):
+        elif constraint == "no_epilepsy_no_tsa" and {"has_epilepsy", "has_tsa"}.issubset(has):
             d = d[(d["has_epilepsy"] == False) & (d["has_tsa"] == False)]
-        elif constraint == "psychostim_true" and "has_psychostimulant" in d.columns:
+        elif constraint == "psychostim_true" and "has_psychostimulant" in has:
             d = d[d["has_psychostimulant"] == True]
-        elif constraint == "psychostim_false" and "has_psychostimulant" in d.columns:
+        elif constraint == "psychostim_false" and "has_psychostimulant" in has:
             d = d[d["has_psychostimulant"] == False]
-        elif constraint == "asm_true" and "has_epilepsy_med" in d.columns:
+        elif constraint == "asm_true" and "has_epilepsy_med" in has:
             d = d[d["has_epilepsy_med"] == True]
-        elif constraint == "asm_false" and "has_epilepsy_med" in d.columns:
+        elif constraint == "asm_false" and "has_epilepsy_med" in has:
             d = d[d["has_epilepsy_med"] == False]
+        elif constraint == "adhd_true" and "has_adhd" in has:
+            d = d[d["has_adhd"] == True]
+        elif constraint == "adhd_false" and "has_adhd" in has:
+            d = d[d["has_adhd"] == False]
+        elif constraint == "psychostim_and_asm_true" and {
+            "has_psychostimulant",
+            "has_epilepsy_med",
+        }.issubset(has):
+            d = d[(d["has_psychostimulant"] == True) & (d["has_epilepsy_med"] == True)]
+        elif constraint == "psychostim_true_asm_false" and {
+            "has_psychostimulant",
+            "has_epilepsy_med",
+        }.issubset(has):
+            d = d[(d["has_psychostimulant"] == True) & (d["has_epilepsy_med"] == False)]
+        elif constraint == "psychostim_false_asm_true" and {
+            "has_psychostimulant",
+            "has_epilepsy_med",
+        }.issubset(has):
+            d = d[(d["has_psychostimulant"] == False) & (d["has_epilepsy_med"] == True)]
+        elif constraint == "adhd_and_psychostim_true" and {
+            "has_adhd",
+            "has_psychostimulant",
+        }.issubset(has):
+            d = d[(d["has_adhd"] == True) & (d["has_psychostimulant"] == True)]
+        elif constraint == "adhd_and_asm_true" and {
+            "has_adhd",
+            "has_epilepsy_med",
+        }.issubset(has):
+            d = d[(d["has_adhd"] == True) & (d["has_epilepsy_med"] == True)]
         return d
 
     # Analysis specifications
@@ -561,7 +591,9 @@ def create_analysis_dataframe(
         def fn(data: pd.DataFrame):
             if not {"LEV_bool", "VPA_bool"}.issubset(data.columns):
                 return None
-            other = [c for c in data.columns if c.endswith("_bool") and c not in {"LEV_bool", "VPA_bool"}]
+            other = [
+                c for c in data.columns if c.endswith("_bool") and c not in {"LEV_bool", "VPA_bool"}
+            ]
             mask_lev_only = data["LEV_bool"] & ~data["VPA_bool"]
             for c in other:
                 mask_lev_only = mask_lev_only & ~data[c]
@@ -575,7 +607,9 @@ def create_analysis_dataframe(
         def fn(data: pd.DataFrame):
             if not {"LEV_bool", "VPA_bool"}.issubset(data.columns):
                 return None
-            other = [c for c in data.columns if c.endswith("_bool") and c not in {"LEV_bool", "VPA_bool"}]
+            other = [
+                c for c in data.columns if c.endswith("_bool") and c not in {"LEV_bool", "VPA_bool"}
+            ]
             mask_combo = data["LEV_bool"] & data["VPA_bool"]
             for c in other:
                 mask_combo = mask_combo & ~data[c]
@@ -606,7 +640,11 @@ def create_analysis_dataframe(
         ("1 ASM vs >=2 ASM", spec_asm_counts()),
     ]
 
-    sex_groups = [("Combined", None), ("M", lambda d: d[d["Sex"] == "M"]), ("F", lambda d: d[d["Sex"] == "F"])]
+    sex_groups = [
+        ("Combined", None),
+        ("M", lambda d: d[d["Sex"] == "M"]),
+        ("F", lambda d: d[d["Sex"] == "F"]),
+    ]
     age_groups = [
         ("All ages", None),
         ("child", lambda d: d[d["age_group"] == "child"]) if "age_group" in df.columns else ("child", None),
@@ -621,6 +659,13 @@ def create_analysis_dataframe(
         ("psychostim_false", "psychostim_false"),
         ("asm_true", "asm_true"),
         ("asm_false", "asm_false"),
+        ("adhd_true", "adhd_true"),
+        ("adhd_false", "adhd_false"),
+        ("psychostim_and_asm_true", "psychostim_and_asm_true"),
+        ("psychostim_true_asm_false", "psychostim_true_asm_false"),
+        ("psychostim_false_asm_true", "psychostim_false_asm_true"),
+        ("adhd_and_psychostim_true", "adhd_and_psychostim_true"),
+        ("adhd_and_asm_true", "adhd_and_asm_true"),
     ]
 
     rows = []
@@ -633,7 +678,9 @@ def create_analysis_dataframe(
             if age_df.empty:
                 continue
             for constraint_label, constraint_key in constraints:
-                constrained_df = age_df if constraint_key is None else apply_constraint(age_df, constraint_key)
+                constrained_df = age_df if constraint_key is None else apply_constraint(
+                    age_df, constraint_key
+                )
                 if constrained_df.empty:
                     continue
                 for name, builder in analysis_specs:
@@ -663,10 +710,18 @@ def create_analysis_dataframe(
                             "group1_female": f1,
                             "group2_male": m2,
                             "group2_female": f2,
-                            "group1_age_mean": group1["Age"].mean() if "Age" in group1.columns else np.nan,
-                            "group2_age_mean": group2["Age"].mean() if "Age" in group2.columns else np.nan,
-                            "group1_age_std": group1["Age"].std() if "Age" in group1.columns else np.nan,
-                            "group2_age_std": group2["Age"].std() if "Age" in group2.columns else np.nan,
+                            "group1_age_mean": group1["Age"].mean()
+                            if "Age" in group1.columns
+                            else np.nan,
+                            "group2_age_mean": group2["Age"].mean()
+                            if "Age" in group2.columns
+                            else np.nan,
+                            "group1_age_std": group1["Age"].std()
+                            if "Age" in group1.columns
+                            else np.nan,
+                            "group2_age_std": group2["Age"].std()
+                            if "Age" in group2.columns
+                            else np.nan,
                             "group1_adhd": diag_counts(group1, "has_adhd"),
                             "group2_adhd": diag_counts(group2, "has_adhd"),
                             "group1_epilepsy": diag_counts(group1, "has_epilepsy"),
