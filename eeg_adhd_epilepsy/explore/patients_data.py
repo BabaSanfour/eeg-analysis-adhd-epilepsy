@@ -438,21 +438,7 @@ def apply_diagnosis_filter(
 diag_filter_options = ["with", "without", "combined"]
 diagnosis_columns = ["TDAH", "Epilepsy", "TSA"]
 
-
-sex_filters = {
-    "F": lambda d: d[d["Sex"] == "F"],
-    "M": lambda d: d[d["Sex"] == "M"],
-    "Combined": lambda d: d,
-}
-
-
-age_filters = {
-    1: lambda d: d[d["age_groups"] == 1],
-    2: lambda d: d[d["age_groups"] == 2],
-    "Combined": lambda d: d,
-}
-
-
+ANALYSIS_SPECS = []
 def get_counts_by_med_analysis(
     df: pd.DataFrame,
     sex_key: str,
@@ -519,113 +505,141 @@ def get_counts_by_med_analysis(
 
 def create_analysis_dataframe(
     df: pd.DataFrame,
-    analysis_type: str,
-    include_potential: bool = True,
+    min_count: int = 0,
 ) -> pd.DataFrame:
-    """Create a summary DataFrame with counts for each combination of filters."""
-    results = []
-    for sex_key in sex_filters.keys():
-        for age_key in age_filters.keys():
-            for diag_combo in itertools.product(diag_filter_options, repeat=3):
-                diag_filters = dict(zip(diagnosis_columns, diag_combo))
-                count1, count2, label1, label2 = get_counts_by_med_analysis(
-                    df,
-                    sex_key,
-                    age_key,
-                    diag_filters,
-                    analysis_type,
-                    include_potential,
-                )
+    """Create summary rows for all analysis specs (med + diagnosis combos)."""
 
-                sub_df = df.copy()
-                sub_df = sex_filters[sex_key](sub_df)
-                sub_df = age_filters[age_key](sub_df)
-                for diag in diagnosis_columns:
-                    sub_df = apply_diagnosis_filter(
-                        sub_df,
-                        diag,
-                        diag_filters.get(diag, "combined"),
-                        include_potential,
-                    )
+    def sex_counts(sub: pd.DataFrame) -> tuple[int, int]:
+        if sub is None or sub.empty or "Sex" not in sub.columns:
+            return 0, 0
+        return int((sub["Sex"] == "M").sum()), int((sub["Sex"] == "F").sum())
 
-                overall_age_mean = sub_df["Age"].mean() if not sub_df.empty else np.nan
-                overall_age_std = sub_df["Age"].std() if not sub_df.empty else np.nan
+    def diag_counts(sub: pd.DataFrame, col: str) -> int:
+        if col not in sub.columns:
+            return 0
+        return int(sub[col].sum())
 
-                female_subset = sub_df[sub_df["Sex"] == "F"]
-                female_age_mean = female_subset["Age"].mean() if not female_subset.empty else np.nan
-                female_age_std = female_subset["Age"].std() if not female_subset.empty else np.nan
+    # Analysis specifications
+    def spec_bool(col: str, label_true: str, label_false: str):
+        def fn(data: pd.DataFrame):
+            if col not in data.columns:
+                return None
+            mask_true = data[col] == True
+            mask_false = data[col] == False
+            return mask_true, mask_false, label_true, label_false
+        return fn
 
-                male_subset = sub_df[sub_df["Sex"] == "M"]
-                male_age_mean = male_subset["Age"].mean() if not male_subset.empty else np.nan
-                male_age_std = male_subset["Age"].std() if not male_subset.empty else np.nan
+    def spec_psych_desc():
+        def fn(data: pd.DataFrame):
+            if "psychostimulant_description" not in data.columns:
+                return None
+            labels = data["psychostimulant_description"].apply(_normalize_psychostim_label)
+            mask_mph = labels == "Methylphenidate"
+            mask_ldx = labels == "Lisdexamfetamine"
+            return mask_mph, mask_ldx, "Methylphenidate", "Lisdexamfetamine"
+        return fn
 
-                if analysis_type == "ctrl_vs_all":
-                    if "psychostimulant_category" in sub_df.columns:
-                        is_control = sub_df["psychostimulant_category"].fillna(0).astype(int).eq(0)
-                    else:
-                        is_control = (
-                            pd.to_numeric(sub_df["Psychostimulant (y/n)"], errors="coerce")
-                            .fillna(0)
-                            .astype(int)
-                            .eq(0)
-                        )
-                    group1_df = sub_df[is_control]
-                    group2_df = sub_df[~is_control]
-                elif analysis_type == "med1_vs_med2":
-                    med_df = sub_df[sub_df["psychostimulant_category"].isin([1, 2])]
-                    group1_df = med_df[med_df["psychostimulant_category"] == 1]
-                    group2_df = med_df[med_df["psychostimulant_category"] == 2]
-                elif analysis_type == "ctrl_vs_med1":
-                    sub_sub_df = sub_df[sub_df["psychostimulant_category"].isin([0, 1])]
-                    group1_df = sub_sub_df[
-                        sub_sub_df["psychostimulant_category"].fillna(0).astype(int).eq(0)
-                    ]
-                    group2_df = sub_sub_df[sub_sub_df["psychostimulant_category"] == 1]
-                elif analysis_type == "ctrl_vs_med2":
-                    sub_sub_df = sub_df[sub_df["psychostimulant_category"].isin([0, 2])]
-                    group1_df = sub_sub_df[
-                        sub_sub_df["psychostimulant_category"].fillna(0).astype(int).eq(0)
-                    ]
-                    group2_df = sub_sub_df[sub_sub_df["psychostimulant_category"] == 2]
-                else:
-                    group1_df = pd.DataFrame()
-                    group2_df = pd.DataFrame()
+    def spec_lev_vpa_single():
+        def fn(data: pd.DataFrame):
+            if not {"LEV_bool", "VPA_bool"}.issubset(data.columns):
+                return None
+            other = [c for c in data.columns if c.endswith("_bool") and c not in {"LEV_bool", "VPA_bool"}]
+            mask_lev_only = data["LEV_bool"] & ~data["VPA_bool"]
+            for c in other:
+                mask_lev_only = mask_lev_only & ~data[c]
+            mask_vpa_only = data["VPA_bool"] & ~data["LEV_bool"]
+            for c in other:
+                mask_vpa_only = mask_vpa_only & ~data[c]
+            return mask_lev_only, mask_vpa_only, "LEV only", "VPA only"
+        return fn
 
-                M_count_group1 = int((group1_df["Sex"] == "M").sum()) if not group1_df.empty else 0
-                F_count_group1 = int((group1_df["Sex"] == "F").sum()) if not group1_df.empty else 0
-                M_count_group2 = int((group2_df["Sex"] == "M").sum()) if not group2_df.empty else 0
-                F_count_group2 = int((group2_df["Sex"] == "F").sum()) if not group2_df.empty else 0
-                M_count = M_count_group1 + M_count_group2
-                F_count = F_count_group1 + F_count_group2
+    def spec_lev_vpa_combo_vs_single():
+        def fn(data: pd.DataFrame):
+            if not {"LEV_bool", "VPA_bool"}.issubset(data.columns):
+                return None
+            other = [c for c in data.columns if c.endswith("_bool") and c not in {"LEV_bool", "VPA_bool"}]
+            mask_combo = data["LEV_bool"] & data["VPA_bool"]
+            for c in other:
+                mask_combo = mask_combo & ~data[c]
+            mask_single = (data["LEV_bool"] ^ data["VPA_bool"])
+            for c in other:
+                mask_single = mask_single & ~data[c]
+            return mask_combo, mask_single, "LEV+VPA combo", "LEV/VPA single"
+        return fn
 
-                age_mean_group1 = group1_df["Age"].mean() if not group1_df.empty else np.nan
-                age_std_group1 = group1_df["Age"].std() if not group1_df.empty else np.nan
-                age_mean_group2 = group2_df["Age"].mean() if not group2_df.empty else np.nan
-                age_std_group2 = group2_df["Age"].std() if not group2_df.empty else np.nan
+    def spec_asm_counts():
+        def fn(data: pd.DataFrame):
+            if "n_epilepsy_meds" not in data.columns:
+                return None
+            mask_one = data["n_epilepsy_meds"] == 1
+            mask_two_plus = data["n_epilepsy_meds"] >= 2
+            return mask_one, mask_two_plus, "1 ASM", ">=2 ASM"
+        return fn
 
-                results.append({
-                    "med_analysis": analysis_type,
-                    "sex": sex_key,
-                    "age_group": age_key,
-                    "TDAH_filter": diag_filters["TDAH"],
-                    "Epilepsy_filter": diag_filters["Epilepsy"],
-                    "TSA_filter": diag_filters["TSA"],
-                    "M_count": M_count,
-                    "F_count": F_count,
-                    "age_mean_overall": overall_age_mean,
-                    "age_std_overall": overall_age_std,
-                    "age_mean_female": female_age_mean,
-                    "age_std_female": female_age_std,
-                    "age_mean_male": male_age_mean,
-                    "age_std_male": male_age_std,
-                    "age_mean_group1": age_mean_group1,
-                    "age_std_group1": age_std_group1,
-                    "age_mean_group2": age_mean_group2,
-                    "age_std_group2": age_std_group2,
-                    label1: count1,
-                    label2: count2,
-                })
-    return pd.DataFrame(results)
+    analysis_specs = [
+        ("ADHD vs non-ADHD", spec_bool("has_adhd", "ADHD", "Non-ADHD")),
+        ("Epilepsy vs non-Epilepsy", spec_bool("has_epilepsy", "Epilepsy", "Non-Epilepsy")),
+        ("TSA vs non-TSA", spec_bool("has_tsa", "TSA", "Non-TSA")),
+        ("Psychostimulant vs none", spec_bool("has_psychostimulant", "Psychostimulant", "No psychostim")),
+        ("ASM vs none", spec_bool("has_epilepsy_med", "ASM", "No ASM")),
+        ("Methylphenidate vs Lisdexamfetamine", spec_psych_desc()),
+        ("LEV only vs VPA only", spec_lev_vpa_single()),
+        ("LEV+VPA combo vs single", spec_lev_vpa_combo_vs_single()),
+        ("1 ASM vs >=2 ASM", spec_asm_counts()),
+    ]
+
+    rows = []
+    for name, builder in analysis_specs:
+        res = builder(df)
+        if res is None:
+            continue
+        mask1, mask2, label1, label2 = res
+        group1 = df[mask1]
+        group2 = df[mask2]
+        n1, n2 = len(group1), len(group2)
+        if n1 == 0 or n2 == 0:
+            continue
+
+        m1, f1 = sex_counts(group1)
+        m2, f2 = sex_counts(group2)
+        rows.append(
+            {
+                "analysis": name,
+                "group1_label": label1,
+                "group2_label": label2,
+                "group1_n": n1,
+                "group2_n": n2,
+                "group1_male": m1,
+                "group1_female": f1,
+                "group2_male": m2,
+                "group2_female": f2,
+                "group1_age_mean": group1["Age"].mean() if "Age" in group1.columns else np.nan,
+                "group2_age_mean": group2["Age"].mean() if "Age" in group2.columns else np.nan,
+                "group1_age_std": group1["Age"].std() if "Age" in group1.columns else np.nan,
+                "group2_age_std": group2["Age"].std() if "Age" in group2.columns else np.nan,
+                "group1_adhd": diag_counts(group1, "has_adhd"),
+                "group2_adhd": diag_counts(group2, "has_adhd"),
+                "group1_epilepsy": diag_counts(group1, "has_epilepsy"),
+                "group2_epilepsy": diag_counts(group2, "has_epilepsy"),
+                "group1_tsa": diag_counts(group1, "has_tsa"),
+                "group2_tsa": diag_counts(group2, "has_tsa"),
+                "group1_psychostim": diag_counts(group1, "has_psychostimulant"),
+                "group2_psychostim": diag_counts(group2, "has_psychostimulant"),
+                "group1_asm": diag_counts(group1, "has_epilepsy_med"),
+                "group2_asm": diag_counts(group2, "has_epilepsy_med"),
+                "group1_n_asms_mean": group1["n_epilepsy_meds"].mean()
+                if "n_epilepsy_meds" in group1.columns
+                else np.nan,
+                "group2_n_asms_mean": group2["n_epilepsy_meds"].mean()
+                if "n_epilepsy_meds" in group2.columns
+                else np.nan,
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    if min_count > 0 and not out.empty:
+        out = out[(out["group1_n"] >= min_count) & (out["group2_n"] >= min_count)]
+    return out.reset_index(drop=True)
 
 
 def remove_small_count_rows(
@@ -633,21 +647,12 @@ def remove_small_count_rows(
     min_count: int = 20,
     count_cols: Optional[list[str]] = None,
 ) -> pd.DataFrame:
-    """Filter out rows where either of the count columns is < min_count.
-
-    Args:
-        df: DataFrame produced by create_analysis_dataframe.
-        min_count: Minimum required for each group count.
-        count_cols: Optional explicit list of two count column names. If None,
-            attempts to infer from common labels (Control, Med, Med1, Med2). As a
-            fallback, uses the last two columns.
-    """
+    """Filter out rows where either of the count columns is < min_count."""
     if df.empty:
         return df
     if not count_cols:
-        candidates = [c for c in ("Control", "Med", "Med1", "Med2") if c in df.columns]
-        if len(candidates) >= 2:
-            count_cols = candidates[-2:]
+        if {"group1_n", "group2_n"}.issubset(df.columns):
+            count_cols = ["group1_n", "group2_n"]
         else:
             count_cols = list(df.columns[-2:])
     m = (df[count_cols[0]] >= min_count) & (df[count_cols[1]] >= min_count)
@@ -660,24 +665,16 @@ def generate_med_analysis_datasets(
     include_potential: bool = True,
     min_count: int = 20,
 ) -> None:
-    """Generate analysis datasets similar to analysis_exploration and save CSVs.
-
-    Produces both full and filtered variants for each analysis type.
-    """
+    """Generate analysis opportunity datasets and save CSVs."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    med_analyses = ["ctrl_vs_all", "med1_vs_med2", "ctrl_vs_med1", "ctrl_vs_med2"]
-    for analysis in med_analyses:
-        res = create_analysis_dataframe(df.copy(), analysis, include_potential=include_potential)
-        # Determine count columns robustly
-        count_cols = [c for c in ("Control", "Med", "Med1", "Med2") if c in res.columns]
-        if len(count_cols) < 2:
-            count_cols = list(res.columns[-2:])
-        full_path = out_dir / f"{analysis}_results.csv"
-        res.to_csv(full_path, index=False)
-        filtered = remove_small_count_rows(res, min_count=min_count, count_cols=count_cols)
-        fil_path = out_dir / f"{analysis}_filtered_results.csv"
-        filtered.to_csv(fil_path, index=False)
-        logging.info(f"Saved analysis CSVs: {full_path}, {fil_path}")
+    res = create_analysis_dataframe(df.copy(), min_count=0)
+    full_path = out_dir / "analysis_opportunities_full.csv"
+    res.to_csv(full_path, index=False)
+    filtered = remove_small_count_rows(res, min_count=min_count, count_cols=["group1_n", "group2_n"])
+    fil_path = out_dir / "analysis_opportunities_filtered.csv"
+    filtered.to_csv(fil_path, index=False)
+    logging.info(f"Saved analysis CSVs: {full_path}, {fil_path}")
+    return filtered
 
 
 def build_diagnosis_overview(df: pd.DataFrame) -> pd.DataFrame:
@@ -1511,6 +1508,7 @@ def generate_html_report(
     med_mismatches: dict[str, object],
     total_subjects: int,
     bids_check: dict[str, object],
+    analysis_opportunities: pd.DataFrame,
     figures: list[Path] | None = None,
 ) -> None:
     """Lightweight HTML report with the key tables/figures."""
@@ -1647,6 +1645,9 @@ def generate_html_report(
   <h2>Grouped Counts (exports)</h2>
   {"".join(f"<h4>{name}</h4>{_df_to_html(tbl)}" for name, tbl in grouping_tables.items())}
 
+  <h2>Analysis Opportunities (>= min count per group)</h2>
+  {_df_to_html(analysis_opportunities)}
+
   <h2>Figures</h2>
   {img_block or "<p>No figures available.</p>"}
 </body>
@@ -1779,7 +1780,7 @@ def main():
         save_custom_groupings(grouping_tables, groupings_dir)
         # Generate analysis datasets to results/analysis/explore
         analysis_dir = Path(results_dir) / "analysis" / "explore"
-        generate_med_analysis_datasets(
+        analysis_filtered = generate_med_analysis_datasets(
             df,
             analysis_dir,
             include_potential=args.potential_in_with,
@@ -1824,6 +1825,7 @@ def main():
             med_mismatches=med_mismatches,
             total_subjects=len(df),
             bids_check=bids_check,
+            analysis_opportunities=analysis_filtered,
             figures=confusion_paths,
         )
     if args.grouped:
