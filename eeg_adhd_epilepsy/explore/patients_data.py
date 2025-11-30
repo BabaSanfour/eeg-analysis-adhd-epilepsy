@@ -519,6 +519,24 @@ def create_analysis_dataframe(
             return 0
         return int(sub[col].sum())
 
+    def apply_constraint(data: pd.DataFrame, constraint: str) -> pd.DataFrame:
+        d = data
+        if constraint == "no_epilepsy" and "has_epilepsy" in d.columns:
+            d = d[d["has_epilepsy"] == False]
+        elif constraint == "no_tsa" and "has_tsa" in d.columns:
+            d = d[d["has_tsa"] == False]
+        elif constraint == "no_epilepsy_no_tsa" and {"has_epilepsy", "has_tsa"}.issubset(d.columns):
+            d = d[(d["has_epilepsy"] == False) & (d["has_tsa"] == False)]
+        elif constraint == "psychostim_true" and "has_psychostimulant" in d.columns:
+            d = d[d["has_psychostimulant"] == True]
+        elif constraint == "psychostim_false" and "has_psychostimulant" in d.columns:
+            d = d[d["has_psychostimulant"] == False]
+        elif constraint == "asm_true" and "has_epilepsy_med" in d.columns:
+            d = d[d["has_epilepsy_med"] == True]
+        elif constraint == "asm_false" and "has_epilepsy_med" in d.columns:
+            d = d[d["has_epilepsy_med"] == False]
+        return d
+
     # Analysis specifications
     def spec_bool(col: str, label_true: str, label_false: str):
         def fn(data: pd.DataFrame):
@@ -588,53 +606,85 @@ def create_analysis_dataframe(
         ("1 ASM vs >=2 ASM", spec_asm_counts()),
     ]
 
-    rows = []
-    for name, builder in analysis_specs:
-        res = builder(df)
-        if res is None:
-            continue
-        mask1, mask2, label1, label2 = res
-        group1 = df[mask1]
-        group2 = df[mask2]
-        n1, n2 = len(group1), len(group2)
-        if n1 == 0 or n2 == 0:
-            continue
+    sex_groups = [("Combined", None), ("M", lambda d: d[d["Sex"] == "M"]), ("F", lambda d: d[d["Sex"] == "F"])]
+    age_groups = [
+        ("All ages", None),
+        ("child", lambda d: d[d["age_group"] == "child"]) if "age_group" in df.columns else ("child", None),
+        ("teen", lambda d: d[d["age_group"] == "teen"]) if "age_group" in df.columns else ("teen", None),
+    ]
+    constraints = [
+        ("none", None),
+        ("no_epilepsy", "no_epilepsy"),
+        ("no_tsa", "no_tsa"),
+        ("no_epilepsy_no_tsa", "no_epilepsy_no_tsa"),
+        ("psychostim_true", "psychostim_true"),
+        ("psychostim_false", "psychostim_false"),
+        ("asm_true", "asm_true"),
+        ("asm_false", "asm_false"),
+    ]
 
-        m1, f1 = sex_counts(group1)
-        m2, f2 = sex_counts(group2)
-        rows.append(
-            {
-                "analysis": name,
-                "group1_label": label1,
-                "group2_label": label2,
-                "group1_n": n1,
-                "group2_n": n2,
-                "group1_male": m1,
-                "group1_female": f1,
-                "group2_male": m2,
-                "group2_female": f2,
-                "group1_age_mean": group1["Age"].mean() if "Age" in group1.columns else np.nan,
-                "group2_age_mean": group2["Age"].mean() if "Age" in group2.columns else np.nan,
-                "group1_age_std": group1["Age"].std() if "Age" in group1.columns else np.nan,
-                "group2_age_std": group2["Age"].std() if "Age" in group2.columns else np.nan,
-                "group1_adhd": diag_counts(group1, "has_adhd"),
-                "group2_adhd": diag_counts(group2, "has_adhd"),
-                "group1_epilepsy": diag_counts(group1, "has_epilepsy"),
-                "group2_epilepsy": diag_counts(group2, "has_epilepsy"),
-                "group1_tsa": diag_counts(group1, "has_tsa"),
-                "group2_tsa": diag_counts(group2, "has_tsa"),
-                "group1_psychostim": diag_counts(group1, "has_psychostimulant"),
-                "group2_psychostim": diag_counts(group2, "has_psychostimulant"),
-                "group1_asm": diag_counts(group1, "has_epilepsy_med"),
-                "group2_asm": diag_counts(group2, "has_epilepsy_med"),
-                "group1_n_asms_mean": group1["n_epilepsy_meds"].mean()
-                if "n_epilepsy_meds" in group1.columns
-                else np.nan,
-                "group2_n_asms_mean": group2["n_epilepsy_meds"].mean()
-                if "n_epilepsy_meds" in group2.columns
-                else np.nan,
-            }
-        )
+    rows = []
+    for sex_label, sex_fn in sex_groups:
+        sex_df = df if sex_fn is None else sex_fn(df)
+        if sex_df.empty:
+            continue
+        for age_label, age_fn in age_groups:
+            age_df = sex_df if age_fn is None else age_fn(sex_df)
+            if age_df.empty:
+                continue
+            for constraint_label, constraint_key in constraints:
+                constrained_df = age_df if constraint_key is None else apply_constraint(age_df, constraint_key)
+                if constrained_df.empty:
+                    continue
+                for name, builder in analysis_specs:
+                    res = builder(constrained_df)
+                    if res is None:
+                        continue
+                    mask1, mask2, label1, label2 = res
+                    group1 = constrained_df[mask1]
+                    group2 = constrained_df[mask2]
+                    n1, n2 = len(group1), len(group2)
+                    if n1 == 0 or n2 == 0:
+                        continue
+
+                    m1, f1 = sex_counts(group1)
+                    m2, f2 = sex_counts(group2)
+                    rows.append(
+                        {
+                            "analysis": name,
+                            "constraint": constraint_label,
+                            "sex": sex_label,
+                            "age_group": age_label,
+                            "group1_label": label1,
+                            "group2_label": label2,
+                            "group1_n": n1,
+                            "group2_n": n2,
+                            "group1_male": m1,
+                            "group1_female": f1,
+                            "group2_male": m2,
+                            "group2_female": f2,
+                            "group1_age_mean": group1["Age"].mean() if "Age" in group1.columns else np.nan,
+                            "group2_age_mean": group2["Age"].mean() if "Age" in group2.columns else np.nan,
+                            "group1_age_std": group1["Age"].std() if "Age" in group1.columns else np.nan,
+                            "group2_age_std": group2["Age"].std() if "Age" in group2.columns else np.nan,
+                            "group1_adhd": diag_counts(group1, "has_adhd"),
+                            "group2_adhd": diag_counts(group2, "has_adhd"),
+                            "group1_epilepsy": diag_counts(group1, "has_epilepsy"),
+                            "group2_epilepsy": diag_counts(group2, "has_epilepsy"),
+                            "group1_tsa": diag_counts(group1, "has_tsa"),
+                            "group2_tsa": diag_counts(group2, "has_tsa"),
+                            "group1_psychostim": diag_counts(group1, "has_psychostimulant"),
+                            "group2_psychostim": diag_counts(group2, "has_psychostimulant"),
+                            "group1_asm": diag_counts(group1, "has_epilepsy_med"),
+                            "group2_asm": diag_counts(group2, "has_epilepsy_med"),
+                            "group1_n_asms_mean": group1["n_epilepsy_meds"].mean()
+                            if "n_epilepsy_meds" in group1.columns
+                            else np.nan,
+                            "group2_n_asms_mean": group2["n_epilepsy_meds"].mean()
+                            if "n_epilepsy_meds" in group2.columns
+                            else np.nan,
+                        }
+                    )
 
     out = pd.DataFrame(rows)
     if min_count > 0 and not out.empty:
