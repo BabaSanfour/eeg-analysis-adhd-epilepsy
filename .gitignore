@@ -10,4 +10,4 @@ plots/
 .venv/
 *egg-info/
 results/
-
+.old
