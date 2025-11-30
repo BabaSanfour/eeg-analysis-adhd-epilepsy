@@ -136,6 +136,7 @@ def check_bids_subject_folders(df: pd.DataFrame, bids_root: Path) -> dict[str, o
             expected.append(folder)
 
     missing = []
+    missing_study_ids = []
     present = []
     for folder in expected:
         path = bids_root / folder
@@ -143,9 +144,26 @@ def check_bids_subject_folders(df: pd.DataFrame, bids_root: Path) -> dict[str, o
             present.append(folder)
         else:
             missing.append(folder)
+            try:
+                missing_study_ids.append(int(folder.split("-")[1]))
+            except Exception:
+                continue
+
+    missing_pairs = []
+    if missing_study_ids and {"Study ID", "Pt ID"}.issubset(df.columns):
+        sid_numeric = pd.to_numeric(df["Study ID"], errors="coerce")
+        mask = sid_numeric.isin(missing_study_ids)
+        pt_ids = pd.to_numeric(df.loc[mask, "Pt ID"], errors="coerce")
+        study_ids = sid_numeric.loc[mask]
+        for pt, sid in zip(pt_ids, study_ids):
+            if pd.isna(pt) or pd.isna(sid):
+                continue
+            missing_pairs.append(f"{int(pt)}:{int(sid)}")
 
     results["bids_present"] = present
     results["bids_missing"] = missing
+    results["missing_pairs"] = missing_pairs
+    results["missing_study_ids"] = missing_study_ids
     results["bids_root"] = str(bids_root)
     results["expected_count"] = len(expected)
     results["missing_count"] = len(missing)
@@ -1509,14 +1527,15 @@ def generate_html_report(
         )
     if bids_check:
         missing = bids_check.get("bids_missing", [])
-        expected = bids_check.get("expected_count", 0)
+        missing_pairs = bids_check.get("missing_pairs", [])
         quality_items.append(
             {
-                "text": (
-                    f"BIDS subject folders at {bids_check.get('bids_root')}: "
-                    f"{expected} expected, {len(missing)} missing"
-                ),
-                "sub": [f"Missing folders: {missing}" if missing else "All folders present"],
+                "text": f"Missing EEG data for {len(missing)} subjects.",
+                "sub": [
+                    f"Missing (Pt ID:Study ID): {missing_pairs}"
+                    if missing_pairs
+                    else "All folders present"
+                ],
             }
         )
     dup_info = pt_id_info.get("duplicate_pt_id")
@@ -1710,11 +1729,18 @@ def main():
     # Derive psychostimulant flags using the mapping first, then normalize
     df = _ensure_psychostimulant_flags(df)
 
-    med_mismatches = _compute_medication_mismatches(
-        df, include_potential=args.potential_in_with
-    )
-
-    df = drop_mismatches_and_duplicates(df, med_mismatches, Path(args.data_dir))
+    med_mismatches = _compute_medication_mismatches(df, include_potential=args.potential_in_with)
+    df = _drop_mismatches_and_duplicates(df, med_mismatches, Path(args.data_dir))
+    if bids_check.get("missing_study_ids"):
+        sid_numeric = pd.to_numeric(df.get("Study ID"), errors="coerce")
+        missing_sid_set = set(bids_check["missing_study_ids"])
+        mask_missing_bids = sid_numeric.isin(missing_sid_set)
+        if mask_missing_bids.any():
+            df = df.loc[~mask_missing_bids].copy()
+            logging.info(
+                f"Dropped {int(mask_missing_bids.sum())} rows missing BIDS folders: "
+                f"{bids_check.get('missing_pairs', [])}"
+            )
 
     df = _normalize_values_and_types(df)
     df = _normalize_sex_values(df)
