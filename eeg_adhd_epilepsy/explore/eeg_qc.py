@@ -13,10 +13,11 @@ import json
 import logging
 import re
 import sys
-from collections import Counter, defaultdict
+import unicodedata
+from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
 import matplotlib
 import mne
@@ -40,9 +41,32 @@ BAND_LIMITS = {
 }
 
 BASIC_1020_CHANNELS = [
-    "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8", "A1", "T3", "C3", "Cz",
-    "C4", "T4", "A2", "T5", "P3", "Pz", "P4", "T6", "O1", "O2"
+    "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8", "T3", "C3", "Cz",
+    "C4", "T4", "T5", "P3", "Pz", "P4", "T6", "O1", "O2"
 ]
+
+EYES_OPEN_LABELS = (
+    "eyes open",
+    "eye open",
+    "eyes-open",
+    "eo",
+    "yeux ouverts",
+    "yeux ouvert",
+)
+EYES_CLOSED_LABELS = (
+    "eyes closed",
+    "eye closed",
+    "eyes-closed",
+    "ec",
+    "yeux fermes",
+    "yeux ferme",
+)
+MOVEMENT_LABELS = ("bouge", "movement", "mouvement")
+ARTEFACT_LABELS = ("artefact", "artefacts", "artifact", "artifacts")
+EFFORT_LABELS = ("effort",)
+PAT_MONTAGE_LABELS = ("pat montage",)
+HV_LABELS = ("hv",)
+PHOTO_LABELS = ("photo",)
 
 
 def parse_args() -> argparse.Namespace:
@@ -187,6 +211,75 @@ def validate_montage(raw: mne.io.BaseRaw, standard_names: set[str]) -> Dict[str,
         "pct_missing_1020": pct_missing,
     }
 
+def _strip_accents(text: str) -> str:
+    return "".join(ch for ch in unicodedata.normalize("NFD", text) if unicodedata.category(ch) != "Mn")
+
+
+def normalize_annotation_label(desc: str) -> str:
+    clean = _strip_accents(desc).lower().strip()
+    interest_map = {
+        "Eyes Open": EYES_OPEN_LABELS,
+        "Eyes Closed": EYES_CLOSED_LABELS,
+        "Movement": MOVEMENT_LABELS,
+        "Artefact": ARTEFACT_LABELS,
+        "Effort": EFFORT_LABELS,
+        "PAT Montage": PAT_MONTAGE_LABELS,
+        "HV": HV_LABELS,
+        "PHOTO": PHOTO_LABELS,
+    }
+    for canonical, patterns in interest_map.items():
+        if any(pattern in clean for pattern in patterns):
+            return canonical
+    return desc.strip()
+
+
+def summarize_annotations(annotations: mne.Annotations) -> Tuple[Counter, Dict[str, float]]:
+    counts: Counter = Counter()
+    durations: Dict[str, float] = {}
+    if annotations is None or len(annotations) == 0:
+        return counts, durations
+    for desc, dur in zip(annotations.description, annotations.duration):
+        if desc is None:
+            continue
+        label = normalize_annotation_label(desc)
+        if not label:
+            continue
+        counts[label] += 1
+        if dur is None:
+            continue
+        dur_val = float(dur)
+        if np.isfinite(dur_val):
+            durations[label] = durations.get(label, 0.0) + dur_val
+    return counts, durations
+
+
+def _normalize_channel_names_for_montage(raw: mne.io.BaseRaw, montage: mne.channels.DigMontage) -> None:
+    """Rename channels to match montage labels (case-insensitive) when possible."""
+    canonical = {name.lower(): name for name in montage.ch_names}
+    mapping: Dict[str, str] = {}
+    for ch_name in raw.ch_names:
+        canon = canonical.get(ch_name.lower())
+        if canon and ch_name != canon:
+            mapping[ch_name] = canon
+    if mapping:
+        raw.rename_channels(mapping)
+
+
+def ensure_default_montage(raw: mne.io.BaseRaw, logger: logging.Logger | None = None) -> None:
+    """Attach a standard montage when EEG locations are missing."""
+    try:
+        montage = mne.channels.make_standard_montage("standard_1020")
+        _normalize_channel_names_for_montage(raw, montage)
+        raw.set_montage(montage, on_missing="ignore")
+        if logger:
+            filenames = getattr(raw, "filenames", None)
+            logger.debug(
+                "Applied standard_1020 montage to %s", filenames[0] if filenames else "recording"
+            )
+    except Exception as exc:  # pragma: no cover - defensive branch
+        if logger:
+            logger.warning("Unable to set default montage: %s", exc)
+
 
 def compute_channel_amplitude_stats(raw: mne.io.BaseRaw, picks: List[str]) -> Dict[str, object]:
     if not picks:
@@ -233,7 +326,7 @@ def detect_flat_and_noisy_channels(raw: mne.io.BaseRaw, picks: List[str]) -> Dic
         "noisy_channels": [eeg_chs[i] for i in noisy_idx],
         "n_flat_channels": int(len(flat_idx)),
         "n_noisy_channels": int(len(noisy_idx)),
-        "pct_bad_channels": float((len(flat_idx) + len(noisy_idx)) / max(n_channels, 1) * 100.0),
+        "% bad_channels": float((len(flat_idx) + len(noisy_idx)) / max(n_channels, 1) * 100.0),
         "variances": variances,
     }
 
@@ -257,7 +350,7 @@ def compute_psd_metrics(
     for band, (low, high) in BAND_LIMITS.items():
         band_mask = (freqs >= low) & (freqs <= high)
         if band_mask.any():
-            band_power = np.trapz(psd[:, band_mask], freqs[band_mask], axis=1).mean()
+            band_power = np.trapezoid(psd[:, band_mask], freqs[band_mask], axis=1).mean()
             band_powers[band] = float(band_power * 1e12)  # convert V^2 to uV^2
         else:
             band_powers[band] = float("nan")
@@ -265,26 +358,46 @@ def compute_psd_metrics(
     return spec, psd, freqs, alpha_peak, band_powers
 
 
-def detect_signal_onset(raw: mne.io.BaseRaw, picks: List[str], threshold_var_uv2: float = 5.0) -> Tuple[float, float]:
+def detect_signal_activity_bounds(
+    raw: mne.io.BaseRaw, picks: List[str], threshold_var_uv2: float = 5.0
+) -> Tuple[float, float, float, float]:
+    """Return empty duration at start/end and signal onset/offset timestamps."""
     if not picks:
-        return float("nan"), float("nan")
+        return (float("nan"), float("nan"), float("nan"), float("nan"))
     data = raw.get_data(picks=picks) * 1e6  # uV
     sfreq = float(raw.info["sfreq"])
-    window = int(sfreq)
-    if window <= 0:
-        return 0.0, 0.0
-    n_windows = data.shape[1] // window
+    window_samples = max(int(round(sfreq)), 1)
+    if window_samples <= 0:
+        return (0.0, 0.0, 0.0, 0.0)
+    n_windows = data.shape[1] // window_samples
     if n_windows == 0:
-        return 0.0, 0.0
-    reshaped = data[:, : n_windows * window].reshape(data.shape[0], n_windows, window)
-    # Mean variance across channels per window
+        return (0.0, 0.0, 0.0, 0.0)
+    reshaped = data[:, : n_windows * window_samples].reshape(data.shape[0], n_windows, window_samples)
     window_vars = np.var(reshaped, axis=2).mean(axis=0)
-    above_thresh = np.where(window_vars > threshold_var_uv2)[0]
-    if len(above_thresh) == 0:
-        return float(n_windows), float(n_windows)
-    first_idx = int(above_thresh[0])
-    onset_sec = float(first_idx)
-    return float(first_idx), onset_sec
+    if not np.any(np.isfinite(window_vars)):
+        total_duration = float(data.shape[1]) / sfreq
+        return (total_duration, float("nan"), total_duration, float("nan"))
+
+    perc_lo = float(np.percentile(window_vars, 10))
+    perc_hi = float(np.percentile(window_vars, 90))
+    span = max(perc_hi - perc_lo, 0.0)
+    adaptive_thresh = perc_lo + 0.25 * span
+    effective_thresh = max(threshold_var_uv2, adaptive_thresh)
+
+    active_windows = window_vars > effective_thresh
+    window_duration = window_samples / sfreq
+    total_duration = float(data.shape[1]) / sfreq
+    if not np.any(active_windows):
+        return (total_duration, float("nan"), total_duration, float("nan"))
+
+    active_indices = np.where(active_windows)[0]
+    first_idx = int(active_indices[0])
+    last_idx = int(active_indices[-1])
+    empty_start_sec = float(first_idx) * window_duration
+    signal_start_sec = empty_start_sec
+    signal_end_sec = min(float(last_idx + 1) * window_duration, total_duration)
+    empty_end_sec = max(total_duration - signal_end_sec, 0.0)
+    return empty_start_sec, signal_start_sec, empty_end_sec, signal_end_sec
 
 
 def plot_amplitude_histogram(amp_stats: Dict[str, object]) -> matplotlib.figure.Figure:
@@ -331,8 +444,27 @@ def plot_psd_figures(
     return fig_all, fig_avg
 
 
+def plot_event_counts(event_counts: Dict[str, int]) -> matplotlib.figure.Figure | None:
+    if not event_counts:
+        return None
+    sorted_items = sorted(event_counts.items(), key=lambda item: item[1], reverse=True)
+    labels, counts = zip(*sorted_items)
+    height = max(4, 0.4 * len(labels))
+    fig, ax = plt.subplots(figsize=(8, height))
+    positions = np.arange(len(labels))
+    ax.barh(positions, counts, color="#4C72B0")
+    ax.set_xlabel("Count")
+    ax.set_title("Annotation Counts")
+    ax.set_yticks(positions)
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.grid(True, axis="x", alpha=0.3)
+    plt.tight_layout()
+    return fig
+
+
 def plot_raw_segment(
-    raw: mne.io.BaseRaw, start_sec: float, duration_sec: float = 10.0
+    raw: mne.io.BaseRaw, start_sec: float, duration_sec: float = 10.0, title: str | None = None
 ) -> matplotlib.figure.Figure:
     safe_start = max(min(start_sec, raw.times[-1]), 0.0)
     if safe_start >= raw.times[-1]:
@@ -345,8 +477,7 @@ def plot_raw_segment(
         start=0,
         n_channels=20,
         show=False,
-        scalings="auto",
-        title="Raw segment (first 10s of signal)",
+        title=title or "Raw segment (10s window)",
     )
     plt.tight_layout()
     return fig
@@ -361,7 +492,9 @@ def create_subject_report(
     fig_psd_avg: matplotlib.figure.Figure | None,
     fig_amp_hist: matplotlib.figure.Figure | None,
     fig_var_topo: matplotlib.figure.Figure | None,
-    fig_raw_segment: matplotlib.figure.Figure | None,
+    fig_raw_segment_start: matplotlib.figure.Figure | None,
+    fig_raw_segment_end: matplotlib.figure.Figure | None,
+    fig_events: matplotlib.figure.Figure | None,
 ) -> None:
     report = mne.Report(title=f"EEG QC Report - {subject_id}")
     try:
@@ -377,16 +510,90 @@ def create_subject_report(
         report.add_figure(fig_amp_hist, title="Amplitude Distribution", section="Signal Quality")
     if fig_var_topo is not None:
         report.add_figure(fig_var_topo, title="Channel Variance Topomap", section="Signal Quality")
-    if fig_raw_segment is not None:
-        report.add_figure(fig_raw_segment, title="Raw Segment (10s)", section="Signal Quality")
+    if fig_raw_segment_start is not None:
+        report.add_figure(fig_raw_segment_start, title="Raw Segment - Start", section="Signal Quality")
+    if fig_raw_segment_end is not None:
+        report.add_figure(fig_raw_segment_end, title="Raw Segment - End", section="Signal Quality")
+    if fig_events is not None:
+        report.add_figure(fig_events, title="Annotation Counts", section="Events")
+
+    duration_min = metrics.get("duration_min", float("nan"))
+    sfreq = metrics.get("sfreq", float("nan"))
+    n_channels = metrics.get("n_channels", 0)
+    n_1020 = metrics.get("n_channels_1020_match", 0)
+    pct_bad = metrics.get("pct_bad_channels", float("nan"))
+    amp_mean = metrics.get("amplitude_mean_uv", float("nan"))
+    amp_median = metrics.get("amplitude_median_uv", float("nan"))
+    amp_max = metrics.get("amplitude_max_uv", float("nan"))
+    alpha_peak = metrics.get("alpha_peak_hz", float("nan"))
+    start_sec = metrics.get("actual_signal_start_sec", float("nan"))
+    end_sec = metrics.get("actual_signal_end_sec", float("nan"))
+    empty_start = metrics.get("empty_start_sec", float("nan"))
+    empty_end = metrics.get("empty_end_sec", float("nan"))
+    n_flat = metrics.get("n_flat_channels", 0)
+    n_noisy = metrics.get("n_noisy_channels", 0)
+    eyes_open_dur = metrics.get("eyes_open_duration_sec", float("nan"))
+    eyes_closed_dur = metrics.get("eyes_closed_duration_sec", float("nan"))
+    eyes_open_count = metrics.get("eyes_open_event_count", 0)
+    eyes_closed_count = metrics.get("eyes_closed_event_count", 0)
+    movement_dur = metrics.get("movement_duration_sec", float("nan"))
+    movement_count = metrics.get("movement_event_count", 0)
+    artefact_dur = metrics.get("artefact_duration_sec", float("nan"))
+    artefact_count = metrics.get("artefact_event_count", 0)
+    effort_dur = metrics.get("effort_duration_sec", float("nan"))
+    effort_count = metrics.get("effort_event_count", 0)
+    pat_dur = metrics.get("pat_montage_duration_sec", float("nan"))
+    pat_count = metrics.get("pat_montage_event_count", 0)
+    hv_dur = metrics.get("hv_duration_sec", float("nan"))
+    hv_count = metrics.get("hv_event_count", 0)
+    post_hv_dur = metrics.get("post_hv_duration_sec", float("nan"))
+    post_hv_count = metrics.get("post_hv_event_count", 0)
+    photo_dur = metrics.get("photo_duration_sec", float("nan"))
+    photo_count = metrics.get("photo_event_count", 0)
+    band_power_items = []
+    for band in BAND_LIMITS:
+        value = metrics.get(f"band_power_{band}", float("nan"))
+        if np.isnan(value):
+            continue
+        band_power_items.append(f"{band.title()}: {value:.2e} uV^2")
+    band_str = ", ".join(band_power_items) if band_power_items else "Unavailable"
 
     qc_summary_html = "<ul>"
-    qc_summary_html += f"<li>Duration: {metrics.get('duration_min', float('nan')):.2f} min</li>"
-    qc_summary_html += f"<li>Sampling frequency: {metrics.get('sfreq', float('nan'))} Hz</li>"
-    qc_summary_html += f"<li>Alpha peak: {metrics.get('alpha_peak_hz', float('nan')):.2f} Hz</li>"
-    qc_summary_html += f"<li>Bad channels (%): {metrics.get('pct_bad_channels', 0):.1f}%</li>"
+    qc_summary_html += f"<li>Duration: {duration_min:.2f} min @ {sfreq:.1f} Hz</li>"
+    qc_summary_html += f"<li>Channels: {n_channels} total / {n_1020} (10-20 match)</li>"
+    qc_summary_html += f"<li>Bad channels: {pct_bad:.1f}% (flat={n_flat}, noisy={n_noisy})</li>"
+    qc_summary_html += (
+        f"<li>Signal activity: start {start_sec:.1f}s (empty {empty_start:.1f}s), "
+        f"end {end_sec:.1f}s (empty tail {empty_end:.1f}s)</li>"
+    )
+    qc_summary_html += (
+        f"<li>Amplitude (uV): mean {amp_mean:.1f}, median {amp_median:.1f}, max {amp_max:.1f}</li>"
+    )
+    qc_summary_html += f"<li>Alpha peak: {alpha_peak:.2f} Hz</li>"
+    qc_summary_html += f"<li>Band powers: {band_str}</li>"
+    if np.isfinite(eyes_open_dur) or np.isfinite(eyes_closed_dur):
+        qc_summary_html += (
+            f"<li>Eyes-open / closed duration: {eyes_open_dur:.1f}s ({eyes_open_count}) / "
+            f"{eyes_closed_dur:.1f}s ({eyes_closed_count})</li>"
+        )
+    if movement_count:
+        qc_summary_html += f"<li>Movement events: {movement_count} ({movement_dur:.1f}s)</li>"
+    if artefact_count:
+        qc_summary_html += f"<li>Artefact events: {artefact_count} ({artefact_dur:.1f}s)</li>"
+    if effort_count:
+        qc_summary_html += f"<li>Effort events: {effort_count} ({effort_dur:.1f}s)</li>"
+    if pat_count:
+        qc_summary_html += f"<li>PAT montage events: {pat_count} ({pat_dur:.1f}s)</li>"
+    if hv_count:
+        qc_summary_html += f"<li>HV events: {hv_count} ({hv_dur:.1f}s)</li>"
+    if post_hv_count:
+        qc_summary_html += f"<li>Post-HV events: {post_hv_count} ({post_hv_dur:.1f}s)</li>"
+    if photo_count:
+        qc_summary_html += f"<li>PHOTO events: {photo_count} ({photo_dur:.1f}s)</li>"
     if metrics.get("flag_reasons"):
         qc_summary_html += f"<li>Flag reasons: {metrics.get('flag_reasons')}</li>"
+    if metrics.get("event_counts"):
+        qc_summary_html += f"<li>Events: {metrics.get('event_counts')}</li>"
     qc_summary_html += "</ul>"
     report.add_html(qc_summary_html, title="QC Summary", section="Quality Control")
 
@@ -426,6 +633,8 @@ def process_file(
         "duration_min": float("nan"),
         "actual_signal_start_sec": float("nan"),
         "empty_start_sec": float("nan"),
+        "actual_signal_end_sec": float("nan"),
+        "empty_end_sec": float("nan"),
         "meas_date": "",
         "sfreq": float("nan"),
         "n_channels": 0,
@@ -441,6 +650,25 @@ def process_file(
         "amplitude_min_uv": float("nan"),
         "amplitude_max_uv": float("nan"),
         "alpha_peak_hz": float("nan"),
+        "eyes_open_duration_sec": 0.0,
+        "eyes_closed_duration_sec": 0.0,
+        "eyes_open_event_count": 0,
+        "eyes_closed_event_count": 0,
+        "movement_duration_sec": 0.0,
+        "movement_event_count": 0,
+        "artefact_duration_sec": 0.0,
+        "artefact_event_count": 0,
+        "effort_duration_sec": 0.0,
+        "effort_event_count": 0,
+        "pat_montage_duration_sec": 0.0,
+        "pat_montage_event_count": 0,
+        "hv_duration_sec": 0.0,
+        "hv_event_count": 0,
+        "post_hv_duration_sec": 0.0,
+        "post_hv_event_count": 0,
+        "photo_duration_sec": 0.0,
+        "photo_event_count": 0,
+        "event_counts": "",
         "flag_bad": False,
         "flag_reasons": "",
         "error": "",
@@ -451,6 +679,8 @@ def process_file(
     try:
         raw = load_raw(filepath, args.input_dir, args)
         raw.load_data()
+        ensure_default_montage(raw, logger)
+        raw.filter(1, None, fir_design="firwin", verbose="ERROR")
     except Exception as exc:  # pragma: no cover - defensive branch
         err_msg = f"Failed to read {filepath.name}: {exc}"
         logger.error(err_msg)
@@ -462,13 +692,16 @@ def process_file(
         metrics.update(meta)
 
         basic_picks = get_basic_1020_picks(raw)
+        raw_basic = raw.copy().pick(basic_picks) if basic_picks else None
+        analysis_raw = raw_basic if raw_basic is not None else raw
+
         montage_info = validate_montage(raw, standard_names)
         metrics["n_channels_1020_match"] = montage_info["n_channels_1020_match"]
         metrics["non_standard_channels"] = ",".join(montage_info["non_standard_channels"])
-        metrics["channel_names"] = ",".join(meta.get("channel_names", []))
+        metrics["channel_names"] = ",".join(basic_picks) if basic_picks else ",".join(meta.get("channel_names", []))
         pct_missing_1020 = montage_info["pct_missing_1020"]
 
-        amp_stats = compute_channel_amplitude_stats(raw, basic_picks)
+        amp_stats = compute_channel_amplitude_stats(analysis_raw, basic_picks)
         metrics.update(
             {
                 "amplitude_mean_uv": amp_stats["mean"],
@@ -479,18 +712,38 @@ def process_file(
             }
         )
 
-        noise_info = detect_flat_and_noisy_channels(raw, basic_picks)
+
+        noise_info = detect_flat_and_noisy_channels(analysis_raw, basic_picks)
         metrics["n_flat_channels"] = noise_info["n_flat_channels"]
         metrics["n_noisy_channels"] = noise_info["n_noisy_channels"]
-        metrics["pct_bad_channels"] = noise_info["pct_bad_channels"]
+        metrics["pct_bad_channels"] = noise_info["% bad_channels"]
+        metrics["% bad_channels"] = noise_info["% bad_channels"]
 
-        empty_start_sec, onset_sec = detect_signal_onset(raw, basic_picks)
+        empty_start_sec, onset_sec, empty_end_sec, offset_sec = detect_signal_activity_bounds(
+            analysis_raw, basic_picks
+        )
         metrics["empty_start_sec"] = empty_start_sec
         metrics["actual_signal_start_sec"] = onset_sec
+        metrics["empty_end_sec"] = empty_end_sec
+        metrics["actual_signal_end_sec"] = offset_sec
 
-        spec, psd, freqs, alpha_peak, band_powers = compute_psd_metrics(raw, basic_picks)
+        spec, psd, freqs, alpha_peak, band_powers = compute_psd_metrics(analysis_raw, basic_picks)
         metrics["alpha_peak_hz"] = alpha_peak
         metrics.update({f"band_power_{k}": v for k, v in band_powers.items()})
+
+        annotation_counts, annotation_durations = summarize_annotations(raw.annotations)
+        annotation_counts_dict = dict(annotation_counts)
+        metrics["event_counts"] = (
+            json.dumps(annotation_counts_dict, ensure_ascii=False) if annotation_counts_dict else ""
+        )
+        metrics["eyes_open_event_count"] = int(annotation_counts.get("Eyes Open", 0))
+        metrics["eyes_closed_event_count"] = int(annotation_counts.get("Eyes Closed", 0))
+        metrics["movement_event_count"] = int(annotation_counts.get("Movement", 0))
+        metrics["artefact_event_count"] = int(annotation_counts.get("Artefact", 0))
+        metrics["effort_event_count"] = int(annotation_counts.get("Effort", 0))
+        metrics["pat_montage_event_count"] = int(annotation_counts.get("PAT Montage", 0))
+        metrics["hv_event_count"] = int(annotation_counts.get("HV", 0))
+        metrics["photo_event_count"] = int(annotation_counts.get("PHOTO", 0))
 
         # Base flagging (dataset-level outlier flags added later)
         reasons: List[str] = []
@@ -506,6 +759,8 @@ def process_file(
             reasons.append("amplitude_above_threshold")
         if metrics["empty_start_sec"] > 120:
             reasons.append("long_empty_start")
+        if metrics["empty_end_sec"] > 120:
+            reasons.append("long_empty_end")
         if np.isnan(metrics["alpha_peak_hz"]):
             reasons.append("no_alpha_peak")
         if not basic_picks:
@@ -514,21 +769,47 @@ def process_file(
         metrics["flag_bad"] = bool(reasons)
         metrics["flag_reasons"] = ";".join(reasons)
 
-        if args.generate_subject_reports and not args.skip_figures:
-            fig_psd_all = fig_psd_avg = fig_amp_hist = fig_var_topo = fig_raw_segment = None
-            try:
+        if args.generate_subject_reports:
+            fig_psd_all = fig_psd_avg = fig_amp_hist = fig_var_topo = None
+            fig_raw_segment_start = fig_raw_segment_end = fig_events = None
+
+            if not args.skip_figures:
                 if spec is not None and psd.size > 0:
-                    fig_psd_all, fig_psd_avg = plot_psd_figures(spec, freqs, psd)
+                    try:
+                        fig_psd_all, fig_psd_avg = plot_psd_figures(spec, freqs, psd)
+                    except Exception as exc:  # pragma: no cover - defensive branch
+                        logger.warning("PSD plotting failed for %s: %s", filepath.name, exc)
                 if amp_stats["per_channel"].size > 0:
-                    fig_amp_hist = plot_amplitude_histogram(amp_stats)
-                if basic_picks:
-                    raw_basic = raw.copy().pick(basic_picks)
-                    fig_var_topo = plot_channel_variance_topomap(raw_basic)
-                    safe_onset = onset_sec if np.isfinite(onset_sec) else 0.0
-                    fig_raw_segment = plot_raw_segment(raw_basic, max(safe_onset, 0.0))
-                report_path = output_dirs["subject_reports"] / f"{subject_id}_qc_report.html"
+                    try:
+                        fig_amp_hist = plot_amplitude_histogram(amp_stats)
+                    except Exception as exc:  # pragma: no cover - defensive branch
+                        logger.warning("Amplitude histogram failed for %s: %s", filepath.name, exc)
+                if raw_basic is not None:
+                    try:
+                        fig_var_topo = plot_channel_variance_topomap(raw_basic)
+                        safe_onset = onset_sec if np.isfinite(onset_sec) else 0.0
+                        fig_raw_segment_start = plot_raw_segment(
+                            raw_basic, max(safe_onset, 0.0), title="Raw Segment - Start (10s)"
+                        )
+                        if np.isfinite(offset_sec):
+                            last_start = max(offset_sec - 10.0, 0.0)
+                        else:
+                            last_start = max(raw_basic.times[-1] - 10.0, 0.0)
+                        fig_raw_segment_end = plot_raw_segment(
+                            raw_basic, last_start, title="Raw Segment - End (10s)"
+                        )
+                    except Exception as exc:  # pragma: no cover - defensive branch
+                        logger.warning("Raw/variance plotting failed for %s: %s", filepath.name, exc)
+                if annotation_counts_dict:
+                    try:
+                        fig_events = plot_event_counts(annotation_counts_dict)
+                    except Exception as exc:  # pragma: no cover - defensive branch
+                        logger.warning("Event count plotting failed for %s: %s", filepath.name, exc)
+
+            report_path = output_dirs["subject_reports"] / f"{subject_id}_qc_report.html"
+            try:
                 create_subject_report(
-                    raw,
+                    raw_basic if raw_basic is not None else raw,
                     metrics,
                     subject_id,
                     report_path,
@@ -536,10 +817,12 @@ def process_file(
                     fig_psd_avg,
                     fig_amp_hist,
                     fig_var_topo,
-                    fig_raw_segment,
+                    fig_raw_segment_start,
+                    fig_raw_segment_end,
+                    fig_events,
                 )
             except Exception as fig_exc:  # pragma: no cover - defensive branch
-                logger.warning("Figure generation failed for %s: %s", filepath.name, fig_exc)
+                logger.warning("Report generation failed for %s: %s", filepath.name, fig_exc)
 
     except Exception as exc:  # pragma: no cover - defensive branch
         err_msg = f"Processing failed for {filepath.name}: {exc}"
@@ -568,6 +851,8 @@ def compute_dataset_stats(records: List[Dict[str, object]]) -> Dict[str, Dict[st
         "band_power_alpha",
         "band_power_beta",
         "band_power_gamma",
+        "eyes_open_duration_sec",
+        "eyes_closed_duration_sec",
     ]
     stats: Dict[str, Dict[str, float]] = {}
     for col in metric_cols:
@@ -646,6 +931,68 @@ def save_figures(df: pd.DataFrame, flags_counter: Counter, fig_dir: Path) -> Dic
     fig.savefig(flag_path, dpi=150)
     plt.close(fig)
     paths["flag_reasons"] = flag_path
+
+    def _event_count_stats(column: str) -> Dict[str, float] | None:
+        if column not in df:
+            return None
+        series = pd.to_numeric(df[column], errors="coerce").fillna(0)
+        if series.empty:
+            return None
+        values = series.to_numpy(dtype=float)
+        return {
+            "mean": float(np.mean(values)),
+            "std": float(np.std(values, ddof=0)),
+            "max": float(np.max(values)),
+            "min": float(np.min(values)),
+        }
+
+    event_specs = [
+        ("Eyes Open", "eyes_open_event_count"),
+        ("Eyes Closed", "eyes_closed_event_count"),
+        ("Movement", "movement_event_count"),
+        ("Artefact", "artefact_event_count"),
+        ("PAT Montage", "pat_montage_event_count"),
+        ("HV", "hv_event_count"),
+        ("PHOTO", "photo_event_count"),
+    ]
+    event_labels: List[str] = []
+    event_means: List[float] = []
+    event_stds: List[float] = []
+    event_ranges: List[Tuple[float, float]] = []
+    for label, count_col in event_specs:
+        stats = _event_count_stats(count_col)
+        if not stats:
+            continue
+        event_labels.append(label)
+        event_means.append(stats["mean"])
+        event_stds.append(stats["std"])
+        event_ranges.append((stats["min"], stats["max"]))
+    if event_labels:
+        height = max(3.5, 0.5 * len(event_labels))
+        fig, ax = plt.subplots(figsize=(8, height))
+        positions = np.arange(len(event_labels))
+        ax.barh(positions, event_means, xerr=event_stds, color="#55A868", alpha=0.85, capsize=5)
+        ax.set_xlabel("Average Event Count per Subject")
+        ax.set_title("Event Count Averages (with Std)")
+        ax.set_yticks(positions)
+        ax.set_yticklabels(event_labels)
+        ax.invert_yaxis()
+        max_mean = max(event_means) if event_means else 0.0
+        for idx, (mean_val, (min_val, max_val)) in enumerate(zip(event_means, event_ranges)):
+            offset = max_mean * 0.03 if max_mean else 0.1
+            ax.text(
+                mean_val + offset,
+                positions[idx],
+                f"min {min_val:.1f} / max {max_val:.1f}",
+                va="center",
+            )
+        ax.grid(True, axis="x", alpha=0.3)
+        plt.tight_layout()
+        event_path = fig_dir / "event_count_average.png"
+        fig.savefig(event_path, dpi=150)
+        plt.close(fig)
+        paths["event_stats"] = event_path
+
     return paths
 
 
@@ -672,6 +1019,28 @@ def create_summary_report(
         for reason, count in flags_counter.most_common():
             summary_html += f"<li>{reason}: {count}</li>"
         summary_html += "</ul>"
+
+    def _describe_series(column: str) -> Dict[str, float] | None:
+        if column not in df:
+            return None
+        series = pd.to_numeric(df[column], errors="coerce").dropna()
+        if series.empty:
+            return None
+        return {
+            "mean": float(series.mean()),
+            "max": float(series.max()),
+            "min": float(series.min()),
+            "std": float(series.std()),
+        }
+
+    def _sum_counts(column: str) -> int | None:
+        if column not in df:
+            return None
+        series = pd.to_numeric(df[column], errors="coerce").dropna()
+        if series.empty:
+            return None
+        return int(series.sum())
+
     report.add_html(summary_html, title="Summary", section="Overview")
 
     for title, path in [
@@ -679,6 +1048,7 @@ def create_summary_report(
         ("Mean Amplitude Distribution", fig_paths.get("amplitude_mean_uv")),
         ("Alpha Peak Distribution", fig_paths.get("alpha_peak_hz")),
         ("Flag Reasons", fig_paths.get("flag_reasons")),
+        ("Event Duration Averages", fig_paths.get("event_stats")),
     ]:
         if path and path.exists():
             report.add_image(path, title=title, section="Figures")
