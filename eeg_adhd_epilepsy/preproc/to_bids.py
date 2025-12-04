@@ -9,7 +9,7 @@ import re
 import shutil
 from pathlib import Path
 from typing import List, Set
-from datetime import datetime
+from datetime import datetime, timezone
 
 import mne
 import pandas as pd
@@ -96,8 +96,9 @@ def read_subject_data(
             try:
                 year, month, day = map(int, date_match.groups())
                 sh, sm, ss = map(int, start_match.groups())
-                meas_dt = datetime(year, month, day, sh, sm, ss)
-                meas_iso = meas_dt.isoformat()
+                # Recording timestamps need to be UTC-aware for BIDS export
+                meas_dt = datetime(year, month, day, sh, sm, ss, tzinfo=timezone.utc)
+                meas_iso = meas_dt.isoformat().replace("+00:00", "Z")
             except ValueError:
                 logging.warning("Invalid date/time in %s; meas_date not set", pnt)
         else:
