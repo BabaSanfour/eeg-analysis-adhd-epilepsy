@@ -9,6 +9,7 @@ import re
 import shutil
 from pathlib import Path
 from typing import List, Set
+from datetime import datetime
 
 import mne
 import pandas as pd
@@ -53,17 +54,24 @@ def read_subject_data(
     raw_dir: Path,
     bids_root: Path,
     mapping_df: pd.DataFrame,
-    overwrite: bool = False
+    overwrite: bool = False,
 ):
     """
     Read files for one subject, convert EEG data to BIDS format.
-    Skips existing outputs when overwrite=False, without marking failure.
-    Raises on real processing errors.
+
+    Returns:
+        dict with {"participant_id": str, "meas": str | None} on success,
+        or None when subject is skipped (e.g. special control).
     """
-    # -- determine new_id
+    # -- determine new_id and meas_date from .pnt
     pnt = raw_dir / f"{subject_id}.pnt"
+    meas_dt = None
+    meas_iso = None
+
     if pnt.exists():
         text = pnt.read_bytes().decode("ISO-8859-1", errors="ignore").replace("\x00", "")
+
+        # --- parse numeric ID
         match = re.search(r"ID(\d+(?:\.\d+)?)", text)
         if match:
             # capture full numeric part, strip any .suffix
@@ -71,7 +79,7 @@ def read_subject_data(
             new_id = new_id_full.split('.')[0]
             if new_id == "2.2":
                 logging.warning("Skipping %s → sub-%s (special control)", subject_id, new_id)
-                return  # skip special control
+                return None  # skip special control
             # apply mapping if needed
             if new_id.isdigit() and len(new_id) >= 4:
                 mapped = mapping_df[mapping_df["ID"] == int(new_id)]
@@ -80,21 +88,37 @@ def read_subject_data(
         else:
             logging.warning("Could not parse new ID in %s; using raw ID", subject_id)
             new_id = subject_id
+
+        # --- NEW: parse Date + Start Time → meas_dt
+        date_match = re.search(r"Date(\d{4})/(\d{2})/(\d{2})", text)
+        start_match = re.search(r"Start Time(\d{2})(\d{2})(\d{2})", text)
+        if date_match and start_match:
+            try:
+                year, month, day = map(int, date_match.groups())
+                sh, sm, ss = map(int, start_match.groups())
+                meas_dt = datetime(year, month, day, sh, sm, ss)
+                meas_iso = meas_dt.isoformat()
+            except ValueError:
+                logging.warning("Invalid date/time in %s; meas_date not set", pnt)
+        else:
+            logging.warning("Could not parse recording date/time in %s", pnt)
     else:
-        logging.warning("No .pnt for %s; using raw ID", subject_id)
+        logging.warning("No .pnt for %s; using raw ID and no meas_date", subject_id)
         raise FileNotFoundError(f"No .pnt file for {subject_id}")
 
     # zero-pad if numeric
     if re.fullmatch(r"\d+", new_id):
         new_id = f"{int(new_id):04d}"
 
+    participant_id = f"sub-{new_id}"
+
     # -- detect existing BIDS output
-    sub_dir = bids_root / f"sub-{new_id}"
+    sub_dir = bids_root / participant_id
     if sub_dir.exists():
         if not overwrite:
-            logging.info("Skipping %s → sub-%s (already exists)", subject_id, new_id)
-            return
-        logging.info("Overwriting %s → sub-%s", subject_id, new_id)
+            logging.info("Skipping %s → %s (already exists)", subject_id, participant_id)
+            return {"participant_id": participant_id, "meas": meas_iso}
+        logging.info("Overwriting %s → %s", subject_id, participant_id)
         shutil.rmtree(sub_dir)
 
     # -- locate EEG file
@@ -106,6 +130,10 @@ def read_subject_data(
     # -- read EEG
     raw = mne.io.read_raw_nihon(str(eeg_path), preload=False)
     raw.info["line_freq"] = 60
+
+    # -- inject meas_date into MNE object so BIDS picks it up
+    if meas_dt is not None:
+        raw.set_meas_date(meas_dt)
 
     # -- write BIDS, catching existing-file errors when overwrite=False
     bids_path = BIDSPath(
@@ -129,20 +157,27 @@ def read_subject_data(
     except Exception as e:
         msg = str(e).lower()
         if not overwrite and ("already exists" in msg or "file exists" in msg):
-            logging.info("Skipping write for %s → sub-%s (exists)", subject_id, new_id)
-            return
+            logging.info("Skipping write for %s → %s (exists)", subject_id, participant_id)
+            return {"participant_id": participant_id, "meas": meas_iso}
         raise
 
-    logging.info("Converted %s → sub-%s", subject_id, new_id)
+    logging.info("Converted %s → %s", subject_id, participant_id)
+    return {"participant_id": participant_id, "meas": meas_iso}  # NEW
 
 
-def update_participants_tsv(bids_dir: Path, subjects_df: pd.DataFrame):
+def update_participants_tsv(
+    bids_dir: Path,
+    subjects_df: pd.DataFrame,
+    meas_df: pd.DataFrame,
+):
     """
-    Merge only age & sex into participants.tsv to avoid duplicate columns.
+    Merge age, sex, and meas into participants.tsv.
+    Also writes a participants.csv copy.
     """
     tsv_path = bids_dir / "participants.tsv"
     participants_df = pd.read_csv(tsv_path, sep="\t")
 
+    # Age/Sex from subjects_df
     subjects_meta = (
         subjects_df.rename(columns={"Study ID": "ID"})[["ID", "Age", "Sex"]]
         .copy()
@@ -154,8 +189,19 @@ def update_participants_tsv(bids_dir: Path, subjects_df: pd.DataFrame):
 
     merged = participants_df.merge(subjects_meta, on="participant_id", how="left")
     merged = merged.rename(columns={"Age": "age", "Sex": "sex"})
+
+    # merge meas (measurement datetime) from meas_df
+    if meas_df is not None and not meas_df.empty:
+        merged = merged.merge(meas_df, on="participant_id", how="left")
+
+    # Write back TSV
     merged.to_csv(tsv_path, sep="\t", index=False)
     logging.info("Updated participants.tsv at %s", tsv_path)
+
+    # also write a CSV version
+    csv_path = bids_dir / "participants.csv"
+    merged.to_csv(csv_path, index=False)
+    logging.info("Wrote participants.csv at %s", csv_path)
 
 
 def find_missing(subjects_ids: List[str], bids_dir) -> List[str]:
@@ -205,12 +251,16 @@ def main():
     logging.info("Found %d subjects in %s", len(subject_ids), args.raw)
 
     failed = []
+    meas_records = []
+
     for sid in tqdm(subject_ids, desc="Converting subjects"):
         try:
-            read_subject_data(
+            meta = read_subject_data(
                 sid, args.raw, args.bids, mapping_df,
                 overwrite=args.overwrite
             )
+            if meta is not None:
+                meas_records.append(meta)
         except Exception as e:
             logging.error("Failed %s: %s", sid, e)
             failed.append(sid)
@@ -221,7 +271,10 @@ def main():
     else:
         logging.info("All subjects converted successfully")
 
-    update_participants_tsv(args.bids, subjects_df)
+    meas_df = pd.DataFrame(meas_records) if meas_records else pd.DataFrame(columns=["participant_id", "meas"])
+
+    update_participants_tsv(args.bids, subjects_df, meas_df)
+
     subject_ids = subjects_df["Study ID"].astype(str).tolist()
     missing = find_missing(subject_ids, args.bids)
     if missing:
@@ -234,4 +287,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
