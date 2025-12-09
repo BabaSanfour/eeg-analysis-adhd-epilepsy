@@ -245,7 +245,7 @@ def main():
         args.map, header=None, names=["patient", "ID"], sep=";"
     )
     subjects_df = pd.read_csv(
-        args.subs, encoding="utf-8", low_memory=False
+        args.subs, sep=";", encoding="utf-8", low_memory=False
     )
 
     subject_ids = get_subject_ids(args.raw)
