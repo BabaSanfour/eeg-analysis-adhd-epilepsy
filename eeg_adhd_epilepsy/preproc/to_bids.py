@@ -28,7 +28,6 @@ logging.basicConfig(
 # -----------------------------------------------------------------------------
 # HELPERS
 # -----------------------------------------------------------------------------
-
 def get_subject_ids(source_dir: Path) -> List[str]:
     """
     Scan source_dir and return sorted unique subject IDs.
@@ -86,10 +85,11 @@ def read_subject_data(
                 if not mapped.empty:
                     new_id = str(int(mapped["patient"].iat[0]))
         else:
-            logging.warning("Could not parse new ID in %s; using raw ID", subject_id)
-            new_id = subject_id
+            logging.warning("Could not parse new ID in %s; skipping subject", subject_id)
+            return None  # skip subject if no ID found
 
-        # --- NEW: parse Date + Start Time → meas_dt
+
+        # --- parse Date + Start Time → meas_dt
         date_match = re.search(r"Date(\d{4})/(\d{2})/(\d{2})", text)
         start_match = re.search(r"Start Time(\d{2})(\d{2})(\d{2})", text)
         if date_match and start_match:
@@ -245,7 +245,7 @@ def main():
         args.map, header=None, names=["patient", "ID"], sep=";"
     )
     subjects_df = pd.read_csv(
-        args.subs, sep=";", encoding="utf-8", low_memory=False
+        args.subs, encoding="utf-8", low_memory=False
     )
 
     subject_ids = get_subject_ids(args.raw)
