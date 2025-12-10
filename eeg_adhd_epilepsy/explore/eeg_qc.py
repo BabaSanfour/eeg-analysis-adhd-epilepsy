@@ -702,7 +702,7 @@ def process_file(
         metrics["alpha_peak_hz"] = alpha_peak
         metrics.update({f"band_power_{k}": v for k, v in band_powers.items()})
 
-        annotation_counts, annotation_durations = summarize_annotations(raw.annotations)
+        annotation_counts = summarize_annotations(raw.annotations)
         annotation_counts_dict = dict(annotation_counts)
         metrics["event_counts"] = (
             json.dumps(annotation_counts_dict, ensure_ascii=False) if annotation_counts_dict else ""
