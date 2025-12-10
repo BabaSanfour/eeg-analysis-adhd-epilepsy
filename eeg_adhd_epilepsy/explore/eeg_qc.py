@@ -35,8 +35,8 @@ import matplotlib.pyplot as plt  # noqa: E402
 BAND_LIMITS = {
     "delta": (1, 4),
     "theta": (4, 8),
-    "alpha": (8, 13),
-    "beta": (13, 30),
+    "alpha": (8, 12),
+    "beta": (12, 30),
     "gamma": (30, 45),
 }
 
@@ -233,24 +233,18 @@ def normalize_annotation_label(desc: str) -> str:
     return desc.strip()
 
 
-def summarize_annotations(annotations: mne.Annotations) -> Tuple[Counter, Dict[str, float]]:
+def summarize_annotations(annotations: mne.Annotations) -> Counter:
     counts: Counter = Counter()
-    durations: Dict[str, float] = {}
     if annotations is None or len(annotations) == 0:
-        return counts, durations
-    for desc, dur in zip(annotations.description, annotations.duration):
+        return counts
+    for desc in annotations.description:
         if desc is None:
             continue
         label = normalize_annotation_label(desc)
         if not label:
             continue
         counts[label] += 1
-        if dur is None:
-            continue
-        dur_val = float(dur)
-        if np.isfinite(dur_val):
-            durations[label] = durations.get(label, 0.0) + dur_val
-    return counts, durations
+    return counts
 
 
 def _normalize_channel_names_for_montage(raw: mne.io.BaseRaw, montage: mne.channels.DigMontage) -> None:
@@ -532,23 +526,14 @@ def create_subject_report(
     empty_end = metrics.get("empty_end_sec", float("nan"))
     n_flat = metrics.get("n_flat_channels", 0)
     n_noisy = metrics.get("n_noisy_channels", 0)
-    eyes_open_dur = metrics.get("eyes_open_duration_sec", float("nan"))
-    eyes_closed_dur = metrics.get("eyes_closed_duration_sec", float("nan"))
     eyes_open_count = metrics.get("eyes_open_event_count", 0)
     eyes_closed_count = metrics.get("eyes_closed_event_count", 0)
-    movement_dur = metrics.get("movement_duration_sec", float("nan"))
     movement_count = metrics.get("movement_event_count", 0)
-    artefact_dur = metrics.get("artefact_duration_sec", float("nan"))
     artefact_count = metrics.get("artefact_event_count", 0)
-    effort_dur = metrics.get("effort_duration_sec", float("nan"))
     effort_count = metrics.get("effort_event_count", 0)
-    pat_dur = metrics.get("pat_montage_duration_sec", float("nan"))
     pat_count = metrics.get("pat_montage_event_count", 0)
-    hv_dur = metrics.get("hv_duration_sec", float("nan"))
     hv_count = metrics.get("hv_event_count", 0)
-    post_hv_dur = metrics.get("post_hv_duration_sec", float("nan"))
     post_hv_count = metrics.get("post_hv_event_count", 0)
-    photo_dur = metrics.get("photo_duration_sec", float("nan"))
     photo_count = metrics.get("photo_event_count", 0)
     band_power_items = []
     for band in BAND_LIMITS:
@@ -571,25 +556,20 @@ def create_subject_report(
     )
     qc_summary_html += f"<li>Alpha peak: {alpha_peak:.2f} Hz</li>"
     qc_summary_html += f"<li>Band powers: {band_str}</li>"
-    if np.isfinite(eyes_open_dur) or np.isfinite(eyes_closed_dur):
-        qc_summary_html += (
-            f"<li>Eyes-open / closed duration: {eyes_open_dur:.1f}s ({eyes_open_count}) / "
-            f"{eyes_closed_dur:.1f}s ({eyes_closed_count})</li>"
-        )
     if movement_count:
-        qc_summary_html += f"<li>Movement events: {movement_count} ({movement_dur:.1f}s)</li>"
+        qc_summary_html += f"<li>Movement events: {movement_count}</li>"
     if artefact_count:
-        qc_summary_html += f"<li>Artefact events: {artefact_count} ({artefact_dur:.1f}s)</li>"
+        qc_summary_html += f"<li>Artefact events: {artefact_count}</li>"
     if effort_count:
-        qc_summary_html += f"<li>Effort events: {effort_count} ({effort_dur:.1f}s)</li>"
+        qc_summary_html += f"<li>Effort events: {effort_count}</li>"
     if pat_count:
-        qc_summary_html += f"<li>PAT montage events: {pat_count} ({pat_dur:.1f}s)</li>"
+        qc_summary_html += f"<li>PAT montage events: {pat_count}</li>"
     if hv_count:
-        qc_summary_html += f"<li>HV events: {hv_count} ({hv_dur:.1f}s)</li>"
+        qc_summary_html += f"<li>HV events: {hv_count}</li>"
     if post_hv_count:
-        qc_summary_html += f"<li>Post-HV events: {post_hv_count} ({post_hv_dur:.1f}s)</li>"
+        qc_summary_html += f"<li>Post-HV events: {post_hv_count}</li>"
     if photo_count:
-        qc_summary_html += f"<li>PHOTO events: {photo_count} ({photo_dur:.1f}s)</li>"
+        qc_summary_html += f"<li>PHOTO events: {photo_count}</li>"
     if metrics.get("flag_reasons"):
         qc_summary_html += f"<li>Flag reasons: {metrics.get('flag_reasons')}</li>"
     if metrics.get("event_counts"):
@@ -650,23 +630,14 @@ def process_file(
         "amplitude_min_uv": float("nan"),
         "amplitude_max_uv": float("nan"),
         "alpha_peak_hz": float("nan"),
-        "eyes_open_duration_sec": 0.0,
-        "eyes_closed_duration_sec": 0.0,
         "eyes_open_event_count": 0,
         "eyes_closed_event_count": 0,
-        "movement_duration_sec": 0.0,
         "movement_event_count": 0,
-        "artefact_duration_sec": 0.0,
         "artefact_event_count": 0,
-        "effort_duration_sec": 0.0,
         "effort_event_count": 0,
-        "pat_montage_duration_sec": 0.0,
         "pat_montage_event_count": 0,
-        "hv_duration_sec": 0.0,
         "hv_event_count": 0,
-        "post_hv_duration_sec": 0.0,
         "post_hv_event_count": 0,
-        "photo_duration_sec": 0.0,
         "photo_event_count": 0,
         "event_counts": "",
         "flag_bad": False,
@@ -851,8 +822,6 @@ def compute_dataset_stats(records: List[Dict[str, object]]) -> Dict[str, Dict[st
         "band_power_alpha",
         "band_power_beta",
         "band_power_gamma",
-        "eyes_open_duration_sec",
-        "eyes_closed_duration_sec",
     ]
     stats: Dict[str, Dict[str, float]] = {}
     for col in metric_cols:
@@ -1048,7 +1017,6 @@ def create_summary_report(
         ("Mean Amplitude Distribution", fig_paths.get("amplitude_mean_uv")),
         ("Alpha Peak Distribution", fig_paths.get("alpha_peak_hz")),
         ("Flag Reasons", fig_paths.get("flag_reasons")),
-        ("Event Duration Averages", fig_paths.get("event_stats")),
     ]:
         if path and path.exists():
             report.add_image(path, title=title, section="Figures")
