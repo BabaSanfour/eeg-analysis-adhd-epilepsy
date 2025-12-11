@@ -422,9 +422,15 @@ def compute_hurst_exponent(data_1d: np.ndarray, logger: logging.Logger | None = 
     if data_1d.size < 128:
         return float("nan")
     n_scale = 20
-    scale = np.exp(np.linspace(np.log(4), np.log(int(len(data_1d) / 10)), n_scale)).astype(int)
+    max_window = int(len(data_1d) / 10)
+    if max_window < 4:
+        return float("nan")
+    scale = np.exp(np.linspace(np.log(4), np.log(max_window), n_scale)).astype(int)
+    scale = np.unique(scale[scale >= 4])
+    if scale.size == 0:
+        return float("nan")
     try:
-        value = fractal_dfa(data_1d, multifractal=False, n=scale)
+        value = fractal_dfa(data_1d, scale=scale, multifractal=False)
     except LinAlgError as exc:
         if logger:
             logger.warning("Hurst DFA failed (LinAlgError): %s", exc)
