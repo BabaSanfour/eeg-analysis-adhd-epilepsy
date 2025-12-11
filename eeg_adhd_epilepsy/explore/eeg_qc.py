@@ -421,44 +421,18 @@ def compute_hurst_exponent(data_1d: np.ndarray, logger: logging.Logger | None = 
     """Estimate the Hurst exponent via DFA (NeuroKit2 first, then mne-features, then nolds)."""
     if data_1d.size < 128:
         return float("nan")
-    n_scale = 20
+
     max_window = int(len(data_1d) / 10)
     if max_window < 4:
         return float("nan")
-    scale = np.exp(np.linspace(np.log(4), np.log(max_window), n_scale)).astype(int)
-    scale = np.unique(scale[scale >= 4])
-    if scale.size == 0:
-        return float("nan")
-    try:
-        value = fractal_dfa(data_1d, scale=scale, multifractal=False)
-    except LinAlgError as exc:
-        if logger:
-            logger.warning("Hurst DFA failed (LinAlgError): %s", exc)
-        return float("nan")
-    except Exception as exc:  # pragma: no cover - defensive fallback
-        if logger:
-            logger.warning("Hurst DFA failed: %s", exc)
+
+    scale = np.unique(np.geomspace(4, max_window, num=20).astype(int))
+    scale = scale[scale >= 4]
+    if scale.size < 2:
         return float("nan")
 
-    if isinstance(value, (list, tuple, np.ndarray)):
-        arr_value = np.asarray(value).squeeze()
-        if arr_value.size == 0:
-            return float("nan")
-        value = arr_value.flat[0]
-    elif isinstance(value, dict):
-        for key in ("dfa", "DFA", "alpha", "exponent"):
-            if key in value:
-                value = value[key]
-                break
-    try:
-        value = float(np.asarray(value).squeeze())
-    except Exception as exc:  # pragma: no cover - defensive fallback
-        if logger:
-            logger.warning("Hurst DFA value conversion failed: %s", exc)
-        return float("nan")
-    if not np.isfinite(value):
-        return float("nan")
-    return value
+    raw_value = fractal_dfa(data_1d, scale=scale, multifractal=False)[0]
+    return value if np.isfinite(value) else float("nan")
 
 
 def compute_hurst_per_channel(
