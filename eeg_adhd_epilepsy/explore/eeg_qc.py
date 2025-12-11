@@ -431,8 +431,8 @@ def compute_hurst_exponent(data_1d: np.ndarray, logger: logging.Logger | None = 
     if scale.size < 2:
         return float("nan")
 
-    raw_value = fractal_dfa(data_1d, scale=scale, multifractal=False)[0]
-    return value if np.isfinite(value) else float("nan")
+    raw_value = fractal_dfa(data_1d, scale=scale, overlap=False)[0]
+    return raw_value if np.isfinite(raw_value) else float("nan")
 
 
 def compute_hurst_per_channel(
