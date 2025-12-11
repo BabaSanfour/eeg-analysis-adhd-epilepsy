@@ -332,7 +332,7 @@ def compute_psd_metrics(
     for band, (low, high) in band_limits.items():
         band_mask = (freqs >= low) & (freqs <= high)
         if band_mask.any():
-            band_power = np.trapz(psd[:, band_mask], freqs[band_mask], axis=1).mean()
+            band_power = np.trapezoid(psd[:, band_mask], freqs[band_mask], axis=1).mean()
             band_powers[band] = float(band_power * 1e12)  # convert V^2 to uV^2
         else:
             band_powers[band] = float("nan")
@@ -374,8 +374,8 @@ def compute_hf_lf_ratio(
         return float("nan"), float("nan")
     hf_mask = (freqs >= hf_band[0]) & (freqs <= hf_band[1])
     lf_mask = (freqs >= lf_band[0]) & (freqs <= lf_band[1])
-    hf_power = np.trapz(psd[:, hf_mask], freqs[hf_mask], axis=1)
-    lf_power = np.trapz(psd[:, lf_mask], freqs[lf_mask], axis=1) + EPS
+    hf_power = np.trapezoid(psd[:, hf_mask], freqs[hf_mask], axis=1)
+    lf_power = np.trapezoid(psd[:, lf_mask], freqs[lf_mask], axis=1) + EPS
     ratios = hf_power / lf_power
     return float(np.nanmean(ratios)), float(np.nanmax(ratios))
 
