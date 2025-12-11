@@ -971,7 +971,7 @@ def plot_segment_metric_over_time(
         df["_x"] = np.arange(len(df))
         x_label = "Segment index"
     else:
-        df["_x"] = df["_x"].fillna(method="ffill").fillna(method="bfill")
+        df["_x"] = df["_x"].ffill().bfill()
         x_label = "Start time (s)"
 
     palette = _segment_palette(df["segment_type"].unique())
