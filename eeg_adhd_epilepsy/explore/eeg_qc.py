@@ -30,8 +30,6 @@ from eeg_adhd_epilepsy.utils.qc_config import BAND_LIMITS, BASIC_1020_CHANNELS
 
 from fooof import FOOOF
 
-from neurokit2.complexity import fractal_dfa
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
@@ -47,8 +45,6 @@ HF_RATIO_FLAG = 0.50
 APERIODIC_SLOPE_MIN = 0.50
 APERIODIC_SLOPE_MAX = 3.0
 LINE_NOISE_RATIO_FLAG = 5.0
-HURST_LOW = 0.30
-HURST_HIGH = 0.90
 ARTIFACT_Z_OK = 2.0
 ARTIFACT_Z_BAD = 3.0
 MAX_BAD_CHANNEL_PCT = 30.0
@@ -417,88 +413,6 @@ def compute_aperiodic_slope(
     return float(np.nanmean(slopes_arr)), float(np.nanstd(slopes_arr)), float(np.nanmean(intercepts_arr))
 
 
-def compute_hurst_exponent(data_1d: np.ndarray, logger: logging.Logger | None = None) -> float:
-    """Estimate the Hurst exponent via DFA (NeuroKit2 first, then mne-features, then nolds)."""
-    if data_1d.size < 128:
-        return float("nan")
-
-    max_window = int(len(data_1d) / 10)
-    if max_window < 4:
-        return float("nan")
-
-    scale = np.unique(np.geomspace(4, max_window, num=20).astype(int))
-    scale = scale[scale >= 4]
-    if scale.size < 2:
-        return float("nan")
-
-    raw_value = fractal_dfa(data_1d, scale=scale, overlap=False)[0]
-    return raw_value if np.isfinite(raw_value) else float("nan")
-
-
-def compute_hurst_per_channel(
-    data: mne.io.BaseRaw | mne.Epochs,
-    picks: List[str] | None = None,
-    max_points: int = 20000,
-    logger: logging.Logger | None = None,
-    return_dict: bool = False,
-) -> Tuple[np.ndarray, float, float] | Dict[str, object]:
-    """Compute Hurst exponent per channel (median across epochs if needed)."""
-    if picks is None and hasattr(data, "info"):
-        eeg_indices = mne.pick_types(data.info, eeg=True)
-        picks = [data.ch_names[idx] for idx in eeg_indices]
-    if not picks:
-        empty = np.array([], dtype=float)
-        if return_dict:
-            return {
-                "segment_hurst_values": empty,
-                "segment_hurst_median": float("nan"),
-                "segment_hurst_min": float("nan"),
-                "segment_hurst_max": float("nan"),
-                "hurst_std": float("nan"),
-            }
-        return empty, float("nan"), float("nan")
-    sfreq = float(data.info.get("sfreq", np.nan)) if hasattr(data, "info") else float("nan")  # type: ignore
-    min_samples = int(sfreq * 300) if np.isfinite(sfreq) else 0  # 5 minutes
-
-    if isinstance(data, mne.Epochs):
-        arr = data.get_data(picks=picks)  # shape (n_epochs, n_channels, n_times)
-        arr = arr.transpose(1, 0, 2).reshape(len(picks), -1)
-    else:
-        arr = data.get_data(picks=picks)
-
-    if min_samples > 0 and arr.shape[1] < min_samples:
-        empty = np.full((len(picks),), np.nan, dtype=float)
-        if return_dict:
-            return {
-                "segment_hurst_values": empty,
-                "segment_hurst_median": float("nan"),
-                "segment_hurst_min": float("nan"),
-                "segment_hurst_max": float("nan"),
-                "hurst_std": float("nan"),
-            }
-        return empty, float("nan"), float("nan")
-
-    effective_max = max(max_points, min_samples) if max_points else min_samples
-    if effective_max and arr.shape[1] > effective_max:
-        arr = arr[:, :effective_max]
-    hurst_values = np.asarray(
-        [compute_hurst_exponent(channel, logger=logger) for channel in arr],
-        dtype=float,
-    )
-    median = float(np.nanmedian(hurst_values))
-    std = float(np.nanstd(hurst_values))
-    min_val = float(np.nanmin(hurst_values)) if np.isfinite(hurst_values).any() else float("nan")
-    max_val = float(np.nanmax(hurst_values)) if np.isfinite(hurst_values).any() else float("nan")
-    if return_dict:
-        return {
-            "segment_hurst_values": hurst_values,
-            "segment_hurst_median": median,
-            "segment_hurst_min": min_val,
-            "segment_hurst_max": max_val,
-            "hurst_std": std,
-        }
-    return hurst_values, median, std
-
 
 def compute_epoch_amplitude_stats(
     epochs: mne.Epochs | None,
@@ -547,12 +461,6 @@ def _evaluate_segment_flags(metrics: Mapping[str, object]) -> Tuple[bool, str]:
     slope = metrics.get("segment_aperiodic_slope", float("nan"))
     if np.isfinite(slope) and (slope < APERIODIC_SLOPE_MIN or slope > APERIODIC_SLOPE_MAX):
         reasons.append("aperiodic_slope_out_of_range")
-    hurst_min = metrics.get("segment_hurst_min", float("nan"))
-    hurst_max = metrics.get("segment_hurst_max", float("nan"))
-    if np.isfinite(hurst_min) and hurst_min < HURST_LOW:
-        reasons.append("hurst_too_low")
-    if np.isfinite(hurst_max) and hurst_max > HURST_HIGH:
-        reasons.append("hurst_too_high")
     bad_pct = metrics.get("segment_pct_bad_channels", float("nan"))
     if np.isfinite(bad_pct) and bad_pct > MAX_BAD_CHANNEL_PCT:
         reasons.append("too_many_bad_channels")
@@ -585,11 +493,7 @@ def compute_segment_qc(
     line_noise_mean, _ = compute_line_noise_index(psd, freqs, line_freq=line_freq)
     hf_ratio_mean, _ = compute_hf_lf_ratio(psd, freqs, hf_band=(30.0, 100.0), lf_band=(1.0, 30.0))
     slope_mean, _, _ = compute_aperiodic_slope(psd, freqs, fmin=1.0, fmax=30.0)
-    hurst_info = compute_hurst_per_channel(
-        raw_segment, picks, logger=logger, return_dict=True
-    )
 
-    hurst_values = hurst_info.get("segment_hurst_values", np.array([]))
     metrics: Dict[str, object] = {
         "segment_duration_sec": duration_sec,
         "segment_n_channels": len(picks),
@@ -610,10 +514,6 @@ def compute_segment_qc(
         "segment_hf_lf_ratio": hf_ratio_mean,
         "segment_line_noise_ratio": line_noise_mean,
         "segment_aperiodic_slope": slope_mean,
-        "segment_hurst_median": hurst_info.get("segment_hurst_median", float("nan")),
-        "segment_hurst_min": hurst_info.get("segment_hurst_min", float("nan")),
-        "segment_hurst_max": hurst_info.get("segment_hurst_max", float("nan")),
-        "segment_hurst_values": hurst_values.tolist() if isinstance(hurst_values, np.ndarray) else [],
     }
 
     flag_bad, reasons = _evaluate_segment_flags(metrics)
@@ -829,9 +729,6 @@ def evaluate_subject_flag(
     slope = metrics.get("aperiodic_slope_mean", float("nan"))
     if np.isfinite(slope) and (slope < APERIODIC_SLOPE_MIN or slope > APERIODIC_SLOPE_MAX):
         reasons.append("extreme_aperiodic_slope")
-    hurst_med = metrics.get("hurst_median", float("nan"))
-    if np.isfinite(hurst_med) and (hurst_med < HURST_LOW or hurst_med > HURST_HIGH):
-        reasons.append("hurst_outlier")
     line_noise = metrics.get("line_noise_ratio_mean", float("nan"))
     if np.isfinite(line_noise) and line_noise > LINE_NOISE_RATIO_FLAG:
         reasons.append("line_noise_residual")
@@ -1094,8 +991,6 @@ def create_subject_report(
     line_noise_ratio = metrics.get("line_noise_ratio_mean", float("nan"))
     hf_ratio = metrics.get("hf_lf_ratio_mean", float("nan"))
     slope = metrics.get("aperiodic_slope_mean", float("nan"))
-    hurst_med = metrics.get("hurst_median", float("nan"))
-    hurst_std = metrics.get("hurst_std", float("nan"))
 
     band_power_items = []
     for band in BAND_LIMITS:
@@ -1121,7 +1016,6 @@ def create_subject_report(
     qc_summary_html += f"<li>Line-noise ratio: {line_noise_ratio:.2f}</li>"
     qc_summary_html += f"<li>HF/LF ratio: {hf_ratio:.2f}</li>"
     qc_summary_html += f"<li>Aperiodic slope: {slope:.2f}</li>"
-    qc_summary_html += f"<li>Hurst median / std: {hurst_med:.2f} / {hurst_std:.2f}</li>"
     if metrics.get("condition_flags"):
         qc_summary_html += f"<li>Condition flags: {metrics['condition_flags']}</li>"
     if metrics.get("flag_reasons"):
@@ -1154,7 +1048,6 @@ def compute_dataset_stats(records: List[Dict[str, object]]) -> Dict[str, Dict[st
         "hf_lf_ratio_mean",
         "line_noise_ratio_mean",
         "aperiodic_slope_mean",
-        "hurst_median",
     ]
     stats: Dict[str, Dict[str, float]] = {}
     for col in metric_cols:
@@ -1346,45 +1239,12 @@ def save_figures(
         plt.close(fig)
         paths[column] = out_path
 
-    def _save_hurst_values_hist(column: str, title: str, filename: str):
-        if column not in df:
-            return
-        all_values: List[np.ndarray] = []
-        for entry in df[column]:
-            if isinstance(entry, (list, tuple, np.ndarray, pd.Series)):
-                arr = np.asarray(entry, dtype=float).ravel()
-                arr = arr[np.isfinite(arr)]
-                if arr.size:
-                    all_values.append(arr)
-        if not all_values:
-            return
-        values = np.concatenate(all_values)
-        if values.size == 0:
-            return
-        fig, ax = plt.subplots(figsize=(6, 4))
-        ax.hist(values, bins=30, edgecolor="black", alpha=0.8)
-        ax.set_title(title)
-        ax.set_xlabel("Hurst exponent")
-        ax.set_ylabel("Count")
-        ax.grid(True, alpha=0.3)
-        plt.tight_layout()
-        out_path = fig_dir / filename
-        fig.savefig(out_path, dpi=150)
-        plt.close(fig)
-        paths[column] = out_path
-
     _save_hist("duration_min", "Duration Distribution (min)", "dataset_duration_distribution.png")
     _save_hist("amplitude_mean_uv", "Mean Amplitude Distribution (uV)", "dataset_amplitude_distribution.png")
     _save_hist("alpha_peak_hz", "Alpha Peak Distribution (Hz)", "dataset_alpha_peak_distribution.png")
     _save_hist("hf_lf_ratio_mean", "HF/LF Ratio Distribution", "dataset_hf_ratio_distribution.png")
     _save_hist("aperiodic_slope_mean", "Aperiodic Slope Distribution", "dataset_slope_distribution.png")
     _save_hist("line_noise_ratio_mean", "Line Noise Ratio Distribution", "dataset_line_noise_distribution.png")
-    _save_hist("hurst_median", "Hurst Median Distribution", "dataset_hurst_median_distribution.png")
-    _save_hurst_values_hist(
-        "hurst_values",
-        "Hurst Exponent Distribution (All Channels)",
-        "dataset_hurst_values_distribution.png",
-    )
 
     fig, ax = plt.subplots(figsize=(7, 4))
     if flags_counter:
@@ -1480,8 +1340,6 @@ def create_summary_report(
         ("HF Ratio Distribution", fig_paths.get("hf_lf_ratio_mean")),
         ("Aperiodic Slope Distribution", fig_paths.get("aperiodic_slope_mean")),
         ("Line Noise Distribution", fig_paths.get("line_noise_ratio_mean")),
-        ("Hurst Median Distribution", fig_paths.get("hurst_median")),
-        ("Hurst Values Distribution", fig_paths.get("hurst_values")),
         ("Flag Reasons", fig_paths.get("flag_reasons")),
         ("Event Count Distributions", fig_paths.get("event_stats")),
         ("Recording Start Hour", fig_paths.get("meas_hour_distribution")),
@@ -1521,8 +1379,6 @@ __all__ = [
     "compute_epoch_amplitude_stats",
     "compute_epoch_rejection_breakdown",
     "compute_hf_lf_ratio",
-    "compute_hurst_exponent",
-    "compute_hurst_per_channel",
     "compute_line_noise_index",
     "compute_psd_metrics",
     "create_subject_report",

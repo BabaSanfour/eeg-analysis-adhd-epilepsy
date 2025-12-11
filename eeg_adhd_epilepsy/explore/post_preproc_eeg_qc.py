@@ -147,12 +147,6 @@ def run_post_qc_for_file(
         slope_mean, slope_std, _ = eeg_qc.compute_aperiodic_slope(psd, freqs, fmin=1.0, fmax=30.0)
         metrics["aperiodic_slope_mean"] = slope_mean
         metrics["aperiodic_slope_std"] = slope_std
-        hurst_values, hurst_median, hurst_std = eeg_qc.compute_hurst_per_channel(
-            data_obj if isinstance(data_obj, mne.Epochs) else analysis_raw, picks_names
-        )
-        metrics["hurst_median"] = hurst_median
-        metrics["hurst_std"] = hurst_std
-        metrics["hurst_values"] = hurst_values.tolist() if hurst_values.size else []
 
         if isinstance(data_obj, mne.Epochs):
             amp_stats = eeg_qc.compute_epoch_amplitude_stats(data_obj, picks_names)

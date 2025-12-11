@@ -103,8 +103,6 @@ def run_pre_qc_for_file(
         "hf_lf_ratio_max": float("nan"),
         "aperiodic_slope_mean": float("nan"),
         "aperiodic_slope_std": float("nan"),
-        "hurst_median": float("nan"),
-        "hurst_std": float("nan"),
         "flag_bad": False,
         "flag_reasons": "",
         "flag_category": "usable",
@@ -201,10 +199,6 @@ def run_pre_qc_for_file(
         slope_mean, slope_std, _ = eeg_qc.compute_aperiodic_slope(psd, freqs, fmin=1.0, fmax=30.0)
         metrics["aperiodic_slope_mean"] = slope_mean
         metrics["aperiodic_slope_std"] = slope_std
-        hurst_values, hurst_median, hurst_std = eeg_qc.compute_hurst_per_channel(analysis_raw, basic_picks)
-        metrics["hurst_median"] = hurst_median
-        metrics["hurst_std"] = hurst_std
-        metrics["hurst_values"] = hurst_values.tolist() if hurst_values.size else []
 
         annotation_counts = summarize_annotations(raw.annotations)
         metrics["event_counts"] = (
