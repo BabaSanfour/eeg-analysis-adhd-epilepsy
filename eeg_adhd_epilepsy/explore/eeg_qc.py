@@ -20,6 +20,7 @@ from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence, Tupl
 import matplotlib
 import mne
 import numpy as np
+from numpy.linalg import LinAlgError
 import pandas as pd
 from joblib import Parallel, delayed, parallel
 from mne_bids import BIDSPath, read_raw_bids
@@ -420,18 +421,37 @@ def compute_hurst_exponent(data_1d: np.ndarray, logger: logging.Logger | None = 
     """Estimate the Hurst exponent via DFA (NeuroKit2 first, then mne-features, then nolds)."""
     if data_1d.size < 128:
         return float("nan")
-    value = fractal_dfa(data_1d, multifractal=False)
-    if isinstance(value, (list, tuple)) and len(value) > 0:
-        value = value[0]
+    try:
+        value = fractal_dfa(data_1d, multifractal=False)
+    except LinAlgError as exc:
+        if logger:
+            logger.warning("Hurst DFA failed (LinAlgError): %s", exc)
+        return float("nan")
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        if logger:
+            logger.warning("Hurst DFA failed: %s", exc)
+        return float("nan")
+
+    if isinstance(value, (list, tuple, np.ndarray)):
+        arr_value = np.asarray(value).squeeze()
+        if arr_value.size == 0:
+            return float("nan")
+        value = arr_value.flat[0]
     elif isinstance(value, dict):
         for key in ("dfa", "DFA", "alpha", "exponent"):
             if key in value:
                 value = value[key]
                 break
-    value = float(np.asarray(value).squeeze())
-    if np.isfinite(value):
-        return value
-    return float("nan")
+    try:
+        value = float(np.asarray(value).squeeze())
+    except Exception as exc:  # pragma: no cover - defensive fallback
+        if logger:
+            logger.warning("Hurst DFA value conversion failed: %s", exc)
+        return float("nan")
+    if not np.isfinite(value):
+        return float("nan")
+    return value
+
 
 def compute_hurst_per_channel(
     data: mne.io.BaseRaw | mne.Epochs,
@@ -445,7 +465,7 @@ def compute_hurst_per_channel(
         eeg_indices = mne.pick_types(data.info, eeg=True)
         picks = [data.ch_names[idx] for idx in eeg_indices]
     if not picks:
-        empty = np.array([])
+        empty = np.array([], dtype=float)
         if return_dict:
             return {
                 "segment_hurst_values": empty,
@@ -465,7 +485,7 @@ def compute_hurst_per_channel(
         arr = data.get_data(picks=picks)
 
     if min_samples > 0 and arr.shape[1] < min_samples:
-        empty = np.full((len(picks),), np.nan)
+        empty = np.full((len(picks),), np.nan, dtype=float)
         if return_dict:
             return {
                 "segment_hurst_values": empty,
@@ -479,7 +499,10 @@ def compute_hurst_per_channel(
     effective_max = max(max_points, min_samples) if max_points else min_samples
     if effective_max and arr.shape[1] > effective_max:
         arr = arr[:, :effective_max]
-    hurst_values = np.array([compute_hurst_exponent(channel, logger=logger) for channel in arr])
+    hurst_values = np.asarray(
+        [compute_hurst_exponent(channel, logger=logger) for channel in arr],
+        dtype=float,
+    )
     median = float(np.nanmedian(hurst_values))
     std = float(np.nanstd(hurst_values))
     min_val = float(np.nanmin(hurst_values)) if np.isfinite(hurst_values).any() else float("nan")
