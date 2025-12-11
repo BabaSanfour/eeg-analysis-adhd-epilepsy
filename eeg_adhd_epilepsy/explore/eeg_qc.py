@@ -1349,14 +1349,40 @@ def save_figures(
     def _save_hist(column: str, title: str, filename: str):
         if column not in df:
             return
-        fig, ax = plt.subplots(figsize=(6, 4))
         series = pd.to_numeric(df[column], errors="coerce").dropna()
         if series.empty:
-            plt.close(fig)
             return
+        fig, ax = plt.subplots(figsize=(6, 4))
         ax.hist(series, bins=30, edgecolor="black", alpha=0.8)
         ax.set_title(title)
         ax.set_xlabel(column)
+        ax.set_ylabel("Count")
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+        out_path = fig_dir / filename
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        paths[column] = out_path
+
+    def _save_hurst_values_hist(column: str, title: str, filename: str):
+        if column not in df:
+            return
+        all_values: List[np.ndarray] = []
+        for entry in df[column]:
+            if isinstance(entry, (list, tuple, np.ndarray, pd.Series)):
+                arr = np.asarray(entry, dtype=float).ravel()
+                arr = arr[np.isfinite(arr)]
+                if arr.size:
+                    all_values.append(arr)
+        if not all_values:
+            return
+        values = np.concatenate(all_values)
+        if values.size == 0:
+            return
+        fig, ax = plt.subplots(figsize=(6, 4))
+        ax.hist(values, bins=30, edgecolor="black", alpha=0.8)
+        ax.set_title(title)
+        ax.set_xlabel("Hurst exponent")
         ax.set_ylabel("Count")
         ax.grid(True, alpha=0.3)
         plt.tight_layout()
@@ -1371,6 +1397,12 @@ def save_figures(
     _save_hist("hf_lf_ratio_mean", "HF/LF Ratio Distribution", "dataset_hf_ratio_distribution.png")
     _save_hist("aperiodic_slope_mean", "Aperiodic Slope Distribution", "dataset_slope_distribution.png")
     _save_hist("line_noise_ratio_mean", "Line Noise Ratio Distribution", "dataset_line_noise_distribution.png")
+    _save_hist("hurst_median", "Hurst Median Distribution", "dataset_hurst_median_distribution.png")
+    _save_hurst_values_hist(
+        "hurst_values",
+        "Hurst Exponent Distribution (All Channels)",
+        "dataset_hurst_values_distribution.png",
+    )
 
     fig, ax = plt.subplots(figsize=(7, 4))
     if flags_counter:
@@ -1466,6 +1498,8 @@ def create_summary_report(
         ("HF Ratio Distribution", fig_paths.get("hf_lf_ratio_mean")),
         ("Aperiodic Slope Distribution", fig_paths.get("aperiodic_slope_mean")),
         ("Line Noise Distribution", fig_paths.get("line_noise_ratio_mean")),
+        ("Hurst Median Distribution", fig_paths.get("hurst_median")),
+        ("Hurst Values Distribution", fig_paths.get("hurst_values")),
         ("Flag Reasons", fig_paths.get("flag_reasons")),
         ("Event Count Distributions", fig_paths.get("event_stats")),
         ("Recording Start Hour", fig_paths.get("meas_hour_distribution")),
