@@ -586,7 +586,6 @@ def create_subject_report(
     post_hv_count = metrics.get("post_hv_event_count", 0)
     photo_count = metrics.get("photo_event_count", 0)
     yawn_cough_count = metrics.get("yawning_coughing_event_count", 0)
-    sensor_count = metrics.get("sensor_electrode_event_count", 0)
     jaw_face_count = metrics.get("jaw_face_tension_event_count", 0)
     sleepy_count = metrics.get("sleepy_event_count", 0)
     sleep_count = metrics.get("sleep_event_count", 0)
@@ -636,8 +635,6 @@ def create_subject_report(
         qc_summary_html += f"<li>PHOTO events: {photo_count}</li>"
     if yawn_cough_count:
         qc_summary_html += f"<li>Yawning/Coughing events: {yawn_cough_count}</li>"
-    if sensor_count:
-        qc_summary_html += f"<li>Sensor/Electrode events: {sensor_count}</li>"
     if jaw_face_count:
         qc_summary_html += f"<li>Jaw/Face tension events: {jaw_face_count}</li>"
     if sleepy_count:
@@ -732,7 +729,6 @@ def process_file(
         "post_hv_event_count": 0,
         "photo_event_count": 0,
         "yawning_coughing_event_count": 0,
-        "sensor_electrode_event_count": 0,
         "jaw_face_tension_event_count": 0,
         "sleepy_event_count": 0,
         "sleep_event_count": 0,
@@ -828,7 +824,6 @@ def process_file(
         metrics["hv_event_count"] = int(annotation_counts.get("HV", 0))
         metrics["photo_event_count"] = int(annotation_counts.get("PHOTO", 0))
         metrics["yawning_coughing_event_count"] = int(annotation_counts.get("Yawning/Coughing", 0))
-        metrics["sensor_electrode_event_count"] = int(annotation_counts.get("Sensor/Electrode", 0))
         metrics["jaw_face_tension_event_count"] = int(annotation_counts.get("Jaw/Face Tension", 0))
         metrics["sleepy_event_count"] = int(annotation_counts.get("Sleepy", 0))
         metrics["sleep_event_count"] = int(annotation_counts.get("Sleep", 0))
@@ -1076,7 +1071,6 @@ def save_figures(
         ("HV", "hv_event_count"),
         ("PHOTO", "photo_event_count"),
         ("Yawning/Coughing", "yawning_coughing_event_count"),
-        ("Sensor/Electrode", "sensor_electrode_event_count"),
         ("Jaw/Face Tension", "jaw_face_tension_event_count"),
         ("Sleepy", "sleepy_event_count"),
         ("Sleep", "sleep_event_count"),
@@ -1170,7 +1164,6 @@ def create_summary_report(
         ("HV", "hv_event_count"),
         ("PHOTO", "photo_event_count"),
         ("Yawning/Coughing", "yawning_coughing_event_count"),
-        ("Sensor/Electrode", "sensor_electrode_event_count"),
         ("Jaw/Face Tension", "jaw_face_tension_event_count"),
         ("Sleepy", "sleepy_event_count"),
         ("Sleep", "sleep_event_count"),
