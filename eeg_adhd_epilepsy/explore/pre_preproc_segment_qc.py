@@ -38,6 +38,11 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--line_freq", type=float, default=60.0, help="Mains frequency for line-noise metric.")
     parser.add_argument("--log_level", default="INFO", help="Logging level (DEBUG, INFO, WARNING...).")
+    parser.add_argument(
+        "--skip_reports",
+        action="store_true",
+        help="Disable HTML segment reports (subject-level and dataset-level).",
+    )
     return parser.parse_args()
 
 
@@ -134,6 +139,8 @@ def main() -> None:
     args = parse_args()
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir = output_dir / "subject_reports"
+    fig_dir = output_dir / "figures"
     log_file = output_dir / "logs" / "pre_preproc_segment_qc.log"
     logger = eeg_qc.setup_logging(log_file, args.log_level)
 
@@ -160,6 +167,8 @@ def main() -> None:
 
     subjects_dir = output_dir / "subjects"
     subjects_dir.mkdir(parents=True, exist_ok=True)
+    if not args.skip_reports:
+        reports_dir.mkdir(parents=True, exist_ok=True)
     all_segment_frames: List[pd.DataFrame] = []
     aggregated_frames: List[pd.DataFrame] = []
     errors = []
@@ -180,6 +189,10 @@ def main() -> None:
         df.to_csv(subject_dir / f"{subject_id}_segment_qc_pre.csv", index=False)
         all_segment_frames.append(df)
 
+        if not args.skip_reports:
+            report_path = reports_dir / f"{subject_id}_segment_qc_pre_report.html"
+            eeg_qc.create_segment_subject_report(df, subject_id, report_path)
+
         agg_df = eeg_qc.aggregate_segment_qc(records)
         if not agg_df.empty:
             agg_path = subject_dir / f"{subject_id}_segment_qc_pre_aggregated.csv"
@@ -191,6 +204,11 @@ def main() -> None:
         dataset_segments.to_csv(output_dir / "segment_qc_pre_all_segments.csv", index=False)
         summary = summarize_dataset_segments(dataset_segments)
         (output_dir / "segment_qc_pre_dataset_summary.json").write_text(json.dumps(summary, indent=2))
+        if not args.skip_reports:
+            fig_paths = eeg_qc.save_segment_dataset_figures(dataset_segments, fig_dir)
+            report_path = output_dir / "segment_qc_pre_summary_report.html"
+            eeg_qc.create_segment_dataset_report(dataset_segments, fig_paths, report_path)
+            logger.info("Saved dataset summary HTML report to %s", report_path)
 
     if aggregated_frames:
         summary_df = pd.concat(aggregated_frames, ignore_index=True)

@@ -928,6 +928,248 @@ def plot_raw_segment(
     return fig
 
 
+SEGMENT_REPORT_METRICS = (
+    {"column": "segment_duration_sec", "title": "Segment Duration", "ylabel": "Duration (s)", "kind": "bar"},
+    {"column": "segment_amplitude_mean_uv", "title": "Mean Amplitude", "ylabel": "Mean amplitude (uV)", "kind": "line"},
+    {"column": "segment_pct_bad_channels", "title": "Percent Bad Channels", "ylabel": "Bad channels (%)", "kind": "line"},
+    {"column": "segment_line_noise_ratio", "title": "Line Noise Ratio", "ylabel": "Line-noise ratio", "kind": "line"},
+    {"column": "segment_hf_lf_ratio", "title": "HF/LF Ratio", "ylabel": "HF/LF ratio", "kind": "line"},
+    {"column": "segment_aperiodic_slope", "title": "Aperiodic Slope", "ylabel": "Aperiodic slope", "kind": "line"},
+    {"column": "segment_band_power_alpha", "title": "Alpha Band Power", "ylabel": "Alpha power (uV^2)", "kind": "line"},
+)
+
+
+def _segment_palette(segment_types: Sequence[str]) -> Dict[str, object]:
+    cmap = plt.get_cmap("tab20")
+    return {seg: cmap(idx % cmap.N) for idx, seg in enumerate(sorted(segment_types))}
+
+
+def plot_segment_metric_over_time(
+    segments_df: pd.DataFrame,
+    column: str,
+    title: str,
+    ylabel: str,
+    kind: str = "line",
+) -> matplotlib.figure.Figure | None:
+    """Line/bar plot of a metric across segments for a subject."""
+    if column not in segments_df:
+        return None
+    df = segments_df.copy()
+    df["metric"] = pd.to_numeric(df[column], errors="coerce")
+    t_start = df["t_start"] if "t_start" in df else pd.Series([np.nan] * len(df))
+    df["t_start"] = pd.to_numeric(t_start, errors="coerce")
+    segment_types = df["segment_type"] if "segment_type" in df else pd.Series(["Unknown"] * len(df))
+    df["segment_type"] = segment_types.fillna("Unknown")
+    df = df.dropna(subset=["metric"])
+    if df.empty:
+        return None
+
+    # Order by start time when available, else by original order
+    df = df.sort_values(by="t_start", na_position="last").reset_index(drop=True)
+    df["_x"] = df["t_start"]
+    if df["_x"].isna().all():
+        df["_x"] = np.arange(len(df))
+        x_label = "Segment index"
+    else:
+        df["_x"] = df["_x"].fillna(method="ffill").fillna(method="bfill")
+        x_label = "Start time (s)"
+
+    palette = _segment_palette(df["segment_type"].unique())
+    fig, ax = plt.subplots(figsize=(8, 4))
+
+    for seg_type, group in df.groupby("segment_type", dropna=False):
+        color = palette.get(seg_type, "#4C72B0")
+        if kind == "bar":
+            ax.bar(group["_x"], group["metric"], color=color, alpha=0.75, label=seg_type)
+        else:
+            ax.plot(
+                group["_x"],
+                group["metric"],
+                marker="o",
+                linestyle="-",
+                label=seg_type,
+                color=color,
+                alpha=0.85,
+            )
+        if "segment_flag_bad" in group:
+            flagged = group[group["segment_flag_bad"].astype(bool)]
+            if not flagged.empty:
+                ax.scatter(flagged["_x"], flagged["metric"], marker="x", color="red", s=70, label="Flagged")
+
+    handles, labels = ax.get_legend_handles_labels()
+    # Deduplicate legend entries (flagged marker can repeat across groups)
+    seen = set()
+    unique_handles = []
+    unique_labels = []
+    for h, lbl in zip(handles, labels):
+        if lbl in seen:
+            continue
+        seen.add(lbl)
+        unique_handles.append(h)
+        unique_labels.append(lbl)
+    if unique_handles:
+        ax.legend(unique_handles, unique_labels, bbox_to_anchor=(1.05, 1), loc="upper left")
+
+    ax.set_title(title)
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    return fig
+
+
+def plot_segment_metric_distribution(
+    segments_df: pd.DataFrame,
+    column: str,
+    title: str,
+    xlabel: str,
+    fig_dir: Path,
+) -> Path | None:
+    """Histogram for a given segment metric across the dataset."""
+    if column not in segments_df:
+        return None
+    series = pd.to_numeric(segments_df[column], errors="coerce").dropna()
+    if series.empty:
+        return None
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.hist(series, bins=30, edgecolor="black", alpha=0.8)
+    ax.set_title(f"{title} Distribution")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel("Count")
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+    out_path = fig_dir / f"{column}_distribution.png"
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
+def create_segment_subject_report(
+    segments_df: pd.DataFrame, subject_id: str, output_path: Path, metric_specs: Sequence[Mapping[str, str]] = SEGMENT_REPORT_METRICS
+) -> None:
+    """Subject-level HTML report for segment QC metrics."""
+    if segments_df is None or segments_df.empty:
+        return
+    report = mne.Report(title=f"Segment QC Report - {subject_id}")
+    durations = pd.to_numeric(segments_df.get("duration"), errors="coerce").dropna()
+    total_duration = float(durations.sum()) if not durations.empty else float("nan")
+    flagged = segments_df.get("segment_flag_bad")
+    flagged_count = int(pd.to_numeric(flagged, errors="coerce").fillna(0).astype(bool).sum()) if flagged is not None else 0
+    type_counts = (
+        segments_df.get("segment_type", pd.Series(dtype=str)).fillna("Unknown").value_counts().to_dict()
+        if not segments_df.empty
+        else {}
+    )
+    summary_html = "<ul>"
+    summary_html += f"<li>Segments: {len(segments_df)}</li>"
+    summary_html += f"<li>Total duration: {total_duration:.1f} s</li>"
+    summary_html += f"<li>Flagged segments: {flagged_count}</li>"
+    if type_counts:
+        summary_html += "<li>Segment types:<ul>"
+        for seg_type, count in type_counts.items():
+            summary_html += f"<li>{seg_type}: {count}</li>"
+        summary_html += "</ul></li>"
+    summary_html += "</ul>"
+    report.add_html(summary_html, title="Segment Summary", section="Overview")
+
+    for spec in metric_specs:
+        fig = plot_segment_metric_over_time(
+            segments_df,
+            column=spec["column"],
+            title=spec["title"],
+            ylabel=spec["ylabel"],
+            kind=spec.get("kind", "line"),
+        )
+        if fig is not None:
+            report.add_figure(fig, title=spec["title"], section="Segment Metrics")
+
+    flag_mask = pd.Series(False, index=segments_df.index)
+    flag_col = segments_df.get("segment_flag_bad")
+    if flag_col is not None:
+        flag_mask = pd.to_numeric(flag_col, errors="coerce").fillna(0).astype(bool)
+    flagged_table = segments_df[flag_mask]
+    if not flagged_table.empty:
+        preview_cols = [
+            "segment_type",
+            "t_start",
+            "t_stop",
+            "duration",
+            "segment_hf_lf_ratio",
+            "segment_line_noise_ratio",
+            "segment_aperiodic_slope",
+            "segment_flag_reasons",
+        ]
+        available_cols = [col for col in preview_cols if col in flagged_table.columns]
+        html_rows = flagged_table[available_cols].head(25).to_html(index=False)
+        report.add_html(html_rows, title="Flagged Segment Details (first 25)", section="Quality Flags")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report.save(output_path, overwrite=True, open_browser=False)
+
+
+def save_segment_dataset_figures(
+    segments_df: pd.DataFrame, fig_dir: Path, metric_specs: Sequence[Mapping[str, str]] = SEGMENT_REPORT_METRICS
+) -> Dict[str, Path]:
+    """Save dataset-level histograms for segment metrics."""
+    paths: Dict[str, Path] = {}
+    for spec in metric_specs:
+        path = plot_segment_metric_distribution(
+            segments_df,
+            column=spec["column"],
+            title=spec["title"],
+            xlabel=spec["ylabel"],
+            fig_dir=fig_dir,
+        )
+        if path:
+            paths[spec["column"]] = path
+    return paths
+
+
+def create_segment_dataset_report(
+    segments_df: pd.DataFrame,
+    fig_paths: Mapping[str, Path],
+    output_path: Path,
+) -> None:
+    """Dataset-level HTML report for segment QC."""
+    if segments_df is None or segments_df.empty:
+        return
+    report = mne.Report(title="Segment QC Dataset Summary")
+    subject_count = int(segments_df.get("subject_id", pd.Series(dtype=str)).nunique())
+    flagged = segments_df.get("segment_flag_bad")
+    flagged_count = int(pd.to_numeric(flagged, errors="coerce").fillna(0).astype(bool).sum()) if flagged is not None else 0
+    durations = pd.to_numeric(segments_df.get("duration"), errors="coerce").dropna()
+    total_duration = float(durations.sum()) if not durations.empty else float("nan")
+    type_counts = (
+        segments_df.get("segment_type", pd.Series(dtype=str)).fillna("Unknown").value_counts().to_dict()
+        if not segments_df.empty
+        else {}
+    )
+    summary_html = f"""
+    <h3>Dataset Summary</h3>
+    <ul>
+        <li>Subjects: {subject_count}</li>
+        <li>Total segments: {len(segments_df)}</li>
+        <li>Total duration: {total_duration:.1f} s</li>
+        <li>Flagged segments: {flagged_count}</li>
+    </ul>
+    """
+    if type_counts:
+        summary_html += "<p>Segment type counts:</p><ul>"
+        for seg_type, count in type_counts.items():
+            summary_html += f"<li>{seg_type}: {count}</li>"
+        summary_html += "</ul>"
+    report.add_html(summary_html, title="Summary", section="Overview")
+
+    for spec in SEGMENT_REPORT_METRICS:
+        path = fig_paths.get(spec["column"])
+        if path and path.exists():
+            report.add_image(path, title=f"{spec['title']} Distribution", section="Metric Distributions")
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    report.save(output_path, overwrite=True, open_browser=False)
+
+
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
@@ -1381,6 +1623,8 @@ __all__ = [
     "compute_hf_lf_ratio",
     "compute_line_noise_index",
     "compute_psd_metrics",
+    "create_segment_dataset_report",
+    "create_segment_subject_report",
     "create_subject_report",
     "create_summary_report",
     "detect_flat_and_noisy_channels",
@@ -1398,9 +1642,13 @@ __all__ = [
     "plot_psd_figures",
     "plot_psd_overlay",
     "plot_raw_segment",
+    "plot_segment_metric_distribution",
+    "plot_segment_metric_over_time",
     "prepare_channel_selection",
     "read_subjects_list",
+    "save_segment_dataset_figures",
     "save_figures",
+    "SEGMENT_REPORT_METRICS",
     "setup_logging",
     "summarize_flags",
     "tqdm_joblib",
