@@ -13,7 +13,6 @@ import json
 import logging
 import re
 import sys
-import unicodedata
 from collections import Counter
 from contextlib import contextmanager
 from pathlib import Path
@@ -27,46 +26,24 @@ from joblib import Parallel, delayed, parallel
 from tqdm import tqdm
 from mne_bids import BIDSPath, read_raw_bids
 
+from eeg_adhd_epilepsy.utils.qc_config import (
+    BAND_LIMITS,
+    BASIC_1020_CHANNELS,
+    KNOWN_EVENT_LABELS,
+)
+from eeg_adhd_epilepsy.utils.qc_annotations import (
+    compute_special_event_counts,
+    crop_raw_after_reference_event,
+    summarize_annotations,
+)
+
+EVENT_LABELS_ALWAYS_KEEP_ZERO = {"Eyes Open", "Eyes Closed", "HV", "PHOTO"}
+
 # Headless-friendly backend for figure generation.
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
 
-BAND_LIMITS = {
-    "delta": (1, 4),
-    "theta": (4, 8),
-    "alpha": (8, 12),
-    "beta": (12, 30),
-    "gamma": (30, 45),
-}
-
-BASIC_1020_CHANNELS = [
-    "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8", "T3", "C3", "Cz",
-    "C4", "T4", "T5", "P3", "Pz", "P4", "T6", "O1", "O2"
-]
-
-EYES_OPEN_LABELS = (
-    "eyes open",
-    "eye open",
-    "eyes-open",
-    "eo",
-    "yeux ouverts",
-    "yeux ouvert",
-)
-EYES_CLOSED_LABELS = (
-    "eyes closed",
-    "eye closed",
-    "eyes-closed",
-    "ec",
-    "yeux fermes",
-    "yeux ferme",
-)
-MOVEMENT_LABELS = ("bouge", "movement", "mouvement")
-ARTEFACT_LABELS = ("artefact", "artefacts", "artifact", "artifacts")
-EFFORT_LABELS = ("effort",)
-PAT_MONTAGE_LABELS = ("pat montage",)
-HV_LABELS = ("hv",)
-PHOTO_LABELS = ("photo",)
 
 
 def parse_args() -> argparse.Namespace:
@@ -116,15 +93,45 @@ def setup_logging(log_file: Path, level: str) -> logging.Logger:
     return logging.getLogger("eeg_qc")
 
 
-def get_basic_1020_picks(raw: mne.io.BaseRaw) -> List[str]:
-    """Return channel names present in raw that belong to the 19-channel 10-20 set."""
+def prepare_channel_selection(
+    raw: mne.io.BaseRaw,
+    standard_names: set[str],
+    logger: logging.Logger | None = None,
+) -> Tuple[mne.io.BaseRaw | None, List[str], Dict[str, object]]:
+    """Return (raw restricted to 10-20 channels, picks, montage stats)."""
+    try:
+        montage = mne.channels.make_standard_montage("standard_1020")
+        canonical = {name.lower(): name for name in montage.ch_names}
+        mapping: Dict[str, str] = {}
+        for ch_name in raw.ch_names:
+            canon = canonical.get(ch_name.lower())
+            if canon and ch_name != canon:
+                mapping[ch_name] = canon
+        if mapping:
+            raw.rename_channels(mapping)
+        raw.set_montage(montage, on_missing="ignore")
+        if logger:
+            filenames = getattr(raw, "filenames", None)
+            logger.debug(
+                "Applied standard_1020 montage to %s", filenames[0] if filenames else "recording"
+            )
+    except Exception as exc:  # pragma: no cover - defensive branch
+        if logger:
+            logger.warning("Unable to set default montage: %s", exc)
+
     lower_map = {name.lower(): name for name in raw.ch_names}
-    picks: List[str] = []
-    for ch in BASIC_1020_CHANNELS:
-        name = lower_map.get(ch.lower())
-        if name:
-            picks.append(name)
-    return picks
+    basic_picks = [lower_map[ch.lower()] for ch in BASIC_1020_CHANNELS if ch.lower() in lower_map]
+    eeg_chs = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True)).ch_names
+    matched = [ch for ch in eeg_chs if ch.lower() in standard_names]
+    non_standard = [ch for ch in eeg_chs if ch.lower() not in standard_names]
+    pct_missing = (1.0 - (len(matched) / max(len(BASIC_1020_CHANNELS), 1))) * 100.0
+    montage_info = {
+        "n_channels_1020_match": len(matched),
+        "non_standard_channels": non_standard,
+        "pct_missing_1020": pct_missing,
+    }
+    analysis_raw = raw.copy().pick(basic_picks) if basic_picks else None
+    return analysis_raw, basic_picks, montage_info
 
 
 def discover_bids_files(
@@ -186,6 +193,23 @@ def load_raw(filepath: Path, bids_root: Path, args: argparse.Namespace) -> mne.i
     return read_raw_bids(bids_path)
 
 
+def load_meas_datetimes(bids_root: Path) -> pd.Series:
+    tsv_path = bids_root / "participants.tsv"
+    if not tsv_path.exists():
+        return pd.Series(dtype="datetime64[ns]")
+    df = pd.read_csv(tsv_path, sep="\t")
+    if "meas" not in df:
+        return pd.Series(dtype="datetime64[ns]")
+    meas_series = pd.to_datetime(df["meas"], errors="coerce", utc=True)
+    meas_series = meas_series.dropna()
+    if meas_series.empty:
+        return pd.Series(dtype="datetime64[ns]")
+    try:
+        meas_series = meas_series.dt.tz_convert(None)
+    except TypeError:
+        meas_series = meas_series.dt.tz_localize(None)
+    return meas_series
+
 def extract_metadata(raw: mne.io.BaseRaw) -> Dict[str, object]:
     duration_sec = raw.n_times / float(raw.info["sfreq"])
     meas_date = raw.info.get("meas_date")
@@ -200,83 +224,10 @@ def extract_metadata(raw: mne.io.BaseRaw) -> Dict[str, object]:
     }
 
 
-def validate_montage(raw: mne.io.BaseRaw, standard_names: set[str]) -> Dict[str, object]:
-    eeg_chs = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True)).ch_names
-    matched = [ch for ch in eeg_chs if ch.lower() in standard_names]
-    non_standard = [ch for ch in eeg_chs if ch.lower() not in standard_names]
-    pct_missing = (1.0 - (len(matched) / max(len(BASIC_1020_CHANNELS), 1))) * 100.0
-    return {
-        "n_channels_1020_match": len(matched),
-        "non_standard_channels": non_standard,
-        "pct_missing_1020": pct_missing,
-    }
-
-def _strip_accents(text: str) -> str:
-    return "".join(ch for ch in unicodedata.normalize("NFD", text) if unicodedata.category(ch) != "Mn")
 
 
-def normalize_annotation_label(desc: str) -> str:
-    clean = _strip_accents(desc).lower().strip()
-    interest_map = {
-        "Eyes Open": EYES_OPEN_LABELS,
-        "Eyes Closed": EYES_CLOSED_LABELS,
-        "Movement": MOVEMENT_LABELS,
-        "Artefact": ARTEFACT_LABELS,
-        "Effort": EFFORT_LABELS,
-        "PAT Montage": PAT_MONTAGE_LABELS,
-        "HV": HV_LABELS,
-        "PHOTO": PHOTO_LABELS,
-    }
-    for canonical, patterns in interest_map.items():
-        if any(pattern in clean for pattern in patterns):
-            return canonical
-    return desc.strip()
-
-
-def summarize_annotations(annotations: mne.Annotations) -> Counter:
-    counts: Counter = Counter()
-    if annotations is None or len(annotations) == 0:
-        return counts
-    for desc in annotations.description:
-        if desc is None:
-            continue
-        label = normalize_annotation_label(desc)
-        if not label:
-            continue
-        counts[label] += 1
-    return counts
-
-
-def _normalize_channel_names_for_montage(raw: mne.io.BaseRaw, montage: mne.channels.DigMontage) -> None:
-    """Rename channels to match montage labels (case-insensitive) when possible."""
-    canonical = {name.lower(): name for name in montage.ch_names}
-    mapping: Dict[str, str] = {}
-    for ch_name in raw.ch_names:
-        canon = canonical.get(ch_name.lower())
-        if canon and ch_name != canon:
-            mapping[ch_name] = canon
-    if mapping:
-        raw.rename_channels(mapping)
-
-
-def ensure_default_montage(raw: mne.io.BaseRaw, logger: logging.Logger | None = None) -> None:
-    """Attach a standard montage when EEG locations are missing."""
-    try:
-        montage = mne.channels.make_standard_montage("standard_1020")
-        _normalize_channel_names_for_montage(raw, montage)
-        raw.set_montage(montage, on_missing="ignore")
-        if logger:
-            filenames = getattr(raw, "filenames", None)
-            logger.debug(
-                "Applied standard_1020 montage to %s", filenames[0] if filenames else "recording"
-            )
-    except Exception as exc:  # pragma: no cover - defensive branch
-        if logger:
-            logger.warning("Unable to set default montage: %s", exc)
-
-
-def compute_channel_amplitude_stats(raw: mne.io.BaseRaw, picks: List[str]) -> Dict[str, object]:
-    if not picks:
+def compute_channel_amplitude_stats(raw: mne.io.BaseRaw | None, picks: List[str]) -> Dict[str, object]:
+    if raw is None or not picks:
         return {
             "mean": float("nan"),
             "median": float("nan"),
@@ -297,8 +248,8 @@ def compute_channel_amplitude_stats(raw: mne.io.BaseRaw, picks: List[str]) -> Di
     }
 
 
-def detect_flat_and_noisy_channels(raw: mne.io.BaseRaw, picks: List[str]) -> Dict[str, object]:
-    if not picks:
+def detect_flat_and_noisy_channels(raw: mne.io.BaseRaw | None, picks: List[str]) -> Dict[str, object]:
+    if raw is None or not picks:
         return {
             "flat_channels": [],
             "noisy_channels": [],
@@ -326,9 +277,9 @@ def detect_flat_and_noisy_channels(raw: mne.io.BaseRaw, picks: List[str]) -> Dic
 
 
 def compute_psd_metrics(
-    raw: mne.io.BaseRaw, picks: List[str], fmin: float = 1.0, fmax: float = 60.0
+    raw: mne.io.BaseRaw | None, picks: List[str], fmin: float = 1.0, fmax: float = 60.0
 ) -> Tuple[mne.time_frequency.Spectrum | None, np.ndarray, np.ndarray, float, Dict[str, float]]:
-    if not picks:
+    if raw is None or not picks:
         empty = np.array([])
         return None, empty, empty, float("nan"), {k: float("nan") for k in BAND_LIMITS}
     spec = raw.compute_psd(picks=picks, fmin=fmin, fmax=fmax, verbose="ERROR")
@@ -350,48 +301,6 @@ def compute_psd_metrics(
             band_powers[band] = float("nan")
 
     return spec, psd, freqs, alpha_peak, band_powers
-
-
-def detect_signal_activity_bounds(
-    raw: mne.io.BaseRaw, picks: List[str], threshold_var_uv2: float = 5.0
-) -> Tuple[float, float, float, float]:
-    """Return empty duration at start/end and signal onset/offset timestamps."""
-    if not picks:
-        return (float("nan"), float("nan"), float("nan"), float("nan"))
-    data = raw.get_data(picks=picks) * 1e6  # uV
-    sfreq = float(raw.info["sfreq"])
-    window_samples = max(int(round(sfreq)), 1)
-    if window_samples <= 0:
-        return (0.0, 0.0, 0.0, 0.0)
-    n_windows = data.shape[1] // window_samples
-    if n_windows == 0:
-        return (0.0, 0.0, 0.0, 0.0)
-    reshaped = data[:, : n_windows * window_samples].reshape(data.shape[0], n_windows, window_samples)
-    window_vars = np.var(reshaped, axis=2).mean(axis=0)
-    if not np.any(np.isfinite(window_vars)):
-        total_duration = float(data.shape[1]) / sfreq
-        return (total_duration, float("nan"), total_duration, float("nan"))
-
-    perc_lo = float(np.percentile(window_vars, 10))
-    perc_hi = float(np.percentile(window_vars, 90))
-    span = max(perc_hi - perc_lo, 0.0)
-    adaptive_thresh = perc_lo + 0.25 * span
-    effective_thresh = max(threshold_var_uv2, adaptive_thresh)
-
-    active_windows = window_vars > effective_thresh
-    window_duration = window_samples / sfreq
-    total_duration = float(data.shape[1]) / sfreq
-    if not np.any(active_windows):
-        return (total_duration, float("nan"), total_duration, float("nan"))
-
-    active_indices = np.where(active_windows)[0]
-    first_idx = int(active_indices[0])
-    last_idx = int(active_indices[-1])
-    empty_start_sec = float(first_idx) * window_duration
-    signal_start_sec = empty_start_sec
-    signal_end_sec = min(float(last_idx + 1) * window_duration, total_duration)
-    empty_end_sec = max(total_duration - signal_end_sec, 0.0)
-    return empty_start_sec, signal_start_sec, empty_end_sec, signal_end_sec
 
 
 def plot_amplitude_histogram(amp_stats: Dict[str, object]) -> matplotlib.figure.Figure:
@@ -438,9 +347,63 @@ def plot_psd_figures(
     return fig_all, fig_avg
 
 
-def plot_event_counts(event_counts: Dict[str, int]) -> matplotlib.figure.Figure | None:
+def plot_events_distribution(event_counts: Dict[str, object]) -> matplotlib.figure.Figure | None:
     if not event_counts:
         return None
+
+    def _is_sequence(value: object) -> bool:
+        return isinstance(value, (list, tuple, np.ndarray, pd.Series))
+
+    if any(_is_sequence(v) for v in event_counts.values()):
+        labels: List[str] = []
+        sequences: List[np.ndarray] = []
+        for label, values in event_counts.items():
+            if not _is_sequence(values):
+                continue
+            arr = np.asarray(values, dtype=float)
+            arr = arr[np.isfinite(arr)]
+            if arr.size == 0:
+                continue
+            labels.append(label)
+            sequences.append(arr)
+        if not labels:
+            return None
+        cols = 2 if len(labels) > 1 else 1
+        rows = int(np.ceil(len(labels) / cols))
+        fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 3.5 * rows))
+        axes = np.atleast_1d(axes).flatten()
+        for ax_idx, (label, data) in enumerate(zip(labels, sequences)):
+            if data.size == 0:
+                continue
+            data_min = int(np.floor(data.min()))
+            data_max = int(np.ceil(data.max()))
+            if data_max == data_min:
+                bin_edges = np.array([data_min - 0.5, data_min + 0.5])
+            else:
+                start_edge = data_min - 0.5
+                end_edge = data_max + 0.5
+                bin_edges = np.arange(start_edge, end_edge + 1.0, 1.0)
+            axes[ax_idx].hist(data, bins=bin_edges, color="#4C72B0", alpha=0.85, edgecolor="black")
+            xticks = np.arange(data_min, data_max + 1, 1)
+            if xticks.size == 0:
+                xticks = np.array([data_min])
+            display_ticks = xticks
+            if xticks.size > 20:
+                display_ticks = xticks[::5]
+                if xticks[-1] not in display_ticks:
+                    display_ticks = np.append(display_ticks, xticks[-1])
+            axes[ax_idx].set_xticks(display_ticks)
+            axes[ax_idx].set_xlim(bin_edges[0], bin_edges[-1])
+            axes[ax_idx].set_title(label)
+            axes[ax_idx].set_xlabel("Count")
+            axes[ax_idx].set_ylabel("Subjects")
+            axes[ax_idx].grid(True, axis="y", alpha=0.3)
+        for extra_ax in axes[len(labels):]:
+            extra_ax.axis("off")
+        fig.suptitle("Event Count Distributions", fontsize=14)
+        fig.tight_layout(rect=[0, 0, 1, 0.97])
+        return fig
+
     sorted_items = sorted(event_counts.items(), key=lambda item: item[1], reverse=True)
     labels, counts = zip(*sorted_items)
     height = max(4, 0.4 * len(labels))
@@ -455,6 +418,93 @@ def plot_event_counts(event_counts: Dict[str, int]) -> matplotlib.figure.Figure 
     ax.grid(True, axis="x", alpha=0.3)
     plt.tight_layout()
     return fig
+
+
+def save_meas_distribution_figures(meas_datetimes: pd.Series, fig_dir: Path) -> Dict[str, Path]:
+    meas_datetimes = meas_datetimes.dropna()
+    if meas_datetimes.empty:
+        return {}
+
+    paths: Dict[str, Path] = {}
+
+    def _save_hist(values: np.ndarray, bins: np.ndarray, title: str, xlabel: str, filename: str,
+                   xticks: np.ndarray | None = None, xlabels: List[str] | None = None) -> None:
+        fig, ax = plt.subplots(figsize=(7, 4))
+        ax.hist(values, bins=bins, edgecolor="black", alpha=0.85)
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Count")
+        ax.grid(True, alpha=0.3)
+        if xticks is not None:
+            ax.set_xticks(xticks)
+            if xlabels is not None:
+                ax.set_xticklabels(xlabels)
+        plt.tight_layout()
+        out_path = fig_dir / filename
+        fig.savefig(out_path, dpi=150)
+        plt.close(fig)
+        paths[filename.replace(".png", "")] = out_path
+
+    hour_values = meas_datetimes.dt.hour + (meas_datetimes.dt.minute / 60.0)
+    hour_bins = np.arange(0.0, 24.5, 0.5)
+    _save_hist(
+        hour_values.to_numpy(dtype=float),
+        hour_bins,
+        "Recording Start Hour",
+        "Hour (30 min bins)",
+        "meas_hour_distribution.png",
+        xticks=np.arange(0, 25, 2),
+    )
+
+    day_values = meas_datetimes.dt.day
+    day_bins = np.arange(0.5, 32.5, 1.0)
+    _save_hist(
+        day_values.to_numpy(dtype=float),
+        day_bins,
+        "Recording Day of Month",
+        "Day of Month",
+        "meas_day_distribution.png",
+        xticks=np.arange(1, 32, 2),
+    )
+
+    dow_values = meas_datetimes.dt.dayofweek
+    dow_bins = np.arange(-0.5, 7.5, 1.0)
+    dow_labels = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    _save_hist(
+        dow_values.to_numpy(dtype=float),
+        dow_bins,
+        "Recording Day of Week",
+        "Day of Week",
+        "meas_dayofweek_distribution.png",
+        xticks=np.arange(0, 7, 1),
+        xlabels=dow_labels,
+    )
+
+    month_values = meas_datetimes.dt.month
+    month_bins = np.arange(0.5, 12.5 + 1, 1.0)
+    _save_hist(
+        month_values.to_numpy(dtype=float),
+        month_bins,
+        "Recording Month",
+        "Month",
+        "meas_month_distribution.png",
+        xticks=np.arange(1, 13, 1),
+    )
+
+    year_values = meas_datetimes.dt.year
+    year_min = int(year_values.min())
+    year_max = int(year_values.max())
+    year_bins = np.arange(year_min - 0.5, year_max + 1.5, 1.0)
+    _save_hist(
+        year_values.to_numpy(dtype=float),
+        year_bins,
+        "Recording Year",
+        "Year",
+        "meas_year_distribution.png",
+        xticks=np.arange(year_min, year_max + 1, 1),
+    )
+
+    return paths
 
 
 def plot_raw_segment(
@@ -535,6 +585,20 @@ def create_subject_report(
     hv_count = metrics.get("hv_event_count", 0)
     post_hv_count = metrics.get("post_hv_event_count", 0)
     photo_count = metrics.get("photo_event_count", 0)
+    yawn_cough_count = metrics.get("yawning_coughing_event_count", 0)
+    sensor_count = metrics.get("sensor_electrode_event_count", 0)
+    jaw_face_count = metrics.get("jaw_face_tension_event_count", 0)
+    sleepy_count = metrics.get("sleepy_event_count", 0)
+    sleep_count = metrics.get("sleep_event_count", 0)
+    collab_count = metrics.get("collaboration_event_count", 0)
+    emotion_count = metrics.get("emotion_behavior_event_count", 0)
+    oral_count = metrics.get("oral_activity_event_count", 0)
+    eye_move_count = metrics.get("eye_movement_event_count", 0)
+    wake_count = metrics.get("wakefulness_event_count", 0)
+    resp_count = metrics.get("respiration_event_count", 0)
+    sensor_action_kw_count = metrics.get("sensor_action_keyword_event_count", 0)
+    eye_keyword_count = metrics.get("eye_movement_keyword_event_count", 0)
+    clinical_comment_count = metrics.get("clinical_comment_event_count", 0)
     band_power_items = []
     for band in BAND_LIMITS:
         value = metrics.get(f"band_power_{band}", float("nan"))
@@ -570,6 +634,34 @@ def create_subject_report(
         qc_summary_html += f"<li>Post-HV events: {post_hv_count}</li>"
     if photo_count:
         qc_summary_html += f"<li>PHOTO events: {photo_count}</li>"
+    if yawn_cough_count:
+        qc_summary_html += f"<li>Yawning/Coughing events: {yawn_cough_count}</li>"
+    if sensor_count:
+        qc_summary_html += f"<li>Sensor/Electrode events: {sensor_count}</li>"
+    if jaw_face_count:
+        qc_summary_html += f"<li>Jaw/Face tension events: {jaw_face_count}</li>"
+    if sleepy_count:
+        qc_summary_html += f"<li>Sleepy events: {sleepy_count}</li>"
+    if sleep_count:
+        qc_summary_html += f"<li>Sleep events: {sleep_count}</li>"
+    if collab_count:
+        qc_summary_html += f"<li>Collaboration comments: {collab_count}</li>"
+    if emotion_count:
+        qc_summary_html += f"<li>Emotion/Behavior comments: {emotion_count}</li>"
+    if oral_count:
+        qc_summary_html += f"<li>Oral activity events: {oral_count}</li>"
+    if eye_move_count:
+        qc_summary_html += f"<li>Eye movement events: {eye_move_count}</li>"
+    if wake_count:
+        qc_summary_html += f"<li>Wakefulness events: {wake_count}</li>"
+    if resp_count:
+        qc_summary_html += f"<li>Respiration events: {resp_count}</li>"
+    if sensor_action_kw_count:
+        qc_summary_html += f"<li>Sensor action keyword mentions: {sensor_action_kw_count}</li>"
+    if eye_keyword_count:
+        qc_summary_html += f"<li>Eye-movement keyword mentions: {eye_keyword_count}</li>"
+    if clinical_comment_count:
+        qc_summary_html += f"<li>Clinical comment labels: {clinical_comment_count}</li>"
     if metrics.get("flag_reasons"):
         qc_summary_html += f"<li>Flag reasons: {metrics.get('flag_reasons')}</li>"
     if metrics.get("event_counts"):
@@ -639,6 +731,20 @@ def process_file(
         "hv_event_count": 0,
         "post_hv_event_count": 0,
         "photo_event_count": 0,
+        "yawning_coughing_event_count": 0,
+        "sensor_electrode_event_count": 0,
+        "jaw_face_tension_event_count": 0,
+        "sleepy_event_count": 0,
+        "sleep_event_count": 0,
+        "collaboration_event_count": 0,
+        "emotion_behavior_event_count": 0,
+        "oral_activity_event_count": 0,
+        "eye_movement_event_count": 0,
+        "wakefulness_event_count": 0,
+        "respiration_event_count": 0,
+        "sensor_action_keyword_event_count": 0,
+        "eye_movement_keyword_event_count": 0,
+        "clinical_comment_event_count": 0,
         "event_counts": "",
         "flag_bad": False,
         "flag_reasons": "",
@@ -646,12 +752,19 @@ def process_file(
     }
     band_power_fields = {f"band_power_{band}": float("nan") for band in BAND_LIMITS}
     metrics.update(band_power_fields)
+    analysis_raw: mne.io.BaseRaw | None = None
+    basic_picks: List[str] = []
+    montage_info: Dict[str, object] = {}
 
+    analysis_start_offset = 0.0
+    original_duration = float("nan")
     try:
         raw = load_raw(filepath, args.input_dir, args)
         raw.load_data()
-        ensure_default_montage(raw, logger)
         raw.filter(1, None, fir_design="firwin", verbose="ERROR")
+        original_duration = raw.times[-1]
+        analysis_start_offset = crop_raw_after_reference_event(raw, raw.annotations, logger)
+        analysis_raw, basic_picks, montage_info = prepare_channel_selection(raw, standard_names, logger)
     except Exception as exc:  # pragma: no cover - defensive branch
         err_msg = f"Failed to read {filepath.name}: {exc}"
         logger.error(err_msg)
@@ -662,11 +775,6 @@ def process_file(
         meta = extract_metadata(raw)
         metrics.update(meta)
 
-        basic_picks = get_basic_1020_picks(raw)
-        raw_basic = raw.copy().pick(basic_picks) if basic_picks else None
-        analysis_raw = raw_basic if raw_basic is not None else raw
-
-        montage_info = validate_montage(raw, standard_names)
         metrics["n_channels_1020_match"] = montage_info["n_channels_1020_match"]
         metrics["non_standard_channels"] = ",".join(montage_info["non_standard_channels"])
         metrics["channel_names"] = ",".join(basic_picks) if basic_picks else ",".join(meta.get("channel_names", []))
@@ -690,12 +798,17 @@ def process_file(
         metrics["pct_bad_channels"] = noise_info["% bad_channels"]
         metrics["% bad_channels"] = noise_info["% bad_channels"]
 
-        empty_start_sec, onset_sec, empty_end_sec, offset_sec = detect_signal_activity_bounds(
-            analysis_raw, basic_picks
-        )
-        metrics["empty_start_sec"] = empty_start_sec
+        analysis_duration = raw.times[-1] if raw is not None else float("nan")
+        onset_sec = analysis_start_offset
+        offset_sec = analysis_start_offset + (analysis_duration if np.isfinite(analysis_duration) else 0.0)
+        if np.isfinite(original_duration):
+            offset_sec = min(offset_sec, original_duration)
+            empty_end = max(original_duration - offset_sec, 0.0)
+        else:
+            empty_end = 0.0
+        metrics["empty_start_sec"] = onset_sec
         metrics["actual_signal_start_sec"] = onset_sec
-        metrics["empty_end_sec"] = empty_end_sec
+        metrics["empty_end_sec"] = empty_end
         metrics["actual_signal_end_sec"] = offset_sec
 
         spec, psd, freqs, alpha_peak, band_powers = compute_psd_metrics(analysis_raw, basic_picks)
@@ -703,9 +816,8 @@ def process_file(
         metrics.update({f"band_power_{k}": v for k, v in band_powers.items()})
 
         annotation_counts = summarize_annotations(raw.annotations)
-        annotation_counts_dict = dict(annotation_counts)
         metrics["event_counts"] = (
-            json.dumps(annotation_counts_dict, ensure_ascii=False) if annotation_counts_dict else ""
+            json.dumps(annotation_counts, ensure_ascii=False) if annotation_counts else ""
         )
         metrics["eyes_open_event_count"] = int(annotation_counts.get("Eyes Open", 0))
         metrics["eyes_closed_event_count"] = int(annotation_counts.get("Eyes Closed", 0))
@@ -715,6 +827,21 @@ def process_file(
         metrics["pat_montage_event_count"] = int(annotation_counts.get("PAT Montage", 0))
         metrics["hv_event_count"] = int(annotation_counts.get("HV", 0))
         metrics["photo_event_count"] = int(annotation_counts.get("PHOTO", 0))
+        metrics["yawning_coughing_event_count"] = int(annotation_counts.get("Yawning/Coughing", 0))
+        metrics["sensor_electrode_event_count"] = int(annotation_counts.get("Sensor/Electrode", 0))
+        metrics["jaw_face_tension_event_count"] = int(annotation_counts.get("Jaw/Face Tension", 0))
+        metrics["sleepy_event_count"] = int(annotation_counts.get("Sleepy", 0))
+        metrics["sleep_event_count"] = int(annotation_counts.get("Sleep", 0))
+        metrics["collaboration_event_count"] = int(annotation_counts.get("Collaboration", 0))
+        metrics["emotion_behavior_event_count"] = int(annotation_counts.get("Emotion/Behavior", 0))
+        metrics["oral_activity_event_count"] = int(annotation_counts.get("Oral Activity", 0))
+        metrics["eye_movement_event_count"] = int(annotation_counts.get("Eye Movement", 0))
+        metrics["wakefulness_event_count"] = int(annotation_counts.get("Wakefulness", 0))
+        metrics["respiration_event_count"] = int(annotation_counts.get("Respiration", 0))
+        special_counts = compute_special_event_counts(raw.annotations)
+        metrics["sensor_action_keyword_event_count"] = special_counts["sensor_action_keyword_events"]
+        metrics["eye_movement_keyword_event_count"] = special_counts["eye_movement_keyword_events"]
+        metrics["clinical_comment_event_count"] = special_counts["clinical_comment_events"]
 
         # Base flagging (dataset-level outlier flags added later)
         reasons: List[str] = []
@@ -755,32 +882,32 @@ def process_file(
                         fig_amp_hist = plot_amplitude_histogram(amp_stats)
                     except Exception as exc:  # pragma: no cover - defensive branch
                         logger.warning("Amplitude histogram failed for %s: %s", filepath.name, exc)
-                if raw_basic is not None:
+                if analysis_raw is not None:
                     try:
-                        fig_var_topo = plot_channel_variance_topomap(raw_basic)
+                        fig_var_topo = plot_channel_variance_topomap(analysis_raw)
                         safe_onset = onset_sec if np.isfinite(onset_sec) else 0.0
                         fig_raw_segment_start = plot_raw_segment(
-                            raw_basic, max(safe_onset, 0.0), title="Raw Segment - Start (10s)"
+                            analysis_raw, max(safe_onset, 0.0), title="Raw Segment - Start (10s)"
                         )
                         if np.isfinite(offset_sec):
                             last_start = max(offset_sec - 10.0, 0.0)
                         else:
-                            last_start = max(raw_basic.times[-1] - 10.0, 0.0)
+                            last_start = max(analysis_raw.times[-1] - 10.0, 0.0)
                         fig_raw_segment_end = plot_raw_segment(
-                            raw_basic, last_start, title="Raw Segment - End (10s)"
+                            analysis_raw, last_start, title="Raw Segment - End (10s)"
                         )
                     except Exception as exc:  # pragma: no cover - defensive branch
                         logger.warning("Raw/variance plotting failed for %s: %s", filepath.name, exc)
-                if annotation_counts_dict:
+                if annotation_counts:
                     try:
-                        fig_events = plot_event_counts(annotation_counts_dict)
+                        fig_events = plot_events_distribution(annotation_counts)
                     except Exception as exc:  # pragma: no cover - defensive branch
                         logger.warning("Event count plotting failed for %s: %s", filepath.name, exc)
 
             report_path = output_dirs["subject_reports"] / f"{subject_id}_qc_report.html"
             try:
                 create_subject_report(
-                    raw_basic if raw_basic is not None else raw,
+                    analysis_raw if analysis_raw is not None else raw,
                     metrics,
                     subject_id,
                     report_path,
@@ -865,7 +992,46 @@ def summarize_flags(records: List[Dict[str, object]]) -> Counter:
     return counter
 
 
-def save_figures(df: pd.DataFrame, flags_counter: Counter, fig_dir: Path) -> Dict[str, Path]:
+def collect_unknown_events(
+    records: List[Dict[str, object]], known_labels: set[str]
+) -> Dict[str, Dict[str, int]]:
+    summary: Dict[str, Dict[str, object]] = {}
+    for rec in records:
+        payload = rec.get("event_counts")
+        if not payload:
+            continue
+        try:
+            counts = json.loads(payload)
+        except Exception:
+            continue
+        subject_id = rec.get("subject_id", "unknown")
+        for label, value in counts.items():
+            if label in known_labels:
+                continue
+            try:
+                occurrences = int(value)
+            except Exception:
+                continue
+            if occurrences <= 0:
+                continue
+            entry = summary.setdefault(label, {"occurrences": 0, "subjects": set()})
+            entry["occurrences"] += occurrences
+            entry["subjects"].add(subject_id)
+    formatted: Dict[str, Dict[str, int]] = {}
+    for label, data in summary.items():
+        formatted[label] = {
+            "occurrences": int(data["occurrences"]),
+            "n_subjects": len(data["subjects"]),
+        }
+    return formatted
+
+
+def save_figures(
+    df: pd.DataFrame,
+    flags_counter: Counter,
+    fig_dir: Path,
+    meas_datetimes: pd.Series | None = None,
+) -> Dict[str, Path]:
     fig_dir.mkdir(parents=True, exist_ok=True)
     paths: Dict[str, Path] = {}
 
@@ -901,20 +1067,6 @@ def save_figures(df: pd.DataFrame, flags_counter: Counter, fig_dir: Path) -> Dic
     plt.close(fig)
     paths["flag_reasons"] = flag_path
 
-    def _event_count_stats(column: str) -> Dict[str, float] | None:
-        if column not in df:
-            return None
-        series = pd.to_numeric(df[column], errors="coerce").fillna(0)
-        if series.empty:
-            return None
-        values = series.to_numpy(dtype=float)
-        return {
-            "mean": float(np.mean(values)),
-            "std": float(np.std(values, ddof=0)),
-            "max": float(np.max(values)),
-            "min": float(np.min(values)),
-        }
-
     event_specs = [
         ("Eyes Open", "eyes_open_event_count"),
         ("Eyes Closed", "eyes_closed_event_count"),
@@ -923,44 +1075,42 @@ def save_figures(df: pd.DataFrame, flags_counter: Counter, fig_dir: Path) -> Dic
         ("PAT Montage", "pat_montage_event_count"),
         ("HV", "hv_event_count"),
         ("PHOTO", "photo_event_count"),
+        ("Yawning/Coughing", "yawning_coughing_event_count"),
+        ("Sensor/Electrode", "sensor_electrode_event_count"),
+        ("Jaw/Face Tension", "jaw_face_tension_event_count"),
+        ("Sleepy", "sleepy_event_count"),
+        ("Sleep", "sleep_event_count"),
+        ("Collaboration", "collaboration_event_count"),
+        ("Emotion/Behavior", "emotion_behavior_event_count"),
+        ("Oral Activity", "oral_activity_event_count"),
+        ("Eye Movement", "eye_movement_event_count"),
+        ("Wakefulness", "wakefulness_event_count"),
+        ("Respiration", "respiration_event_count"),
+        ("Sensor Actions", "sensor_action_keyword_event_count"),
+        ("Eye Movement Keywords", "eye_movement_keyword_event_count"),
+        ("Clinical Comments", "clinical_comment_event_count"),
     ]
-    event_labels: List[str] = []
-    event_means: List[float] = []
-    event_stds: List[float] = []
-    event_ranges: List[Tuple[float, float]] = []
+    events_distribution: Dict[str, np.ndarray] = {}
     for label, count_col in event_specs:
-        stats = _event_count_stats(count_col)
-        if not stats:
+        if count_col not in df:
             continue
-        event_labels.append(label)
-        event_means.append(stats["mean"])
-        event_stds.append(stats["std"])
-        event_ranges.append((stats["min"], stats["max"]))
-    if event_labels:
-        height = max(3.5, 0.5 * len(event_labels))
-        fig, ax = plt.subplots(figsize=(8, height))
-        positions = np.arange(len(event_labels))
-        ax.barh(positions, event_means, xerr=event_stds, color="#55A868", alpha=0.85, capsize=5)
-        ax.set_xlabel("Average Event Count per Subject")
-        ax.set_title("Event Count Averages (with Std)")
-        ax.set_yticks(positions)
-        ax.set_yticklabels(event_labels)
-        ax.invert_yaxis()
-        max_mean = max(event_means) if event_means else 0.0
-        for idx, (mean_val, (min_val, max_val)) in enumerate(zip(event_means, event_ranges)):
-            offset = max_mean * 0.03 if max_mean else 0.1
-            ax.text(
-                mean_val + offset,
-                positions[idx],
-                f"min {min_val:.1f} / max {max_val:.1f}",
-                va="center",
-            )
-        ax.grid(True, axis="x", alpha=0.3)
-        plt.tight_layout()
-        event_path = fig_dir / "event_count_average.png"
-        fig.savefig(event_path, dpi=150)
-        plt.close(fig)
-        paths["event_stats"] = event_path
+        series = pd.to_numeric(df[count_col], errors="coerce").dropna()
+        if label not in EVENT_LABELS_ALWAYS_KEEP_ZERO:
+            series = series[series > 0]
+        if series.empty:
+            continue
+        events_distribution[label] = series.to_numpy(dtype=float)
+    if events_distribution:
+        fig = plot_events_distribution(events_distribution)
+        if fig is not None:
+            event_path = fig_dir / "event_count_distributions.png"
+            fig.savefig(event_path, dpi=150)
+            plt.close(fig)
+            paths["event_stats"] = event_path
+
+    if meas_datetimes is not None and not meas_datetimes.empty:
+        meas_paths = save_meas_distribution_figures(meas_datetimes, fig_dir)
+        paths.update(meas_paths)
 
     return paths
 
@@ -971,6 +1121,7 @@ def create_summary_report(
     output_path: Path,
     total_files: int,
     flags_counter: Counter,
+    unknown_events: Dict[str, Dict[str, int]] | None = None,
 ) -> None:
     report = mne.Report(title="EEG QC Dataset Summary")
     valid_records = int((df["error"] == "").sum()) if "error" in df else len(df)
@@ -1010,6 +1161,37 @@ def create_summary_report(
             return None
         return int(series.sum())
 
+    event_fields = [
+        ("Eyes Open", "eyes_open_event_count"),
+        ("Eyes Closed", "eyes_closed_event_count"),
+        ("Movement", "movement_event_count"),
+        ("Artefact", "artefact_event_count"),
+        ("PAT Montage", "pat_montage_event_count"),
+        ("HV", "hv_event_count"),
+        ("PHOTO", "photo_event_count"),
+        ("Yawning/Coughing", "yawning_coughing_event_count"),
+        ("Sensor/Electrode", "sensor_electrode_event_count"),
+        ("Jaw/Face Tension", "jaw_face_tension_event_count"),
+        ("Sleepy", "sleepy_event_count"),
+        ("Sleep", "sleep_event_count"),
+        ("Collaboration", "collaboration_event_count"),
+        ("Emotion/Behavior", "emotion_behavior_event_count"),
+        ("Oral Activity", "oral_activity_event_count"),
+        ("Eye Movement", "eye_movement_event_count"),
+        ("Wakefulness", "wakefulness_event_count"),
+        ("Respiration", "respiration_event_count"),
+        ("Sensor Actions", "sensor_action_keyword_event_count"),
+        ("Eye Movement Keywords", "eye_movement_keyword_event_count"),
+        ("Clinical Comments", "clinical_comment_event_count"),
+    ]
+    event_items: List[str] = []
+    for label, column in event_fields:
+        total = _sum_counts(column)
+        if total:
+            event_items.append(f"<li>{label}: {total}</li>")
+    if event_items:
+        summary_html += "<p>Annotation totals:</p><ul>" + "".join(event_items) + "</ul>"
+
     report.add_html(summary_html, title="Summary", section="Overview")
 
     for title, path in [
@@ -1017,9 +1199,24 @@ def create_summary_report(
         ("Mean Amplitude Distribution", fig_paths.get("amplitude_mean_uv")),
         ("Alpha Peak Distribution", fig_paths.get("alpha_peak_hz")),
         ("Flag Reasons", fig_paths.get("flag_reasons")),
+        ("Event Count Distributions", fig_paths.get("event_stats")),
+        ("Recording Start Hour", fig_paths.get("meas_hour_distribution")),
+        ("Recording Day of Month", fig_paths.get("meas_day_distribution")),
+        ("Recording Day of Week", fig_paths.get("meas_dayofweek_distribution")),
+        ("Recording Month", fig_paths.get("meas_month_distribution")),
+        ("Recording Year", fig_paths.get("meas_year_distribution")),
     ]:
         if path and path.exists():
             report.add_image(path, title=title, section="Figures")
+
+    if unknown_events:
+        unknown_html = "<p>Unrecognized annotation labels:</p><ul>"
+        for label, stats in sorted(unknown_events.items(), key=lambda item: item[1]["occurrences"], reverse=True):
+            unknown_html += (
+                f"<li>{label}: {stats['occurrences']} occurrences; {stats['n_subjects']} subjects</li>"
+            )
+        unknown_html += "</ul>"
+        report.add_html(unknown_html, title="Unrecognized Annotation Labels", section="Unrecognized Annotations")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report.save(output_path, overwrite=True, open_browser=False)
@@ -1075,11 +1272,20 @@ def main() -> None:
         logger.info("Saved JSON report to %s", json_path)
 
     flags_counter = summarize_flags(results)
+    unknown_events = collect_unknown_events(results, KNOWN_EVENT_LABELS)
+    meas_datetimes = load_meas_datetimes(args.input_dir)
     fig_paths = {}
     if not args.skip_figures:
-        fig_paths = save_figures(df, flags_counter, fig_dir)
+        fig_paths = save_figures(df, flags_counter, fig_dir, meas_datetimes)
         summary_report_path = output_dir / "qc_summary_report.html"
-        create_summary_report(df, fig_paths, summary_report_path, len(files), flags_counter)
+        create_summary_report(
+            df,
+            fig_paths,
+            summary_report_path,
+            len(files),
+            flags_counter,
+            unknown_events,
+        )
         logger.info("Saved summary HTML report to %s", summary_report_path)
 
     logger.info("QC finished. Total files: %d, flagged bad: %d", len(files), int(df["flag_bad"].sum()))

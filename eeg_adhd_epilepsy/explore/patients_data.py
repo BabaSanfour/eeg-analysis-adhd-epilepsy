@@ -1,5 +1,5 @@
 """
-patients_csv_explorer.py
+patients_data.py
 
 Explore the ADHD/Epilepsy patients CSV with psychostimulant + anti-seizure
 medication columns. Prints dataset info, value counts, medication summaries, and
