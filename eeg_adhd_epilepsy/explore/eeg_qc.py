@@ -421,8 +421,10 @@ def compute_hurst_exponent(data_1d: np.ndarray, logger: logging.Logger | None = 
     """Estimate the Hurst exponent via DFA (NeuroKit2 first, then mne-features, then nolds)."""
     if data_1d.size < 128:
         return float("nan")
+    n_scale = 20
+    scale = np.exp(np.linspace(np.log(4), np.log(int(len(data_1d) / 10)), n_scale)).astype(int)
     try:
-        value = fractal_dfa(data_1d, multifractal=False)
+        value = fractal_dfa(data_1d, multifractal=False, n=scale)
     except LinAlgError as exc:
         if logger:
             logger.warning("Hurst DFA failed (LinAlgError): %s", exc)
