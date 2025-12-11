@@ -5,13 +5,26 @@ from __future__ import annotations
 import re
 from typing import Dict, Tuple
 
-from .config import (
-    EYES_CLOSED_LABELS,
-    EYES_OPEN_LABELS,
-    HV_LABELS,
-    PHOTO_LABELS,
-    POST_HV_LABELS,
+EYES_OPEN_LABELS = (
+    "eyes open",
+    "eye open",
+    "eyes-open",
+    "eo",
+    "yeux ouverts",
+    "yeux ouvert",
 )
+EYES_CLOSED_LABELS = (
+    "eyes closed",
+    "eye closed",
+    "eyes-closed",
+    "ec",
+    "yeux fermes",
+    "yeux ferme",
+)
+
+HV_LABELS = ("hv",)
+POST_HV_LABELS = ("post hv",)
+PHOTO_LABELS = ("photo",)
 
 # Frequency bands for PSD summaries
 BAND_LIMITS: Dict[str, Tuple[int, int]] = {
