@@ -28,7 +28,8 @@ from tqdm import tqdm
 from eeg_adhd_epilepsy.utils.qc_config import BAND_LIMITS, BASIC_1020_CHANNELS
 
 from fooof import FOOOF
-from hurst import compute_Hc
+
+from mne_features.univariate import compute_dfa as mne_compute_dfa
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -416,11 +417,10 @@ def compute_aperiodic_slope(
 
 
 def compute_hurst_exponent(data_1d: np.ndarray, logger: logging.Logger | None = None) -> float:
-    """Estimate the Hurst exponent using the hurst package (fallback to nolds if available)."""
+    """Estimate the Hurst exponent via DFA (preferring mne-features, else nolds)."""
     if data_1d.size < 128:
         return float("nan")
-    hurst_value, _, _ = compute_Hc(data_1d, simplified=True)
-    return float(hurst_value)
+    return float(mne_compute_dfa(data_1d))
 
 
 def compute_hurst_per_channel(
