@@ -27,8 +27,8 @@ from tqdm import tqdm
 
 from eeg_adhd_epilepsy.utils.qc_config import BAND_LIMITS, BASIC_1020_CHANNELS
 
-# Optional dependency: fooof for aperiodic slope estimation
 from fooof import FOOOF
+from hurst import compute_Hc
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -42,17 +42,17 @@ DATA_RETENTION_BORDERLINE = 0.30
 BAD_CHANNEL_GOOD = 3
 BAD_CHANNEL_BORDERLINE = 6
 HF_RATIO_FLAG = 0.50
-APERIODIC_SLOPE_MIN = -0.50
-APERIODIC_SLOPE_MAX = -3.0
+APERIODIC_SLOPE_MIN = 0.50
+APERIODIC_SLOPE_MAX = 3.0
 LINE_NOISE_RATIO_FLAG = 5.0
 HURST_LOW = 0.30
 HURST_HIGH = 0.90
 ARTIFACT_Z_OK = 2.0
 ARTIFACT_Z_BAD = 3.0
+MAX_BAD_CHANNEL_PCT = 30.0
 
 CONDITIONS = ("EO", "EC", "HV", "POST_HV", "PHOTO", "UNKNOWN")
 EPS = np.finfo(float).eps
-
 
 # ---------------------------------------------------------------------------
 # Logging / misc helpers
@@ -415,49 +415,36 @@ def compute_aperiodic_slope(
     return float(np.nanmean(slopes_arr)), float(np.nanstd(slopes_arr)), float(np.nanmean(intercepts_arr))
 
 
-def compute_hurst_exponent(data_1d: np.ndarray) -> float:
-    """Lightweight rescaled-range estimate of the Hurst exponent."""
+def compute_hurst_exponent(data_1d: np.ndarray, logger: logging.Logger | None = None) -> float:
+    """Estimate the Hurst exponent using the hurst package (fallback to nolds if available)."""
     if data_1d.size < 128:
         return float("nan")
-    x = np.cumsum(data_1d - np.mean(data_1d))
-    n = len(x)
-    window_sizes = np.unique(np.linspace(32, n // 2, num=8, dtype=int))
-    rs_values = []
-    scales = []
-    for w in window_sizes:
-        if w < 16:
-            continue
-        segments = max(n // w, 1)
-        rs_segment = []
-        for i in range(segments):
-            start = i * w
-            end = start + w
-            if end > n:
-                break
-            seg = x[start:end]
-            r = np.max(seg) - np.min(seg)
-            s = np.std(seg)
-            if s > 0:
-                rs_segment.append(r / s)
-        if rs_segment:
-            rs_values.append(np.mean(rs_segment))
-            scales.append(w)
-    if len(rs_values) < 2:
-        return float("nan")
-    log_r = np.log(rs_values)
-    log_s = np.log(scales)
-    slope, _ = np.polyfit(log_s, log_r, 1)
-    return float(slope)
+    hurst_value, _, _ = compute_Hc(data_1d, simplified=True)
+    return float(hurst_value)
 
 
 def compute_hurst_per_channel(
     data: mne.io.BaseRaw | mne.Epochs,
-    picks: List[str],
+    picks: List[str] | None = None,
     max_points: int = 20000,
-) -> Tuple[np.ndarray, float, float]:
+    logger: logging.Logger | None = None,
+    return_dict: bool = False,
+) -> Tuple[np.ndarray, float, float] | Dict[str, object]:
     """Compute Hurst exponent per channel (median across epochs if needed)."""
+    if picks is None and hasattr(data, "info"):
+        eeg_indices = mne.pick_types(data.info, eeg=True)
+        picks = [data.ch_names[idx] for idx in eeg_indices]
     if not picks:
-        return np.array([]), float("nan"), float("nan")
+        empty = np.array([])
+        if return_dict:
+            return {
+                "segment_hurst_values": empty,
+                "segment_hurst_median": float("nan"),
+                "segment_hurst_min": float("nan"),
+                "segment_hurst_max": float("nan"),
+                "hurst_std": float("nan"),
+            }
+        return empty, float("nan"), float("nan")
     if isinstance(data, mne.Epochs):
         arr = data.get_data(picks=picks)  # shape (n_epochs, n_channels, n_times)
         arr = arr.transpose(1, 0, 2).reshape(len(picks), -1)
@@ -465,8 +452,20 @@ def compute_hurst_per_channel(
         arr = data.get_data(picks=picks)
     if arr.shape[1] > max_points:
         arr = arr[:, :max_points]
-    hurst_values = np.array([compute_hurst_exponent(channel) for channel in arr])
-    return hurst_values, float(np.nanmedian(hurst_values)), float(np.nanstd(hurst_values))
+    hurst_values = np.array([compute_hurst_exponent(channel, logger=logger) for channel in arr])
+    median = float(np.nanmedian(hurst_values))
+    std = float(np.nanstd(hurst_values))
+    min_val = float(np.nanmin(hurst_values)) if np.isfinite(hurst_values).any() else float("nan")
+    max_val = float(np.nanmax(hurst_values)) if np.isfinite(hurst_values).any() else float("nan")
+    if return_dict:
+        return {
+            "segment_hurst_values": hurst_values,
+            "segment_hurst_median": median,
+            "segment_hurst_min": min_val,
+            "segment_hurst_max": max_val,
+            "hurst_std": std,
+        }
+    return hurst_values, median, std
 
 
 def compute_epoch_amplitude_stats(
@@ -480,6 +479,135 @@ def compute_epoch_amplitude_stats(
     ptp = np.ptp(data, axis=2)  # shape (n_epochs, n_channels)
     ptp_epoch = ptp.mean(axis=1)
     return {"mean_ptp_uv": float(np.nanmean(ptp_epoch)), "max_ptp_uv": float(np.nanmax(ptp_epoch))}
+
+
+# ---------------------------------------------------------------------------
+# Segment-level helpers
+# ---------------------------------------------------------------------------
+def crop_segment(
+    raw: mne.io.BaseRaw,
+    t_start: float,
+    t_stop: float,
+    picks: List[str] | None = None,
+) -> mne.io.BaseRaw | None:
+    """Return a cropped copy of raw between t_start and t_stop (seconds)."""
+    if raw is None:
+        return None
+    start = max(float(t_start), 0.0)
+    end = min(float(t_stop), raw.times[-1])
+    if end <= start:
+        return None
+    segment = raw.copy().crop(tmin=start, tmax=end)
+    if picks:
+        lower_map = {ch.lower(): ch for ch in segment.ch_names}
+        pick_names = [lower_map[p.lower()] for p in picks if p.lower() in lower_map]
+        if not pick_names:
+            return None
+        segment = segment.copy().pick(pick_names)
+    return segment
+
+
+def _evaluate_segment_flags(metrics: Mapping[str, object]) -> Tuple[bool, str]:
+    reasons: List[str] = []
+    hf_ratio = metrics.get("segment_hf_lf_ratio", float("nan"))
+    if np.isfinite(hf_ratio) and hf_ratio > HF_RATIO_FLAG:
+        reasons.append("high_hf_lf_ratio")
+    slope = metrics.get("segment_aperiodic_slope", float("nan"))
+    if np.isfinite(slope) and (slope < APERIODIC_SLOPE_MIN or slope > APERIODIC_SLOPE_MAX):
+        reasons.append("aperiodic_slope_out_of_range")
+    hurst_min = metrics.get("segment_hurst_min", float("nan"))
+    hurst_max = metrics.get("segment_hurst_max", float("nan"))
+    if np.isfinite(hurst_min) and hurst_min < HURST_LOW:
+        reasons.append("hurst_too_low")
+    if np.isfinite(hurst_max) and hurst_max > HURST_HIGH:
+        reasons.append("hurst_too_high")
+    bad_pct = metrics.get("segment_pct_bad_channels", float("nan"))
+    if np.isfinite(bad_pct) and bad_pct > MAX_BAD_CHANNEL_PCT:
+        reasons.append("too_many_bad_channels")
+    return bool(reasons), ";".join(reasons)
+
+
+def compute_segment_qc(
+    raw_segment: mne.io.BaseRaw | None,
+    picks: List[str] | None = None,
+    logger: logging.Logger | None = None,
+    line_freq: float = 60.0,
+) -> Dict[str, object]:
+    """Compute QC metrics for a single raw segment."""
+    if raw_segment is None:
+        return {}
+    available = raw_segment.ch_names
+    if picks:
+        lower_map = {ch.lower(): ch for ch in available}
+        picks = [lower_map[p.lower()] for p in picks if p.lower() in lower_map]
+    else:
+        picks = available
+
+    amp_stats = compute_channel_amplitude_stats(raw_segment, picks)
+    noise_info = detect_flat_and_noisy_channels(raw_segment, picks)
+    duration_sec = float(raw_segment.times[-1]) if raw_segment.times.size else float("nan")
+
+    _, psd, freqs, alpha_peak, band_powers = compute_psd_metrics(
+        raw_segment, picks, fmin=1.0, fmax=100.0
+    )
+    line_noise_mean, _ = compute_line_noise_index(psd, freqs, line_freq=line_freq)
+    hf_ratio_mean, _ = compute_hf_lf_ratio(psd, freqs, hf_band=(30.0, 100.0), lf_band=(1.0, 30.0))
+    slope_mean, _, _ = compute_aperiodic_slope(psd, freqs, fmin=1.0, fmax=30.0)
+    hurst_info = compute_hurst_per_channel(
+        raw_segment, picks, logger=logger, return_dict=True
+    )
+
+    hurst_values = hurst_info.get("segment_hurst_values", np.array([]))
+    metrics: Dict[str, object] = {
+        "segment_duration_sec": duration_sec,
+        "segment_n_channels": len(picks),
+        "segment_amplitude_mean_uv": amp_stats["mean"],
+        "segment_amplitude_median_uv": amp_stats["median"],
+        "segment_amplitude_std_uv": amp_stats["std"],
+        "segment_amplitude_min_uv": amp_stats["min"],
+        "segment_amplitude_max_uv": amp_stats["max"],
+        "segment_n_flat_channels": noise_info["n_flat_channels"],
+        "segment_n_noisy_channels": noise_info["n_noisy_channels"],
+        "segment_pct_bad_channels": noise_info["pct_bad_channels"],
+        "segment_band_power_delta": band_powers.get("delta", float("nan")),
+        "segment_band_power_theta": band_powers.get("theta", float("nan")),
+        "segment_band_power_alpha": band_powers.get("alpha", float("nan")),
+        "segment_band_power_beta": band_powers.get("beta", float("nan")),
+        "segment_band_power_gamma": band_powers.get("gamma", float("nan")),
+        "segment_alpha_peak_hz": alpha_peak,
+        "segment_hf_lf_ratio": hf_ratio_mean,
+        "segment_line_noise_ratio": line_noise_mean,
+        "segment_aperiodic_slope": slope_mean,
+        "segment_hurst_median": hurst_info.get("segment_hurst_median", float("nan")),
+        "segment_hurst_min": hurst_info.get("segment_hurst_min", float("nan")),
+        "segment_hurst_max": hurst_info.get("segment_hurst_max", float("nan")),
+        "segment_hurst_values": hurst_values.tolist() if isinstance(hurst_values, np.ndarray) else [],
+    }
+
+    flag_bad, reasons = _evaluate_segment_flags(metrics)
+    metrics["segment_flag_bad"] = flag_bad
+    metrics["segment_flag_reasons"] = reasons
+    return metrics
+
+
+def aggregate_segment_qc(
+    segment_qc_rows: List[Mapping[str, object]], group_cols: List[str] | None = None
+) -> pd.DataFrame:
+    """Aggregate segment QC metrics per subject/segment_type."""
+    if not segment_qc_rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(segment_qc_rows)
+    group_cols = group_cols or ["subject_id", "segment_type"]
+    for col in group_cols:
+        if col not in df.columns:
+            return df
+    numeric_cols = df.select_dtypes(include=[np.number]).columns
+    if numeric_cols.empty:
+        return df[group_cols]
+    grouped = df.groupby(group_cols, dropna=False)[numeric_cols]
+    agg_df = grouped.agg(["mean", "median"])
+    agg_df.columns = [f"{col}_{stat}" for col, stat in agg_df.columns]
+    return agg_df.reset_index()
 
 
 # ---------------------------------------------------------------------------
@@ -1314,9 +1442,11 @@ def create_summary_report(
 
 __all__ = [
     "apply_dataset_outlier_flags",
+    "aggregate_segment_qc",
     "BAND_LIMITS",
     "BASIC_1020_CHANNELS",
     "collect_unknown_events",
+    "compute_segment_qc",
     "compute_aperiodic_slope",
     "compute_channel_amplitude_stats",
     "compute_condition_amplitude_metrics",
@@ -1337,6 +1467,7 @@ __all__ = [
     "evaluate_subject_flag",
     "extract_metadata",
     "parse_subject_id",
+    "crop_segment",
     "load_meas_datetimes",
     "load_raw",
     "plot_amplitude_histogram",
