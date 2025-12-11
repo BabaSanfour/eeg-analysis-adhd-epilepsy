@@ -29,7 +29,7 @@ from eeg_adhd_epilepsy.utils.qc_config import BAND_LIMITS, BASIC_1020_CHANNELS
 
 from fooof import FOOOF
 
-from mne_features.univariate import compute_dfa as mne_compute_dfa
+from neurokit2.complexity import fractal_dfa
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
@@ -417,11 +417,21 @@ def compute_aperiodic_slope(
 
 
 def compute_hurst_exponent(data_1d: np.ndarray, logger: logging.Logger | None = None) -> float:
-    """Estimate the Hurst exponent via DFA (preferring mne-features, else nolds)."""
+    """Estimate the Hurst exponent via DFA (NeuroKit2 first, then mne-features, then nolds)."""
     if data_1d.size < 128:
         return float("nan")
-    return float(mne_compute_dfa(data_1d))
-
+    value = fractal_dfa(data_1d, multifractal=False)
+    if isinstance(value, (list, tuple)) and len(value) > 0:
+        value = value[0]
+    elif isinstance(value, dict):
+        for key in ("dfa", "DFA", "alpha", "exponent"):
+            if key in value:
+                value = value[key]
+                break
+    value = float(np.asarray(value).squeeze())
+    if np.isfinite(value):
+        return value
+    return float("nan")
 
 def compute_hurst_per_channel(
     data: mne.io.BaseRaw | mne.Epochs,
@@ -445,13 +455,30 @@ def compute_hurst_per_channel(
                 "hurst_std": float("nan"),
             }
         return empty, float("nan"), float("nan")
+    sfreq = float(data.info.get("sfreq", np.nan)) if hasattr(data, "info") else float("nan")  # type: ignore
+    min_samples = int(sfreq * 300) if np.isfinite(sfreq) else 0  # 5 minutes
+
     if isinstance(data, mne.Epochs):
         arr = data.get_data(picks=picks)  # shape (n_epochs, n_channels, n_times)
         arr = arr.transpose(1, 0, 2).reshape(len(picks), -1)
     else:
         arr = data.get_data(picks=picks)
-    if arr.shape[1] > max_points:
-        arr = arr[:, :max_points]
+
+    if min_samples > 0 and arr.shape[1] < min_samples:
+        empty = np.full((len(picks),), np.nan)
+        if return_dict:
+            return {
+                "segment_hurst_values": empty,
+                "segment_hurst_median": float("nan"),
+                "segment_hurst_min": float("nan"),
+                "segment_hurst_max": float("nan"),
+                "hurst_std": float("nan"),
+            }
+        return empty, float("nan"), float("nan")
+
+    effective_max = max(max_points, min_samples) if max_points else min_samples
+    if effective_max and arr.shape[1] > effective_max:
+        arr = arr[:, :effective_max]
     hurst_values = np.array([compute_hurst_exponent(channel, logger=logger) for channel in arr])
     median = float(np.nanmedian(hurst_values))
     std = float(np.nanstd(hurst_values))
