@@ -314,8 +314,58 @@ def _compute_eye_state_durations(
     return open_duration, closed_duration
 
 
+def _segment_eye_states_within_interval(
+    start: float,
+    stop: float,
+    eye_states: Sequence[Tuple[float, float, str]],
+    segment_prefix: str,
+    hv_index: float | int | None = np.nan,
+    post_hv_index: float | int | None = np.nan,
+    freq_hz: float | None = np.nan,
+) -> List[dict]:
+    """Split a block interval by eye-state annotations and return segment rows."""
+    segments: List[dict] = []
+    for state_start, state_stop, state in eye_states:
+        if state_stop <= start or state_start >= stop:
+            continue
+        seg_start = max(start, state_start)
+        seg_stop = min(stop, state_stop)
+        if seg_stop <= seg_start:
+            continue
+        duration = seg_stop - seg_start
+        seg_type = f"{segment_prefix}_{'EO' if state == 'open' else 'EC'}"
+        segments.append(
+            {
+                "segment_type": seg_type,
+                "t_start": seg_start,
+                "t_stop": seg_stop,
+                "duration": duration,
+                "freq_hz": freq_hz if freq_hz is not None else np.nan,
+                "hv_index": hv_index,
+                "post_hv_index": post_hv_index,
+                "eyes_open_duration": duration if state == "open" else 0.0,
+                "eyes_closed_duration": duration if state == "closed" else 0.0,
+            }
+        )
+    if not segments and stop > start:
+        segments.append(
+            {
+                "segment_type": f"{segment_prefix}_UNKNOWN",
+                "t_start": start,
+                "t_stop": stop,
+                "duration": stop - start,
+                "freq_hz": freq_hz if freq_hz is not None else np.nan,
+                "hv_index": hv_index,
+                "post_hv_index": post_hv_index,
+                "eyes_open_duration": 0.0,
+                "eyes_closed_duration": 0.0,
+            }
+        )
+    return segments
+
+
 def extract_condition_segments(raw: mne.io.BaseRaw) -> pd.DataFrame:
-    """Compute EO/EC, HV/PostHV, and PHOTO segments for a Raw recording."""
+    """Compute EO/EC baseline plus HV/PostHV/PHOTO segments split by eye state."""
     if raw is None:
         raise ValueError("raw must be a valid mne.io.Raw instance")
     entries = _prepare_annotation_entries(raw)
@@ -359,61 +409,43 @@ def extract_condition_segments(raw: mne.io.BaseRaw) -> pd.DataFrame:
             )
 
     for block in hv_blocks:
-        duration = block["t_stop"] - block["t_start"]
-        if duration <= 0.0:
-            continue
-        open_dur, closed_dur = _compute_eye_state_durations(block["t_start"], block["t_stop"], eye_states)
-        records.append(
-            {
-                "segment_type": block["segment_type"],
-                "t_start": block["t_start"],
-                "t_stop": block["t_stop"],
-                "duration": duration,
-                "freq_hz": np.nan,
-                "hv_index": block["hv_index"],
-                "post_hv_index": np.nan,
-                "eyes_open_duration": open_dur,
-                "eyes_closed_duration": closed_dur,
-            }
+        records.extend(
+            _segment_eye_states_within_interval(
+                block["t_start"],
+                block["t_stop"],
+                eye_states,
+                segment_prefix="HV",
+                hv_index=block["hv_index"],
+                post_hv_index=np.nan,
+                freq_hz=np.nan,
+            )
         )
 
     for block in post_hv_blocks:
-        duration = block["t_stop"] - block["t_start"]
-        if duration <= 0.0:
-            continue
-        open_dur, closed_dur = _compute_eye_state_durations(block["t_start"], block["t_stop"], eye_states)
-        records.append(
-            {
-                "segment_type": block["segment_type"],
-                "t_start": block["t_start"],
-                "t_stop": block["t_stop"],
-                "duration": duration,
-                "freq_hz": np.nan,
-                "hv_index": np.nan,
-                "post_hv_index": block["post_hv_index"],
-                "eyes_open_duration": open_dur,
-                "eyes_closed_duration": closed_dur,
-            }
+        records.extend(
+            _segment_eye_states_within_interval(
+                block["t_start"],
+                block["t_stop"],
+                eye_states,
+                segment_prefix="PostHV",
+                hv_index=np.nan,
+                post_hv_index=block["post_hv_index"],
+                freq_hz=np.nan,
+            )
         )
 
     for block in photo_blocks:
-        duration = block["t_stop"] - block["t_start"]
-        if duration <= 0.0:
-            continue
-        open_dur, closed_dur = _compute_eye_state_durations(block["t_start"], block["t_stop"], eye_states)
         freq = block.get("freq_hz")
-        records.append(
-            {
-                "segment_type": block["segment_type"],
-                "t_start": block["t_start"],
-                "t_stop": block["t_stop"],
-                "duration": duration,
-                "freq_hz": freq if freq is not None else np.nan,
-                "hv_index": np.nan,
-                "post_hv_index": np.nan,
-                "eyes_open_duration": open_dur,
-                "eyes_closed_duration": closed_dur,
-            }
+        records.extend(
+            _segment_eye_states_within_interval(
+                block["t_start"],
+                block["t_stop"],
+                eye_states,
+                segment_prefix="PHOTO",
+                hv_index=np.nan,
+                post_hv_index=np.nan,
+                freq_hz=freq if freq is not None else np.nan,
+            )
         )
 
     if not records:
@@ -493,13 +525,20 @@ def summarize_condition_segments(df: pd.DataFrame) -> Dict[str, object]:
         "total_eyes_open_duration": float(pd.to_numeric(df["eyes_open_duration"], errors="coerce").sum()),
         "total_eyes_closed_duration": float(pd.to_numeric(df["eyes_closed_duration"], errors="coerce").sum()),
     }
-    for column, key in [
-        ("HV_block", "hv_block_count"),
-        ("PostHV_block", "post_hv_block_count"),
-        ("PHOTO_block", "photo_block_count"),
-    ]:
-        summary[key] = int((df["segment_type"] == column).sum())
-    photo = df[df["segment_type"] == "PHOTO_block"]
+    segment_types = df["segment_type"].fillna("Unknown").astype(str)
+    hv_mask = segment_types.str.startswith("HV_") | (segment_types == "HV_block")
+    post_hv_mask = segment_types.str.startswith("PostHV_") | (segment_types == "PostHV_block")
+    photo_mask = segment_types.str.startswith("PHOTO_") | (segment_types == "PHOTO_block")
+
+    hv_indices = pd.to_numeric(df.loc[hv_mask, "hv_index"], errors="coerce")
+    summary["hv_block_count"] = int(hv_indices.dropna().nunique() or df.loc[hv_mask, "t_start"].nunique())
+
+    post_hv_indices = pd.to_numeric(df.loc[post_hv_mask, "post_hv_index"], errors="coerce")
+    summary["post_hv_block_count"] = int(post_hv_indices.dropna().nunique() or df.loc[post_hv_mask, "t_start"].nunique())
+
+    summary["photo_block_count"] = int(df.loc[photo_mask, "t_start"].nunique())
+
+    photo = df.loc[photo_mask]
     if not photo.empty and "freq_hz" in photo:
         freq_summary = (
             photo.dropna(subset=["freq_hz"])
@@ -565,7 +604,8 @@ def _plot_eye_state_breakdown(df: pd.DataFrame, fig_dir: Path) -> Path | None:
 
 
 def _plot_photo_frequency_durations(df: pd.DataFrame, fig_dir: Path) -> Path | None:
-    photo = df[df["segment_type"] == "PHOTO_block"]
+    segment_types = df["segment_type"].fillna("").astype(str)
+    photo = df[segment_types.str.startswith("PHOTO_") | (segment_types == "PHOTO_block")]
     if photo.empty or "freq_hz" not in photo:
         return None
     group = (
@@ -588,44 +628,68 @@ def _plot_photo_frequency_durations(df: pd.DataFrame, fig_dir: Path) -> Path | N
 
 
 def _plot_block_eye_states(df: pd.DataFrame, block_type: str, fig_dir: Path) -> Path | None:
-    if block_type not in {"HV_block", "PostHV_block"}:
-        raise ValueError("block_type must be 'HV_block' or 'PostHV_block'")
-    column = "hv_index" if block_type == "HV_block" else "post_hv_index"
-    block_df = df[df["segment_type"] == block_type]
+    if block_type not in {"HV", "PostHV"}:
+        raise ValueError("block_type must be 'HV' or 'PostHV'")
+    column = "hv_index" if block_type == "HV" else "post_hv_index"
+    segment_types = df["segment_type"].fillna("").astype(str)
+    legacy_label = f"{block_type}_block"
+    mask = segment_types.str.startswith(f"{block_type}_") | (segment_types == legacy_label)
+    block_df = df.loc[mask].copy()
     if block_df.empty or column not in block_df:
         return None
-    sorted_df = block_df.sort_values("t_start").copy()
-    fallback = pd.Series(
-        np.arange(1, len(sorted_df) + 1, dtype=int),
-        index=sorted_df.index,
-    )
-    indices = (
-        pd.to_numeric(sorted_df[column], errors="coerce")
-        .fillna(fallback)
-        .astype(int)
-    )
-    grouped = sorted_df.groupby(indices)[["eyes_open_duration", "eyes_closed_duration", "duration"]].sum()
+
+    block_df[column] = pd.to_numeric(block_df[column], errors="coerce")
+    fallback = pd.Series(np.arange(1, len(block_df) + 1, dtype=int), index=block_df.index)
+    block_df[column] = block_df[column].fillna(fallback).astype(int)
+
+    def _label_eye_state(seg_type: str) -> str:
+        if "_EO" in seg_type:
+            return "EO"
+        if "_EC" in seg_type:
+            return "EC"
+        return "Unknown"
+
+    block_df["eye_state"] = [_label_eye_state(val) for val in block_df["segment_type"]]
+
+    grouped = block_df.groupby([column, "eye_state"])["duration"].sum().unstack(fill_value=0.0)
+
+    legacy_mask = segment_types[mask] == legacy_label
+    if legacy_mask.any():
+        legacy_df = block_df[legacy_mask]
+        legacy_grouped = legacy_df.groupby(column)[["eyes_open_duration", "eyes_closed_duration"]].sum()
+        grouped["EO"] = grouped.get("EO", 0.0) + legacy_grouped.get("eyes_open_duration", 0.0)
+        grouped["EC"] = grouped.get("EC", 0.0) + legacy_grouped.get("eyes_closed_duration", 0.0)
+
     if grouped.empty:
         return None
-    labels = [f"{block_type.replace('_', ' ')} #{idx}" for idx in grouped.index]
+
+    labels = [f"{block_type} #{idx}" for idx in grouped.index]
     fig, ax = plt.subplots(figsize=(7, max(3, len(grouped) * 0.4)))
     positions = np.arange(len(labels))
-    ax.barh(positions, grouped["eyes_open_duration"], label="Eyes Open", color="#55A868")
-    ax.barh(
-        positions,
-        grouped["eyes_closed_duration"],
-        left=grouped["eyes_open_duration"],
-        label="Eyes Closed",
-        color="#C44E52",
-    )
+    eo_vals = grouped.get("EO", pd.Series(0.0, index=grouped.index))
+    ec_vals = grouped.get("EC", pd.Series(0.0, index=grouped.index))
+    unknown_vals = grouped.drop(columns=[c for c in grouped.columns if c in {"EO", "EC"}], errors="ignore").sum(axis=1)
+
+    ax.barh(positions, eo_vals, label="Eyes Open", color="#55A868")
+    ax.barh(positions, ec_vals, left=eo_vals, label="Eyes Closed", color="#C44E52")
+    if not (unknown_vals == 0).all():
+        ax.barh(
+            positions,
+            unknown_vals,
+            left=eo_vals + ec_vals,
+            label="Unknown",
+            color="#8172B2",
+            alpha=0.7,
+        )
+
     ax.set_yticks(positions)
     ax.set_yticklabels(labels)
     ax.set_xlabel("Duration (s)")
-    ax.set_title(f"{block_type.replace('_', ' ')} Eyes-Open vs Eyes-Closed")
+    ax.set_title(f"{block_type} Eyes-Open vs Eyes-Closed")
     ax.legend()
     ax.grid(True, axis="x", alpha=0.3)
     plt.tight_layout()
-    key = "hv_blocks" if block_type == "HV_block" else "post_hv_blocks"
+    key = "hv_blocks" if block_type == "HV" else "post_hv_blocks"
     return _save_fig(fig, fig_dir / FIGURE_FILENAMES[key])
 
 
@@ -672,10 +736,10 @@ def save_condition_segment_figures(df: pd.DataFrame, fig_dir: Path) -> Dict[str,
         path = func(df, fig_dir)
         if path:
             figure_paths[key] = path
-    for block_type in ("HV_block", "PostHV_block"):
+    for block_type in ("HV", "PostHV"):
         path = _plot_block_eye_states(df, block_type, fig_dir)
         if path:
-            figure_paths["hv_blocks" if block_type == "HV_block" else "post_hv_blocks"] = path
+            figure_paths["hv_blocks" if block_type == "HV" else "post_hv_blocks"] = path
     timeline_path = _plot_segment_timeline(df, fig_dir)
     if timeline_path:
         figure_paths["timeline"] = timeline_path

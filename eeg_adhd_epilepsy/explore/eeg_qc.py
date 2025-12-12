@@ -938,6 +938,10 @@ SEGMENT_REPORT_METRICS = (
     {"column": "segment_band_power_alpha", "title": "Alpha Band Power", "ylabel": "Alpha power (uV^2)", "kind": "line"},
 )
 
+SUBJECT_SEGMENT_REPORT_METRICS = tuple(
+    spec for spec in SEGMENT_REPORT_METRICS if spec["column"] != "segment_duration_sec"
+)
+
 
 def _segment_palette(segment_types: Sequence[str]) -> Dict[str, object]:
     cmap = plt.get_cmap("tab20")
@@ -1046,7 +1050,10 @@ def plot_segment_metric_distribution(
 
 
 def create_segment_subject_report(
-    segments_df: pd.DataFrame, subject_id: str, output_path: Path, metric_specs: Sequence[Mapping[str, str]] = SEGMENT_REPORT_METRICS
+    segments_df: pd.DataFrame,
+    subject_id: str,
+    output_path: Path,
+    metric_specs: Sequence[Mapping[str, str]] = SUBJECT_SEGMENT_REPORT_METRICS,
 ) -> None:
     """Subject-level HTML report for segment QC metrics."""
     if segments_df is None or segments_df.empty:
@@ -1108,6 +1115,59 @@ def create_segment_subject_report(
     report.save(output_path, overwrite=True, open_browser=False)
 
 
+def _compute_flagged_percentages_by_segment(
+    segments_df: pd.DataFrame,
+) -> Tuple[pd.Series, pd.Series]:
+    """Return (% flagged segments, % flagged subjects) per segment_type."""
+    if segments_df is None or segments_df.empty or "segment_type" not in segments_df:
+        empty = pd.Series(dtype=float)
+        return empty, empty
+    df = segments_df.copy()
+    df["segment_type"] = df["segment_type"].fillna("Unknown").astype(str)
+    df["flag_bad_bool"] = pd.to_numeric(df.get("segment_flag_bad"), errors="coerce").fillna(0).astype(bool)
+
+    seg_pct = df.groupby("segment_type")["flag_bad_bool"].mean() * 100.0
+    subj_pct = pd.Series(dtype=float)
+    if "subject_id" in df:
+        subj_counts = df.groupby("segment_type")["subject_id"].nunique()
+        flagged_subj_counts = (
+            df[df["flag_bad_bool"]]
+            .groupby("segment_type")["subject_id"]
+            .nunique()
+        )
+        subj_pct = (flagged_subj_counts / subj_counts.replace(0, np.nan) * 100.0).fillna(0.0)
+    return seg_pct.sort_index(), subj_pct.sort_index()
+
+
+def _plot_flagged_percentages(
+    series: pd.Series,
+    title: str,
+    xlabel: str,
+    fig_dir: Path,
+    filename: str,
+) -> Path | None:
+    """Save a horizontal bar plot for flagged percentages."""
+    if series is None or series.empty:
+        return None
+    ordered = series.sort_values(ascending=False)
+    positions = np.arange(len(ordered))
+    fig, ax = plt.subplots(figsize=(8, max(3, len(ordered) * 0.4)))
+    ax.barh(positions, ordered.values, color="#C44E52", alpha=0.85)
+    ax.set_yticks(positions)
+    ax.set_yticklabels(ordered.index)
+    ax.set_xlabel(xlabel)
+    ax.set_title(title)
+    ax.set_xlim(left=0, right=max(100.0, ordered.max() * 1.05))
+    ax.grid(True, axis="x", alpha=0.3)
+    ax.invert_yaxis()
+    plt.tight_layout()
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    out_path = fig_dir / filename
+    fig.savefig(out_path, dpi=150)
+    plt.close(fig)
+    return out_path
+
+
 def save_segment_dataset_figures(
     segments_df: pd.DataFrame, fig_dir: Path, metric_specs: Sequence[Mapping[str, str]] = SEGMENT_REPORT_METRICS
 ) -> Dict[str, Path]:
@@ -1123,6 +1183,25 @@ def save_segment_dataset_figures(
         )
         if path:
             paths[spec["column"]] = path
+    flagged_seg_pct, flagged_subj_pct = _compute_flagged_percentages_by_segment(segments_df)
+    flagged_segments_path = _plot_flagged_percentages(
+        flagged_seg_pct,
+        title="Flagged Segments by Type (%)",
+        xlabel="Flagged segments (%)",
+        fig_dir=fig_dir,
+        filename="flagged_segments_pct.png",
+    )
+    if flagged_segments_path:
+        paths["flagged_segments_pct"] = flagged_segments_path
+    flagged_subjects_path = _plot_flagged_percentages(
+        flagged_subj_pct,
+        title="Flagged Subjects by Type (%)",
+        xlabel="Flagged subjects (%)",
+        fig_dir=fig_dir,
+        filename="flagged_subjects_pct.png",
+    )
+    if flagged_subjects_path:
+        paths["flagged_subjects_pct"] = flagged_subjects_path
     return paths
 
 
@@ -1159,12 +1238,32 @@ def create_segment_dataset_report(
         for seg_type, count in type_counts.items():
             summary_html += f"<li>{seg_type}: {count}</li>"
         summary_html += "</ul>"
+
+    flagged_seg_pct, flagged_subj_pct = _compute_flagged_percentages_by_segment(segments_df)
+    if not flagged_seg_pct.empty:
+        summary_html += "<p>Flagged segments (% of segments) by type:</p><ul>"
+        for seg_type, pct in flagged_seg_pct.sort_values(ascending=False).items():
+            summary_html += f"<li>{seg_type}: {pct:.1f}%</li>"
+        summary_html += "</ul>"
+    if not flagged_subj_pct.empty:
+        summary_html += "<p>Flagged subjects (% of subjects with that segment type):</p><ul>"
+        for seg_type, pct in flagged_subj_pct.sort_values(ascending=False).items():
+            summary_html += f"<li>{seg_type}: {pct:.1f}%</li>"
+        summary_html += "</ul>"
     report.add_html(summary_html, title="Summary", section="Overview")
 
     for spec in SEGMENT_REPORT_METRICS:
         path = fig_paths.get(spec["column"])
         if path and path.exists():
             report.add_image(path, title=f"{spec['title']} Distribution", section="Metric Distributions")
+
+    for title, key in [
+        ("Flagged Segments by Type (%)", "flagged_segments_pct"),
+        ("Flagged Subjects by Type (%)", "flagged_subjects_pct"),
+    ]:
+        fig_path = fig_paths.get(key)
+        if fig_path and fig_path.exists():
+            report.add_image(fig_path, title=title, section="Flagged Rates")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report.save(output_path, overwrite=True, open_browser=False)
@@ -1649,6 +1748,7 @@ __all__ = [
     "save_segment_dataset_figures",
     "save_figures",
     "SEGMENT_REPORT_METRICS",
+    "SUBJECT_SEGMENT_REPORT_METRICS",
     "setup_logging",
     "summarize_flags",
     "tqdm_joblib",
