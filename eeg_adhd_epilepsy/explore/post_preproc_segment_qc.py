@@ -303,7 +303,9 @@ def main() -> None:
         (output_dir / "segment_qc_post_dataset_summary.json").write_text(json.dumps(summary, indent=2))
         topomap_aggregates = eeg_qc.aggregate_topomap_metrics(dataset_topo_payloads) if not args.skip_reports else {}
         if not args.skip_reports:
-            fig_paths = eeg_qc.save_segment_dataset_figures(dataset_segments, fig_dir, topomap_aggregates)
+            fig_paths = eeg_qc.save_segment_dataset_figures(
+                dataset_segments, fig_dir, topomap_aggregates=topomap_aggregates
+            )
             report_path = output_dir / "segment_qc_post_summary_report.html"
             eeg_qc.create_segment_dataset_report(dataset_segments, fig_paths, report_path)
             logger.info("Saved dataset summary HTML report to %s", report_path)
