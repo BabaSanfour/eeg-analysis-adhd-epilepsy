@@ -87,7 +87,8 @@ def process_file(
     segment_csv = None
     agg_csv = None
     report_path = None
-    per_channel_accum: Dict[str, Dict[str, List[np.ndarray]]] = defaultdict(lambda: defaultdict(list))
+    per_channel_stats: Dict[str, Dict[str, Dict[str, np.ndarray | None]]]
+    per_channel_stats = defaultdict(lambda: defaultdict(lambda: {"sum": None, "count": None}))
     per_channel_maps: Dict[str, Dict[str, float]] = {}
     try:
         raw = eeg_qc.load_raw(
@@ -103,6 +104,7 @@ def process_file(
         if getattr(args, "highpass", None) is not None and args.highpass > 0:
             raw.filter(args.highpass, None, fir_design="firwin", verbose="ERROR")
         analysis_raw, basic_picks, montage_info = eeg_qc.prepare_channel_selection(raw, standard_names, logger)
+        expected_len = len(basic_picks)
         segments_df = extract_condition_segments(raw)
         if segments_df is None or segments_df.empty or analysis_raw is None:
             return {"subject_id": subject_id, "records": records, "error": error}
@@ -131,8 +133,15 @@ def process_file(
                 seg_type = str(row.get("segment_type", "Unknown"))
                 for name, arr in channel_metrics.items():
                     arr_np = np.asarray(arr, dtype=float)
-                    if arr_np.size == len(basic_picks):
-                        per_channel_accum[seg_type][name].append(arr_np)
+                    if expected_len == 0 or arr_np.size != expected_len:
+                        continue
+                    stats = per_channel_stats[seg_type][name]
+                    if stats["sum"] is None or stats["count"] is None:
+                        stats["sum"] = np.zeros(expected_len, dtype=float)
+                        stats["count"] = np.zeros(expected_len, dtype=float)
+                    mask = np.isfinite(arr_np)
+                    stats["sum"][mask] += arr_np[mask]
+                    stats["count"][mask] += 1.0
             record = {
                 "subject_id": subject_id,
                 "segment_type": row.get("segment_type", ""),
@@ -157,19 +166,16 @@ def process_file(
             segment_df.to_csv(segment_csv, index=False)
             if reports_dir is not None:
                 topomap_figs: Dict[str, object] = {}
-                if per_channel_accum and analysis_raw is not None:
-                    expected_len = len(basic_picks)
-                    for seg_type, metrics_map in per_channel_accum.items():
-                        for metric_key, arr_list in metrics_map.items():
-                            valid = [
-                                np.asarray(arr, dtype=float)
-                                for arr in arr_list
-                                if np.asarray(arr, dtype=float).size == expected_len
-                            ]
-                            if not valid:
+                if per_channel_stats and analysis_raw is not None:
+                    for seg_type, metrics_map in per_channel_stats.items():
+                        for metric_key, stats in metrics_map.items():
+                            sums = stats.get("sum")
+                            counts = stats.get("count")
+                            if sums is None or counts is None or sums.size == 0:
                                 continue
-                            stacked = np.vstack(valid)
-                            arr = np.nanmean(stacked, axis=0)
+                            with np.errstate(divide="ignore", invalid="ignore"):
+                                arr = sums / counts
+                            arr[np.asarray(counts) == 0] = np.nan
                             if arr.size == 0 or not np.isfinite(arr).any():
                                 continue
                             if metric_key.startswith("band_power_"):
