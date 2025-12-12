@@ -1401,6 +1401,7 @@ def create_segment_dataset_report(
     flagged_count = int(pd.to_numeric(flagged, errors="coerce").fillna(0).astype(bool).sum()) if flagged is not None else 0
     durations = pd.to_numeric(segments_df.get("duration"), errors="coerce").dropna()
     total_duration = float(durations.sum()) if not durations.empty else float("nan")
+    total_duration_readable = format_seconds_hms(total_duration)
     type_counts = (
         segments_df.get("segment_type", pd.Series(dtype=str)).fillna("Unknown").value_counts().to_dict()
         if not segments_df.empty
