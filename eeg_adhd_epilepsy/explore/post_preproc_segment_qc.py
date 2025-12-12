@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
 
@@ -82,10 +81,17 @@ def process_file(
     args: argparse.Namespace,
     standard_names: set[str],
     logger: object,
+    subjects_dir: Path,
+    reports_dir: Path | None,
 ) -> Dict[str, object]:
     subject_id = eeg_qc.parse_subject_id(filepath)
     records: List[Dict[str, object]] = []
     error = ""
+    segment_df: pd.DataFrame | None = None
+    agg_df: pd.DataFrame | None = None
+    segment_csv = None
+    agg_csv = None
+    report_path = None
     try:
         raw = eeg_qc.load_raw(
             filepath,
@@ -135,10 +141,32 @@ def process_file(
             }
             record.update(qc_metrics)
             records.append(record)
+        if records:
+            subject_dir = subjects_dir / subject_id
+            subject_dir.mkdir(parents=True, exist_ok=True)
+            segment_df = pd.DataFrame(records)
+            segment_csv = subject_dir / f"{subject_id}_segment_qc_post.csv"
+            segment_df.to_csv(segment_csv, index=False)
+            if reports_dir is not None:
+                report_path = reports_dir / f"{subject_id}_segment_qc_post_report.html"
+                eeg_qc.create_segment_subject_report(segment_df, subject_id, report_path)
+            agg_df = eeg_qc.aggregate_segment_qc(records)
+            if not agg_df.empty:
+                agg_csv = subject_dir / f"{subject_id}_segment_qc_post_aggregated.csv"
+                agg_df.to_csv(agg_csv, index=False)
     except Exception as exc:  # pragma: no cover - defensive branch
         error = str(exc)
         logger.error("Failed processing %s: %s", subject_id, exc, exc_info=True)
-    return {"subject_id": subject_id, "records": records, "error": error}
+    return {
+        "subject_id": subject_id,
+        "records": records,
+        "segment_df": segment_df,
+        "agg_df": agg_df,
+        "segment_csv": segment_csv,
+        "agg_csv": agg_csv,
+        "report_path": report_path,
+        "error": error,
+    }
 
 
 def compare_pre_post(pre_summary_path: Path, post_summary_path: Path, output_path: Path, logger: object) -> None:
@@ -190,44 +218,29 @@ def main() -> None:
         return
     logger.info("Found %d files to process", len(files))
 
-    with eeg_qc.tqdm_joblib(tqdm(total=len(files), desc="Segment QC (post)")):
-        results = Parallel(n_jobs=args.n_jobs)(
-            delayed(process_file)(filepath, args, standard_names, logger) for filepath in files
-        )
-
     subjects_dir = output_dir / "subjects"
     subjects_dir.mkdir(parents=True, exist_ok=True)
-    if not args.skip_reports:
-        reports_dir.mkdir(parents=True, exist_ok=True)
+    reports_dir.mkdir(parents=True, exist_ok=True) if not args.skip_reports else None
+
+    with eeg_qc.tqdm_joblib(tqdm(total=len(files), desc="Segment QC (post)")):
+        results = Parallel(n_jobs=args.n_jobs)(
+            delayed(process_file)(
+                filepath, args, standard_names, logger, subjects_dir, None if args.skip_reports else reports_dir
+            )
+            for filepath in files
+        )
+
     all_segment_frames: List[pd.DataFrame] = []
     aggregated_frames: List[pd.DataFrame] = []
     errors = []
 
-    subject_records: Dict[str, List[Dict[str, object]]] = defaultdict(list)
     for res in results:
-        if res["records"]:
-            subject_records[res["subject_id"]].extend(res["records"])
-        if res["error"]:
+        if res.get("segment_df") is not None:
+            all_segment_frames.append(res["segment_df"])
+        if res.get("agg_df") is not None and not res["agg_df"].empty:
+            aggregated_frames.append(res["agg_df"])
+        if res.get("error"):
             errors.append((res["subject_id"], res["error"]))
-
-    for subject_id, records in subject_records.items():
-        if not records:
-            continue
-        subject_dir = subjects_dir / subject_id
-        subject_dir.mkdir(parents=True, exist_ok=True)
-        df = pd.DataFrame(records)
-        df.to_csv(subject_dir / f"{subject_id}_segment_qc_post.csv", index=False)
-        all_segment_frames.append(df)
-
-        if not args.skip_reports:
-            report_path = reports_dir / f"{subject_id}_segment_qc_post_report.html"
-            eeg_qc.create_segment_subject_report(df, subject_id, report_path)
-
-        agg_df = eeg_qc.aggregate_segment_qc(records)
-        if not agg_df.empty:
-            agg_path = subject_dir / f"{subject_id}_segment_qc_post_aggregated.csv"
-            agg_df.to_csv(agg_path, index=False)
-            aggregated_frames.append(agg_df)
 
     if all_segment_frames:
         dataset_segments = pd.concat(all_segment_frames, ignore_index=True)
