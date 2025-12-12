@@ -973,80 +973,6 @@ def format_seconds_hms(seconds: float | None) -> str:
     return sec_component
 
 
-def plot_segment_metric_over_time(
-    segments_df: pd.DataFrame,
-    column: str,
-    title: str,
-    ylabel: str,
-    kind: str = "line",
-) -> matplotlib.figure.Figure | None:
-    """Line/bar plot of a metric across segments for a subject."""
-    if column not in segments_df:
-        return None
-    df = segments_df.copy()
-    df["metric"] = pd.to_numeric(df[column], errors="coerce")
-    t_start = df["t_start"] if "t_start" in df else pd.Series([np.nan] * len(df))
-    df["t_start"] = pd.to_numeric(t_start, errors="coerce")
-    segment_types = df["segment_type"] if "segment_type" in df else pd.Series(["Unknown"] * len(df))
-    df["segment_type"] = segment_types.fillna("Unknown")
-    df = df.dropna(subset=["metric"])
-    if df.empty:
-        return None
-
-    # Order by start time when available, else by original order
-    df = df.sort_values(by="t_start", na_position="last").reset_index(drop=True)
-    df["_x"] = df["t_start"]
-    if df["_x"].isna().all():
-        df["_x"] = np.arange(len(df))
-        x_label = "Segment index"
-    else:
-        df["_x"] = df["_x"].ffill().bfill()
-        x_label = "Start time (s)"
-
-    palette = _segment_palette(df["segment_type"].unique())
-    fig, ax = plt.subplots(figsize=(8, 4))
-
-    for seg_type, group in df.groupby("segment_type", dropna=False):
-        color = palette.get(seg_type, "#4C72B0")
-        if kind == "bar":
-            ax.bar(group["_x"], group["metric"], color=color, alpha=0.75, label=seg_type)
-        else:
-            ax.plot(
-                group["_x"],
-                group["metric"],
-                marker="o",
-                linestyle="-",
-                label=seg_type,
-                color=color,
-                alpha=0.85,
-            )
-        if "segment_flag_bad" in group:
-            flagged = group[group["segment_flag_bad"].astype(bool)]
-            if not flagged.empty:
-                ax.scatter(flagged["_x"], flagged["metric"], marker="x", color="red", s=70, label="Flagged")
-
-    handles, labels = ax.get_legend_handles_labels()
-    # Deduplicate legend entries (flagged marker can repeat across groups)
-    seen = set()
-    unique_handles = []
-    unique_labels = []
-    for h, lbl in zip(handles, labels):
-        if lbl in seen:
-            continue
-        seen.add(lbl)
-        unique_handles.append(h)
-        unique_labels.append(lbl)
-    if unique_handles:
-        ax.legend(unique_handles, unique_labels, bbox_to_anchor=(1.05, 1), loc="upper left")
-
-    ax.set_title(title)
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(ylabel)
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    return fig
-
-
 def plot_segment_metric_blocks(
     segments_df: pd.DataFrame,
     column: str,
@@ -1061,15 +987,19 @@ def plot_segment_metric_blocks(
     df["t_start"] = pd.to_numeric(df["t_start"], errors="coerce")
     df["t_stop"] = pd.to_numeric(df["t_stop"], errors="coerce")
     df["segment_type"] = df.get("segment_type", pd.Series(["Unknown"] * len(df))).fillna("Unknown")
+    df["flag_bad_bool"] = pd.to_numeric(df.get("segment_flag_bad"), errors="coerce").fillna(0).astype(bool)
     df = df.dropna(subset=["metric", "t_start", "t_stop"])
     if df.empty:
         return None
     palette = _segment_palette(df["segment_type"].unique())
     means = df.groupby("segment_type")["metric"].mean()
-    boundaries = sorted(df["t_start"].dropna().unique().tolist())
+    boundaries = sorted(
+        set(df["t_start"].dropna().tolist()) | set(df["t_stop"].dropna().tolist())
+    )
 
     fig, ax = plt.subplots(figsize=(8, 4))
-    added_labels: set[str] = set()
+    seen_labels: dict[str, matplotlib.artist.Artist] = {}
+    flagged_added = False
     for seg_type, group in df.sort_values("t_start").groupby("segment_type", dropna=False):
         mean_val = means.get(seg_type)
         color = palette.get(seg_type, "#4C72B0")
@@ -1078,15 +1008,24 @@ def plot_segment_metric_blocks(
             stop = float(row["t_stop"])
             if not (np.isfinite(start) and np.isfinite(stop)) or stop <= start:
                 continue
-            label = seg_type if seg_type not in added_labels else None
-            ax.hlines(mean_val, start, stop, colors=color, linewidth=6, label=label)
-        added_labels.add(seg_type)
+            artist = ax.hlines(mean_val, start, stop, colors=color, linewidth=6)
+            if seg_type not in seen_labels:
+                seen_labels[seg_type] = artist
+            if row.get("flag_bad_bool", False):
+                midpoint = start + (stop - start) / 2.0
+                flag_artist = ax.scatter(
+                    midpoint, mean_val, color="red", marker="x", s=70, zorder=5
+                )
+                if not flagged_added:
+                    seen_labels["Flagged"] = flag_artist
+                    flagged_added = True
+                ax.axvspan(start, stop, color="red", alpha=0.08, linewidth=0)
 
     for boundary in boundaries:
         ax.axvline(boundary, color="gray", linestyle="--", linewidth=1, alpha=0.3)
 
-    handles, labels = ax.get_legend_handles_labels()
-    if handles:
+    if seen_labels:
+        labels, handles = zip(*seen_labels.items())
         ax.legend(handles, labels, bbox_to_anchor=(1.05, 1), loc="upper left")
     ax.set_title(title)
     ax.set_xlabel("Time (s)")
@@ -1094,33 +1033,6 @@ def plot_segment_metric_blocks(
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     return fig
-
-
-def plot_segment_metric_distribution(
-    segments_df: pd.DataFrame,
-    column: str,
-    title: str,
-    xlabel: str,
-    fig_dir: Path,
-) -> Path | None:
-    """Histogram for a given segment metric across the dataset."""
-    if column not in segments_df:
-        return None
-    series = pd.to_numeric(segments_df[column], errors="coerce").dropna()
-    if series.empty:
-        return None
-    fig_dir.mkdir(parents=True, exist_ok=True)
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.hist(series, bins=30, edgecolor="black", alpha=0.8)
-    ax.set_title(f"{title} Distribution")
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("Count")
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    out_path = fig_dir / f"{column}_distribution.png"
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
 
 
 def plot_segment_metric_distribution_by_type(
@@ -1202,15 +1114,6 @@ def create_segment_subject_report(
     report.add_html(summary_html, title="Segment Summary", section="Overview")
 
     for spec in metric_specs:
-        fig = plot_segment_metric_over_time(
-            segments_df,
-            column=spec["column"],
-            title=spec["title"],
-            ylabel=spec["ylabel"],
-            kind=spec.get("kind", "line"),
-        )
-        if fig is not None:
-            report.add_figure(fig, title=spec["title"], section="Segment Metrics")
         block_fig = plot_segment_metric_blocks(
             segments_df,
             column=spec["column"],
@@ -1929,8 +1832,6 @@ __all__ = [
     "plot_raw_segment",
     "plot_segment_metric_blocks",
     "plot_segment_metric_distribution_by_type",
-    "plot_segment_metric_distribution",
-    "plot_segment_metric_over_time",
     "format_seconds_hms",
     "prepare_channel_selection",
     "read_subjects_list",
