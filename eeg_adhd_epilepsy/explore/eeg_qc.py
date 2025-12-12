@@ -1441,19 +1441,29 @@ def save_segment_dataset_figures(
             arr = np.asarray(values, dtype=float)
             if arr.size == 0 or len(channels) != arr.size:
                 continue
-            if metric_key.startswith("band_power_"):
-                title = f"{metric_key.replace('band_power_', '').title()} Band Power Topomap"
+            seg_type = None
+            base_key = metric_key
+            if "::" in metric_key:
+                seg_type, base_key = metric_key.split("::", 1)
+            if base_key.startswith("band_power_"):
+                title = f"{base_key.replace('band_power_', '').title()} Band Power Topomap"
                 cmap = "viridis"
-            elif metric_key in {"line_noise_ratio", "hf_lf_ratio", "aperiodic_slope"}:
-                title = f"{metric_key.replace('_', ' ').title()} Topomap"
+            elif base_key in {"line_noise_ratio", "hf_lf_ratio", "aperiodic_slope"}:
+                title = f"{base_key.replace('_', ' ').title()} Topomap"
                 cmap = "RdBu_r"
-            else:
-                title = f"{metric_key.replace('_', ' ').title()} Topomap"
+            elif base_key == "variance":
+                title = "Variance Topomap"
                 cmap = "viridis"
+            else:
+                title = f"{base_key.replace('_', ' ').title()} Topomap"
+                cmap = "viridis"
+            if seg_type:
+                title = f"{seg_type}: {title}"
             fig = plot_topomap_from_channel_values(channels, arr, title=title, cmap=cmap, unit=None)
             if fig is None:
                 continue
-            out_path = fig_dir / f"{metric_key}_topomap.png"
+            out_name = metric_key.replace("::", "_") + "_topomap.png"
+            out_path = fig_dir / out_name
             fig.savefig(out_path, dpi=150)
             plt.close(fig)
             paths[f"{metric_key}_topomap"] = out_path
@@ -1921,19 +1931,29 @@ def save_figures(
             arr = np.asarray(values, dtype=float)
             if arr.size == 0 or len(channels) != arr.size:
                 continue
-            if metric_key.startswith("band_power_"):
-                title = f"{metric_key.replace('band_power_', '').title()} Band Power Topomap"
+            seg_type = None
+            base_key = metric_key
+            if "::" in metric_key:
+                seg_type, base_key = metric_key.split("::", 1)
+            if base_key.startswith("band_power_"):
+                title = f"{base_key.replace('band_power_', '').title()} Band Power Topomap"
                 cmap = "viridis"
-            elif metric_key in {"line_noise_ratio", "hf_lf_ratio", "aperiodic_slope"}:
-                title = f"{metric_key.replace('_', ' ').title()} Topomap"
+            elif base_key in {"line_noise_ratio", "hf_lf_ratio", "aperiodic_slope"}:
+                title = f"{base_key.replace('_', ' ').title()} Topomap"
                 cmap = "RdBu_r"
-            else:
-                title = f"{metric_key.replace('_', ' ').title()} Topomap"
+            elif base_key == "variance":
+                title = "Variance Topomap"
                 cmap = "viridis"
+            else:
+                title = f"{base_key.replace('_', ' ').title()} Topomap"
+                cmap = "viridis"
+            if seg_type:
+                title = f"{seg_type}: {title}"
             fig = plot_topomap_from_channel_values(channels, arr, title=title, cmap=cmap, unit=None)
             if fig is None:
                 continue
-            out_path = fig_dir / f"{metric_key}_topomap.png"
+            out_name = metric_key.replace("::", "_") + "_topomap.png"
+            out_path = fig_dir / out_name
             fig.savefig(out_path, dpi=150)
             plt.close(fig)
             paths[f"{metric_key}_topomap"] = out_path

@@ -93,7 +93,7 @@ def process_file(
     segment_csv = None
     agg_csv = None
     report_path = None
-    per_channel_accum: Dict[str, List[np.ndarray]] = defaultdict(list)
+    per_channel_accum: Dict[str, Dict[str, List[np.ndarray]]] = defaultdict(lambda: defaultdict(list))
     per_channel_maps: Dict[str, Dict[str, float]] = {}
     per_channel_accum: Dict[str, List[np.ndarray]] = defaultdict(list)
     try:
@@ -135,10 +135,11 @@ def process_file(
             )
             channel_metrics = qc_metrics.pop("per_channel_metrics", None)
             if channel_metrics:
+                seg_type = str(row.get("segment_type", "Unknown"))
                 for name, arr in channel_metrics.items():
                     arr_np = np.asarray(arr, dtype=float)
                     if arr_np.size == len(basic_picks):
-                        per_channel_accum[name].append(arr_np)
+                        per_channel_accum[seg_type][name].append(arr_np)
             record = {
                 "subject_id": subject_id,
                 "segment_type": row.get("segment_type", ""),
@@ -164,39 +165,44 @@ def process_file(
             if reports_dir is not None:
                 topomap_figs: Dict[str, object] = {}
                 if per_channel_accum and analysis_raw is not None:
-                    topo_arrays: Dict[str, np.ndarray] = {}
                     expected_len = len(basic_picks)
-                    for name, arr_list in per_channel_accum.items():
-                        valid = [
-                            np.asarray(arr, dtype=float) for arr in arr_list if np.asarray(arr, dtype=float).size == expected_len
-                        ]
-                        if not valid:
-                            continue
-                        stacked = np.vstack(valid)
-                        topo_arrays[name] = np.nanmean(stacked, axis=0)
-                    for metric_key, values in topo_arrays.items():
-                        arr = np.asarray(values, dtype=float)
-                        if arr.size == 0 or not np.isfinite(arr).any():
-                            continue
-                        if metric_key.startswith("band_power_"):
-                            label = f"{metric_key.replace('band_power_', '').title()} band power (uV^2)"
-                        elif metric_key == "amplitude_ptp_uv":
-                            label = "Amplitude (uV ptp)"
-                        elif metric_key == "line_noise_ratio":
-                            label = "Line-noise ratio"
-                        elif metric_key == "hf_lf_ratio":
-                            label = "HF/LF ratio"
-                        elif metric_key == "aperiodic_slope":
-                            label = "Aperiodic slope"
-                        else:
-                            label = metric_key
-                        cmap = "RdBu_r" if metric_key in {"line_noise_ratio", "hf_lf_ratio", "aperiodic_slope"} else "viridis"
-                        fig_topo = eeg_qc.plot_metric_topomap(
-                            arr, analysis_raw, basic_picks, title=f"{label} Topomap", cmap=cmap, unit=None
-                        )
-                        if fig_topo is not None:
-                            topomap_figs[label] = fig_topo
-                        per_channel_maps[metric_key] = {ch: float(val) for ch, val in zip(basic_picks, arr)}
+                    for seg_type, metrics_map in per_channel_accum.items():
+                        for metric_key, arr_list in metrics_map.items():
+                            valid = [
+                                np.asarray(arr, dtype=float)
+                                for arr in arr_list
+                                if np.asarray(arr, dtype=float).size == expected_len
+                            ]
+                            if not valid:
+                                continue
+                            stacked = np.vstack(valid)
+                            arr = np.nanmean(stacked, axis=0)
+                            if arr.size == 0 or not np.isfinite(arr).any():
+                                continue
+                            if metric_key.startswith("band_power_"):
+                                label_core = f"{metric_key.replace('band_power_', '').title()} band power (uV^2)"
+                            elif metric_key == "amplitude_ptp_uv":
+                                label_core = "Amplitude (uV ptp)"
+                            elif metric_key == "line_noise_ratio":
+                                label_core = "Line-noise ratio"
+                            elif metric_key == "hf_lf_ratio":
+                                label_core = "HF/LF ratio"
+                            elif metric_key == "aperiodic_slope":
+                                label_core = "Aperiodic slope"
+                            elif metric_key == "variance":
+                                label_core = "Variance"
+                            else:
+                                label_core = metric_key
+                            label = f"{seg_type}: {label_core}"
+                            cmap = "RdBu_r" if metric_key in {"line_noise_ratio", "hf_lf_ratio", "aperiodic_slope"} else "viridis"
+                            fig_topo = eeg_qc.plot_metric_topomap(
+                                arr, analysis_raw, basic_picks, title=f"{label} Topomap", cmap=cmap, unit=None
+                            )
+                            if fig_topo is not None:
+                                topomap_figs[label] = fig_topo
+                            per_channel_maps[f"{seg_type}::{metric_key}"] = {
+                                ch: float(val) for ch, val in zip(basic_picks, arr)
+                            }
                 report_path = reports_dir / f"{subject_id}_segment_qc_post_report.html"
                 eeg_qc.create_segment_subject_report(segment_df, subject_id, report_path, topomap_figs=topomap_figs)
             agg_df = eeg_qc.aggregate_segment_qc(records)
