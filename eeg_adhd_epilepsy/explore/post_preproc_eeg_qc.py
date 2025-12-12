@@ -133,20 +133,49 @@ def run_post_qc_for_file(
 
         metrics["alpha_peak_hz"] = alpha_peak
         metrics.update({f"band_power_{k}": v for k, v in band_powers.items()})
+        per_channel_band_powers = eeg_qc.compute_band_powers_per_channel(psd, freqs)
 
         line_noise_mean, line_noise_ratios = eeg_qc.compute_line_noise_index(
             psd, freqs, line_freq=getattr(args, "line_freq", 60.0)
         )
         metrics["line_noise_ratio_mean"] = line_noise_mean
         metrics["line_noise_ratio_max"] = float(np.nanmax(line_noise_ratios) if line_noise_ratios.size else np.nan)
-        hf_ratio_mean, hf_ratio_max = eeg_qc.compute_hf_lf_ratio(
+        hf_ratio_mean, hf_ratio_max, hf_ratios = eeg_qc.compute_hf_lf_ratio(
             psd, freqs, hf_band=(30.0, 100.0), lf_band=(1.0, 30.0)
         )
         metrics["hf_lf_ratio_mean"] = hf_ratio_mean
         metrics["hf_lf_ratio_max"] = hf_ratio_max
-        slope_mean, slope_std, _ = eeg_qc.compute_aperiodic_slope(psd, freqs, fmin=1.0, fmax=30.0)
+        slope_mean, slope_std, _, slope_per_channel = eeg_qc.compute_aperiodic_slope(
+            psd, freqs, fmin=1.0, fmax=30.0
+        )
         metrics["aperiodic_slope_mean"] = slope_mean
         metrics["aperiodic_slope_std"] = slope_std
+        # Per-channel metrics for topomaps
+        topomap_metrics = {}
+        metric_arrays = {
+            "line_noise_ratio": line_noise_ratios,
+            "hf_lf_ratio": hf_ratios,
+            "aperiodic_slope": slope_per_channel,
+        }
+        per_channel_amp_values = None
+        if isinstance(data_obj, mne.Epochs):
+            data = data_obj.get_data(picks=picks_names) * 1e6
+            per_channel_amp_values = np.ptp(data, axis=2).mean(axis=0)
+        elif analysis_raw is not None:
+            amp_stats_fig = eeg_qc.compute_channel_amplitude_stats(analysis_raw, picks_names)
+            per_channel_amp_values = amp_stats_fig.get("per_channel", np.array([]))
+            metric_arrays["variance"] = eeg_qc.detect_flat_and_noisy_channels(analysis_raw, picks_names).get(
+                "variances", np.array([])
+            )
+        if per_channel_amp_values is not None:
+            metric_arrays["amplitude_ptp_uv"] = per_channel_amp_values
+        for band, values in per_channel_band_powers.items():
+            metric_arrays[f"band_power_{band}"] = values
+        for name, arr in metric_arrays.items():
+            arr_np = np.asarray(arr, dtype=float)
+            if arr_np.size == len(picks_names):
+                topomap_metrics[name] = {ch: float(val) for ch, val in zip(picks_names, arr_np)}
+        metrics["topomap_metrics"] = topomap_metrics
 
         if isinstance(data_obj, mne.Epochs):
             amp_stats = eeg_qc.compute_epoch_amplitude_stats(data_obj, picks_names)
@@ -174,6 +203,8 @@ def run_post_qc_for_file(
             fig_psd_all = fig_psd_avg = fig_amp_hist = fig_var_topo = None
             fig_raw_segment_start = fig_raw_segment_end = fig_events = None
             fig_overlay = None
+            metric_topomap_figs: Dict[str, object] = {}
+            per_channel_amp = per_channel_amp_values
             if not skip_figures:
                 try:
                     if spec is not None and psd.size > 0:
@@ -185,6 +216,7 @@ def run_post_qc_for_file(
                         data = data_obj.get_data(picks=picks_names) * 1e6
                         reshaped = data.reshape(len(data_obj), len(picks_names), -1)
                         per_channel = np.ptp(reshaped, axis=2).mean(axis=0)
+                        per_channel_amp = per_channel
                         amp_stats_fig = {
                             "mean": float(np.nanmean(per_channel)),
                             "median": float(np.nanmedian(per_channel)),
@@ -196,6 +228,7 @@ def run_post_qc_for_file(
                         fig_amp_hist = eeg_qc.plot_amplitude_histogram(amp_stats_fig)
                     elif analysis_raw is not None:
                         amp_stats_fig = eeg_qc.compute_channel_amplitude_stats(analysis_raw, picks_names)
+                        per_channel_amp = amp_stats_fig.get("per_channel")
                         fig_amp_hist = eeg_qc.plot_amplitude_histogram(amp_stats_fig)
                         fig_var_topo = eeg_qc.plot_channel_variance_topomap(analysis_raw)
                         fig_raw_segment_start = eeg_qc.plot_raw_segment(
@@ -208,6 +241,29 @@ def run_post_qc_for_file(
                         )
                 except Exception:
                     fig_amp_hist = fig_var_topo = None
+                try:
+                    topo_source = analysis_raw if analysis_raw is not None else data_obj
+                    metric_arrays = {
+                        "Line-noise ratio": line_noise_ratios,
+                        "HF/LF ratio": hf_ratios,
+                        "Aperiodic slope": slope_per_channel,
+                    }
+                    if per_channel_amp is not None:
+                        metric_arrays["Amplitude (uV ptp)"] = per_channel_amp
+                    for band, values in per_channel_band_powers.items():
+                        metric_arrays[f"{band.title()} band power (uV^2)"] = values
+                    for label, values in metric_arrays.items():
+                        arr = np.asarray(values, dtype=float)
+                        if arr.size == 0 or not np.isfinite(arr).any():
+                            continue
+                        cmap = "RdBu_r" if "ratio" in label.lower() or "slope" in label.lower() else "viridis"
+                        fig_topo = eeg_qc.plot_metric_topomap(
+                            arr, topo_source, picks_names, title=f"{label} Topomap", cmap=cmap, unit=None
+                        )
+                        if fig_topo is not None:
+                            metric_topomap_figs[label] = fig_topo
+                except Exception:
+                    metric_topomap_figs = {}
                 if before_raw is not None and psd.size:
                     try:
                         before_analysis, before_picks, _ = eeg_qc.prepare_channel_selection(
@@ -238,6 +294,7 @@ def run_post_qc_for_file(
                     fig_raw_segment_end,
                     fig_events,
                     fig_psd_overlay_before_after=fig_overlay,
+                    metric_topomap_figs=metric_topomap_figs,
                 )
             except Exception:
                 logger.warning("Failed to build post-preproc report for %s", filepath.name)
@@ -336,6 +393,7 @@ def main() -> None:
         d.mkdir(parents=True, exist_ok=True)
 
     standard_names = {ch.lower() for ch in BASIC_1020_CHANNELS}
+    topomap_payloads = []
 
     def _process_file(file_a: Path) -> List[Dict[str, object]]:
         subj = eeg_qc.parse_subject_id(file_a)
@@ -367,6 +425,9 @@ def main() -> None:
         )
         metrics_a["pipeline"] = "A"
         metrics_list.append(metrics_a)
+        topo_a = metrics_a.pop("topomap_metrics", None)
+        if topo_a:
+            topomap_payloads.append(topo_a)
 
         file_b = map_b.get(subj)
         if file_b:
@@ -382,6 +443,9 @@ def main() -> None:
             )
             metrics_b["pipeline"] = "B"
             metrics_list.append(metrics_b)
+            topo_b = metrics_b.pop("topomap_metrics", None)
+            if topo_b:
+                topomap_payloads.append(topo_b)
             deltas = compute_pipeline_deltas(metrics_a, metrics_b)
             metrics_a.update({f"delta_{k}": v for k, v in deltas.items()})
 
@@ -415,7 +479,8 @@ def main() -> None:
     flags_counter = eeg_qc.summarize_flags(records)
     fig_paths = {}
     if not args.skip_figures:
-        fig_paths = eeg_qc.save_figures(df, flags_counter, fig_dir, meas_datetimes=None)
+        topomap_aggregates = eeg_qc.aggregate_topomap_metrics(topomap_payloads)
+        fig_paths = eeg_qc.save_figures(df, flags_counter, fig_dir, meas_datetimes=None, topomap_aggregates=topomap_aggregates)
         summary_report_path = output_dir / "qc_summary_report_post_preproc.html"
         eeg_qc.create_summary_report(
             df,

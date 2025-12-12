@@ -337,6 +337,62 @@ def compute_psd_metrics(
     return spec, psd, freqs, alpha_peak, band_powers
 
 
+def compute_band_powers_per_channel(
+    psd: np.ndarray,
+    freqs: np.ndarray,
+    band_limits: Mapping[str, Tuple[float, float]] | None = None,
+) -> Dict[str, np.ndarray]:
+    """Return band power per channel for each band (in uV^2)."""
+    if psd.size == 0 or freqs.size == 0:
+        band_limits = band_limits or BAND_LIMITS
+        return {band: np.array([]) for band in band_limits}
+    band_limits = band_limits or BAND_LIMITS
+    band_powers: Dict[str, np.ndarray] = {}
+    for band, (low, high) in band_limits.items():
+        mask = (freqs >= low) & (freqs <= high)
+        if not mask.any():
+            band_powers[band] = np.full(psd.shape[0], np.nan)
+            continue
+        band_power = np.trapezoid(psd[:, mask], freqs[mask], axis=1)
+        band_powers[band] = band_power * 1e12  # convert V^2 to uV^2
+    return band_powers
+
+
+def _channel_sort_key(name: str) -> Tuple[int, str]:
+    order = {ch: idx for idx, ch in enumerate(BASIC_1020_CHANNELS)}
+    return (order.get(name, len(order)), name)
+
+
+def aggregate_topomap_metrics(
+    metric_maps: Sequence[Mapping[str, Mapping[str, float]]]
+) -> Dict[str, Tuple[List[str], np.ndarray]]:
+    """Aggregate per-channel metric dicts into channel-aligned arrays (mean across subjects)."""
+    aggregated: Dict[str, Dict[str, List[float]]] = defaultdict(lambda: defaultdict(list))
+    for metric_map in metric_maps:
+        if not metric_map:
+            continue
+        for metric, channel_values in metric_map.items():
+            if not channel_values:
+                continue
+            for ch, val in channel_values.items():
+                try:
+                    v = float(val)
+                except Exception:
+                    continue
+                if not np.isfinite(v):
+                    continue
+                aggregated[metric][ch].append(v)
+
+    results: Dict[str, Tuple[List[str], np.ndarray]] = {}
+    for metric, channel_dict in aggregated.items():
+        if not channel_dict:
+            continue
+        channels = sorted(channel_dict.keys(), key=_channel_sort_key)
+        values = np.array([float(np.nanmean(channel_dict[ch])) for ch in channels], dtype=float)
+        results[metric] = (channels, values)
+    return results
+
+
 def compute_line_noise_index(
     psd: np.ndarray,
     freqs: np.ndarray,
@@ -365,16 +421,16 @@ def compute_hf_lf_ratio(
     freqs: np.ndarray,
     hf_band: Tuple[float, float] = (30.0, 100.0),
     lf_band: Tuple[float, float] = (1.0, 30.0),
-) -> Tuple[float, float]:
+) -> Tuple[float, float, np.ndarray]:
     """High-frequency / low-frequency power ratio."""
     if psd.size == 0 or freqs.size == 0:
-        return float("nan"), float("nan")
+        return float("nan"), float("nan"), np.array([])
     hf_mask = (freqs >= hf_band[0]) & (freqs <= hf_band[1])
     lf_mask = (freqs >= lf_band[0]) & (freqs <= lf_band[1])
     hf_power = np.trapezoid(psd[:, hf_mask], freqs[hf_mask], axis=1)
     lf_power = np.trapezoid(psd[:, lf_mask], freqs[lf_mask], axis=1) + EPS
     ratios = hf_power / lf_power
-    return float(np.nanmean(ratios)), float(np.nanmax(ratios))
+    return float(np.nanmean(ratios)), float(np.nanmax(ratios)), ratios
 
 
 def compute_aperiodic_slope(
@@ -382,13 +438,13 @@ def compute_aperiodic_slope(
     freqs: np.ndarray,
     fmin: float = 1.0,
     fmax: float = 30.0,
-) -> Tuple[float, float, float]:
+) -> Tuple[float, float, float, np.ndarray]:
     """Fit 1/f slope using FOOOF (fallback to polyfit if FOOOF unavailable)."""
     if psd.size == 0 or freqs.size == 0:
-        return float("nan"), float("nan"), float("nan")
+        return float("nan"), float("nan"), float("nan"), np.array([])
     mask = (freqs >= fmin) & (freqs <= fmax)
     if not mask.any():
-        return float("nan"), float("nan"), float("nan")
+        return float("nan"), float("nan"), float("nan"), np.array([])
     slopes: List[float] = []
     intercepts: List[float] = []
 
@@ -411,7 +467,12 @@ def compute_aperiodic_slope(
 
     slopes_arr = np.asarray(slopes)
     intercepts_arr = np.asarray(intercepts)
-    return float(np.nanmean(slopes_arr)), float(np.nanstd(slopes_arr)), float(np.nanmean(intercepts_arr))
+    return (
+        float(np.nanmean(slopes_arr)),
+        float(np.nanstd(slopes_arr)),
+        float(np.nanmean(intercepts_arr)),
+        slopes_arr,
+    )
 
 
 
@@ -473,6 +534,7 @@ def compute_segment_qc(
     picks: List[str] | None = None,
     logger: logging.Logger | None = None,
     line_freq: float = 60.0,
+    include_channel_metrics: bool = False,
 ) -> Dict[str, object]:
     """Compute QC metrics for a single raw segment."""
     if raw_segment is None:
@@ -491,9 +553,12 @@ def compute_segment_qc(
     _, psd, freqs, alpha_peak, band_powers = compute_psd_metrics(
         raw_segment, picks, fmin=1.0, fmax=100.0
     )
-    line_noise_mean, _ = compute_line_noise_index(psd, freqs, line_freq=line_freq)
-    hf_ratio_mean, _ = compute_hf_lf_ratio(psd, freqs, hf_band=(30.0, 100.0), lf_band=(1.0, 30.0))
-    slope_mean, _, _ = compute_aperiodic_slope(psd, freqs, fmin=1.0, fmax=30.0)
+    band_power_arrays = compute_band_powers_per_channel(psd, freqs)
+    line_noise_mean, line_noise_ratios = compute_line_noise_index(psd, freqs, line_freq=line_freq)
+    hf_ratio_mean, _hf_ratio_max, hf_ratios = compute_hf_lf_ratio(
+        psd, freqs, hf_band=(30.0, 100.0), lf_band=(1.0, 30.0)
+    )
+    slope_mean, _, _, slope_per_channel = compute_aperiodic_slope(psd, freqs, fmin=1.0, fmax=30.0)
 
     metrics: Dict[str, object] = {
         "segment_duration_sec": duration_sec,
@@ -516,6 +581,18 @@ def compute_segment_qc(
         "segment_line_noise_ratio": line_noise_mean,
         "segment_aperiodic_slope": slope_mean,
     }
+
+    if include_channel_metrics:
+        channel_metrics: Dict[str, np.ndarray] = {
+            "amplitude_ptp_uv": amp_stats["per_channel"],
+            "variance": noise_info.get("variances", np.array([])),
+            "line_noise_ratio": line_noise_ratios,
+            "hf_lf_ratio": hf_ratios,
+            "aperiodic_slope": slope_per_channel,
+        }
+        for band, values in band_power_arrays.items():
+            channel_metrics[f"band_power_{band}"] = values
+        metrics["per_channel_metrics"] = channel_metrics
 
     flag_bad, reasons = _evaluate_segment_flags(metrics)
     metrics["segment_flag_bad"] = flag_bad
@@ -794,6 +871,67 @@ def plot_channel_variance_topomap(raw: mne.io.BaseRaw) -> matplotlib.figure.Figu
     fig, ax = plt.subplots(figsize=(5, 4))
     mne.viz.plot_topomap(variances, raw.info, axes=ax, show=False)
     ax.set_title("Channel Variance Distribution")
+    plt.tight_layout()
+    return fig
+
+
+def plot_metric_topomap(
+    values: Sequence[float] | np.ndarray,
+    raw: mne.io.BaseRaw | mne.Epochs,
+    picks: Sequence[str],
+    title: str,
+    cmap: str = "viridis",
+    unit: str | None = None,
+) -> matplotlib.figure.Figure | None:
+    """Generic topomap helper for per-channel metrics."""
+    if raw is None:
+        return None
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0:
+        return None
+    lower_map = {ch.lower(): ch for ch in raw.ch_names}
+    pick_names = [lower_map[p.lower()] for p in picks if p.lower() in lower_map]
+    if len(pick_names) != len(arr):
+        return None
+    indices = mne.pick_channels(raw.info["ch_names"], include=pick_names, ordered=True)
+    if len(indices) != len(arr):
+        return None
+    info = mne.pick_info(raw.info, indices)
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))
+    im, _ = mne.viz.plot_topomap(arr, info, axes=ax, show=False, cmap=cmap)
+    cbar = plt.colorbar(im, ax=ax, shrink=0.75)
+    if unit:
+        cbar.set_label(unit)
+    ax.set_title(title)
+    plt.tight_layout()
+    return fig
+
+
+def plot_topomap_from_channel_values(
+    channel_names: Sequence[str],
+    values: Sequence[float],
+    title: str,
+    cmap: str = "viridis",
+    unit: str | None = None,
+) -> matplotlib.figure.Figure | None:
+    """Topomap plotting without a raw object (uses standard montage)."""
+    if not channel_names:
+        return None
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0 or len(channel_names) != arr.size:
+        return None
+    info = mne.create_info(list(channel_names), sfreq=100.0, ch_types="eeg")
+    montage = mne.channels.make_standard_montage("standard_1020")
+    try:
+        info.set_montage(montage, on_missing="ignore")
+    except Exception:
+        return None
+    fig, ax = plt.subplots(figsize=(5.5, 4.5))
+    im, _ = mne.viz.plot_topomap(arr, info, axes=ax, show=False, cmap=cmap)
+    cbar = plt.colorbar(im, ax=ax, shrink=0.75)
+    if unit:
+        cbar.set_label(unit)
+    ax.set_title(title)
     plt.tight_layout()
     return fig
 
@@ -1085,6 +1223,7 @@ def create_segment_subject_report(
     subject_id: str,
     output_path: Path,
     metric_specs: Sequence[Mapping[str, str]] = SUBJECT_SEGMENT_REPORT_METRICS,
+    topomap_figs: Mapping[str, matplotlib.figure.Figure] | None = None,
 ) -> None:
     """Subject-level HTML report for segment QC metrics."""
     if segments_df is None or segments_df.empty:
@@ -1112,6 +1251,12 @@ def create_segment_subject_report(
         summary_html += "</ul></li>"
     summary_html += "</ul>"
     report.add_html(summary_html, title="Segment Summary", section="Overview")
+
+    if topomap_figs:
+        for label, fig in topomap_figs.items():
+            if fig is None:
+                continue
+            report.add_figure(fig, title=label, section="Topographic Metrics")
 
     for spec in metric_specs:
         block_fig = plot_segment_metric_blocks(
@@ -1251,7 +1396,10 @@ def _plot_flagged_subject_distribution(
 
 
 def save_segment_dataset_figures(
-    segments_df: pd.DataFrame, fig_dir: Path, metric_specs: Sequence[Mapping[str, str]] = SEGMENT_REPORT_METRICS
+    segments_df: pd.DataFrame,
+    fig_dir: Path,
+    metric_specs: Sequence[Mapping[str, str]] = SEGMENT_REPORT_METRICS,
+    topomap_aggregates: Mapping[str, Tuple[Sequence[str], np.ndarray]] | None = None,
 ) -> Dict[str, Path]:
     """Save dataset-level histograms for segment metrics."""
     paths: Dict[str, Path] = {}
@@ -1287,6 +1435,28 @@ def save_segment_dataset_figures(
     flagged_subject_dist_path = _plot_flagged_subject_distribution(segments_df, fig_dir)
     if flagged_subject_dist_path:
         paths["flagged_subjects_distribution"] = flagged_subject_dist_path
+
+    if topomap_aggregates:
+        for metric_key, (channels, values) in topomap_aggregates.items():
+            arr = np.asarray(values, dtype=float)
+            if arr.size == 0 or len(channels) != arr.size:
+                continue
+            if metric_key.startswith("band_power_"):
+                title = f"{metric_key.replace('band_power_', '').title()} Band Power Topomap"
+                cmap = "viridis"
+            elif metric_key in {"line_noise_ratio", "hf_lf_ratio", "aperiodic_slope"}:
+                title = f"{metric_key.replace('_', ' ').title()} Topomap"
+                cmap = "RdBu_r"
+            else:
+                title = f"{metric_key.replace('_', ' ').title()} Topomap"
+                cmap = "viridis"
+            fig = plot_topomap_from_channel_values(channels, arr, title=title, cmap=cmap, unit=None)
+            if fig is None:
+                continue
+            out_path = fig_dir / f"{metric_key}_topomap.png"
+            fig.savefig(out_path, dpi=150)
+            plt.close(fig)
+            paths[f"{metric_key}_topomap"] = out_path
     return paths
 
 
@@ -1354,6 +1524,12 @@ def create_segment_dataset_report(
         if fig_path and fig_path.exists():
             report.add_image(fig_path, title=title, section="Flagged Rates")
 
+    topo_items = sorted([item for item in fig_paths.items() if item[0].endswith("_topomap")])
+    for key, path in topo_items:
+        if path and path.exists():
+            title = key.replace("_topomap", "").replace("_", " ").title()
+            report.add_image(path, title=title, section="Topographic Metrics")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report.save(output_path, overwrite=True, open_browser=False)
 
@@ -1374,6 +1550,7 @@ def create_subject_report(
     fig_raw_segment_end: matplotlib.figure.Figure | None,
     fig_events: matplotlib.figure.Figure | None,
     fig_psd_overlay_before_after: matplotlib.figure.Figure | None = None,
+    metric_topomap_figs: Mapping[str, matplotlib.figure.Figure] | None = None,
 ) -> None:
     """Reusable subject HTML report."""
     report = mne.Report(title=f"EEG QC Report - {subject_id}")
@@ -1402,6 +1579,11 @@ def create_subject_report(
         report.add_figure(fig_raw_segment_end, title="Raw Segment - End", section="Signal Quality")
     if fig_events is not None:
         report.add_figure(fig_events, title="Annotation Counts", section="Events")
+    if metric_topomap_figs:
+        for label, fig in metric_topomap_figs.items():
+            if fig is None:
+                continue
+            report.add_figure(fig, title=label, section="Topographic Metrics")
 
     duration_min = metrics.get("duration_min", float("nan"))
     sfreq = metrics.get("sfreq", float("nan"))
@@ -1647,6 +1829,7 @@ def save_figures(
     flags_counter: Counter,
     fig_dir: Path,
     meas_datetimes: pd.Series | None = None,
+    topomap_aggregates: Mapping[str, Tuple[Sequence[str], np.ndarray]] | None = None,
 ) -> Dict[str, Path]:
     fig_dir.mkdir(parents=True, exist_ok=True)
     paths: Dict[str, Path] = {}
@@ -1733,6 +1916,28 @@ def save_figures(
         meas_paths = save_meas_distribution_figures(meas_datetimes, fig_dir)
         paths.update(meas_paths)
 
+    if topomap_aggregates:
+        for metric_key, (channels, values) in topomap_aggregates.items():
+            arr = np.asarray(values, dtype=float)
+            if arr.size == 0 or len(channels) != arr.size:
+                continue
+            if metric_key.startswith("band_power_"):
+                title = f"{metric_key.replace('band_power_', '').title()} Band Power Topomap"
+                cmap = "viridis"
+            elif metric_key in {"line_noise_ratio", "hf_lf_ratio", "aperiodic_slope"}:
+                title = f"{metric_key.replace('_', ' ').title()} Topomap"
+                cmap = "RdBu_r"
+            else:
+                title = f"{metric_key.replace('_', ' ').title()} Topomap"
+                cmap = "viridis"
+            fig = plot_topomap_from_channel_values(channels, arr, title=title, cmap=cmap, unit=None)
+            if fig is None:
+                continue
+            out_path = fig_dir / f"{metric_key}_topomap.png"
+            fig.savefig(out_path, dpi=150)
+            plt.close(fig)
+            paths[f"{metric_key}_topomap"] = out_path
+
     return paths
 
 
@@ -1781,6 +1986,12 @@ def create_summary_report(
         if path and path.exists():
             report.add_image(path, title=title, section="Figures")
 
+    topo_items = sorted([item for item in fig_paths.items() if item[0].endswith("_topomap")])
+    for key, path in topo_items:
+        if path and path.exists():
+            title = key.replace("_topomap", "").replace("_", " ").title()
+            report.add_image(path, title=title, section="Topographic Metrics")
+
     if unknown_events:
         unknown_html = "<p>Unrecognized annotation labels:</p><ul>"
         for label, stats in sorted(unknown_events.items(), key=lambda item: item[1]["occurrences"], reverse=True):
@@ -1808,6 +2019,8 @@ __all__ = [
     "compute_dataset_stats",
     "compute_epoch_amplitude_stats",
     "compute_epoch_rejection_breakdown",
+    "compute_band_powers_per_channel",
+    "aggregate_topomap_metrics",
     "compute_hf_lf_ratio",
     "compute_line_noise_index",
     "compute_psd_metrics",
@@ -1827,6 +2040,8 @@ __all__ = [
     "plot_amplitude_histogram",
     "plot_channel_variance_topomap",
     "plot_events_distribution",
+    "plot_metric_topomap",
+    "plot_topomap_from_channel_values",
     "plot_psd_figures",
     "plot_psd_overlay",
     "plot_raw_segment",

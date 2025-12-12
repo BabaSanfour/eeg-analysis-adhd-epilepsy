@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from collections import defaultdict
 from pathlib import Path
 from typing import Dict, List
 
@@ -92,6 +93,9 @@ def process_file(
     segment_csv = None
     agg_csv = None
     report_path = None
+    per_channel_accum: Dict[str, List[np.ndarray]] = defaultdict(list)
+    per_channel_maps: Dict[str, Dict[str, float]] = {}
+    per_channel_accum: Dict[str, List[np.ndarray]] = defaultdict(list)
     try:
         raw = eeg_qc.load_raw(
             filepath,
@@ -123,8 +127,18 @@ def process_file(
             if segment is None:
                 continue
             qc_metrics = eeg_qc.compute_segment_qc(
-                segment, picks=basic_picks, logger=logger, line_freq=getattr(args, "line_freq", 60.0)
+                segment,
+                picks=basic_picks,
+                logger=logger,
+                line_freq=getattr(args, "line_freq", 60.0),
+                include_channel_metrics=not args.skip_reports,
             )
+            channel_metrics = qc_metrics.pop("per_channel_metrics", None)
+            if channel_metrics:
+                for name, arr in channel_metrics.items():
+                    arr_np = np.asarray(arr, dtype=float)
+                    if arr_np.size == len(basic_picks):
+                        per_channel_accum[name].append(arr_np)
             record = {
                 "subject_id": subject_id,
                 "segment_type": row.get("segment_type", ""),
@@ -148,8 +162,43 @@ def process_file(
             segment_csv = subject_dir / f"{subject_id}_segment_qc_post.csv"
             segment_df.to_csv(segment_csv, index=False)
             if reports_dir is not None:
+                topomap_figs: Dict[str, object] = {}
+                if per_channel_accum and analysis_raw is not None:
+                    topo_arrays: Dict[str, np.ndarray] = {}
+                    expected_len = len(basic_picks)
+                    for name, arr_list in per_channel_accum.items():
+                        valid = [
+                            np.asarray(arr, dtype=float) for arr in arr_list if np.asarray(arr, dtype=float).size == expected_len
+                        ]
+                        if not valid:
+                            continue
+                        stacked = np.vstack(valid)
+                        topo_arrays[name] = np.nanmean(stacked, axis=0)
+                    for metric_key, values in topo_arrays.items():
+                        arr = np.asarray(values, dtype=float)
+                        if arr.size == 0 or not np.isfinite(arr).any():
+                            continue
+                        if metric_key.startswith("band_power_"):
+                            label = f"{metric_key.replace('band_power_', '').title()} band power (uV^2)"
+                        elif metric_key == "amplitude_ptp_uv":
+                            label = "Amplitude (uV ptp)"
+                        elif metric_key == "line_noise_ratio":
+                            label = "Line-noise ratio"
+                        elif metric_key == "hf_lf_ratio":
+                            label = "HF/LF ratio"
+                        elif metric_key == "aperiodic_slope":
+                            label = "Aperiodic slope"
+                        else:
+                            label = metric_key
+                        cmap = "RdBu_r" if metric_key in {"line_noise_ratio", "hf_lf_ratio", "aperiodic_slope"} else "viridis"
+                        fig_topo = eeg_qc.plot_metric_topomap(
+                            arr, analysis_raw, basic_picks, title=f"{label} Topomap", cmap=cmap, unit=None
+                        )
+                        if fig_topo is not None:
+                            topomap_figs[label] = fig_topo
+                        per_channel_maps[metric_key] = {ch: float(val) for ch, val in zip(basic_picks, arr)}
                 report_path = reports_dir / f"{subject_id}_segment_qc_post_report.html"
-                eeg_qc.create_segment_subject_report(segment_df, subject_id, report_path)
+                eeg_qc.create_segment_subject_report(segment_df, subject_id, report_path, topomap_figs=topomap_figs)
             agg_df = eeg_qc.aggregate_segment_qc(records)
             if not agg_df.empty:
                 agg_csv = subject_dir / f"{subject_id}_segment_qc_post_aggregated.csv"
@@ -165,6 +214,7 @@ def process_file(
         "segment_csv": segment_csv,
         "agg_csv": agg_csv,
         "report_path": report_path,
+        "topomap_channel_maps": per_channel_maps,
         "error": error,
     }
 
@@ -233,6 +283,7 @@ def main() -> None:
     all_segment_frames: List[pd.DataFrame] = []
     aggregated_frames: List[pd.DataFrame] = []
     errors = []
+    dataset_topo_payloads: List[Dict[str, Dict[str, float]]] = []
 
     for res in results:
         if res.get("segment_df") is not None:
@@ -241,14 +292,18 @@ def main() -> None:
             aggregated_frames.append(res["agg_df"])
         if res.get("error"):
             errors.append((res["subject_id"], res["error"]))
+        topo_map = res.get("topomap_channel_maps")
+        if topo_map:
+            dataset_topo_payloads.append(topo_map)
 
     if all_segment_frames:
         dataset_segments = pd.concat(all_segment_frames, ignore_index=True)
         dataset_segments.to_csv(output_dir / "segment_qc_post_all_segments.csv", index=False)
         summary = summarize_dataset_segments(dataset_segments)
         (output_dir / "segment_qc_post_dataset_summary.json").write_text(json.dumps(summary, indent=2))
+        topomap_aggregates = eeg_qc.aggregate_topomap_metrics(dataset_topo_payloads) if not args.skip_reports else {}
         if not args.skip_reports:
-            fig_paths = eeg_qc.save_segment_dataset_figures(dataset_segments, fig_dir)
+            fig_paths = eeg_qc.save_segment_dataset_figures(dataset_segments, fig_dir, topomap_aggregates)
             report_path = output_dir / "segment_qc_post_summary_report.html"
             eeg_qc.create_segment_dataset_report(dataset_segments, fig_paths, report_path)
             logger.info("Saved dataset summary HTML report to %s", report_path)

@@ -185,20 +185,39 @@ def run_pre_qc_for_file(
         )
         metrics["alpha_peak_hz"] = alpha_peak
         metrics.update({f"band_power_{k}": v for k, v in band_powers.items()})
+        per_channel_band_powers = eeg_qc.compute_band_powers_per_channel(psd, freqs)
 
         line_noise_mean, line_noise_ratios = eeg_qc.compute_line_noise_index(
             psd, freqs, line_freq=getattr(args, "line_freq", 60.0)
         )
         metrics["line_noise_ratio_mean"] = line_noise_mean
         metrics["line_noise_ratio_max"] = float(np.nanmax(line_noise_ratios) if line_noise_ratios.size else np.nan)
-        hf_ratio_mean, hf_ratio_max = eeg_qc.compute_hf_lf_ratio(
+        hf_ratio_mean, hf_ratio_max, hf_ratios = eeg_qc.compute_hf_lf_ratio(
             psd, freqs, hf_band=(30.0, 100.0), lf_band=(1.0, 30.0)
         )
         metrics["hf_lf_ratio_mean"] = hf_ratio_mean
         metrics["hf_lf_ratio_max"] = hf_ratio_max
-        slope_mean, slope_std, _ = eeg_qc.compute_aperiodic_slope(psd, freqs, fmin=1.0, fmax=30.0)
+        slope_mean, slope_std, _, slope_per_channel = eeg_qc.compute_aperiodic_slope(
+            psd, freqs, fmin=1.0, fmax=30.0
+        )
         metrics["aperiodic_slope_mean"] = slope_mean
         metrics["aperiodic_slope_std"] = slope_std
+        # Per-channel metrics for topomaps
+        topomap_metrics = {}
+        metric_arrays = {
+            "amplitude_ptp_uv": amp_stats["per_channel"],
+            "variance": noise_info.get("variances", np.array([])),
+            "line_noise_ratio": line_noise_ratios,
+            "hf_lf_ratio": hf_ratios,
+            "aperiodic_slope": slope_per_channel,
+        }
+        for band, values in per_channel_band_powers.items():
+            metric_arrays[f"band_power_{band}"] = values
+        for name, arr in metric_arrays.items():
+            arr_np = np.asarray(arr, dtype=float)
+            if arr_np.size == len(basic_picks):
+                topomap_metrics[name] = {ch: float(val) for ch, val in zip(basic_picks, arr_np)}
+        metrics["topomap_metrics"] = topomap_metrics
 
         annotation_counts = summarize_annotations(raw.annotations)
         metrics["event_counts"] = (
@@ -238,6 +257,7 @@ def run_pre_qc_for_file(
         if getattr(args, "generate_subject_reports", False):
             fig_psd_all = fig_psd_avg = fig_amp_hist = fig_var_topo = None
             fig_raw_segment_start = fig_raw_segment_end = fig_events = None
+            metric_topomap_figs: Dict[str, object] = {}
 
             if not getattr(args, "skip_figures", False):
                 if spec is not None and psd.size > 0:
@@ -264,6 +284,29 @@ def run_pre_qc_for_file(
                         fig_raw_segment_end = eeg_qc.plot_raw_segment(
                             analysis_raw, last_start, title="Raw Segment - End (10s)"
                         )
+                        metric_arrays = {
+                            "Amplitude (uV ptp)": amp_stats["per_channel"],
+                            "Line-noise ratio": line_noise_ratios,
+                            "HF/LF ratio": hf_ratios,
+                            "Aperiodic slope": slope_per_channel,
+                        }
+                        for band, values in per_channel_band_powers.items():
+                            metric_arrays[f"{band.title()} band power (uV^2)"] = values
+                        for label, values in metric_arrays.items():
+                            arr = np.asarray(values, dtype=float)
+                            if arr.size == 0 or not np.isfinite(arr).any():
+                                continue
+                            cmap = "RdBu_r" if "ratio" in label.lower() or "slope" in label.lower() else "viridis"
+                            fig_topo = eeg_qc.plot_metric_topomap(
+                                arr,
+                                analysis_raw,
+                                basic_picks,
+                                title=f"{label} Topomap",
+                                cmap=cmap,
+                                unit=None,
+                            )
+                            if fig_topo is not None:
+                                metric_topomap_figs[label] = fig_topo
                     except Exception as exc:  # pragma: no cover - defensive branch
                         logger.warning("Raw/variance plotting failed for %s: %s", filepath.name, exc)
                 if annotation_counts:
@@ -286,6 +329,7 @@ def run_pre_qc_for_file(
                     fig_raw_segment_start,
                     fig_raw_segment_end,
                     fig_events,
+                    metric_topomap_figs=metric_topomap_figs,
                 )
             except Exception as fig_exc:  # pragma: no cover - defensive branch
                 logger.warning("Report generation failed for %s: %s", filepath.name, fig_exc)
@@ -338,6 +382,7 @@ def main() -> None:
     for d in output_dirs.values():
         d.mkdir(parents=True, exist_ok=True)
 
+    topomap_payloads = []
     with eeg_qc.tqdm_joblib(tqdm(total=len(files), desc="Processing EEG files")):
         results = Parallel(n_jobs=args.n_jobs, backend="loky")(
             delayed(run_pre_qc_for_file)(
@@ -350,6 +395,10 @@ def main() -> None:
             )
             for f in files
         )
+    for rec in results:
+        topo = rec.pop("topomap_metrics", None)
+        if topo:
+            topomap_payloads.append(topo)
 
     dataset_stats = eeg_qc.compute_dataset_stats(results)
     eeg_qc.apply_dataset_outlier_flags(results, dataset_stats)
@@ -369,7 +418,8 @@ def main() -> None:
     meas_datetimes = eeg_qc.load_meas_datetimes(args.input_dir)
     fig_paths = {}
     if not args.skip_figures:
-        fig_paths = eeg_qc.save_figures(df, flags_counter, fig_dir, meas_datetimes)
+        topomap_aggregates = eeg_qc.aggregate_topomap_metrics(topomap_payloads)
+        fig_paths = eeg_qc.save_figures(df, flags_counter, fig_dir, meas_datetimes, topomap_aggregates)
         summary_report_path = output_dir / "qc_summary_report_pre_preproc.html"
         eeg_qc.create_summary_report(
             df,
