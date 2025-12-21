@@ -10,8 +10,6 @@ from .config import (
     bids_dir,
     derivatives_dir,
     source_dirs,
-    sensors_to_keep,
-    n_subjects,
     MAPPING_PSYCHOSTIMULANT,
 )
 
@@ -23,8 +21,6 @@ __all__ = [
     "bids_dir",
     "derivatives_dir",
     "source_dirs",
-    "sensors_to_keep",
-    "n_subjects",
     "MAPPING_PSYCHOSTIMULANT",
 ]
 
