@@ -106,8 +106,9 @@ DEMOGRAPHIC_LABELS = tuple(_annot_config.get("demographics", ()))
 PAT_MONTAGE_LABELS = tuple(_annot_config.get("pat_montage", ("pat montage",)))
 COLLABORATION_LABELS = tuple(_annot_config.get("collaboration", ()))
 EFFORT_LABELS = tuple(_annot_config.get("effort", ()))
+HV_IGNORE = tuple(_annot_config.get("HV_ignore", ()))
 
-IGNORED_LABELS = DEMOGRAPHIC_LABELS + PAT_MONTAGE_LABELS + COLLABORATION_LABELS + EFFORT_LABELS
+IGNORED_LABELS = DEMOGRAPHIC_LABELS + PAT_MONTAGE_LABELS + COLLABORATION_LABELS + EFFORT_LABELS + HV_IGNORE
 REFERENCE_EVENT_KEYWORDS = tuple(_annot_config.get("recording_start", ("a1+a2 off",)))
 SENSOR_ACTION_KEYWORDS = tuple(_annot_config.get("sensor_action_keywords", ()))
 

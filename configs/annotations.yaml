@@ -96,6 +96,7 @@ annotations:
     - tousse
     - tousse trop
     - patiente tousse
+    - pt tousse++, ralenti HV
     - cough
     - coughing
     - eternue
@@ -459,3 +460,19 @@ annotations:
     - touhe
     - arrange
     - hange
+  HV_ignore:
+    - HV non fait
+    - ajuste rythme HV
+    - ajuste rythme d'HV
+    - ajuste rythme de l'HV
+    - arret HV pt a mal au coeur
+    - arret hv
+    - beaucoup de spasmes durant HV
+    - lent, mais hv + sym
+    - ne veut pas faire hv
+    - ne veut plus faire hv
+    - ordi nateur bogue reprise HV plus tard
+    - pas HV
+    - recommence hv
+    - reprise hv
+    - slow with HV
