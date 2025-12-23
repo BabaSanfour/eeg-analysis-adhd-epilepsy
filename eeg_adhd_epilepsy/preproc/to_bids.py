@@ -12,7 +12,10 @@ from typing import Optional, Dict
 import mne
 import pandas as pd
 from mne_bids import write_raw_bids, BIDSPath
+from joblib import Parallel, delayed
 from tqdm import tqdm
+
+from eeg_adhd_epilepsy.utils.logs import tqdm_joblib
 
 from eeg_adhd_epilepsy.io import ingest
 from eeg_adhd_epilepsy.utils import config
@@ -77,9 +80,6 @@ def map_annotation_to_category(desc: str) -> Optional[str]:
             if re.search(r'\b' + re.escape(ch.lower()) + r'\b', normalized):
                 return "BAD_IGNORE"
         
-        # Check if any 10-20 channel is mentioned OR no channel mentioned -> Bad
-        # (If we reached here, it didn't match Additional channels)
-        # We categorize as 'sensor_artefact', which standardize_annotations will receive and prefix with 'bad_'
         return "sensor_artefact"
 
     # 4. Standard Interest Map
@@ -338,6 +338,15 @@ def check_missing(subjects_ids: list, bids_dir: Path):
         LOGGER.info("No missing BIDS directories.")
 
 
+def safe_process_subject(sid, *args, **kwargs):
+    """Wrapper to catch exceptions in parallel execution."""
+    try:
+        return process_subject(sid, *args, **kwargs)
+    except Exception as e:
+        # Return the error so we can log it in the main process
+        return {"error": str(e), "sid": sid}
+
+
 # ----------------------------------------------------------------------------
 # MAIN
 # ----------------------------------------------------------------------------
@@ -349,6 +358,7 @@ def main():
     parser.add_argument("--duplicates", type=Path, required=True, help="duplicates CSV file")
     parser.add_argument("--subs", type=Path, required=True, help="subjects CSV file")
     parser.add_argument("--overwrite", action="store_true", help="overwrite existing BIDS")
+    parser.add_argument("--n_jobs", type=int, default=-1, help="number of parallel jobs (default: 1)")
     args = parser.parse_args()
 
     # Load metadata tables
@@ -362,18 +372,24 @@ def main():
     meas_records = []
     failed = []
 
-    for sid in tqdm(subject_ids, desc="Converting subjects"):
-        try:
-            res = process_subject(
+    with tqdm_joblib(tqdm(total=len(subject_ids), desc="Converting subjects")):
+        results = Parallel(n_jobs=args.n_jobs)(
+            delayed(safe_process_subject)(
                 sid, args.raw, args.bids, mapping_df, 
                 duplicates_df=duplicates_df,
                 overwrite=args.overwrite
             )
-            if res:
-                meas_records.append(res)
-        except Exception as e:
-            LOGGER.error("Failed processing subject %s: %s", sid, e)
-            failed.append(sid)
+            for sid in subject_ids
+        )
+
+    for res in results:
+        if not res:
+            continue
+        if "error" in res:
+            LOGGER.error("Failed processing subject %s: %s", res["sid"], res["error"])
+            failed.append(res["sid"])
+        else:
+            meas_records.append(res)
 
     if failed:
         LOGGER.warning("Failed subjects: %s", failed)
