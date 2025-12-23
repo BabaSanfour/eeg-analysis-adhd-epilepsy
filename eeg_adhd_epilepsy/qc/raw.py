@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import traceback
 from pathlib import Path
 from typing import Dict
 
@@ -197,7 +198,7 @@ def _process_file(
                  logger.warning(f"No segment definitions found at {seg_csv_path} (run qc/conditions.py first).")
 
     except Exception as e:
-        logger.error(f"Error processing {subject_id}: {e}")
+        logger.error(f"Error processing {subject_id}: {e}\n{traceback.format_exc()}")
         result["error"] = str(e)
     
     # Create per-subject report
@@ -366,10 +367,7 @@ def main() -> None:
         
         # Generate figures and compute flags counter for summary report
         from collections import Counter
-        fig_paths = qc_reports.save_dataset_figures(df_files, output_dirs["figures"])
-        total_files = len(files)
-        
-        # Build flags counter from flag reasons
+        # Build flags counter from flag reasons (Compute BEFORE figure generation)
         flags_counter = Counter()
         if "subject_flag_reasons" in df_files.columns:
             for reasons_str in df_files["subject_flag_reasons"].dropna():
@@ -378,6 +376,14 @@ def main() -> None:
                         reason = reason.strip()
                         if reason:
                             flags_counter[reason] += 1
+
+        # Generate figures
+        fig_paths = qc_reports.save_figures(
+            df_files, 
+            flags_counter, 
+            output_dirs["figures"]
+        )
+        total_files = len(files)
         
         qc_reports.create_summary_report(
             df_files, 
