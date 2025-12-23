@@ -54,10 +54,53 @@ def read_subjects_list(path: Path | None) -> set[str] | None:
     return {line.strip() for line in path.read_text().splitlines() if line.strip()}
 
 
+def parse_bids_components(filepath: Path) -> dict[str, str]:
+    """
+    Extract BIDS entities (subject, session, task) from filename.
+    Returns dict like {"subject": "01", "session": "01", ...}
+    """
+    entities = {}
+    
+    # Standard BIDS regex for entities
+    # sub-<label>[_ses-<label>][_task-<label>]...
+    parts = filepath.stem.split("_")
+    for part in parts:
+        if "-" in part:
+            key, val = part.split("-", 1)
+            entities[key] = val
+            
+    # Fallback/Normalization
+    if "sub" not in entities:
+        # Try finding anywhere in string if not strictly underscore separated
+        match = re.search(r"sub-([A-Za-z0-9]+)", filepath.name)
+        if match:
+            entities["sub"] = match.group(1)
+            
+    # Session
+    if "ses" not in entities:
+         match = re.search(r"ses-([A-Za-z0-9]+)", filepath.name)
+         if match:
+             entities["ses"] = match.group(1)
+
+    # Normalize keys to full names if preferred, but BIDS standard uses short keys
+    # Let's return mapped keys for clarity
+    final = {}
+    if "sub" in entities:
+        final["subject"] = entities["sub"]
+    if "ses" in entities:
+        final["session"] = entities["ses"]
+    if "task" in entities:
+        final["task"] = entities["task"]
+        
+    return final
+
+
 def parse_subject_id(filepath: Path) -> str:
-    match = re.search(r"sub-([A-Za-z0-9]+)", filepath.name)
-    if match:
-        return f"sub-{match.group(1)}"
+    """Return subject ID string (e.g. 'sub-01')."""
+    comps = parse_bids_components(filepath)
+    if "subject" in comps:
+        return f"sub-{comps['subject']}"
+    # Fallback
     return filepath.stem
 
 
@@ -71,7 +114,29 @@ def load_bids_raw(
     processing: str | None = None,
 ) -> mne.io.BaseRaw:
     """Load a raw file using BIDS structure."""
+    
+    # Auto-infer entities if not provided
+    comps = parse_bids_components(filepath)
+    if not session:
+        session = comps.get("session")
+    if not task:
+        task = comps.get("task")
+    
+    # If parse_bids_components is limited, we might need a quick check for run/acq etc.
+    if not run and "run" not in comps:
+        match = re.search(r"run-([A-Za-z0-9]+)", filepath.name)
+        if match: run = match.group(1)
+    
+    if not acquisition and "acq" not in comps:
+        match = re.search(r"acq-([A-Za-z0-9]+)", filepath.name)
+        if match: acquisition = match.group(1)
+        
+    if not processing and "proc" not in comps:
+        match = re.search(r"proc-([A-Za-z0-9]+)", filepath.name)
+        if match: processing = match.group(1)
+        
     subject_clean = parse_subject_id(filepath).replace("sub-", "")
+    
     bids_path = BIDSPath(
         root=bids_root,
         subject=subject_clean,
