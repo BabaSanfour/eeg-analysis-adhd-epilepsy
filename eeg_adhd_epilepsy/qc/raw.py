@@ -75,6 +75,9 @@ def _process_file(
     subject_fig_dir = subject_out_dir / "figures"
     subject_fig_dir.mkdir(parents=True, exist_ok=True)
 
+    raw = None
+    file_metrics = None
+
     try:
         raw = bids_io.load_bids_raw(
             filepath,
@@ -204,7 +207,7 @@ def _process_file(
 
     report_path = output_dirs["reports"] / report_filename
     
-    if not args.skip_reports:         
+    if not args.skip_reports and file_metrics and raw:         
          fig_output_dir = output_dirs["figures"] / subject_id
          if session_id:
              fig_output_dir = fig_output_dir / f"ses-{session_id}"
