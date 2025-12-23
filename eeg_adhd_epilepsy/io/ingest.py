@@ -95,8 +95,10 @@ def map_subject_id(raw_id: str, mapping_df: pd.DataFrame) -> Optional[str]:
         except ValueError:
             pass
             
-    # Default: if no mapping found, return original (or handle roughly)
-    return raw_id
+    if raw_id and raw_id.isdigit():
+        return raw_id
+        
+    return None
 
 
 def find_eeg_file(raw_dir: Path, subject_id: str) -> Optional[Path]:

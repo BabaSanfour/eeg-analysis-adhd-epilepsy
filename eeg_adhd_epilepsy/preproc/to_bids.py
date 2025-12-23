@@ -177,18 +177,22 @@ def process_subject(
     # Use the ID found in .pnt if available, else use filename subject_id
     raw_id_for_mapping = meta['original_id'] if meta['original_id'] else subject_id
     
-    # Special control check inside map_subject_id or here?
-    # ingest.map_subject_id handles the "2.2" exclusion logic
-    new_id = ingest.map_subject_id(raw_id_for_mapping, mapping_df)
+    raw_id_str = str(raw_id_for_mapping)
+    dup_row = duplicates_df[duplicates_df['Study_ID'].astype(str) == raw_id_str]
+    if raw_id_str in ['232', '961', '494', '662', '958', '791', '674', '792', '767', "492"]:
+        print("here")
+    if not dup_row.empty:
+        # Found in duplicates mapping -> Use specific ID and Session
+        new_id = str(dup_row['Actual_ID'].values[0])
+        session = f"{int(dup_row['Session'].values[0]):02d}"
+    else:
+        # Not in duplicates -> Use general mapping, default session 01
+        new_id = ingest.map_subject_id(raw_id_for_mapping, mapping_df)
+        session = "01"
     
     if new_id is None:
         LOGGER.warning("Skipping subject %s (ID mapping exclusion)", subject_id)
         return None
-
-    session = "01"
-    if new_id in duplicates_df['Study_ID'].values:
-        new_id = duplicates_df.loc[duplicates_df['Study_ID'] == new_id, 'Actual_ID'].values[0]
-        session = duplicates_df.loc[duplicates_df['Study_ID'] == new_id, 'Session'].values[0]
     
     # zero-pad if numeric (standardize subject ID format: sub-0123)
     if new_id.isdigit():

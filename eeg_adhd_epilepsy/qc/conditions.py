@@ -39,9 +39,21 @@ def _process_subject(
     task: str | None = None,
 ) -> Dict[str, object] | None:
     """Process a single subject file and generate a report."""
-    subject_id = io_bids.parse_subject_id(filepath)
+    # Use helper to extract full components
+    comps = io_bids.parse_bids_components(filepath)
+    subject_id = f"sub-{comps.get('subject', 'unknown')}"
+    session_id = comps.get('session') # e.g. "01"
+    
+    # User request: Output Structure = sub-XX/ (no session grouping folders)
+    # Filenames = sub-XX_ses-YY...
     subject_out_dir = output_dir / "subjects" / subject_id
+    subject_out_dir.mkdir(parents=True, exist_ok=True)
     fig_dir = subject_out_dir / "figures"
+    
+    output_prefix = subject_id
+    if session_id:
+        output_prefix = f"{subject_id}_ses-{session_id}"
+        fig_dir = fig_dir / f"ses-{session_id}"
     
     try:
         raw = io_bids.load_bids_raw(
@@ -109,20 +121,22 @@ def _process_subject(
         fig_paths = viz_cond.save_condition_segment_figures(df_segments, fig_dir)
         
         # 5. Generate Individual Report
-        report_path = subject_out_dir / f"{subject_id}_condition_report.html"
+        report_path = subject_out_dir / f"{output_prefix}_condition_report.html"
         raw_duration = raw.times[-1] if raw.n_times > 0 else 0.0
                 
         report_cond.create_condition_segments_report(
             summary=summary,
             figure_paths=fig_paths,
             output_path=report_path,
-            subject_id=subject_id,
+            subject_id=output_prefix,
             raw_duration=raw_duration,
             event_counts=event_counts,
         )
         
         return {
             "subject_id": subject_id,
+            "session_id": session_id,
+            "output_prefix": output_prefix,
             "filepath": str(filepath),
             "summary": summary,
             "event_counts": event_counts,
@@ -201,6 +215,50 @@ def main() -> None:
             output_path=global_report_path,
             figure_paths=figure_paths,
         )
+        
+        import json
+        
+        missing_export = {
+            "metadata": {
+                "generated_at": pd.Timestamp.now().isoformat(),
+                "total_files_processed": len(valid_results)
+            },
+            "no_conditions": [], # Only Raw (Zero EO/EC/HV/Photo)
+            "no_eyes_open": [],
+            "no_eyes_closed": [],
+            "no_hv": [],
+            "no_photo": []
+        }
+        
+        for res in valid_results:
+            sid = res["output_prefix"] 
+            summ = res["summary"]
+            
+            # Check No Conditions (All Zero)
+            if (summ.get("total_eyes_open_duration", 0) <= 0 and 
+                summ.get("total_eyes_closed_duration", 0) <= 0 and
+                summ.get("hv_block_count", 0) == 0 and
+                summ.get("photo_block_count", 0) == 0):
+                 missing_export["no_conditions"].append(sid)
+            
+            if summ.get("total_eyes_open_duration", 0) <= 0:
+                missing_export["no_eyes_open"].append(sid)
+            if summ.get("total_eyes_closed_duration", 0) <= 0:
+                missing_export["no_eyes_closed"].append(sid)
+            if summ.get("hv_block_count", 0) == 0:
+                missing_export["no_hv"].append(sid)
+            if summ.get("photo_block_count", 0) == 0:
+                missing_export["no_photo"].append(sid)
+                
+        # Save to BIDS root or Output dir? User said "BIDS folder".
+        json_path = args.input_dir / "missing_conditions.json"
+        try:
+            with open(json_path, "w") as f:
+                json.dump(missing_export, f, indent=2)
+            logger.info(f"Missingness report saved to {json_path}")
+        except Exception as e:
+            logger.error(f"Failed to save missingness JSON to BIDS root: {e}")
+            
     else:
         logger.error("No valid results produced.")
 
