@@ -312,6 +312,9 @@ def update_participants_tsv(
     if meas_df is not None and not meas_df.empty:
         # ensure columns match
         if "participant_id" in meas_df.columns:
+            overlap_cols = [c for c in meas_df.columns if c in merged.columns and c != "participant_id"]
+            if overlap_cols:
+                merged = merged.drop(columns=overlap_cols)
             merged = merged.merge(meas_df, on="participant_id", how="left")
 
     # Write back TSV
@@ -350,7 +353,7 @@ def main():
 
     # Load metadata tables
     mapping_df = pd.read_csv(args.map, header=None, names=["patient", "ID"], sep=";")
-    subjects_df = pd.read_csv(args.subs, encoding="utf-8", low_memory=False)
+    subjects_df = pd.read_csv(args.subs, sep=";", encoding="utf-8", low_memory=False)
     duplicates_df = pd.read_csv(args.duplicates, encoding="utf-8", low_memory=False)
 
     subject_ids = ingest.get_subject_ids(args.raw)
