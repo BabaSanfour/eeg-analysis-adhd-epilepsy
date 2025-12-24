@@ -12,10 +12,7 @@ from typing import Optional, Dict
 import mne
 import pandas as pd
 from mne_bids import write_raw_bids, BIDSPath
-from joblib import Parallel, delayed
 from tqdm import tqdm
-
-from eeg_adhd_epilepsy.utils.logs import tqdm_joblib
 
 from eeg_adhd_epilepsy.io import ingest
 from eeg_adhd_epilepsy.utils import config
@@ -320,11 +317,6 @@ def update_participants_tsv(
     # Write back TSV
     merged.to_csv(tsv_path, sep="\t", index=False)
     
-    # also write a CSV version (legacy requirement?)
-    csv_path = bids_dir / "participants.csv"
-    merged.to_csv(csv_path, index=False)
-
-
 def check_missing(subjects_ids: list, bids_dir: Path):
     missing = []
     for sid in subjects_ids:
@@ -338,15 +330,6 @@ def check_missing(subjects_ids: list, bids_dir: Path):
         LOGGER.info("No missing BIDS directories.")
 
 
-def safe_process_subject(sid, *args, **kwargs):
-    """Wrapper to catch exceptions in parallel execution."""
-    try:
-        return process_subject(sid, *args, **kwargs)
-    except Exception as e:
-        # Return the error so we can log it in the main process
-        return {"error": str(e), "sid": sid}
-
-
 # ----------------------------------------------------------------------------
 # MAIN
 # ----------------------------------------------------------------------------
@@ -358,12 +341,14 @@ def main():
     parser.add_argument("--duplicates", type=Path, required=True, help="duplicates CSV file")
     parser.add_argument("--subs", type=Path, required=True, help="subjects CSV file")
     parser.add_argument("--overwrite", action="store_true", help="overwrite existing BIDS")
-    parser.add_argument("--n_jobs", type=int, default=-1, help="number of parallel jobs (default: 1)")
+    parser.add_argument("--n_jobs", type=int, default=-1, help="number of parallel jobs (default: -1)")
     args = parser.parse_args()
 
     # Load metadata tables
     mapping_df = pd.read_csv(args.map, header=None, names=["patient", "ID"], sep=";")
-    subjects_df = pd.read_csv(args.subs, encoding="utf-8", low_memory=False)
+    subjects_df = pd.read_csv(args.subs, encoding="utf-8", low_memory=False, on_bad_lines="warn")
+    # removed unnamed columns if they exist
+    subjects_df = subjects_df.loc[:, ~subjects_df.columns.str.contains("unnamed", case=False)]
     LOGGER.info("Loaded subjects CSV with columns: %s", subjects_df.columns.tolist())
     duplicates_df = pd.read_csv(args.duplicates, encoding="utf-8", low_memory=False)
 
@@ -373,15 +358,13 @@ def main():
     meas_records = []
     failed = []
 
-    with tqdm_joblib(tqdm(total=len(subject_ids), desc="Converting subjects")):
-        results = Parallel(n_jobs=args.n_jobs)(
-            delayed(safe_process_subject)(
-                sid, args.raw, args.bids, mapping_df, 
-                duplicates_df=duplicates_df,
-                overwrite=args.overwrite
-            )
-            for sid in subject_ids
-        )
+    results = []
+    for sid in tqdm(subject_ids, desc="Converting subjects"):
+        results.append(process_subject(
+            sid, args.raw, args.bids, mapping_df, 
+            duplicates_df=duplicates_df,
+            overwrite=args.overwrite
+        ))
 
     for res in results:
         if not res:
