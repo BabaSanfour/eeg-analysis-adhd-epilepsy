@@ -363,7 +363,8 @@ def main():
 
     # Load metadata tables
     mapping_df = pd.read_csv(args.map, header=None, names=["patient", "ID"], sep=";")
-    subjects_df = pd.read_csv(args.subs, sep=";", encoding="utf-8", low_memory=False)
+    subjects_df = pd.read_csv(args.subs, encoding="utf-8", low_memory=False)
+    LOGGER.info("Loaded subjects CSV with columns: %s", subjects_df.columns.tolist())
     duplicates_df = pd.read_csv(args.duplicates, encoding="utf-8", low_memory=False)
 
     subject_ids = ingest.get_subject_ids(args.raw)
