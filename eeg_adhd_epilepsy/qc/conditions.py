@@ -178,7 +178,6 @@ def main() -> None:
                 filepath=f,
                 bids_root=args.input_dir,
                 output_dir=args.output_dir,
-                session=args.bids_session,
                 task=args.bids_task,
             ) 
             for f in files
