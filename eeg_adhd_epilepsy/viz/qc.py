@@ -259,7 +259,11 @@ def plot_flagged_subject_distribution(
     df = segments_df.copy()
     df["segment_type"] = df["segment_type"].fillna("Unknown").astype(str)
     df["subject_id"] = df["subject_id"].astype(str)
-    df["flag_bad_bool"] = pd.to_numeric(df.get("segment_flag_bad"), errors="coerce").fillna(0).astype(bool)
+    val = df.get("segment_flag_bad")
+    if val is None:
+        df["flag_bad_bool"] = False
+    else:
+        df["flag_bad_bool"] = pd.to_numeric(val, errors="coerce").fillna(0).astype(bool)
     flagged = df[df["flag_bad_bool"]]
     if flagged.empty:
         return None
@@ -307,7 +311,11 @@ def plot_segment_metric_blocks(
     df["t_start"] = pd.to_numeric(df["t_start"], errors="coerce")
     df["t_stop"] = pd.to_numeric(df["t_stop"], errors="coerce")
     df["segment_type"] = df.get("segment_type", pd.Series(["Unknown"] * len(df))).fillna("Unknown")
-    df["flag_bad_bool"] = pd.to_numeric(df.get("segment_flag_bad"), errors="coerce").fillna(0).astype(bool)
+    val = df.get("segment_flag_bad")
+    if val is None:
+        df["flag_bad_bool"] = False
+    else:
+        df["flag_bad_bool"] = pd.to_numeric(val, errors="coerce").fillna(0).astype(bool)
     df = df.dropna(subset=["metric", "t_start", "t_stop"])
     if df.empty:
         return None

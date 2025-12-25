@@ -341,7 +341,6 @@ def main():
     parser.add_argument("--duplicates", type=Path, required=True, help="duplicates CSV file")
     parser.add_argument("--subs", type=Path, required=True, help="subjects CSV file")
     parser.add_argument("--overwrite", action="store_true", help="overwrite existing BIDS")
-    parser.add_argument("--n_jobs", type=int, default=-1, help="number of parallel jobs (default: -1)")
     args = parser.parse_args()
 
     # Load metadata tables

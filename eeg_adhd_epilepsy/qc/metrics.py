@@ -143,6 +143,6 @@ def compute_segment_qc(
         metrics["per_channel_metrics"] = channel_metrics
 
     flag_bad, reasons = _evaluate_segment_flags(metrics)
-    metrics["flag_bad"] = flag_bad
-    metrics["flag_reasons"] = reasons
+    metrics["segment_flag_bad"] = flag_bad
+    metrics["segment_flag_reasons"] = reasons
     return metrics

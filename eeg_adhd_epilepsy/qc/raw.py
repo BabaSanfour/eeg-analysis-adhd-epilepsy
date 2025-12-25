@@ -149,8 +149,8 @@ def _process_file(
                  "segment_type": "Whole",
                  "t_start": 0.0,
                  "duration": duration_sec,
-                 "flag_bad": flag_status,
-                 "flag_reasons": ";".join(reasons)
+                 "segment_flag_bad": bool(reasons),
+                 "segment_flag_reasons": ";".join(reasons)
              }
              whole_rec.update(computed_metrics)
              result["segment_metrics"].append(whole_rec)
