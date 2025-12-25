@@ -65,7 +65,10 @@ def _compute_flagged_percentages_by_segment(
         return empty, empty, empty_int, empty_int
     df = segments_df.copy()
     df["segment_type"] = df["segment_type"].fillna("Unknown").astype(str)
-    df["flag_bad_bool"] = pd.to_numeric(df.get("segment_flag_bad"), errors="coerce").fillna(0).astype(bool)
+    if "segment_flag_bad" in df:
+        df["flag_bad_bool"] = pd.to_numeric(df["segment_flag_bad"], errors="coerce").fillna(0).astype(bool)
+    else:
+        df["flag_bad_bool"] = False
 
     seg_pct = df.groupby("segment_type")["flag_bad_bool"].mean() * 100.0
     subj_pct = pd.Series(dtype=float)
