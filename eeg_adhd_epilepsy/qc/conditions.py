@@ -23,7 +23,6 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Condition analysis and reporting tools.")
     parser.add_argument("--input_dir", required=True, type=Path, help="Path to BIDS dataset root.")
     parser.add_argument("--output_dir", required=True, type=Path, help="Path to write output reports.")
-    parser.add_argument("--bids_session", help="Process specific session.")
     parser.add_argument("--bids_task", help="Process specific task.")
     parser.add_argument("--subjects_list", type=Path, help="Path to text file with subject IDs to process.")
     parser.add_argument("--n_jobs", type=int, default="-1", help="Number of parallel jobs.")
@@ -162,7 +161,6 @@ def main() -> None:
     logger.info("Discovering files...")
     files = io_bids.discover_bids_files(
         bids_root=args.input_dir,
-        session=args.bids_session,
         task=args.bids_task,
         subjects_filter=subjects_filter,
     )
