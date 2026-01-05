@@ -305,8 +305,24 @@ def _process_file(
                  fig_paths=subj_fig_paths
              )
          
-         # Clear from result to save memory
+         # Save full result to pickle for dataset aggregation (memory efficient)
+         pkl_name = f"{subject_id}_qc_metrics.pkl"
+         if session_id:
+             pkl_name = f"{subject_id}_ses-{session_id}_qc_metrics.pkl"
+         pkl_path = subject_out_dir / pkl_name
+         
+         # Ensure channel names are in file_metrics so we can map them later
+         if file_metrics and "channel_names" not in file_metrics:
+             file_metrics["channel_names"] = raw.ch_names
+             
+         import joblib
+         joblib.dump(result, pkl_path)
+         result["pkl_path"] = str(pkl_path)
+         
+         # Clear from result to save memory in main process
          del result["segment_metrics"]
+         if "file_metrics" in result and "per_channel_metrics" in result["file_metrics"]:
+             del result["file_metrics"]["per_channel_metrics"]
     
     return result
 
@@ -369,28 +385,71 @@ def main() -> None:
                             flags_counter[reason] += 1
 
         topomap_aggregates_files = defaultdict(lambda: defaultdict(list))
+        topomap_aggregates_segments = defaultdict(lambda: defaultdict(list))
         
+        import joblib
+        
+        # Load detailed metrics from pickle files one by one
         for res in results:
-            fm = res.get("file_metrics")
+            pkl_path = res.get("pkl_path")
+            if not pkl_path:
+                continue
+            p = Path(pkl_path)
+            if not p.exists():
+                continue
+            
+            try:
+                full_res = joblib.load(p)
+            except Exception as e:
+                logger.warning(f"Failed to load pickle {p}: {e}")
+                continue
+                
+            # File Level
+            fm = full_res.get("file_metrics")
             if fm and "per_channel_metrics" in fm:
                 channel_names = fm.get("channel_names", [])
                 pcm = fm["per_channel_metrics"]
                 for metric, values in pcm.items():
-                    # values is array of shape (n_channels,)
                     if len(values) == len(channel_names):
                         for ch, val in zip(channel_names, values):
                              topomap_aggregates_files[metric][ch].append(val)
-        
-        # Compute means
+                             
+            # Segment Level
+            for seg in full_res.get("segment_metrics", []):
+                stype = str(seg.get("segment_type", "Unknown"))
+                # Filter Unknowns
+                if "unknown" in stype.lower():
+                    continue
+                    
+                if "per_channel_metrics" in seg:
+                    # Use file channel names
+                    channel_names = fm.get("channel_names", []) if fm else []
+                    pcm = seg["per_channel_metrics"]
+                    for metric, values in pcm.items():
+                        if len(values) == len(channel_names):
+                            for ch, val in zip(channel_names, values):
+                                key = f"{stype}::{metric}"
+                                topomap_aggregates_segments[key][ch].append(val)
+
+        # Compute means for File Level
         topo_agg_files_means = {}
         for metric, ch_dict in topomap_aggregates_files.items():
              ch_means = {}
              for ch, vals in ch_dict.items():
                  ch_means[ch] = np.nanmean(vals)
-             # Convert to sorted arrays for plotting
              channels = sorted(ch_means.keys())
              arr = np.array([ch_means[ch] for ch in channels])
              topo_agg_files_means[metric] = (channels, arr)
+             
+        # Compute means for Segment Level
+        topo_agg_seg_means = {}
+        for key, ch_dict in topomap_aggregates_segments.items():
+             ch_means = {}
+             for ch, vals in ch_dict.items():
+                 ch_means[ch] = np.nanmean(vals)
+             channels = sorted(ch_means.keys())
+             arr = np.array([ch_means[ch] for ch in channels])
+             topo_agg_seg_means[key] = (channels, arr)
 
         # Generate figures
         fig_paths = qc_reports.save_figures(
@@ -414,33 +473,12 @@ def main() -> None:
         # Read and concat efficiently
         df_segments = pd.concat((pd.read_csv(f) for f in segment_files), ignore_index=True)
         
-        df_segments.to_csv(args.output_dir / "qc_raw_segments.csv", index=False)
-        topomap_aggregates_segments = defaultdict(lambda: defaultdict(list))
         
-        for res in results:
-            for seg in res.get("segment_metrics", []):
-                stype = seg.get("segment_type", "Unknown")
-                if "per_channel_metrics" in seg:
-                    fm = res.get("file_metrics", {})
-                    channel_names = fm.get("channel_names", [])
-                    
-                    pcm = seg["per_channel_metrics"]
-                    for metric, values in pcm.items():
-                        if len(values) == len(channel_names):
-                            for ch, val in zip(channel_names, values):
-                                # Key: "SegmentType::Metric"
-                                key = f"{stype}::{metric}"
-                                topomap_aggregates_segments[key][ch].append(val)
-                                
-        # Compute means
-        topo_agg_seg_means = {}
-        for key, ch_dict in topomap_aggregates_segments.items():
-             ch_means = {}
-             for ch, vals in ch_dict.items():
-                 ch_means[ch] = np.nanmean(vals)
-             channels = sorted(ch_means.keys())
-             arr = np.array([ch_means[ch] for ch in channels])
-             topo_agg_seg_means[key] = (channels, arr)
+        # Filter Unknowns from dataframe too
+        if "segment_type" in df_segments.columns:
+            df_segments = df_segments[~df_segments["segment_type"].astype(str).str.contains("Unknown", case=False, na=False)]
+            
+        df_segments.to_csv(args.output_dir / "qc_raw_segments.csv", index=False)
 
         # Generate segment dataset report
         if not args.skip_reports:
