@@ -264,6 +264,59 @@ def save_segment_dataset_figures(
     return paths
 
 
+import base64
+
+def _make_gallery_html(
+    images: Sequence[Tuple[str, Path]], 
+    title: str = "Gallery",
+    columns: int = 4
+) -> str:
+    """Create a responsive HTML gallery for a set of image paths."""
+    if not images:
+        return ""
+        
+    html = f'<h4>{title}</h4><div style="display: flex; flex-wrap: wrap; gap: 20px; justify-content: flex-start;">'
+    
+    # Calculate width rough percentage
+    width_pct = int(100 / columns) - 2 # minus distinct gap
+    
+    for title_text, path in images:
+        if not path.exists():
+            continue
+            
+        with open(path, "rb") as f:
+            encoded = base64.b64encode(f.read()).decode("utf-8")
+            
+        mime = "image/png"
+        if str(path).endswith(".jpg") or str(path).endswith(".jpeg"):
+            mime = "image/jpeg"
+        elif str(path).endswith(".svg"):
+            mime = "image/svg+xml"
+            
+        src = f"data:{mime};base64,{encoded}"
+        
+        card_style = (
+            f"flex: 0 0 {width_pct}%; "
+            "box-shadow: 0 2px 5px rgba(0,0,0,0.1); "
+            "border-radius: 4px; "
+            "overflow: hidden; "
+            "margin-bottom: 20px; "
+            "background: #fff; "
+            "text-align: center;"
+        )
+        
+        img_style = "width: 100%; height: auto; display: block;"
+        
+        html += f"""
+        <div style="{card_style}">
+            <div style="padding: 10px; font-weight: bold; background: #f8f9fa; border-bottom: 1px solid #eee;">{title_text}</div>
+            <img src="{src}" style="{img_style}" alt="{title_text}"/>
+        </div>
+        """
+        
+    html += "</div>"
+    return html
+
 def create_segment_dataset_report(
     segments_df: pd.DataFrame,
     fig_paths: Mapping[str, Path],
@@ -298,7 +351,7 @@ def create_segment_dataset_report(
         for seg_type, count in type_counts.items():
             summary_html += f"<li>{seg_type}: {count}</li>"
         summary_html += "</ul>"
-
+        
     flagged_seg_pct, flagged_subj_pct, subject_counts, flagged_subject_counts = _compute_flagged_percentages_by_segment(segments_df)
     if not flagged_seg_pct.empty:
         summary_html += "<p>Flagged segments (% of segments) by type:</p><ul>"
@@ -328,11 +381,16 @@ def create_segment_dataset_report(
         if fig_path and fig_path.exists():
             report.add_image(fig_path, title=title, section="Flagged Rates")
 
+    # GRID GALLERY IMPLEMENTATION
     topo_items = sorted([item for item in fig_paths.items() if item[0].endswith("_topomap")])
-    for key, path in topo_items:
-        if path and path.exists():
+    if topo_items:
+        gallery_images = []
+        for key, path in topo_items:
             title = key.replace("_topomap", "").replace("_", " ").title()
-            report.add_image(path, title=title, section="Topographic Metrics")
+            gallery_images.append((title, path))
+            
+        gallery_html = _make_gallery_html(gallery_images, title="Topographic Metrics")
+        report.add_html(gallery_html, title="Topomaps", section="Topographic Metrics")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report.save(output_path, overwrite=True, open_browser=False)
@@ -609,11 +667,16 @@ def create_summary_report(
         if path and path.exists():
             report.add_image(path, title=title, section="Figures")
 
+    # GRID GALLERY IMPLEMENTATION
     topo_items = sorted([item for item in fig_paths.items() if item[0].endswith("_topomap")])
-    for key, path in topo_items:
-        if path and path.exists():
+    if topo_items:
+        gallery_images = []
+        for key, path in topo_items:
             title = key.replace("_topomap", "").replace("_", " ").title()
-            report.add_image(path, title=title, section="Topographic Metrics")
+            gallery_images.append((title, path))
+            
+        gallery_html = _make_gallery_html(gallery_images, title="Topographic Metrics")
+        report.add_html(gallery_html, title="Topomaps", section="Topographic Metrics")
 
     if unknown_events:
         unknown_html = "<p>Unrecognized annotation labels:</p><ul>"
@@ -626,7 +689,6 @@ def create_summary_report(
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report.save(output_path, overwrite=True, open_browser=False)
-
 
 def create_segment_subject_report(
     segments_df: pd.DataFrame,
@@ -671,11 +733,11 @@ def create_segment_subject_report(
     # Add Topomap Grids if available
     if fig_paths:
         topo_items = sorted([item for item in fig_paths.items() if "topomap" in item[0].lower()])
-        for key, path in topo_items:
+        if topo_items:
+            for key, path in topo_items:
              # e.g. "Eyes Open_topomaps.png"
-             title = key.replace("_topomaps", "").replace("_", " ").title()
-             report.add_image(path, title=title, section="Segment Type Averages")
+                 title = key.replace("_topomaps", "").replace("_", " ").title()
+                 report.add_image(path, title=title, section="Segment Type Averages")
              
-    
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report.save(output_path, overwrite=True, open_browser=False)
