@@ -313,7 +313,12 @@ def _process_file(
          
          # Ensure channel names are in file_metrics so we can map them later
          if file_metrics and "channel_names" not in file_metrics:
-             file_metrics["channel_names"] = raw.ch_names
+             if picks is not None and len(picks) > 0:
+                 # Map indices to names
+                 file_metrics["channel_names"] = [raw.ch_names[i] for i in picks]
+             else:
+                 # Fallback (though picks should exist)
+                 file_metrics["channel_names"] = raw.ch_names
              
          import joblib
          joblib.dump(result, pkl_path)
