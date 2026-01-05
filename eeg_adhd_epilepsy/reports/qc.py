@@ -455,11 +455,11 @@ def save_figures(
         paths[column] = out_path
 
     _save_hist("duration_min", "Duration Distribution (min)", "dataset_duration_distribution.png")
-    _save_hist("amplitude_mean_uv", "Mean Amplitude Distribution (uV)", "dataset_amplitude_distribution.png")
-    _save_hist("alpha_peak_hz", "Alpha Peak Distribution (Hz)", "dataset_alpha_peak_distribution.png")
-    _save_hist("hf_lf_ratio_mean", "HF/LF Ratio Distribution", "dataset_hf_ratio_distribution.png")
-    _save_hist("aperiodic_slope_mean", "Aperiodic Slope Distribution", "dataset_slope_distribution.png")
-    _save_hist("line_noise_ratio_mean", "Line Noise Ratio Distribution", "dataset_line_noise_distribution.png")
+    _save_hist("segment_amplitude_mean_uv", "Mean Amplitude Distribution (uV)", "dataset_amplitude_distribution.png")
+    _save_hist("segment_alpha_peak_hz", "Alpha Peak Distribution (Hz)", "dataset_alpha_peak_distribution.png")
+    _save_hist("segment_hf_lf_ratio", "HF/LF Ratio Distribution", "dataset_hf_ratio_distribution.png")
+    _save_hist("segment_aperiodic_slope", "Aperiodic Slope Distribution", "dataset_slope_distribution.png")
+    _save_hist("segment_line_noise_ratio", "Line Noise Ratio Distribution", "dataset_line_noise_distribution.png")
 
     fig, ax = plt.subplots(figsize=(7, 4))
     if flags_counter:
@@ -593,11 +593,11 @@ def create_summary_report(
 
     for title, path in [
         ("Duration Distribution", fig_paths.get("duration_min")),
-        ("Mean Amplitude Distribution", fig_paths.get("amplitude_mean_uv")),
-        ("Alpha Peak Distribution", fig_paths.get("alpha_peak_hz")),
-        ("HF Ratio Distribution", fig_paths.get("hf_lf_ratio_mean")),
-        ("Aperiodic Slope Distribution", fig_paths.get("aperiodic_slope_mean")),
-        ("Line Noise Distribution", fig_paths.get("line_noise_ratio_mean")),
+        ("Mean Amplitude Distribution", fig_paths.get("segment_amplitude_mean_uv")),
+        ("Alpha Peak Distribution", fig_paths.get("segment_alpha_peak_hz")),
+        ("HF Ratio Distribution", fig_paths.get("segment_hf_lf_ratio")),
+        ("Aperiodic Slope Distribution", fig_paths.get("segment_aperiodic_slope")),
+        ("Line Noise Distribution", fig_paths.get("segment_line_noise_ratio")),
         ("Flag Reasons", fig_paths.get("flag_reasons")),
         ("Event Count Distributions", fig_paths.get("event_stats")),
         ("Recording Start Hour", fig_paths.get("meas_hour_distribution")),

@@ -18,6 +18,7 @@ import eeg_adhd_epilepsy.qc.metrics as qc_metrics
 import eeg_adhd_epilepsy.utils.stats as qc_stats
 import eeg_adhd_epilepsy.reports.qc as qc_reports
 import eeg_adhd_epilepsy.viz.qc as qc_viz
+
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 from eeg_adhd_epilepsy.utils.events import crop_raw_to_recording_start
 import numpy as np
@@ -34,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--analysis_level", 
         choices=["whole", "segments", "both"], 
-        default="whole",
+        default="both",
         help="Analysis level: 'whole' (file), 'segments' (via existing CSV), or 'both'."
     )
     parser.add_argument("--segment_types", help="Comma-separated segment types to include (default: all).")

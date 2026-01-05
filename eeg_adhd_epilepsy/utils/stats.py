@@ -13,20 +13,21 @@ import mne
 
 def compute_dataset_stats(records: List[Dict[str, object]]) -> Dict[str, Dict[str, float]]:
     df = pd.DataFrame(records)
+
     metric_cols = [
-        "amplitude_mean_uv",
-        "amplitude_max_uv",
-        "pct_bad_channels",
+        "segment_amplitude_mean_uv",
+        "segment_amplitude_max_uv",
+        "segment_pct_bad_channels",
         "duration_min",
-        "alpha_peak_hz",
-        "band_power_delta",
-        "band_power_theta",
-        "band_power_alpha",
-        "band_power_beta",
-        "band_power_gamma",
-        "hf_lf_ratio_mean",
-        "line_noise_ratio_mean",
-        "aperiodic_slope_mean",
+        "segment_alpha_peak_hz",
+        "segment_band_power_delta",
+        "segment_band_power_theta",
+        "segment_band_power_alpha",
+        "segment_band_power_beta",
+        "segment_band_power_gamma",
+        "segment_hf_lf_ratio",
+        "segment_line_noise_ratio",
+        "segment_aperiodic_slope",
     ]
     stats: Dict[str, Dict[str, float]] = {}
     for col in metric_cols:
@@ -181,22 +182,22 @@ def evaluate_subject_flag(
         reasons.append("short_duration")
     if np.isfinite(duration) and duration > 60:
         reasons.append("long_duration")
-    n_bad = float(metrics.get("n_flat_channels", 0)) + float(metrics.get("n_noisy_channels", 0))
+    n_bad = float(metrics.get("segment_n_flat_channels", 0)) + float(metrics.get("segment_n_noisy_channels", 0))
     bad_flag = _flag_bad_channels(n_bad)
     if bad_flag == "borderline":
         reasons.append("many_bad_channels")
     elif bad_flag == "unusable":
         reasons.append("too_many_bad_channels")
 
-    if np.isfinite(metrics.get("amplitude_max_uv", float("nan"))) and metrics["amplitude_max_uv"] > 800:
+    if np.isfinite(metrics.get("segment_amplitude_max_uv", float("nan"))) and metrics["segment_amplitude_max_uv"] > 800:
         reasons.append("amplitude_above_threshold")
-    hf_ratio = metrics.get("hf_lf_ratio_mean", float("nan"))
+    hf_ratio = metrics.get("segment_hf_lf_ratio", float("nan"))
     if np.isfinite(hf_ratio) and hf_ratio > HF_RATIO_FLAG:
         reasons.append("high_hf_ratio")
-    slope = metrics.get("aperiodic_slope_mean", float("nan"))
+    slope = metrics.get("segment_aperiodic_slope", float("nan"))
     if np.isfinite(slope) and (slope < APERIODIC_SLOPE_MIN or slope > APERIODIC_SLOPE_MAX):
         reasons.append("extreme_aperiodic_slope")
-    line_noise = metrics.get("line_noise_ratio_mean", float("nan"))
+    line_noise = metrics.get("segment_line_noise_ratio", float("nan"))
     if np.isfinite(line_noise) and line_noise > LINE_NOISE_RATIO_FLAG:
         reasons.append("line_noise_residual")
 
