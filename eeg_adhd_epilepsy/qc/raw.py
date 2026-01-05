@@ -144,17 +144,7 @@ def _process_file(
              
              result["file_metrics"] = file_metrics
              
-             # Add as a segment record for comparison
-             whole_rec = {
-                 "subject_id": subject_id,
-                 "segment_type": "Whole",
-                 "t_start": 0.0,
-                 "duration": duration_sec,
-                 "segment_flag_bad": bool(reasons),
-                 "segment_flag_reasons": ";".join(reasons)
-             }
-             whole_rec.update(computed_metrics)
-             result["segment_metrics"].append(whole_rec)
+             result["file_metrics"] = file_metrics
         else:
              # Even if skipping "whole" QC, we should populate result["file_metrics"] with basic metadata
              result["file_metrics"] = file_metrics
@@ -368,7 +358,7 @@ def main() -> None:
         
         # Generate figures and compute flags counter for summary report
         from collections import Counter
-        # Build flags counter from flag reasons (Compute BEFORE figure generation)
+        # Build flags counter (already correct)
         flags_counter = Counter()
         if "subject_flag_reasons" in df_files.columns:
             for reasons_str in df_files["subject_flag_reasons"].dropna():
@@ -378,11 +368,36 @@ def main() -> None:
                         if reason:
                             flags_counter[reason] += 1
 
+        topomap_aggregates_files = defaultdict(lambda: defaultdict(list))
+        
+        for res in results:
+            fm = res.get("file_metrics")
+            if fm and "per_channel_metrics" in fm:
+                channel_names = fm.get("channel_names", [])
+                pcm = fm["per_channel_metrics"]
+                for metric, values in pcm.items():
+                    # values is array of shape (n_channels,)
+                    if len(values) == len(channel_names):
+                        for ch, val in zip(channel_names, values):
+                             topomap_aggregates_files[metric][ch].append(val)
+        
+        # Compute means
+        topo_agg_files_means = {}
+        for metric, ch_dict in topomap_aggregates_files.items():
+             ch_means = {}
+             for ch, vals in ch_dict.items():
+                 ch_means[ch] = np.nanmean(vals)
+             # Convert to sorted arrays for plotting
+             channels = sorted(ch_means.keys())
+             arr = np.array([ch_means[ch] for ch in channels])
+             topo_agg_files_means[metric] = (channels, arr)
+
         # Generate figures
         fig_paths = qc_reports.save_figures(
             df_files, 
             flags_counter, 
-            output_dirs["figures"]
+            output_dirs["figures"],
+            topomap_aggregates=topo_agg_files_means
         )
         total_files = len(files)
         
@@ -400,9 +415,40 @@ def main() -> None:
         df_segments = pd.concat((pd.read_csv(f) for f in segment_files), ignore_index=True)
         
         df_segments.to_csv(args.output_dir / "qc_raw_segments.csv", index=False)
+        topomap_aggregates_segments = defaultdict(lambda: defaultdict(list))
+        
+        for res in results:
+            for seg in res.get("segment_metrics", []):
+                stype = seg.get("segment_type", "Unknown")
+                if "per_channel_metrics" in seg:
+                    fm = res.get("file_metrics", {})
+                    channel_names = fm.get("channel_names", [])
+                    
+                    pcm = seg["per_channel_metrics"]
+                    for metric, values in pcm.items():
+                        if len(values) == len(channel_names):
+                            for ch, val in zip(channel_names, values):
+                                # Key: "SegmentType::Metric"
+                                key = f"{stype}::{metric}"
+                                topomap_aggregates_segments[key][ch].append(val)
+                                
+        # Compute means
+        topo_agg_seg_means = {}
+        for key, ch_dict in topomap_aggregates_segments.items():
+             ch_means = {}
+             for ch, vals in ch_dict.items():
+                 ch_means[ch] = np.nanmean(vals)
+             channels = sorted(ch_means.keys())
+             arr = np.array([ch_means[ch] for ch in channels])
+             topo_agg_seg_means[key] = (channels, arr)
+
         # Generate segment dataset report
         if not args.skip_reports:
-             fig_paths = qc_reports.save_segment_dataset_figures(df_segments, output_dirs["figures"])
+             fig_paths = qc_reports.save_segment_dataset_figures(
+                 df_segments, 
+                 output_dirs["figures"],
+                 topomap_aggregates=topo_agg_seg_means
+             )
              qc_reports.create_segment_dataset_report(
                  df_segments, fig_paths, args.output_dir / "qc_raw_segments_report.html"
              )

@@ -375,7 +375,7 @@ def _segment_eye_states_within_interval(
         if not segments:
             segments.append(
                 {
-                    "segment_type": f"{segment_prefix}_UNKNOWN",
+                    "segment_type": segment_prefix,
                     "t_start": start,
                     "t_stop": stop,
                     "duration": block_dur,
