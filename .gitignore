@@ -9,6 +9,6 @@ data/
 plots/
 .venv/
 *egg-info/
-results/
+results*/
 .old
 analysis*/

@@ -16,8 +16,11 @@ from eeg_adhd_epilepsy.features.spectral import (
     compute_spectral_metrics,
     compute_line_noise_index,
     compute_hf_lf_ratio,
-    compute_aperiodic_slope
+    compute_aperiodic_slope,
+    compute_lsd
 )
+
+LOGGER = logging.getLogger("qc_metrics")
 
 
 def extract_metadata(raw: mne.io.BaseRaw) -> Dict[str, object]:
@@ -145,4 +148,46 @@ def compute_segment_qc(
     flag_bad, reasons = _evaluate_segment_flags(metrics)
     metrics["segment_flag_bad"] = flag_bad
     metrics["segment_flag_reasons"] = reasons
+    return metrics
+
+
+def compute_spectral_fidelity(
+    raw_clean: mne.io.BaseRaw, 
+    raw_orig: mne.io.BaseRaw, 
+    bands: Dict[str, Tuple[float, float]]
+) -> Dict[str, float]:
+    """
+    Compute Log-Spectral Distance (LSD) per band between clean and original data.
+    
+    Args:
+        raw_clean: Preprocessed Raw object.
+        raw_orig: Original Raw object.
+        bands: Dictionary of frequency bands {name: (fmin, fmax)}. 
+               If None, defaults to standard bands + Line(58-62).
+               
+    Returns:
+        Dictionary mapping "LSD_{band}" to the float score.
+    """    
+    metrics: Dict[str, float] = {}
+    
+    # Compute PSDs (Welch) - quick check on up to 60s for speed
+    tmax = min(raw_clean.times[-1], 60.0) 
+    
+    # Compute PSD for both (returns Spectrum)
+    spec_clean = raw_clean.compute_psd(tmax=tmax, fmax=120, n_jobs=1, verbose="ERROR")
+    spec_orig = raw_orig.compute_psd(tmax=tmax, fmax=120, n_jobs=1, verbose="ERROR")
+    
+    psd_clean, freqs = spec_clean.get_data(return_freqs=True)
+    psd_orig, _ = spec_orig.get_data(return_freqs=True)
+    
+    # Average over channels
+    avg_clean = np.mean(psd_clean, axis=0)
+    avg_orig = np.mean(psd_orig, axis=0)
+
+    for band, (fmin, fmax) in bands.items():
+        idx = (freqs >= fmin) & (freqs <= fmax)
+        if np.any(idx):
+            lsd_val = compute_lsd(avg_clean[idx], avg_orig[idx])
+            metrics[f"LSD_{band}"] = float(lsd_val)
+            
     return metrics

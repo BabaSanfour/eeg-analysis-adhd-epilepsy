@@ -34,7 +34,7 @@ def _integrate_power(
 
 def compute_spectral_metrics(
     data: mne.io.BaseRaw | mne.Epochs | None,
-    picks: List[str],
+    picks: List[str] | None,
     fmin: float = 1.0,
     fmax: float = 60.0,
     band_limits: Mapping[str, Tuple[float, float]] | None = None,
@@ -51,9 +51,16 @@ def compute_spectral_metrics(
         band_powers_per_channel: Dictionary of band powers per channel
     """
     band_limits = band_limits or BAND_LIMITS
-    if data is None or picks is None or len(picks) == 0:
+    if data is None:
         empty = np.array([])
         return None, empty, empty, float("nan"), {k: float("nan") for k in band_limits}, {k: empty for k in band_limits}
+
+    # Auto-pick EEG channels if picks is None or empty
+    if picks is None or len(picks) == 0:
+        picks = mne.pick_types(data.info, eeg=True, meg=False, exclude='bads')
+        if len(picks) == 0:
+            empty = np.array([])
+            return None, empty, empty, float("nan"), {k: float("nan") for k in band_limits}, {k: empty for k in band_limits}
 
     spec = data.compute_psd(picks=picks, fmin=fmin, fmax=fmax, verbose="ERROR")
     psd, freqs = spec.get_data(return_freqs=True)
@@ -64,7 +71,7 @@ def compute_spectral_metrics(
     
     if alpha_mask.any():
         # Alpha peak from mean PSD across channels
-        mean_psd_alpha = psd[:, alpha_mask].mean(axis=0)
+        mean_psd_alpha = np.nanmean(psd[:, alpha_mask], axis=0)
         alpha_idx = np.argmax(mean_psd_alpha)
         alpha_peak = float(freqs[alpha_mask][alpha_idx])
     else:
@@ -107,8 +114,8 @@ def compute_line_noise_index(
     )
     if not center_mask.any() or not neighbor_mask.any():
         return float("nan"), np.array([])
-    center_power = psd[:, center_mask].mean(axis=1)
-    neighbor_power = psd[:, neighbor_mask].mean(axis=1) + EPS
+    center_power = np.nanmean(psd[:, center_mask], axis=1)
+    neighbor_power = np.nanmean(psd[:, neighbor_mask], axis=1) + EPS
     ratios = center_power / neighbor_power
     return float(np.nanmean(ratios)), ratios
 
@@ -154,11 +161,22 @@ def compute_aperiodic_slope(
             verbose=False,
             aperiodic_mode="fixed",
         )
-        fg.fit(freqs[mask], psd[:, mask], n_jobs=1)
+        # Let's simple check:
+        valid_ch = ~np.isnan(psd[:, mask]).any(axis=1)
+
+        fg.fit(freqs[mask], psd[valid_ch][:, mask], n_jobs=1)
         
         res = fg.get_params("aperiodic_params")
-        intercepts_arr = res[:, 0]
-        slopes_arr = res[:, 1]
+        intercepts_valid = res[:, 0]
+        slopes_valid = res[:, 1]
+        
+        # Map back to full array
+        n_ch = psd.shape[0]
+        slopes_arr = np.full(n_ch, np.nan)
+        intercepts_arr = np.full(n_ch, np.nan)
+        
+        slopes_arr[valid_ch] = slopes_valid
+        intercepts_arr[valid_ch] = intercepts_valid
         
     except Exception:
         # Fallback to empty/nan if group fit fails completely
@@ -172,3 +190,18 @@ def compute_aperiodic_slope(
         float(np.nanmean(intercepts_arr)),
         slopes_arr,
     )
+
+
+def compute_lsd(psd_clean: np.ndarray, psd_raw: np.ndarray, eps: float = 1e-20) -> float:
+    """
+    Compute Log-Spectral Distance (LSD) between two PSDs in dB.
+    LSD = sqrt( mean( (10*log10(P_clean) - 10*log10(P_raw))^2 ) )
+    """
+    if psd_clean.shape != psd_raw.shape:
+        return float("nan")
+        
+    log_clean = 10 * np.log10(psd_clean + eps)
+    log_raw = 10 * np.log10(psd_raw + eps)
+    
+    diff_sq = (log_clean - log_raw) ** 2
+    return float(np.sqrt(np.nanmean(diff_sq)))

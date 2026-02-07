@@ -112,6 +112,7 @@ def load_bids_raw(
     run: str | None = None,
     acquisition: str | None = None,
     processing: str | None = None,
+    preload: bool = True,
 ) -> mne.io.BaseRaw:
     """Load a raw file using BIDS structure."""
     
@@ -149,7 +150,10 @@ def load_bids_raw(
         suffix="eeg",
         extension=filepath.suffix,
     )
-    return read_raw_bids(bids_path, verbose="ERROR")
+    raw = read_raw_bids(bids_path, verbose="ERROR")
+    if preload:
+        raw.load_data()
+    return raw
 
 
 def load_meas_datetimes(bids_root: Path) -> pd.Series:

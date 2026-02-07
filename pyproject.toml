@@ -22,10 +22,14 @@ dependencies = [
   "pandas",
   "mne",
   "mne-bids",
+  "mne-denoise",
   "torch",
   "tqdm",
   "scikit-learn",
   "umap-learn",
+  "pyprep",
+  "asrpy",
+  "autoreject",
 ]
 
 [project.urls]
