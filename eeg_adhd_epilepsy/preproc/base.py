@@ -91,16 +91,19 @@ def run_base_pipeline(
             - A dictionary containing processing provenance and statistics.
     """
     output_path = Path(output_dir) if output_dir else Path("./results")
+    bids_root = Path(config.get("bids_root", output_path))
     
-    # Define BIDS-like structure
-    derivatives_root = output_path / "derivatives" / "preproc"
+    # Derivatives go into BIDS root
+    derivatives_root = bids_root / "derivatives" / "preproc"
     subj_deriv_dir = derivatives_root / subject_id / "eeg"
     subj_deriv_dir.mkdir(parents=True, exist_ok=True)
     
-    # QC: qc/preproc/
-    qc_root = output_path / "qc" / "preproc"
+    # Reports go into output_path/qc/preproc/subjectreports_base
+    qc_root = output_path / "qc" / "preproc" / "subjectreports_base"
     qc_root.mkdir(parents=True, exist_ok=True)
-    figures_dir = qc_root / "figures"
+    
+    # Figures go into output_path/qc/preproc/figures
+    figures_dir = output_path / "qc" / "preproc" / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
     
     LOGGER.info(f"Starting base pipeline for {subject_id}")
@@ -722,7 +725,7 @@ def main():
     
     # Generate Dataset Report
     qc_root = output_dir / "qc" / "preproc"
-    derivatives_root = output_dir / "derivatives" / "preproc"
+    derivatives_root = bids_root / "derivatives" / "preproc"
     
     qc_root.mkdir(parents=True, exist_ok=True)
     
