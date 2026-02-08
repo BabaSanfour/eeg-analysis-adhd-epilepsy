@@ -42,7 +42,7 @@ from eeg_adhd_epilepsy.preproc.utils import (
     _sanitize_n_interpolate,
     _group_consecutive_indices,
     _event_sample_to_onset,
-
+    inflate_bad_annotations,
 )
 import sys
 import argparse
@@ -98,8 +98,8 @@ def run_base_pipeline(
     subj_deriv_dir = derivatives_root / subject_id / "eeg"
     subj_deriv_dir.mkdir(parents=True, exist_ok=True)
     
-    # Reports go into output_path/qc/preproc/subjectreports_base
-    qc_root = output_path / "qc" / "preproc" / "subjectreports_base"
+    # Reports go into output_path/qc/preproc/subjects_reports_base_preproc
+    qc_root = output_path / "qc" / "preproc" / "subjects_reports_base_preproc"
     qc_root.mkdir(parents=True, exist_ok=True)
     
     # Figures go into output_path/qc/preproc/figures
@@ -132,6 +132,11 @@ def run_base_pipeline(
     # 1. Annotate Blocks
     segments_file = config.get("processing", {}).get("segments_file", None)
     raw = annotate_blocks_from_csv(raw, segments_file=segments_file)
+    
+    # 1b. Inflate Manual Annotations (Major -> 5s, Common -> 3s)
+    raw = inflate_bad_annotations(raw)
+    LOGGER.info(f"Inflated manual annotations: {len(raw.annotations)}")
+    
     provenance["steps_completed"].append("annotate_blocks")
 
     # 2. Resample
@@ -208,26 +213,58 @@ def run_base_pipeline(
         "lsd": lsd_val
     }
 
-    # Clean Data Duration
+    # Clean Data Duration & Detailed Artifact Stats
     total_samples = raw.n_times
-    bad_mask = np.zeros(total_samples, dtype=bool)
-    for annot in raw.annotations:
-        desc = annot['description'] 
-        if desc.startswith('BAD_epoch_') or desc.startswith('BAD_ACQ_SKIP') or desc.startswith('BAD_boundary'):
-            start_idx = raw.time_as_index(annot['onset'])[0]
-            start_idx = max(0, start_idx)
-            end_idx = raw.time_as_index(annot['onset'] + annot['duration'])[0]
-            end_idx = min(total_samples, end_idx)
-            if end_idx > start_idx:
-                bad_mask[start_idx:end_idx] = True
     
-    clean_samples = total_samples - bad_mask.sum()
+    # Masks for different bad types (Global Only)
+    mask_all_bad = np.zeros(total_samples, dtype=bool)
+    mask_manual = np.zeros(total_samples, dtype=bool)
+    mask_autoreject = np.zeros(total_samples, dtype=bool)
+    
+    for i, annot in enumerate(raw.annotations):
+        desc = annot['description'] 
+        if not desc.startswith('BAD_'):
+            continue
+            
+        # Check if global (no specific channels targeted)
+        # MNE annotations use 'ch_names' key, which is a list/tuple
+        ch_names = annot.get('ch_names', [])
+        if ch_names:
+            continue # Skip local artifacts for global clean data calculation
+            
+        start_idx = raw.time_as_index(annot['onset'])[0]
+        start_idx = max(0, start_idx)
+        duration = annot['duration']
+        end_idx = raw.time_as_index(annot['onset'] + duration)[0]
+        end_idx = min(total_samples, end_idx)
+        
+        if end_idx > start_idx:
+            # Union mask for total clean data
+            mask_all_bad[start_idx:end_idx] = True
+            
+            # Categorize
+            if desc.startswith('BAD_epoch_'):
+                mask_autoreject[start_idx:end_idx] = True
+            elif desc.startswith('BAD_ACQ_SKIP') or desc.startswith('BAD_boundary'):
+                pass # Technical
+            else:
+                # Assumed Manual (BAD_movement, BAD_yawn, etc.)
+                mask_manual[start_idx:end_idx] = True
+    
+    bad_samples = mask_all_bad.sum()
+    clean_samples = total_samples - bad_samples
     clean_duration_s = clean_samples / raw.info['sfreq']
     clean_fraction = clean_samples / total_samples if total_samples > 0 else 0.0
+    
+    # Compute fractions for specific types
+    manual_bad_fraction = mask_manual.sum() / total_samples if total_samples > 0 else 0.0
+    autoreject_bad_fraction = mask_autoreject.sum() / total_samples if total_samples > 0 else 0.0
 
     provenance["integrity_stats"] = {
         "clean_duration_s": float(clean_duration_s),
-        "clean_fraction": float(clean_fraction)
+        "clean_fraction": float(clean_fraction),
+        "manual_bad_fraction": float(manual_bad_fraction),
+        "autoreject_bad_fraction": float(autoreject_bad_fraction)
     }
 
     provenance["artifact_stats"]["artifacts_count"] = len(raw.annotations)

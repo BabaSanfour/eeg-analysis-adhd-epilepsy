@@ -51,9 +51,6 @@ def map_annotation_to_category(desc: str) -> Optional[str]:
 
     # 1. Check for Ignored Demographics -> Drop
     for pat in config.IGNORED_LABELS:
-        # Use simple substring or regex? List includes exact phrases like "garcon de 9"
-        # but also "garcon". Let's use word boundary search or simpler check.
-        # Given the list is precise strings, let's try strict matching or word regex.
         if re.search(r'\b' + re.escape(pat.lower()) + r'\b', normalized):
             return "BAD_IGNORE"
             
@@ -140,7 +137,7 @@ def standardize_annotations(raw: mne.io.BaseRaw) -> mne.io.BaseRaw:
         elif cat in ALLOW_CLEAN or cat.startswith("clinical_"):
             new_descs.append(cat)
         else:
-            new_descs.append(f"bad_{cat}")
+            new_descs.append(f"BAD_{cat}")
 
     # Rebuild annotations
     raw.set_annotations(mne.Annotations(

@@ -336,3 +336,71 @@ def _group_consecutive_indices(indices: Sequence[int]) -> List[Tuple[int, int]]:
 def _event_sample_to_onset(raw: mne.io.BaseRaw, event_sample: int) -> float:
     """Convert a sample index (considering file offset) to onset time in seconds."""
     return max(0.0, (event_sample - raw.first_samp) / raw.info["sfreq"])
+
+
+def inflate_bad_annotations(
+    raw: mne.io.BaseRaw, 
+    default_duration: float = 3.0, 
+    major_duration: float = 5.0
+) -> mne.io.BaseRaw:
+    """Assign durations to point-like annotations based on standardized BIDS labels.
+    
+    This assumes annotations have likely been standardized by to_bids.py (e.g. 'bad_movement').
+    """
+    new_onsets = []
+    new_durations = []
+    new_descs = []
+    
+    # --- 1. Define Groups based on frequency ---
+    # Rare/Specific -> 5.0s (Safe to remove more as they are infrequent)
+    major_slugs = [
+        "yawn", "cough", "yawning_coughing", 
+        "emotion_behavior", 
+        "oral_activity", 
+        "sensor_artefact", "sensor_action" ,
+        "eye_movement", "blink",
+        "jaw_face_tension",
+        "sleep", "sleepy", "wakefulness"
+    ]
+
+    for annot in raw.annotations:
+        desc = str(annot['description'])
+        onset = float(annot['onset'])
+        duration = float(annot['duration'])
+        desc_lower = desc.lower()
+
+        # Only process if it starts with "bad"
+        if not desc_lower.startswith("bad"):
+            new_onsets.append(onset)
+            new_durations.append(duration)
+            new_descs.append(desc)
+            continue
+        
+        # Determine intended duration
+        target_duration = duration
+        if target_duration <= 0:
+            if any(slug in desc_lower for slug in major_slugs):
+                target_duration = major_duration
+            else:
+                target_duration = default_duration
+
+        # Ensure BAD_ prefix (MNE standard for rejection)
+        if not desc.startswith("BAD_"):
+            clean_desc = desc_lower.replace("bad_", "").replace("bad", "").strip("_").strip()
+            if not clean_desc:
+                desc = "BAD_manual"
+            else:
+                desc = f"BAD_{clean_desc}"
+
+        new_onsets.append(onset)
+        new_durations.append(target_duration)
+        new_descs.append(desc)
+        
+    new_annots = mne.Annotations(
+        onset=new_onsets,
+        duration=new_durations,
+        description=new_descs,
+        orig_time=raw.annotations.orig_time
+    )
+    raw.set_annotations(new_annots)
+    return raw

@@ -58,11 +58,17 @@ def create_preprocessing_report(
     clean_stats = provenance.get("integrity_stats", {})
     clean_dur = clean_stats.get("clean_duration_s", 0) / 60.0
     clean_pct = clean_stats.get("clean_fraction", 0) * 100.0
+    manual_bad_pct = clean_stats.get("manual_bad_fraction", 0) * 100.0
+    ar_bad_pct = clean_stats.get("autoreject_bad_fraction", 0) * 100.0
     
     spectral = provenance.get("spectral_stats", {})
     alpha = spectral.get("alpha_peak", float("nan"))
     slope = spectral.get("aperiodic_slope", float("nan"))
     lsd = spectral.get("lsd", float("nan"))
+
+    # Artifact Stats
+    art_stats = provenance.get("artifact_stats", {})
+    manual_overlap = art_stats.get("manual_overlap_pct", float("nan"))
 
     summary_html = f"""
     <h3>Pipeline Summary</h3>
@@ -70,8 +76,11 @@ def create_preprocessing_report(
         <li><b>Subject ID:</b> {subject_id}</li>
         <li><b>Total Duration:</b> {duration_min:.2f} min @ {sfreq:.1f} Hz</li>
         <li><b>Clean Data:</b> {clean_dur:.2f} min ({clean_pct:.1f}%)</li>
+        <li><b>Manual Bad Data:</b> {manual_bad_pct:.1f}%</li>
+        <li><b>AutoReject Bad Data:</b> {ar_bad_pct:.1f}%</li>
         <li><b>Channels:</b> {n_channels} Total / {n_bads} Bad ({pct_bad:.1f}%)</li>
         <li><b>Bad Channels:</b> {', '.join(bads) if bads else 'None'}</li>
+        <li><b>Manual Bad Overlap:</b> {manual_overlap:.1f}% (Redundant with AutoReject)</li>
     </ul>
     """
     
@@ -245,6 +254,7 @@ def create_dataset_report(
                 "1/f Slope": spec.get("aperiodic_slope", float("nan")),
                 "LSD (dB)": spec.get("lsd", float("nan")),
                 "Clean Data %": integ.get("clean_fraction", 0) * 100,
+                "Manual Overlap %": art_stats.get("manual_overlap_pct", float("nan")),
                 "Process Time (s)": total_time
             })
             
@@ -268,6 +278,7 @@ def create_dataset_report(
         <li><b>Total Subjects:</b> {len(df)}</li>
         <li><b>Avg Bad Channels:</b> {df["Bad Channels"].mean():.2f} (±{df["Bad Channels"].std():.2f})</li>
         <li><b>Avg Clean Data:</b> {df["Clean Data %"].mean():.1f}% (±{df["Clean Data %"].std():.1f}%)</li>
+        <li><b>Avg Manual Overlap:</b> {df["Manual Overlap %"].mean():.1f}% (±{df["Manual Overlap %"].std():.1f}%)</li>
         <li><b>Avg Process Time:</b> {df["Process Time (s)"].mean():.1f}s (±{df["Process Time (s)"].std():.1f}s)</li>
     </ul>
     """
@@ -291,13 +302,50 @@ def create_dataset_report(
     max_bads = int(df["Bad Channels"].max()) + 1
     bins = range(0, max_bads + 2)
     ax.hist(df["Bad Channels"], bins=bins, edgecolor="black", color="indianred", align="left")
-    ax.set_xlabel("Number of Bad Channels")
+    ax.set_xlabel("Number of Bad Channels per Subject")
     ax.set_ylabel("Number of Subjects")
-    ax.set_title("Distribution of Bad Channel Counts")
+    ax.set_title("Distribution of Bad Channel Counts (Per Subject)")
     ax.set_xticks(range(0, max_bads + 1))
     plt.tight_layout()
-    report.add_figure(fig_bads, title="Bad Channels Dist", section="Global Stats")
+    report.add_figure(fig_bads, title="Bad Channels Count", section="Global Stats")
     plt.close(fig_bads)
+    
+    all_bad_channels = []
+    for p_file in provenance_files:
+        try:
+            with open(p_file, "r") as f:
+                prov = json.load(f)
+                all_bad_channels.extend(prov.get("bad_channels_global", []))
+        except:
+            pass
+
+    if all_bad_channels:
+        from collections import Counter
+        bad_counts = Counter(all_bad_channels)
+        # Sort by count descending
+        sorted_bads = sorted(bad_counts.items(), key=lambda x: x[1], reverse=True)
+        ch_names = [x[0] for x in sorted_bads]
+        counts = [x[1] for x in sorted_bads]
+        
+        fig_ch, ax = plt.subplots(figsize=(max(10, len(ch_names)*0.3), 6))
+        ax.bar(ch_names, counts, color="salmon", edgecolor="black")
+        ax.set_ylabel("Count of Subjects")
+        ax.set_title("Frequency of Bad Channels (Dataset Level)")
+        plt.xticks(rotation=45, ha="right")
+        plt.tight_layout()
+        report.add_figure(fig_ch, title="Bad Channels Frequency", section="Global Stats")
+        plt.close(fig_ch)
+
+    # NEW: Low Overlap Identification
+    low_overlap_df = df[df["Manual Overlap %"] < 80.0]
+    if not low_overlap_df.empty:
+        low_overlap_html = "<h3>Subjects with Low Manual Overlap (< 80%)</h3><ul>"
+        for _, row in low_overlap_df.iterrows():
+            low_overlap_html += f"<li><b>{row['Subject']}</b>: {row['Manual Overlap %']:.1f}%</li>"
+        low_overlap_html += "</ul>"
+        
+        # Add a warning section at the top
+        report.add_html(low_overlap_html, title="Low Overlap Warning", section="Summary")
     
     # Artifact Stats: Bad Epochs Distribution
     fig_epochs, ax = plt.subplots(figsize=(6, 5))
