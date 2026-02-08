@@ -503,81 +503,113 @@ def annotate_artifacts_blockwise(
             verbose="ERROR",
         )
 
-        # Run AutoReject
-        n_epochs = len(epochs)
+        # Run AutoReject on chunks for long files
+        # ----------------------------------------
+        # We split the epochs into manageable chunks (e.g., 30 mins) to avoid
+        # super-linear scaling of AutoReject with N epochs.
+        
+        CHUNK_DURATION_S = 1800.0 # 30 minutes
+        n_epochs_chunk_max = int(CHUNK_DURATION_S / seg_len)
+        
+        n_epochs_total = len(epochs)
         
         # Check against minimum epochs threshold
-        if n_epochs < min_epochs:
-            LOGGER.warning(f"Too few epochs ({n_epochs} < {min_epochs}) for AutoReject in condition {condition_name}. Skipping AR.")
+        if n_epochs_total < min_epochs:
+            LOGGER.warning(f"Too few epochs ({n_epochs_total} < {min_epochs}) for AutoReject in condition {condition_name}. Skipping AR.")
             continue
+
+        # Create chunks
+        if n_epochs_total > n_epochs_chunk_max:
+            n_chunks = int(np.ceil(n_epochs_total / n_epochs_chunk_max))
+            LOGGER.info(f"Condition '{condition_name}' too long ({n_epochs_total} epochs). Splitting into {n_chunks} chunks of ~{n_epochs_chunk_max} epochs.")
+            epoch_chunks = []
+            for i in range(n_chunks):
+                start_idx = i * n_epochs_chunk_max
+                end_idx = min((i + 1) * n_epochs_chunk_max, n_epochs_total)
+                chunk = epochs[start_idx:end_idx]
+                if len(chunk) >= min_epochs:
+                    epoch_chunks.append((i, chunk))
+        else:
+            epoch_chunks = [(0, epochs)]
             
-        cv = 10
-        if n_epochs < cv:
-            cv = n_epochs
-            LOGGER.info(f"Adjusting AutoReject CV to {cv} folds for {condition_name} ({n_epochs} epochs).")
+        for chunk_idx, epochs_chunk in epoch_chunks:
+            n_epochs_chunk = len(epochs_chunk)
+            chunk_suffix = f"_chunk{chunk_idx+1}" if len(epoch_chunks) > 1 else ""
+            
+            LOGGER.info(f"Processing AutoReject for {condition_name}{chunk_suffix} ({n_epochs_chunk} epochs)")
+            
+            cv = 10
+            if n_epochs_chunk < cv:
+                cv = n_epochs_chunk
+                LOGGER.info(f"Adjusting AutoReject CV to {cv} folds for {condition_name}{chunk_suffix}.")
 
-        ar = AutoReject(
-            n_interpolate=n_interpolate,
-            random_state=random_seed,
-            n_jobs=n_jobs,
-            verbose=False,
-            cv=cv
-        )
-        ar.fit(epochs)
-        reject_log = ar.get_reject_log(epochs)
-        
-        # Save AutoReject Visualization
-        fig = reject_log.plot(orientation='horizontal', show=False)
-        
-        # Resize for better visibility with many epochs
-        fig.set_size_inches(16, 10) # Wider for horizontal plot
+            try:
+                ar = AutoReject(
+                    n_interpolate=n_interpolate,
+                    random_state=random_seed,
+                    n_jobs=n_jobs,
+                    verbose=False,
+                    cv=cv
+                )
+                ar.fit(epochs_chunk)
+                reject_log = ar.get_reject_log(epochs_chunk)
+                
+                # Save AutoReject Visualization
+                fig = reject_log.plot(orientation='horizontal', show=False)
+                fig.set_size_inches(16, 10) 
 
-        clean_name = condition_name.lower().replace(" ", "_")
-        fig.savefig(figures_dir / f"{subject_id}_autoreject_{clean_name}.png", dpi=150)
-        import matplotlib.pyplot as plt
-        plt.close(fig)
+                clean_name = condition_name.lower().replace(" ", "_")
+                fig.savefig(figures_dir / f"{subject_id}_autoreject_{clean_name}{chunk_suffix}.png", dpi=150)
+                import matplotlib.pyplot as plt
+                plt.close(fig)
 
-        # Convert rejection log to annotations
-        cond_bad_epochs = 0
-        cond_bad_spans = 0
+                # Convert rejection log to annotations
+                chunk_bad_epochs = 0
+                chunk_bad_spans = 0
 
-        # Bad epochs (global)
-        for ep_idx, is_bad_epoch in enumerate(reject_log.bad_epochs):
-            if not is_bad_epoch:
-                continue
-            onset_s = _event_sample_to_onset(raw, int(epochs.events[ep_idx, 0]))
-            new_annots.append((onset_s, seg_len, f"BAD_epoch_{condition_name}", ()))
-            cond_bad_epochs += 1
-
-        # Bad channels (local)
-        labels = np.asarray(reject_log.labels)
-        if labels.ndim == 2 and labels.shape[0] == len(epochs):
-            for ch_idx, ch_name in enumerate(epochs.ch_names):
-                bad_idx = np.flatnonzero(labels[:, ch_idx] != 0)
-                for first_idx, last_idx in _group_consecutive_indices(bad_idx):
-                    start_samp = int(epochs.events[first_idx, 0])
-                    end_samp = int(epochs.events[last_idx, 0])
-                    start_s = _event_sample_to_onset(raw, start_samp)
-                    end_s = _event_sample_to_onset(raw, end_samp) + seg_len
-                    duration_s = end_s - start_s
-
-                    if duration_s <= 0:
+                # Bad epochs (global)
+                for ep_idx, is_bad_epoch in enumerate(reject_log.bad_epochs):
+                    if not is_bad_epoch:
                         continue
-                    new_annots.append(
-                        (start_s, duration_s, f"BAD_{condition_name}", (ch_name,))
-                    )
-                    cond_bad_spans += 1
+                    # Use absolute sample index from original raw via epochs.events
+                    onset_s = _event_sample_to_onset(raw, int(epochs_chunk.events[ep_idx, 0]))
+                    new_annots.append((onset_s, seg_len, f"BAD_epoch_{condition_name}", ()))
+                    chunk_bad_epochs += 1
+
+                # Bad channels (local)
+                labels = np.asarray(reject_log.labels)
+                if labels.ndim == 2 and labels.shape[0] == len(epochs_chunk):
+                    for ch_idx, ch_name in enumerate(epochs_chunk.ch_names):
+                        bad_idx = np.flatnonzero(labels[:, ch_idx] != 0)
+                        for first_idx, last_idx in _group_consecutive_indices(bad_idx):
+                            start_samp = int(epochs_chunk.events[first_idx, 0])
+                            end_samp = int(epochs_chunk.events[last_idx, 0])
+                            start_s = _event_sample_to_onset(raw, start_samp)
+                            end_s = _event_sample_to_onset(raw, end_samp) + seg_len
+                            duration_s = end_s - start_s
+
+                            if duration_s <= 0:
+                                continue
+                            new_annots.append(
+                                (start_s, duration_s, f"BAD_{condition_name}", (ch_name,))
+                            )
+                            chunk_bad_spans += 1
+                
+                stats["bad_epochs"] += chunk_bad_epochs
+                stats["bad_channel_spans"] += chunk_bad_spans
+                
+            except Exception as e:
+                LOGGER.error(f"AutoReject Failed for condition {condition_name}{chunk_suffix}: {e}")
+                continue
 
         stats["blocks_processed"] += len(blocks)
-        stats["bad_epochs"] += cond_bad_epochs
-        stats["bad_channel_spans"] += cond_bad_spans
+        
         stats["by_block"].append(
             {
                 "condition": condition_name,
                 "n_blocks_merged": len(blocks),
-                "epochs": len(epochs),
-                "bad_epochs": cond_bad_epochs,
-                "bad_channel_spans": cond_bad_spans,
+                "epochs_total": n_epochs_total,
+                "chunks_processed": len(epoch_chunks)
             }
         )
 
