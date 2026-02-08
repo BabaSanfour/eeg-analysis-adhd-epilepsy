@@ -158,15 +158,16 @@ def run_base_pipeline(
         # Ensure lowpass is strictly less than Nyquist (sfreq/2)
         nyquist = raw.info["sfreq"] / 2.0
         h_f = min(lp_hz, nyquist - 0.1) if lp_hz else None
+        n_jobs = int(config.get("n_jobs", 1))
         
-        LOGGER.info(f"Applying Bandpass filter: {hp_hz}-{h_f} Hz")
-        raw.filter(l_freq=hp_hz, h_freq=h_f, verbose="ERROR")
+        LOGGER.info(f"Applying Bandpass filter: {hp_hz}-{h_f} Hz (n_jobs={n_jobs})")
+        raw.filter(l_freq=hp_hz, h_freq=h_f, verbose="ERROR", n_jobs=n_jobs)
         provenance["steps_completed"].append("bandpass_filter")
         
         # 3b. Notch Filter
-        LOGGER.info(f"Applying Notch filter at {line_freq} Hz and harmonics")
+        LOGGER.info(f"Applying Notch filter at {line_freq} Hz and harmonics (n_jobs={n_jobs})")
         freqs = np.arange(line_freq, raw.info["sfreq"]/2, line_freq)
-        raw.notch_filter(freqs, verbose="ERROR", method='fir', phase='zero-double')
+        raw.notch_filter(freqs, verbose="ERROR", method='fir', phase='zero-double', n_jobs=n_jobs)
         provenance["steps_completed"].append("notch_filter")
         provenance["zapline_stats"] = {"method": "notch", "line_freq": line_freq}
 
@@ -659,7 +660,8 @@ def main():
     parser.add_argument("--test", action="store_true", help="Run on first 5 subjects for testing")
     parser.add_argument("--random", action="store_true", help="When combined with --test, select 5 random subjects instead of first 5")
     parser.add_argument("--subjects", nargs="+", help="List of specific subject IDs (e.g., sub-001 sub-002)")
-    parser.add_argument("--start-from", type=str, help="Resume processing from this subject ID")
+    parser.add_argument("--skip-existing", action="store_true", help="Skip subjects that already have a provenance file")
+    parser.add_argument("--long-files", action="store_true", help="Optimize for long files (internal parallelism, 1 subject at a time)")
     
     args = parser.parse_args()
     
@@ -725,38 +727,114 @@ def main():
         parser.print_help()
         sys.exit(0)
         
+    # Apply --skip-existing filter
+    if args.skip_existing:
+        LOGGER.info("Checking for existing provenance files to skip...")
+        derivatives_root = bids_root / "derivatives" / "preproc"
+        
+        subjects_to_skip = set()
+        for sid in subjects_to_process:
+            prov_path = derivatives_root / sid / "eeg" / f"{sid}_desc-base_provenance.json"
+            if prov_path.exists():
+                subjects_to_skip.add(sid)
+        
+        if subjects_to_skip:
+            LOGGER.info(f"Skipping {len(subjects_to_skip)} already processed subjects.")
+            subjects_to_process = subjects_to_process - subjects_to_skip
+        else:
+            LOGGER.info("No existing subjects found to skip.")
+
     # Map back to files
     files_to_process = [f for f in files if file_map[f] in subjects_to_process]
     
     if not files_to_process:
-        LOGGER.warning("No files matched the selection criteria.")
+        LOGGER.warning("No files matched the final selection criteria.")
         sys.exit(0)
         
-    # Execution Loop
-    LOGGER.info(f"Starting batch processing of {len(files_to_process)} files with {args.n_jobs} jobs...")
-    
-    pipeline_config = {
-        "n_jobs": 1, 
-        "bids_root": str(bids_root),
-        "processing": {
-            "highpass_hz": args.highpass,
-            "lowpass_hz": args.lowpass,
-            "resample_hz": args.resample,
-        },
-        "line_noise": {
-            "line_freq": args.line_freq,
-        }
-    }
-    
-    # Run Parallel with progress bar
-    with tqdm_joblib(tqdm(total=len(files_to_process), desc="Preprocessing")):
-        results = Parallel(n_jobs=args.n_jobs)(
-            delayed(_process_subject)(f, output_dir, pipeline_config)
-            for f in files_to_process
-        )
+    # Determine Parallelization Strategy
+    # If --long-files is manually set, treat ALL files as long
+    if args.long_files:
+        LOGGER.info(f"Manual override: Treating all {len(files_to_process)} files as 'long' (sequential processing).")
+        long_files = files_to_process
+        short_files = []
+    else:
+        # Automatic Splitting based on duration
+        LOGGER.info("Scanning file durations to optimize parallelization...")
+        short_files = []
+        long_files = []
         
-    success_count = sum(results)
-    fail_count = len(results) - success_count
+        for f in tqdm(files_to_process, desc="Checking Durations"):
+            try:
+                # Read header only
+                raw_info = mne.io.read_raw_brainvision(f, preload=False, verbose="ERROR")
+                duration_min = (raw_info.n_times / raw_info.info['sfreq']) / 60.0
+                
+                if duration_min >= 60.0:
+                    long_files.append(f)
+                else:
+                    short_files.append(f)
+            except Exception as e:
+                LOGGER.warning(f"Could not read duration for {f.name}, treating as long file. Error: {e}")
+                long_files.append(f)
+                
+        LOGGER.info(f"Optimization Strategy: {len(short_files)} short files (<60m), {len(long_files)} long files (>=60m)")
+
+    # ---------------------------------------------------------
+    # Phase 1: Process Short Files (Parallel Subjects)
+    # ---------------------------------------------------------
+    results_short = []
+    if short_files:
+        LOGGER.info(f"--- Phase 1: Processing {len(short_files)} short files in parallel (n_jobs={args.n_jobs}) ---")
+        
+        pipeline_config_short = {
+            "n_jobs": 1,  # 1 core per subject internally
+            "bids_root": str(bids_root),
+            "processing": {
+                "highpass_hz": args.highpass,
+                "lowpass_hz": args.lowpass,
+                "resample_hz": args.resample,
+            },
+            "line_noise": {
+                "line_freq": args.line_freq,
+            }
+        }
+        
+        with tqdm_joblib(tqdm(total=len(short_files), desc="Processing Short Files")):
+            results_short = Parallel(n_jobs=args.n_jobs)(
+                delayed(_process_subject)(f, output_dir, pipeline_config_short)
+                for f in short_files
+            )
+
+    # ---------------------------------------------------------
+    # Phase 2: Process Long Files (Sequential Subjects, Parallel Internal)
+    # ---------------------------------------------------------
+    results_long = []
+    if long_files:
+        LOGGER.info(f"--- Phase 2: Processing {len(long_files)} long files sequentially (internal n_jobs={args.n_jobs}) ---")
+        
+        pipeline_config_long = {
+            "n_jobs": args.n_jobs, # Full power per subject
+            "bids_root": str(bids_root),
+            "processing": {
+                "highpass_hz": args.highpass,
+                "lowpass_hz": args.lowpass,
+                "resample_hz": args.resample,
+            },
+            "line_noise": {
+                "line_freq": args.line_freq,
+            }
+        }
+        
+        # Simple loop, no Parallel (or Parallel(n_jobs=1))
+        # We use a loop to ensure strictly sequential execution to save memory
+        for f in tqdm(long_files, desc="Processing Long Files"):
+            res = _process_subject(f, output_dir, pipeline_config_long)
+            results_long.append(res)
+            
+    # Summary
+    all_results = results_short + results_long
+    success_count = sum(all_results)
+    fail_count = len(all_results) - success_count
             
     LOGGER.info(f"Batch processing complete. Success: {success_count}, Failed: {fail_count}")
     
