@@ -770,7 +770,7 @@ def main():
                 raw_info = mne.io.read_raw_brainvision(f, preload=False, verbose="ERROR")
                 duration_min = (raw_info.n_times / raw_info.info['sfreq']) / 60.0
                 
-                if duration_min >= 60.0:
+                if duration_min >= 30.0:
                     long_files.append(f)
                 else:
                     short_files.append(f)
