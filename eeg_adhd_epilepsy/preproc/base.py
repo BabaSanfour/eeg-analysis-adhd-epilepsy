@@ -505,8 +505,10 @@ def annotate_artifacts_blockwise(
 
         # Run AutoReject
         n_epochs = len(epochs)
-        if n_epochs < 2:
-            LOGGER.warning(f"Too few epochs ({n_epochs}) for AutoReject in condition {condition_name}. Skipping AR.")
+        
+        # Check against minimum epochs threshold
+        if n_epochs < min_epochs:
+            LOGGER.warning(f"Too few epochs ({n_epochs} < {min_epochs}) for AutoReject in condition {condition_name}. Skipping AR.")
             continue
             
         cv = 10
@@ -778,7 +780,7 @@ def main():
                 LOGGER.warning(f"Could not read duration for {f.name}, treating as long file. Error: {e}")
                 long_files.append(f)
                 
-        LOGGER.info(f"Optimization Strategy: {len(short_files)} short files (<60m), {len(long_files)} long files (>=60m)")
+        LOGGER.info(f"Optimization Strategy: {len(short_files)} short files (<30m), {len(long_files)} long files (>=30m)")
 
     # ---------------------------------------------------------
     # Phase 1: Process Short Files (Parallel Subjects)
