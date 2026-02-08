@@ -660,6 +660,7 @@ def main():
     parser.add_argument("--test", action="store_true", help="Run on first 5 subjects for testing")
     parser.add_argument("--random", action="store_true", help="When combined with --test, select 5 random subjects instead of first 5")
     parser.add_argument("--subjects", nargs="+", help="List of specific subject IDs (e.g., sub-001 sub-002)")
+    parser.add_argument("--start-from", type=str, help="Resume processing from this subject ID")
     parser.add_argument("--skip-existing", action="store_true", help="Skip subjects that already have a provenance file")
     parser.add_argument("--long-files", action="store_true", help="Optimize for long files (internal parallelism, 1 subject at a time)")
     
