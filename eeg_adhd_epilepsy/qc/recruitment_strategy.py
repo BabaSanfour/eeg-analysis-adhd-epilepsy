@@ -120,7 +120,7 @@ def get_row_stats(df, label, indent_level):
     full_label = f"{prefix}{label}"
     
     if n == 0:
-        return {"Label": full_label, "N": 0, "Male%": "-", "Age": "-", "RawN": 0, "CleanLabel": label}
+        return {"Label": full_label, "N": 0, "Male%": "-", "Age": "-", "RawN": 0, "CleanLabel": label, "IndentLevel": indent_level}
     
     n_male = df[df["Sex"] == "M"].shape[0] if "Sex" in df.columns else 0
     pct_male = (n_male / n) * 100
@@ -133,7 +133,8 @@ def get_row_stats(df, label, indent_level):
         "Male%": f"{pct_male:.1f}%",
         "Age": f"{age_mean:.1f} ± {age_std:.1f}",
         "RawN": n,
-        "CleanLabel": label
+        "CleanLabel": label,
+        "IndentLevel": indent_level
     }
 
 # --- CALCULATION LOGIC ---
@@ -174,8 +175,13 @@ def calculate_recruitment_logic(base_rows, milestone_n):
              if "Pure ADHD (Total)" in parent_target_map:
                  total = parent_target_map["Pure ADHD (Total)"]
                  unmed = 100 if milestone_n==1500 else (150 if milestone_n==2000 else 200)
-                 target_n = int((total - unmed) / 2) # Equal split
-
+                 if milestone_n <= 2000:
+                     target_n = int((total - unmed) / 2)
+                 else:
+                     target_n = 200 
+                     if milestone_n == 5000:
+                         target_n = 400
+                         
         # Epilepsy
         elif label == "Unmedicated" and "Pure Epilepsy (Total)" in parent_target_map:
              if milestone_n == 1500: target_n = 100
@@ -204,7 +210,7 @@ def calculate_recruitment_logic(base_rows, milestone_n):
              if milestone_n == 1500: target_n = 75
              elif milestone_n == 2000: target_n = 50
              elif milestone_n >= 3000: target_n = 50
-             if milestone_n == 5000: target_n = 100 # Boost for 5k?
+             if milestone_n == 5000: target_n = 100 # Boost for 5k
              
         elif label == "Unmedicated" and "Epilepsy + ADHD (Comorbid)" in parent_target_map:
              target_n = 50
@@ -220,15 +226,38 @@ def calculate_recruitment_logic(base_rows, milestone_n):
             recruit_val = 0
             
         result_rows.append({
-            "Group": r["Label"],
-            "Current": r["RawN"],
-            "Target": target_n,
-            "Recruit": recruit_str,
-            "Strategy": strategy,
+            "Clinical Group": r["Label"],
+            "Current Patients": r["RawN"],
+            "Target Total": target_n,
+            "Recruit Needed": recruit_str,
             "RecruitN": recruit_val, # Numeric for plotting
             "CleanLabel": label,
-            "IsParent": r["Label"].strip().startswith("&") is False
+            "IndentLevel": r["IndentLevel"],
+            "IsParent": r["Label"].strip().startswith("&") is False,
+            "ChildRecruitSum": 0
         })
+
+    # --- ROLLUP LOGIC (Children -> Parent) ---
+    # Iterate backwards to sum children into parents
+    for i in range(len(result_rows) - 1, -1, -1):
+        curr = result_rows[i]
+        curr_level = curr['IndentLevel']
+        
+        # 1. Update Current Node if Child Sum > Current Recruit
+        if curr['ChildRecruitSum'] > 0:
+            if curr['ChildRecruitSum'] > curr['RecruitN']:
+                curr['RecruitN'] = curr['ChildRecruitSum']
+                # Update display string to reflect sum
+                curr['Recruit Needed'] = f"+{curr['RecruitN']}"
+        
+        # 2. Add to Parent (if not top level)
+        if curr_level > 0:
+            # Find first preceding node with level - 1
+            for j in range(i - 1, -1, -1):
+                parent = result_rows[j]
+                if parent['IndentLevel'] == curr_level - 1:
+                    parent['ChildRecruitSum'] += curr['RecruitN']
+                    break
         
     return result_rows
 
@@ -248,14 +277,14 @@ def plot_recruitment_gap(milestone_data, milestone_n):
     # df = df.sort_values("TargetNum", ascending=True)
     
     labels = df["CleanLabel"]
-    current = df["Current"]
+    current = df["Current Patients"]
     recruit = df["RecruitN"]
     
     fig, ax = plt.subplots(figsize=(10, 6))
     
     # Plot Stacked
-    ax.barh(labels, current, label="Current", color="#2ecc71")
-    ax.barh(labels, recruit, left=current, label="To Recruit", color="#e74c3c")
+    ax.barh(labels, current, label="Current Patients", color="#2ecc71")
+    ax.barh(labels, recruit, left=current, label="Needed", color="#e74c3c")
     
     ax.set_title(f"Recruitment Gap for Milestone N={milestone_n}", fontsize=15)
     ax.set_xlabel("Number of Subjects")
@@ -264,27 +293,69 @@ def plot_recruitment_gap(milestone_data, milestone_n):
     # Annotate total target
     for i, (c, r) in enumerate(zip(current, recruit)):
         total = c + r
-        ax.text(total + 5, i, f"Target: {total}", va='center', fontweight='bold')
+        ax.text(total + 5, i, f"Goal: {total}", va='center', fontweight='bold')
 
     sns.despine()
     return fig
 
-def plot_milestone_progression(all_milestones, current_total):
-    """Line plot showing growth of total dataset."""
-    milestones = sorted(TARGETS.keys())
-    x = ["Current"] + [f"N={m}" for m in milestones]
-    y = [current_total] + milestones
+def plot_group_trajectories(current_counts):
+    """Line plot showing recruitment needs for each group."""
+    milestones = [1500, 2000, 3000, 5000]
     
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(x, y, marker='o', linestyle='-', color='#3498db', linewidth=2)
+    # Groups to plot
+    groups = [
+        "Healthy Controls",
+        "Pure ADHD (Total)",
+        "Pure Epilepsy (Total)",
+        "Epilepsy + ADHD (Comorbid)"
+    ]
     
-    for i, val in enumerate(y):
-        ax.annotate(f"{val}", (i, val), xytext=(0, 10), textcoords='offset points', ha='center')
+    x_labels = ["Current"] + [str(m) for m in milestones]
+    
+    # Collect Y values (To Add)
+    plot_data = {}
+    total_to_add = [0] * len(x_labels)
+    
+    for g in groups:
+        curr = current_counts.get(g, 0)
+        # Calculate Delta: 0 for Current, (Target - Current) for milestones
+        deltas = [0] + [max(0, TARGETS[m][g] - curr) for m in milestones]
+        plot_data[g] = deltas
         
-    ax.set_title("Dataset Growth Trajectory", fontsize=15)
-    ax.set_ylabel("Total Subjects")
-    ax.grid(True, linestyle='--', alpha=0.6)
+        # Accumulate total
+        total_to_add = [sum(x) for x in zip(total_to_add, deltas)]
+        
+    # Add Total to plot data
+    plot_data["Total (Sum)"] = total_to_add
+        
+    fig, ax = plt.subplots(figsize=(10, 6))
+    
+    # Define styles
+    styles = {
+        "Healthy Controls": ('#2ecc71', 'o', '-'),
+        "Pure ADHD (Total)": ('#e67e22', 's', '-'),
+        "Pure Epilepsy (Total)": ('#9b59b6', '^', '-'),
+        "Epilepsy + ADHD (Comorbid)": ('#e74c3c', 'D', '-'),
+        "Total (Sum)": ('#34495e', '*', '--') # Dark Blue/Grey, Dashed
+    }
+    
+    for g, y_vals in plot_data.items():
+        color, marker, style = styles.get(g, ('black', 'x', '-'))
+        simple_label = g.replace(" (Total)", "").replace("Epilepsy + ADHD (Comorbid)", "Comorbid")
+        
+        ax.plot(x_labels, y_vals, marker=marker, linestyle=style, linewidth=2.5, label=simple_label, color=color)
+        
+        # Annotate end point
+        ax.annotate(f"+{y_vals[-1]}", (len(x_labels)-1, y_vals[-1]), 
+                   xytext=(5, 0), textcoords='offset points', va='center', fontweight='bold', color=color)
+
+    ax.set_title("Recruitment Projection: Subjects to be Added", fontsize=15)
+    ax.set_ylabel("N_subjects to be added")
+    ax.set_xlabel("Target Milestone (Total Dataset Size)")
+    ax.legend(title="Group", loc='upper left')
+    ax.grid(True, linestyle='--', alpha=0.4)
     sns.despine()
+    
     return fig
 
 # --- MAIN ---
@@ -341,11 +412,18 @@ def main():
     
     meth = pd.DataFrame() 
     lisd = pd.DataFrame()
+    other_adhd = pd.DataFrame()
     if "psychostimulant_description_clean" in med_adhd.columns:
         meth = med_adhd[med_adhd["psychostimulant_description_clean"] == "Methylphenidate"]
         lisd = med_adhd[med_adhd["psychostimulant_description_clean"] == "Lisdexamfetamine"]
+        # Find others (medicated but not meth/lisd)
+        known_ids = meth.index.union(lisd.index)
+        other_adhd = med_adhd[~med_adhd.index.isin(known_ids)]
+        
     base_rows.append(get_row_stats(meth, "Methylphenidate", 2))
     base_rows.append(get_row_stats(lisd, "Lisdexamfetamine", 2))
+    if not other_adhd.empty:
+        base_rows.append(get_row_stats(other_adhd, "Other (Stimulants)", 2))
     
     # Epilepsy
     ep = df[df["has_epilepsy"] & (~df["has_adhd"]) & (~df["has_tsa"])]
@@ -356,11 +434,18 @@ def main():
     
     lev = pd.DataFrame()
     vpa = pd.DataFrame()
+    other_ep = pd.DataFrame()
     if "LEV_bool" in med_ep.columns:
         lev = med_ep[med_ep["LEV_bool"] & (med_ep["n_epilepsy_meds"] == 1)]
         vpa = med_ep[med_ep["VPA_bool"] & (med_ep["n_epilepsy_meds"] == 1)]
+        # Find others
+        known_ids = lev.index.union(vpa.index)
+        other_ep = med_ep[~med_ep.index.isin(known_ids)]
+        
     base_rows.append(get_row_stats(lev, "Levetiracetam (Mono)", 2))
     base_rows.append(get_row_stats(vpa, "Valproic Acid (Mono)", 2))
+    if not other_ep.empty:
+        base_rows.append(get_row_stats(other_ep, "Other (ASMs)", 2))
     
     # Comorbid
     com = df[df["has_epilepsy"] & df["has_adhd"] & (~df["has_tsa"])]
@@ -411,46 +496,54 @@ def main():
     </head>
     <body>
         <div class="container">
-            <h1>EEG Recruitment Strategy Report</h1>
-            <p>Generated on {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+            <h1>EEG Recruitment Strategy Overview</h1>
+            <p>Generated on {datetime.now().strftime('%Y-%m-%d')}</p>
             
             <div class="alert">
-                <strong>Data Inclusion Summary:</strong><br>
-                Out of <strong>{n_init}</strong> initial subjects:<br>
-                <ul>
-                    <li>Dropped <strong>{n_pot}</strong> with "0 (potentiel)" status in TSA, Epilepsy, or ADHD.</li>
-                    <li>Dropped <strong>{n_mis}</strong> with medication mismatches and <strong>{n_dup}</strong> duplicate IDs.</li>
-                    <li>Excluded <strong>{n_bids_missing}</strong> subjects missing accessible BIDS data (encrypted/missing files).</li>
-                </ul>
-                <strong>Final Analyzable Dataset: {current_total} subjects.</strong>
+                <strong>Analyzable Dataset: {current_total} subjects.</strong><br>
+                <small>(Excluded {n_bids_missing + n_pot + n_mis + n_dup} subjects due to missing data/files)</small>
             </div>
 
             <div class="stats-box">
-                <h3>Collection Criteria & Priorities</h3>
-                <p>This strategy focuses on <strong>balancing sample sizes</strong> to enable robust statistical comparisons (aiming for 1:1 matching where possible). Our key priorities are:</p>
-                <ol>
-                    <li><strong>Controls vs. Disease:</strong> Substantially increasing Healthy Controls to match the large Epilepsy and Comorbid populations.</li>
-                    <li><strong>Unmedicated Gap:</strong> Urgently recruiting <em>Unmedicated</em> ADHD and Epilepsy subjects to distinguish pure disease markers from medication effects.</li>
-                    <li><strong>Medication Sub-types:</strong> Ensuring sufficient N to compare specific drugs (e.g., Methylphenidate vs. Lisdexamfetamine; Levetiracetam vs. Valproic Acid).</li>
-                    <li><strong>Comorbid Interactions:</strong> Targeting "Partial Medication" groups (e.g., ASM Only) within the Comorbid population to isolate the additive effects of treatments.</li>
-                </ol>
+                <h3>Guide: How to Read This Report</h3>
+                <p>These tables show the <strong>recruitment targets</strong> needed to enable specific research analyses (e.g., comparing medication effects). By reaching these goals, we ensure balanced groups for robust statistical power.</p>
+                <ul>
+                    <li><strong>Clinical Group:</strong> The specific patient subgroup. <em>(Indented rows are subgroups of the row above).</em></li>
+                    <li><strong>Current Patients:</strong> Number of analyzable subjects we currently have.</li>
+                    <li><strong>Total Target:</strong> The total number of subjects we want to reach.</li>
+                    <li><strong style="color: #c0392b;">Recruit Needed:</strong> The number of <strong>NEW</strong> subjects you need to collect to meet the target.</li>
+                </ul>
             </div>
     """
     
     # Section 2: Baseline
-    html += "<h2>1. Analyzable Baseline</h2>"
-    df_base = pd.DataFrame(base_rows).drop(columns=["CleanLabel"])
+    html += "<h2>1. Current Analyzable Baseline</h2>"
+    df_base = pd.DataFrame(base_rows).drop(columns=["CleanLabel", "IndentLevel"])
     html += _generate_datatable_js(df_base, "baselineTable")
     
-    # Section 2: Milestones & Viz
+    # Section 3: Milestones & Viz
     milestones = [1500, 2000, 3000, 5000]
     
+    # Calculate Current Counts for Plotting
+    current_counts = {
+        "Healthy Controls": len(df[(~df["has_adhd"]) & (~df["has_epilepsy"]) & (~df["has_tsa"])]),
+        "Pure ADHD (Total)": len(df[df["has_adhd"] & (~df["has_epilepsy"]) & (~df["has_tsa"])]),
+        "Pure Epilepsy (Total)": len(df[df["has_epilepsy"] & (~df["has_adhd"]) & (~df["has_tsa"])]),
+        "Epilepsy + ADHD (Comorbid)": len(df[df["has_epilepsy"] & df["has_adhd"] & (~df["has_tsa"])])
+    }
+    
     # Trajectory Plot
-    fig_traj = plot_milestone_progression(milestones, current_total)
+    fig_traj = plot_group_trajectories(current_counts)
     src_traj = _get_base64_plot(fig_traj)
     html += f"""
     <div style="text-align: center; margin: 30px 0;">
-        <img src="{src_traj}" style="max-width: 800px; border: 1px solid #ddd; border-radius: 8px;">
+        <h3>Recruitment Volume Projection</h3>
+        <img src="{src_traj}" style="max-width: 900px; border: 1px solid #ddd; border-radius: 8px;">
+        <p style="font-style: italic; color: #7f8c8d; margin-top: 10px;">
+            <strong>How to read this graph:</strong> The Y-axis shows the number of <em>additional</em> subjects needed. 
+            Each line represents a group. The dashed <strong>Total</strong> line shows the sum of all recruitment needed 
+            to reach each Milestone (X-axis).
+        </p>
     </div>
     """
     
@@ -466,16 +559,16 @@ def main():
         src_gap = _get_base64_plot(fig_gap) if fig_gap else ""
         
         # Table (Drop helper cols for display)
-        df_disp = df_m.drop(columns=["RecruitN", "CleanLabel", "IsParent"])
+        df_disp = df_m.drop(columns=["RecruitN", "CleanLabel", "IndentLevel", "IsParent", "ChildRecruitSum"])
         
         html += f"""
         <div class="grid">
             <div class="card">
-                <h3>Recruitment Table</h3>
+                <h3>Recruitment Targets</h3>
                 {_generate_datatable_js(df_disp, f"table_{m}")}
             </div>
             <div class="card">
-                <h3>Strategy Visualization</h3>
+                <h3>Visual Gap Analysis</h3>
                 <img src="{src_gap}">
             </div>
         </div>
