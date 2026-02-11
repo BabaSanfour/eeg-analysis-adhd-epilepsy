@@ -12,3 +12,15 @@ plots/
 results/
 venv/
 
+# Ignore everything in dl/ except cbramod/
+dl/*
+!dl/cbramod/
+
+# Ignore everything in data/results/dl/ except embeddings/
+data/results/dl/*
+!data/results/dl/embeddings/
+
+# Explicitly ignore files we don't want to track even in whitelisted folders
+dl/cbramod/submit_embeddings_job.sh
+dl/cbramod/check_results.py
+check_results.py
