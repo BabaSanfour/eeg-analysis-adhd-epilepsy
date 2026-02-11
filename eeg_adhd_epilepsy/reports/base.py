@@ -23,13 +23,30 @@ LOGGER = logging.getLogger("preproc_reports")
 matplotlib.use("Agg")
 
 
+def _normalize_html_report_path(path: Path, field_name: str) -> Path:
+    """Validate report output path and ensure parent directory exists."""
+    out_path = Path(path).expanduser()
+    if out_path.suffix.lower() != ".html":
+        raise ValueError(f"{field_name} must be an .html file path, got: {out_path}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    return out_path
+
+
+def _save_message_only_dataset_report(summary_report_path: Path, message_html: str) -> None:
+    """Save a minimal dataset report when provenance aggregation is unavailable."""
+    report = mne.Report(title="Dataset Preprocessing Summary")
+    report.add_html(message_html, title="Overview", section="Summary")
+    report.save(summary_report_path, overwrite=True, open_browser=False)
+    LOGGER.info("Dataset report saved to %s", summary_report_path)
+
+
 def create_preprocessing_report(
     subject_id: str,
     raw: mne.io.BaseRaw,
     psd_before: Tuple[np.ndarray, np.ndarray],
     psd_after: Tuple[np.ndarray, np.ndarray],
     provenance: Dict,
-    output_dir: Path,
+    subject_report_path: Path,
     figures_dir: Optional[Path] = None,
     zapline_obj: Optional[Any] = None,
     raw_before_zap: Optional[mne.io.BaseRaw] = None,
@@ -42,11 +59,12 @@ def create_preprocessing_report(
         psd_before: Tuple of (freqs, psd_data) for the raw data BEFORE processing.
         psd_after: Tuple of (freqs, psd_data) for the raw data AFTER processing.
         provenance: Dictionary containing pipeline provenance (config, stats, bad channels).
-        output_dir: Directory to save the HTML report.
+        subject_report_path: Full output path for subject HTML report.
         figures_dir: Directory containing saved figures (ZapLine, AutoReject) to include.
         zapline_obj: The fitted ZapLine estimator (optional).
         raw_before_zap: Raw data before ZapLine cleaning (optional).
     """
+    out_path = _normalize_html_report_path(subject_report_path, "subject_report_path")
     report = mne.Report(title=f"Preprocessing Report - {subject_id}")
     
     # 1. Pipeline Summary
@@ -126,7 +144,6 @@ def create_preprocessing_report(
         </ul>
         """
         
-    stats = provenance.get('stats', {}) # Old stats location, keep for back-compat
     # timing
     timings = provenance.get("benchmarks", {}).get("timing", {})
     if timings:
@@ -212,7 +229,9 @@ def create_preprocessing_report(
             report.add_image(str(zapline_path), title="Line Noise Removal (ZapLine Summary)", section="Line Noise")
             
     # AutoReject Logs
+    ar_plots: List[Path] = []
     if figures_dir and figures_dir.exists():
+        ar_plots = sorted(list(figures_dir.glob(f"{subject_id}_autoreject_*.png")))
         for ar_plot in ar_plots:
             # e.g. sub-001_autoreject_rest_eyes_open.png
             # Clean name logic: remove prefix
@@ -221,33 +240,47 @@ def create_preprocessing_report(
 
     # 4. Final Output
     # ---------------
-    output_dir.mkdir(parents=True, exist_ok=True)
-    out_path = output_dir / f"{subject_id}_preproc_base_report.html"
     report.save(out_path, overwrite=True, open_browser=False)
     LOGGER.info("Report saved to %s", out_path)
 
 
 def create_dataset_report(
     search_dir: Path, 
-    output_dir: Path,
-    output_filename: str = "summary_preproc_base_report.html"
+    summary_report_path: Path,
+    success_subjects: Optional[List[str]] = None,
+    failed_subjects: Optional[List[str]] = None,
 ) -> None:
     """Generate a dataset-level summary report from provenance files.
 
     Args:
         search_dir: Directory to search for provenance files (e.g. derivatives/preproc).
-        output_dir: Directory to save the HTML report (e.g. qc/preproc).
-        output_filename: Name of the output HTML file.
+        summary_report_path: Full output path for dataset summary HTML report.
     """
-    output_dir = Path(output_dir)
     search_dir = Path(search_dir)
+    summary_report_path = _normalize_html_report_path(
+        summary_report_path, "summary_report_path"
+    )
     provenance_files = sorted(list(search_dir.rglob("*_desc-base_provenance.json")))
     
     if not provenance_files:
-        LOGGER.warning(f"No provenance files found in {search_dir}. Skipping dataset report.")
+        LOGGER.warning("No provenance files found in %s.", search_dir)
+        _save_message_only_dataset_report(
+            summary_report_path=summary_report_path,
+            message_html=f"""
+            <h3>Run Outcome</h3>
+            <ul>
+                <li><b>Subjects Processed:</b> 0</li>
+                <li><b>Succeeded:</b> 0</li>
+                <li><b>Failed:</b> 0</li>
+            </ul>
+            <h3>Dataset Overview</h3>
+            <p>No base provenance files were found under <code>{search_dir}</code>.</p>
+            """,
+        )
         return
 
-    records = []
+    records: List[Dict[str, Any]] = []
+    all_bad_channels: List[str] = []
     for p_file in provenance_files:
         try:
             with open(p_file, "r", encoding="utf-8") as f:
@@ -259,6 +292,7 @@ def create_dataset_report(
             # Bad Channels
             bads = prov.get("bad_channels_global", [])
             n_bads = len(bads)
+            all_bad_channels.extend(bads)
             
             # ZapLine
             zap_stats = prov.get("zapline_stats", {})
@@ -295,7 +329,20 @@ def create_dataset_report(
             LOGGER.warning(f"Failed to read {p_file}: {e}")
 
     if not records:
-        LOGGER.warning("No valid records found.")
+        LOGGER.warning("No valid provenance records found in %s.", search_dir)
+        _save_message_only_dataset_report(
+            summary_report_path=summary_report_path,
+            message_html=f"""
+            <h3>Run Outcome</h3>
+            <ul>
+                <li><b>Subjects Processed:</b> 0</li>
+                <li><b>Succeeded:</b> 0</li>
+                <li><b>Failed:</b> 0</li>
+            </ul>
+            <h3>Dataset Overview</h3>
+            <p>Provenance files were found but none could be parsed successfully.</p>
+            """,
+        )
         return
 
     df = pd.DataFrame(records)
@@ -305,6 +352,20 @@ def create_dataset_report(
     
     # 1. Summary Table
     # ----------------
+    success_subjects = sorted(set(success_subjects or []))
+    failed_subjects = sorted(set(failed_subjects or []))
+
+    run_status_html = f"""
+    <h3>Run Outcome</h3>
+    <ul>
+        <li><b>Subjects Processed:</b> {len(success_subjects) + len(failed_subjects)}</li>
+        <li><b>Succeeded:</b> {len(success_subjects)}</li>
+        <li><b>Failed:</b> {len(failed_subjects)}</li>
+        <li><b>Succeeded IDs:</b> {', '.join(success_subjects) if success_subjects else 'None'}</li>
+        <li><b>Failed IDs:</b> {', '.join(failed_subjects) if failed_subjects else 'None'}</li>
+    </ul>
+    """
+
     summary_html = f"""
     <h3>Dataset Overview</h3>
     <ul>
@@ -325,10 +386,26 @@ def create_dataset_report(
     </ul>
     """
     
-    report.add_html(summary_html, title="Overview", section="Summary")
+    report.add_html(run_status_html + summary_html, title="Overview", section="Summary")
     
     # 2. Visualizations (Scalable for large datasets)
     # ------------------------------------------------
+    # Run Outcome Counts
+    fig_status, ax = plt.subplots(figsize=(6, 4))
+    ax.bar(
+        ["Succeeded", "Failed"],
+        [len(success_subjects), len(failed_subjects)],
+        color=["mediumseagreen", "indianred"],
+        edgecolor="black",
+    )
+    ax.set_ylabel("Number of Subjects")
+    ax.set_title("Batch Run Outcome")
+    for i, value in enumerate([len(success_subjects), len(failed_subjects)]):
+        ax.text(i, value + 0.1, str(value), ha="center", va="bottom")
+    plt.tight_layout()
+    report.add_figure(fig_status, title="Run Outcome", section="Summary")
+    plt.close(fig_status)
+
     
     # Bad Channels Distribution (Histogram)
     fig_bads, ax = plt.subplots(figsize=(8, 5))
@@ -343,15 +420,6 @@ def create_dataset_report(
     report.add_figure(fig_bads, title="Bad Channels Count", section="Global Stats")
     plt.close(fig_bads)
     
-    all_bad_channels = []
-    for p_file in provenance_files:
-        try:
-            with open(p_file, "r") as f:
-                prov = json.load(f)
-                all_bad_channels.extend(prov.get("bad_channels_global", []))
-        except:
-            pass
-
     if all_bad_channels:
         from collections import Counter
         bad_counts = Counter(all_bad_channels)
@@ -431,6 +499,5 @@ def create_dataset_report(
     plt.close(fig_clean)
     
     # Save
-    out_path = output_dir / output_filename
-    report.save(out_path, overwrite=True, open_browser=False)
-    LOGGER.info(f"Dataset report saved to {out_path}")
+    report.save(summary_report_path, overwrite=True, open_browser=False)
+    LOGGER.info("Dataset report saved to %s", summary_report_path)

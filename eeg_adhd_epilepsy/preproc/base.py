@@ -23,19 +23,16 @@ from pathlib import Path
 from typing import Dict, Tuple, Optional, Any, List
 import json
 import numpy as np
-import pandas as pd
 import mne
 
 from pyprep.find_noisy_channels import NoisyChannels
 from autoreject import AutoReject 
 
 from eeg_adhd_epilepsy.preproc.utils import (
-    _save_outputs,
     _resolve_segments_csv,
     PreprocConfig,
     benchmark_step,
     BlockWindow,
-    DEFAULT_ARTIFACT_N_INTERPOLATE,
     _collect_block_windows,
     _get_rest_windows,
     _compute_artifact_overlap,
@@ -48,7 +45,10 @@ import sys
 import argparse
 from eeg_adhd_epilepsy.io import bids
 from eeg_adhd_epilepsy.io import csv as io_csv
-from eeg_adhd_epilepsy.reports.base import create_preprocessing_report, create_dataset_report
+from eeg_adhd_epilepsy.reports.base import (
+    create_preprocessing_report,
+    create_dataset_report,
+)
 from eeg_adhd_epilepsy.features.spectral import (
     compute_spectral_metrics,
     compute_aperiodic_slope,
@@ -66,7 +66,6 @@ DEFAULT_HIGHPASS_HZ = 0.1
 DEFAULT_LOWPASS_HZ = 100.0
 DEFAULT_ARTIFACT_SEGMENT_S = 1.0
 DEFAULT_ARTIFACT_MIN_EPOCHS = 5
-DEFAULT_RANSAC_MIN_SECONDS = 1.0
 DEFAULT_PSD_FMIN = 0.5
 DEFAULT_PSD_FMAX = 60.0
 
@@ -75,7 +74,6 @@ def run_base_pipeline(
     raw: mne.io.BaseRaw,
     config: PreprocConfig,
     subject_id: str = "unknown",
-    output_dir: Optional[Path] = None,
 ) -> Tuple[mne.io.BaseRaw, Dict]:
     """Run the shared preprocessing trunk and return cleaned raw + provenance.
 
@@ -83,27 +81,35 @@ def run_base_pipeline(
         raw: The raw MNE object to process.
         config: Configuration dictionary defining preprocessing parameters.
         subject_id: Identifier for the subject (used in logging/filenames).
-        output_dir: Directory to save intermediate checks and final output.
 
     Returns:
         A tuple containing:
             - The processed MNE Raw object.
             - A dictionary containing processing provenance and statistics.
     """
-    output_path = Path(output_dir) if output_dir else Path("./results")
-    bids_root = Path(config.get("bids_root", output_path))
-    
-    # Derivatives go into BIDS root
-    derivatives_root = bids_root / "derivatives" / "preproc"
-    subj_deriv_dir = derivatives_root / subject_id / "eeg"
-    subj_deriv_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Reports go into output_path/qc/preproc/subjects_reports_base_preproc
-    qc_root = output_path / "qc" / "preproc" / "subjects_reports_base_preproc"
-    qc_root.mkdir(parents=True, exist_ok=True)
-    
-    # Figures go into output_path/qc/preproc/figures
-    figures_dir = output_path / "qc" / "preproc" / "figures"
+    subject_id = bids.normalize_subject_id(subject_id)
+
+    bids_root = Path(config.get("bids_root", Path.cwd())).expanduser()
+    preproc_root_cfg = config.get("preproc_root")
+    reports_root_cfg = config.get("reports_root")
+
+    preproc_root = bids.get_preproc_root(
+        bids_root=bids_root,
+        preproc_root=Path(preproc_root_cfg).expanduser() if preproc_root_cfg else None,
+    )
+    reports_root = bids.get_reports_root(
+        reports_root=Path(reports_root_cfg).expanduser() if reports_root_cfg else None,
+        project_root=Path.cwd(),
+    )
+
+    bids.get_subject_eeg_dir(preproc_root, subject_id, create=True)
+    subject_report_path = bids.get_subject_report_path(
+        reports_root=reports_root,
+        stage="base",
+        subject_id=subject_id,
+        create_dir=True,
+    )
+    figures_dir = subject_report_path.parent / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
     
     LOGGER.info(f"Starting base pipeline for {subject_id}")
@@ -148,7 +154,7 @@ def run_base_pipeline(
 
     # 3. Filtering and Line Noise Removal
     # ----------------------------------
-    with benchmark_step("filtering_and_denosing", provenance):
+    with benchmark_step("filtering_and_denoising", provenance):
         hp_hz = config.get("processing", {}).get("highpass_hz", DEFAULT_HIGHPASS_HZ)
         lp_hz = config.get("processing", {}).get("lowpass_hz", DEFAULT_LOWPASS_HZ)
         line_noise_cfg = config.get("line_noise", {})
@@ -234,7 +240,7 @@ def run_base_pipeline(
     psd_after = (freqs_post, psd_post_data)
 
     # 9. Compute Additional Features (Slope, LSD, Integrity)
-    slope_mean, slope_std, intercept, _ = compute_aperiodic_slope(psd_post_data, freqs_post)
+    slope_mean, _, intercept, _ = compute_aperiodic_slope(psd_post_data, freqs_post)
     lsd_val = compute_lsd(psd_post_data, psd_pre_data) if psd_pre_data.size > 0 else float("nan")
     
     provenance["spectral_stats"] = {
@@ -252,16 +258,14 @@ def run_base_pipeline(
     mask_manual = np.zeros(total_samples, dtype=bool)
     mask_autoreject = np.zeros(total_samples, dtype=bool)
     
-    for i, annot in enumerate(raw.annotations):
+    for annot in raw.annotations:
         desc = annot['description'] 
         if not desc.startswith('BAD_'):
             continue
             
-        # Check if global (no specific channels targeted)
-        # MNE annotations use 'ch_names' key, which is a list/tuple
         ch_names = annot.get('ch_names', [])
         if ch_names:
-            continue # Skip local artifacts for global clean data calculation
+            continue
             
         start_idx = raw.time_as_index(annot['onset'])[0]
         start_idx = max(0, start_idx)
@@ -301,13 +305,23 @@ def run_base_pipeline(
     provenance["artifact_stats"]["artifacts_count"] = len(raw.annotations)
     
     # Save Provenance to Derivatives
-    prov_fname = f"{subject_id}_desc-base_provenance.json"
-    prov_path = subj_deriv_dir / prov_fname
+    out_path = bids.get_stage_output_path(
+        subject_id=subject_id,
+        preproc_root=preproc_root,
+        desc="base",
+        create_dir=True,
+    )
+    prov_path = bids.get_stage_provenance_path(
+        subject_id=subject_id,
+        preproc_root=preproc_root,
+        desc="base",
+        create_dir=True,
+    )
     
     with open(prov_path, "w") as f:
         json.dump(provenance, f, default=str, indent=4) # serialize np types
 
-    _save_outputs(raw, provenance, subj_deriv_dir, subject_id)
+    raw.save(out_path, overwrite=True, verbose="ERROR")
     
     # Generate Report
     create_preprocessing_report(
@@ -316,13 +330,13 @@ def run_base_pipeline(
         psd_before=psd_before,
         psd_after=psd_after,
         provenance=provenance,
-        output_dir=qc_root,
+        subject_report_path=subject_report_path,
         figures_dir=figures_dir,
         zapline_obj=zapline_obj,
         raw_before_zap=raw_before_zap
     )
 
-    LOGGER.info(f"Pipeline completed for {subject_id}")
+    LOGGER.info(f"Pipeline completed for {subject_id}. Output: {out_path}")
 
     return raw, provenance
 
@@ -386,13 +400,16 @@ def detect_global_bads_ransac(
     Returns:
         List of newly detected bad channel names.
     """
-    n_jobs = int(config.get("n_jobs", 1))
     eeg_picks = mne.pick_types(raw.info, eeg=True, exclude=[])
+    if len(eeg_picks) == 0:
+        LOGGER.warning("No EEG channels available for RANSAC bad channel detection.")
+        return []
+
     eeg_ch_names = [raw.ch_names[idx] for idx in eeg_picks]
     eeg_raw = raw.copy().pick(eeg_ch_names)
     rest_windows = _get_rest_windows(raw)
 
-    raw_for_ransac = None
+    raw_for_ransac = eeg_raw
     if rest_windows:
         crops: List[mne.io.BaseRaw] = []
         for onset, stop in rest_windows:
@@ -457,6 +474,10 @@ def annotate_artifacts_blockwise(
     }
 
     eeg_picks = mne.pick_types(raw.info, eeg=True, exclude=[])
+    if len(eeg_picks) == 0:
+        LOGGER.warning("No EEG channels available for AutoReject annotation.")
+        return raw, stats
+
     # Configuration
     artifacts_cfg = config.get("artifacts", {})
     bad_channels_cfg = config.get("bad_channels", {})
@@ -471,11 +492,16 @@ def annotate_artifacts_blockwise(
     min_epochs = int(artifacts_cfg.get("min_epochs", DEFAULT_ARTIFACT_MIN_EPOCHS))
     min_epochs = max(1, min_epochs)
 
-    n_interpolate = [0]
+    n_interpolate = _sanitize_n_interpolate(
+        artifacts_cfg.get("n_interpolate", bad_channels_cfg.get("n_interpolate"))
+    )
 
     n_jobs = int(config.get("n_jobs", 1))
     random_seed = int(config.get("random_seed", 42))
     epoch_tmax = max(seg_len - (1.0 / raw.info["sfreq"]), 0.0)
+    chunk_minutes = float(artifacts_cfg.get("ar_max_chunk_minutes", 30.0))
+    chunk_minutes = max(1.0, chunk_minutes)
+    chunk_duration_s = chunk_minutes * 60.0
 
     # Group blocks by condition name
     grouped_blocks: Dict[str, List[BlockWindow]] = {}
@@ -535,13 +561,9 @@ def annotate_artifacts_blockwise(
             verbose="ERROR",
         )
 
-        # Run AutoReject on chunks for long files
-        # ----------------------------------------
-        # We split the epochs into manageable chunks (e.g., 30 mins) to avoid
-        # super-linear scaling of AutoReject with N epochs.
-        
-        CHUNK_DURATION_S = 1800.0 # 30 minutes
-        n_epochs_chunk_max = int(CHUNK_DURATION_S / seg_len)
+        # Run AutoReject on chunks for long files. This keeps runtime/memory stable.
+        n_epochs_chunk_max = int(chunk_duration_s / seg_len)
+        n_epochs_chunk_max = max(1, n_epochs_chunk_max)
         
         n_epochs_total = len(epochs)
         
@@ -553,7 +575,11 @@ def annotate_artifacts_blockwise(
         # Create chunks
         if n_epochs_total > n_epochs_chunk_max:
             n_chunks = int(np.ceil(n_epochs_total / n_epochs_chunk_max))
-            LOGGER.info(f"Condition '{condition_name}' too long ({n_epochs_total} epochs). Splitting into {n_chunks} chunks of ~{n_epochs_chunk_max} epochs.")
+            LOGGER.info(
+                f"Condition '{condition_name}' too long ({n_epochs_total} epochs). "
+                f"Splitting into {n_chunks} chunks of ~{n_epochs_chunk_max} epochs "
+                f"(~{chunk_minutes:.1f} min each)."
+            )
             epoch_chunks = []
             for i in range(n_chunks):
                 start_idx = i * n_epochs_chunk_max
@@ -588,10 +614,14 @@ def annotate_artifacts_blockwise(
                 
                 # Save AutoReject Visualization
                 fig = reject_log.plot(orientation='horizontal', show=False)
-                fig.set_size_inches(16, 10) 
+                fig.set_size_inches(16, 10)
 
-                clean_name = condition_name.lower().replace(" ", "_")
-                fig.savefig(figures_dir / f"{subject_id}_autoreject_{clean_name}{chunk_suffix}.png", dpi=150)
+                if figures_dir is not None:
+                    clean_name = condition_name.lower().replace(" ", "_")
+                    fig.savefig(
+                        figures_dir / f"{subject_id}_autoreject_{clean_name}{chunk_suffix}.png",
+                        dpi=150,
+                    )
                 import matplotlib.pyplot as plt
                 plt.close(fig)
 
@@ -671,7 +701,6 @@ def annotate_artifacts_blockwise(
 
 def _process_subject(
     fpath: Path,
-    output_dir: Path,
     config: Dict = None,
 ) -> bool:
     """Process a single subject file. Returns True on success, False on failure."""
@@ -702,7 +731,7 @@ def _process_subject(
             LOGGER.warning(f"[{sid}] Could not set standard_1020 montage: {e}")
 
         # Run Pipeline
-        run_base_pipeline(raw, config=config, subject_id=sid, output_dir=output_dir)
+        run_base_pipeline(raw, config=config, subject_id=sid)
         return True
 
     except Exception as e:
@@ -713,7 +742,8 @@ def _process_subject(
 def main():
     parser = argparse.ArgumentParser(description="Run EEG Preprocessing Pipeline on BIDS Dataset")
     parser.add_argument("--bids_root", type=str, default="/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS", help="Path to BIDS dataset root")
-    parser.add_argument("--output_dir", type=str, default="./results", help="Directory to save results")
+    parser.add_argument("--preproc_root", type=str, default=None, help="Directory to save preprocessed FIF/provenance outputs (default: <bids_root>/derivatives/preproc)")
+    parser.add_argument("--reports_root", type=str, default=None, help="Directory to save reports/logs (default: <cwd>/results/reports/preproc)")
     parser.add_argument("--n_jobs", type=int, default=1, help="Number of parallel jobs (default: 1)")
     
     # New Config Args
@@ -734,12 +764,19 @@ def main():
     
     args = parser.parse_args()
     
-    bids_root = Path(args.bids_root)
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    bids_root = Path(args.bids_root).expanduser()
+    preproc_root = bids.get_preproc_root(
+        bids_root=bids_root,
+        preproc_root=Path(args.preproc_root).expanduser() if args.preproc_root else None,
+    )
+    reports_root = bids.get_reports_root(
+        reports_root=Path(args.reports_root).expanduser() if args.reports_root else None,
+        project_root=Path.cwd(),
+    )
+    reports_root.mkdir(parents=True, exist_ok=True)
     
     # Setup logging
-    log_file = output_dir / "logs" / "preproc_base.log"
+    log_file = reports_root / "logs" / "preproc_base.log"
     setup_logging(log_file, "INFO")
     
     if not bids_root.exists():
@@ -799,11 +836,14 @@ def main():
     # Apply --skip-existing filter
     if args.skip_existing:
         LOGGER.info("Checking for existing provenance files to skip...")
-        derivatives_root = bids_root / "derivatives" / "preproc"
         
         subjects_to_skip = set()
         for sid in subjects_to_process:
-            prov_path = derivatives_root / sid / "eeg" / f"{sid}_desc-base_provenance.json"
+            prov_path = bids.get_stage_provenance_path(
+                subject_id=sid,
+                preproc_root=preproc_root,
+                desc="base",
+            )
             if prov_path.exists():
                 subjects_to_skip.add(sid)
         
@@ -858,6 +898,8 @@ def main():
         pipeline_config_short = {
             "n_jobs": 1,  # 1 core per subject internally
             "bids_root": str(bids_root),
+            "preproc_root": str(preproc_root),
+            "reports_root": str(reports_root),
             "processing": {
                 "highpass_hz": args.highpass,
                 "lowpass_hz": args.lowpass,
@@ -872,7 +914,7 @@ def main():
         
         with tqdm_joblib(tqdm(total=len(short_files), desc="Processing Short Files")):
             results_short = Parallel(n_jobs=args.n_jobs)(
-                delayed(_process_subject)(f, output_dir, pipeline_config_short)
+                delayed(_process_subject)(f, pipeline_config_short)
                 for f in short_files
             )
 
@@ -886,6 +928,8 @@ def main():
         pipeline_config_long = {
             "n_jobs": args.n_jobs, # Full power per subject
             "bids_root": str(bids_root),
+            "preproc_root": str(preproc_root),
+            "reports_root": str(reports_root),
             "processing": {
                 "highpass_hz": args.highpass,
                 "lowpass_hz": args.lowpass,
@@ -901,26 +945,39 @@ def main():
         # Simple loop, no Parallel (or Parallel(n_jobs=1))
         # We use a loop to ensure strictly sequential execution to save memory
         for f in tqdm(long_files, desc="Processing Long Files"):
-            res = _process_subject(f, output_dir, pipeline_config_long)
+            res = _process_subject(f, pipeline_config_long)
             results_long.append(res)
             
-    # Summary
-    all_results = results_short + results_long
-    success_count = sum(all_results)
-    fail_count = len(all_results) - success_count
+    # Summary (subject-level)
+    subject_status: Dict[str, bool] = {}
+    for fpath, result in zip(short_files, results_short):
+        sid = file_map[fpath]
+        subject_status[sid] = subject_status.get(sid, True) and bool(result)
+    for fpath, result in zip(long_files, results_long):
+        sid = file_map[fpath]
+        subject_status[sid] = subject_status.get(sid, True) and bool(result)
+    success_ids = sorted([sid for sid, ok in subject_status.items() if ok])
+    failed_ids = sorted([sid for sid, ok in subject_status.items() if not ok])
+    success_count = len(success_ids)
+    fail_count = len(failed_ids)
             
     LOGGER.info(f"Batch processing complete. Success: {success_count}, Failed: {fail_count}")
+    LOGGER.info(f"Succeeded subjects: {success_ids}")
+    LOGGER.info(f"Failed subjects: {failed_ids}")
     
     # Generate Dataset Report
-    qc_root = output_dir / "qc" / "preproc"
-    derivatives_root = bids_root / "derivatives" / "preproc"
-    
-    qc_root.mkdir(parents=True, exist_ok=True)
+    summary_path = bids.get_stage_summary_report_path(
+        reports_root=reports_root,
+        stage="base",
+        create_dir=True,
+    )
     
     LOGGER.info("Generating dataset-level report...")
     create_dataset_report(
-        search_dir=derivatives_root, 
-        output_dir=qc_root
+        search_dir=preproc_root,
+        summary_report_path=summary_path,
+        success_subjects=success_ids,
+        failed_subjects=failed_ids,
     )
 
 
