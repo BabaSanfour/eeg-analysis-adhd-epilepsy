@@ -31,6 +31,8 @@ def create_preprocessing_report(
     provenance: Dict,
     output_dir: Path,
     figures_dir: Optional[Path] = None,
+    zapline_obj: Optional[Any] = None,
+    raw_before_zap: Optional[mne.io.BaseRaw] = None,
 ) -> None:
     """Generate and save an HTML report for the preprocessing pipeline.
 
@@ -42,6 +44,8 @@ def create_preprocessing_report(
         provenance: Dictionary containing pipeline provenance (config, stats, bad channels).
         output_dir: Directory to save the HTML report.
         figures_dir: Directory containing saved figures (ZapLine, AutoReject) to include.
+        zapline_obj: The fitted ZapLine estimator (optional).
+        raw_before_zap: Raw data before ZapLine cleaning (optional).
     """
     report = mne.Report(title=f"Preprocessing Report - {subject_id}")
     
@@ -171,15 +175,44 @@ def create_preprocessing_report(
     
     # 3. Pipeline Step Visualizations
     # -------------------------------
-    if figures_dir and figures_dir.exists():
-        # ZapLine Power
+    # ZapLine Power
+    if zapline_obj is not None and raw_before_zap is not None:
+        try:
+            from mne_denoise.viz.zapline import plot_cleaning_summary
+            
+            # Get effective line freq from provenance or default
+            line_freq = provenance.get("zapline_stats", {}).get("line_freq", 60.0)
+            adaptive = provenance.get("zapline_stats", {}).get("adaptive", False)
+            
+            # Use auto-detected freq if available
+            eff_line_freq = line_freq
+            if adaptive and hasattr(zapline_obj, 'adaptive_results_') and zapline_obj.adaptive_results_:
+                eff_line_freq = zapline_obj.adaptive_results_.get('line_freq', line_freq)
+            
+            # Use data from both states
+            data_before = raw_before_zap.get_data()
+            data_after = raw.get_data()
+            sfreq = raw.info['sfreq']
+            
+            LOGGER.info(f"Generating ZapLine summary plot for {subject_id} report...")
+            fig_summary = plot_cleaning_summary(
+                data_before, data_after, zapline_obj, sfreq, 
+                line_freq=eff_line_freq, show=False
+            )
+            report.add_figure(fig_summary, title="Line Noise Removal (ZapLine Summary)", section="Line Noise")
+            plt.close(fig_summary)
+            
+        except Exception as e:
+            LOGGER.warning(f"Could not generate dynamic ZapLine plot for {subject_id}: {e}")
+            
+    # Legacy/Fallback: Load from disk if available
+    elif figures_dir and figures_dir.exists():
         zapline_path = figures_dir / f"{subject_id}_zapline_summary.png"
         if zapline_path.exists():
-            report.add_image(str(zapline_path), title="Line Noise Removal (ZapLine)", section="Line Noise")
+            report.add_image(str(zapline_path), title="Line Noise Removal (ZapLine Summary)", section="Line Noise")
             
-        # AutoReject Logs
-        # Match pattern {subject_id}_autoreject_*.png
-        ar_plots = sorted(list(figures_dir.glob(f"{subject_id}_autoreject_*.png")))
+    # AutoReject Logs
+    if figures_dir and figures_dir.exists():
         for ar_plot in ar_plots:
             # e.g. sub-001_autoreject_rest_eyes_open.png
             # Clean name logic: remove prefix

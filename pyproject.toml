@@ -22,7 +22,7 @@ dependencies = [
   "pandas",
   "mne",
   "mne-bids",
-  "mne-denoise",
+  "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",
   "scikit-learn",

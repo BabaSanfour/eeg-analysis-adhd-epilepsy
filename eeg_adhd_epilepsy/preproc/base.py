@@ -154,6 +154,9 @@ def run_base_pipeline(
         line_noise_cfg = config.get("line_noise", {})
         line_freq = line_noise_cfg.get("line_freq", 60.0)
         
+        zapline_obj = None
+        raw_before_zap = None
+        
         # 3a. Bandpass Filter
         # Ensure lowpass is strictly less than Nyquist (sfreq/2)
         nyquist = raw.info["sfreq"] / 2.0
@@ -164,12 +167,39 @@ def run_base_pipeline(
         raw.filter(l_freq=hp_hz, h_freq=h_f, verbose="ERROR", n_jobs=n_jobs)
         provenance["steps_completed"].append("bandpass_filter")
         
-        # 3b. Notch Filter
-        LOGGER.info(f"Applying Notch filter at {line_freq} Hz and harmonics (n_jobs={n_jobs})")
-        freqs = np.arange(line_freq, raw.info["sfreq"]/2, line_freq)
-        raw.notch_filter(freqs, verbose="ERROR", method='fir', phase='zero-double', n_jobs=n_jobs)
-        provenance["steps_completed"].append("notch_filter")
-        provenance["zapline_stats"] = {"method": "notch", "line_freq": line_freq}
+        # 3b. Line Noise Removal
+        method = line_noise_cfg.get("method", "notch")
+        adaptive = line_noise_cfg.get("adaptive", False)
+        
+        if method == "zapline":
+            from mne_denoise.zapline import ZapLine
+            LOGGER.info(f"Applying ZapLine ({line_freq} Hz, adaptive={adaptive})...")
+            
+            # ZapLine Class Usage
+            zapline_obj = ZapLine(
+                sfreq=raw.info["sfreq"], 
+                line_freq=line_freq, 
+                adaptive=adaptive
+            )
+            # fit_transform works for both adaptive and standard modes
+            raw_before_zap = raw.copy()
+            raw = zapline_obj.fit_transform(raw)
+            
+            provenance["steps_completed"].append("zapline")
+            provenance["zapline_stats"] = {
+                "method": "zapline", 
+                "line_freq": line_freq, 
+                "adaptive": adaptive,
+                "n_removed": zapline_obj.n_removed_
+            }
+            
+        else:
+            # Notch Filter
+            LOGGER.info(f"Applying Notch filter at {line_freq} Hz and harmonics (n_jobs={n_jobs})")
+            freqs = np.arange(line_freq, raw.info["sfreq"]/2, line_freq)
+            raw.notch_filter(freqs, verbose="ERROR", method='fir', phase='zero-double', n_jobs=n_jobs)
+            provenance["steps_completed"].append("notch_filter")
+            provenance["zapline_stats"] = {"method": "notch", "line_freq": line_freq}
 
 
     # 5. Global Bad Channel Detection
@@ -287,7 +317,9 @@ def run_base_pipeline(
         psd_after=psd_after,
         provenance=provenance,
         output_dir=qc_root,
-        figures_dir=figures_dir
+        figures_dir=figures_dir,
+        zapline_obj=zapline_obj,
+        raw_before_zap=raw_before_zap
     )
 
     LOGGER.info(f"Pipeline completed for {subject_id}")
@@ -689,6 +721,8 @@ def main():
     parser.add_argument("--highpass", type=float, default=DEFAULT_HIGHPASS_HZ, help=f"Highpass filter cutoff Hz (default: {DEFAULT_HIGHPASS_HZ})")
     parser.add_argument("--line_freq", type=float, default=60.0, help="Line noise frequency Hz (default: 60.0)")
     parser.add_argument("--resample", type=float, default=None, help="Resampling frequency Hz (optional)")
+    parser.add_argument("--line-noise-method", type=str, default="notch", choices=["notch", "zapline"], help="Line noise removal method (default: notch)")
+    parser.add_argument("--adaptive", action="store_true", help="Enable adaptive line noise removal (for ZapLine)")
 
     parser.add_argument("--all", action="store_true", help="Process all available subjects")
     parser.add_argument("--test", action="store_true", help="Run on first 5 subjects for testing")
@@ -831,6 +865,8 @@ def main():
             },
             "line_noise": {
                 "line_freq": args.line_freq,
+                "method": args.line_noise_method,
+                "adaptive": args.adaptive,
             }
         }
         
@@ -857,6 +893,8 @@ def main():
             },
             "line_noise": {
                 "line_freq": args.line_freq,
+                "method": args.line_noise_method,
+                "adaptive": args.adaptive,
             }
         }
         
