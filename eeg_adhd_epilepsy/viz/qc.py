@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Mapping, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Sequence, Tuple
 
 import matplotlib
 matplotlib.use("Agg")
@@ -508,8 +508,8 @@ def save_eeg_snapshot(
     fig_dir: Path,
     subject_id: str,
     label: str,
-    start: float = 5.0,
-    duration: float = 30.0,
+    start: float = 30.0,
+    duration: float = 60.0,
     n_channels: int = 20
 ) -> str:
     """Save a butterfly plot snapshot of EEG channels.
@@ -549,8 +549,9 @@ def save_artifact_comparison(
     fig_dir: Path,
     subject_id: str,
     artifact_type: str,
-    window: float = 3.0,
-    n_channels: int = 8
+    window: float = 10.0,
+    n_channels: int = 8,
+    search_start: float = 30.0,
 ) -> str:
     """Save a 3-panel before/after/removed comparison at the largest artifact peak.
     
@@ -583,13 +584,28 @@ def save_artifact_comparison(
         if not frontal:
             frontal = list(range(min(4, len(ch_names))))
         # Find blink peaks using envelope of frontal removed signal
-        envelope = np.abs(removed[frontal]).mean(axis=0)
+        # Restriction: only search after search_start to skip initial transients
+        search_sample = int(search_start * sfreq)
+        if search_sample < n_samples:
+            envelope = np.abs(removed[frontal, search_sample:]).mean(axis=0)
+            offset_samples = search_sample
+        else:
+            envelope = np.abs(removed[frontal]).mean(axis=0)
+            offset_samples = 0
         display_idx = frontal[:n_channels]
     else:
         # For ECG/EMG — find channel with max removed power
-        ch_power = np.sum(removed ** 2, axis=1)
-        top_ch = np.argsort(ch_power)[::-1][:n_channels]
-        envelope = np.abs(removed[top_ch[0]])
+        search_sample = int(search_start * sfreq)
+        if search_sample < n_samples:
+            ch_power = np.sum(removed[:, search_sample:] ** 2, axis=1)
+            top_ch = np.argsort(ch_power)[::-1][:n_channels]
+            envelope = np.abs(removed[top_ch[0], search_sample:])
+            offset_samples = search_sample
+        else:
+            ch_power = np.sum(removed ** 2, axis=1)
+            top_ch = np.argsort(ch_power)[::-1][:n_channels]
+            envelope = np.abs(removed[top_ch[0]])
+            offset_samples = 0
         display_idx = list(top_ch)
     
     # Find peaks in the envelope
@@ -604,6 +620,7 @@ def save_artifact_comparison(
         peak_idx = peaks[np.argmax(properties['peak_heights'])]
     
     # Convert to time
+    peak_idx = peak_idx + offset_samples
     peak_time = peak_idx / sfreq
     half_win = window / 2
     t_start = max(0, peak_time - half_win)
@@ -642,6 +659,301 @@ def save_artifact_comparison(
     fig.tight_layout()
     
     path = fig_dir / f'{subject_id}_{artifact_type}_artifact_comparison.png'
+    fig.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    return str(path)
+
+
+def plot_removed_variance_topomap(
+    raw_before: mne.io.BaseRaw,
+    raw_after: mne.io.BaseRaw,
+    title: str = "Removed Variance",
+) -> matplotlib.figure.Figure | None:
+    """Plot topographic map of variance difference (before - after)."""
+    eeg_before = raw_before.copy().pick_types(eeg=True, exclude='bads')
+    eeg_after = raw_after.copy().pick_types(eeg=True, exclude='bads')
+    
+    # Ensure same shape
+    n_samples = min(eeg_before.n_times, eeg_after.n_times)
+    data_before = eeg_before.get_data()[:, :n_samples]
+    data_after = eeg_after.get_data()[:, :n_samples]
+    
+    var_before = np.var(data_before, axis=1)
+    var_after = np.var(data_after, axis=1)
+    var_removed = var_before - var_after
+    
+    # Clip negative values (in case of subtle interpolation differences)
+    var_removed = np.maximum(var_removed, 0)
+    
+    # Normalize to % of original variance for better readability?
+    # Or just keep raw units. Let's keep raw units but add a good colorbar.
+    
+    fig, ax = plt.subplots(figsize=(5, 4))
+    im, _ = mne.viz.plot_topomap(var_removed, eeg_before.info, axes=ax, show=False, cmap="Reds")
+    plt.colorbar(im, ax=ax, shrink=0.7).set_label('Variance (V^2)')
+    ax.set_title(title)
+    plt.tight_layout()
+    return fig
+
+
+def truncate_plot_data(
+    data: np.ndarray,
+    sfreq: float | None,
+    max_seconds: float | None,
+) -> np.ndarray:
+    """Truncate data on the time axis for faster plotting."""
+    if sfreq is None or max_seconds is None:
+        return data
+    n_plot = min(data.shape[-1], int(float(sfreq) * float(max_seconds)))
+    if data.ndim == 2:
+        return data[:, :n_plot]
+    if data.ndim == 3:
+        return data[:, :, :n_plot]
+    return data
+
+
+def save_dss_pre_plots(
+    estimator: Any,
+    fit_data: np.ndarray,
+    eeg_info: mne.Info,
+    fig_dir: Path,
+    subject_id: str,
+    file_prefix: str,
+    *,
+    sfreq: float | None = None,
+    fit_max_seconds: float | None = None,
+    include_score: bool = True,
+    include_component_summary: bool = True,
+    include_spatial_patterns: bool = True,
+    include_component_time_series: bool = True,
+    summary_n_components: int = 3,
+    spatial_n_components: int = 3,
+    time_series_n_components: int = 5,
+) -> Dict[str, str]:
+    """Save shared pre-cleaning DSS diagnostic plots."""
+    from mne_denoise.viz import (
+        plot_component_summary,
+        plot_component_time_series,
+        plot_score_curve,
+        plot_spatial_patterns,
+    )
+
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    plot_paths: Dict[str, str] = {}
+    fit_data_plot = truncate_plot_data(fit_data, sfreq=sfreq, max_seconds=fit_max_seconds)
+
+    filters = getattr(estimator, "filters_", None)
+    n_available = 0
+    if isinstance(filters, np.ndarray) and filters.ndim >= 2:
+        n_available = int(filters.shape[0])
+
+    if include_score:
+        fig_score = plot_score_curve(estimator, show=False)
+        if fig_score is not None:
+            score_path = fig_dir / f"{subject_id}_{file_prefix}_score.png"
+            fig_score.savefig(score_path, dpi=150, bbox_inches="tight")
+            plt.close(fig_score)
+            plot_paths["score_curve"] = str(score_path)
+
+    if n_available > 0:
+        if include_component_summary:
+            fig_comp = plot_component_summary(
+                estimator,
+                fit_data_plot,
+                info=eeg_info,
+                n_components=min(summary_n_components, n_available),
+                show=False,
+            )
+            if fig_comp is not None:
+                comp_path = fig_dir / f"{subject_id}_{file_prefix}_comps.png"
+                fig_comp.savefig(comp_path, dpi=150, bbox_inches="tight")
+                plt.close(fig_comp)
+                plot_paths["component_summary"] = str(comp_path)
+
+        if include_spatial_patterns:
+            fig_topo = plot_spatial_patterns(
+                estimator,
+                info=eeg_info,
+                n_components=min(spatial_n_components, n_available),
+                show=False,
+            )
+            if fig_topo is not None:
+                topo_path = fig_dir / f"{subject_id}_{file_prefix}_topo.png"
+                fig_topo.savefig(topo_path, dpi=150, bbox_inches="tight")
+                plt.close(fig_topo)
+                plot_paths["spatial_patterns"] = str(topo_path)
+
+        if include_component_time_series:
+            fig_ts = plot_component_time_series(
+                estimator,
+                fit_data_plot,
+                n_components=min(time_series_n_components, n_available),
+                show=False,
+            )
+            if fig_ts is not None:
+                ts_path = fig_dir / f"{subject_id}_{file_prefix}_timeseries.png"
+                fig_ts.savefig(ts_path, dpi=150, bbox_inches="tight")
+                plt.close(fig_ts)
+                plot_paths["component_time_series"] = str(ts_path)
+
+    return plot_paths
+
+
+def save_dss_post_plots(
+    raw_before: mne.io.BaseRaw,
+    raw_after: mne.io.BaseRaw,
+    fig_dir: Path,
+    subject_id: str,
+    file_prefix: str,
+    overlay_title: str,
+    *,
+    fmax: float = 50.0,
+    include_time_course: bool = True,
+    window_seconds: float = 60.0,
+    start_seconds: float = 30.0,
+) -> Dict[str, str]:
+    """Save shared post-cleaning DSS comparison plots."""
+    from mne_denoise.viz import (
+        plot_overlay_comparison,
+        plot_psd_comparison,
+        plot_time_course_comparison,
+    )
+
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    plot_paths: Dict[str, str] = {}
+
+    fig_psd = plot_psd_comparison(raw_before, raw_after, fmax=fmax, show=False)
+    if fig_psd is not None:
+        psd_path = fig_dir / f"{subject_id}_{file_prefix}_psd.png"
+        fig_psd.savefig(psd_path, dpi=150, bbox_inches="tight")
+        plt.close(fig_psd)
+        plot_paths["psd_comparison"] = str(psd_path)
+
+    fig_ov = plot_overlay_comparison(
+        raw_before,
+        raw_after,
+        start=start_seconds,
+        stop=min(raw_before.times[-1], start_seconds + window_seconds),
+        title=overlay_title,
+        show=False,
+    )
+    if fig_ov is not None:
+        ov_path = fig_dir / f"{subject_id}_{file_prefix}_overlay.png"
+        fig_ov.savefig(ov_path, dpi=150, bbox_inches="tight")
+        plt.close(fig_ov)
+        plot_paths["overlay_comparison"] = str(ov_path)
+
+    if include_time_course:
+        s_start = int(start_seconds * raw_before.info["sfreq"])
+        s_stop = int(min(raw_before.times[-1], start_seconds + window_seconds) * raw_before.info["sfreq"])
+        fig_tc = plot_time_course_comparison(
+            raw_before,
+            raw_after,
+            start=s_start,
+            stop=s_stop,
+            show=False,
+        )
+        if fig_tc is not None:
+            tc_path = fig_dir / f"{subject_id}_{file_prefix}_timecourse.png"
+            fig_tc.savefig(tc_path, dpi=150, bbox_inches="tight")
+            plt.close(fig_tc)
+            plot_paths["time_course_comparison"] = str(tc_path)
+
+    return plot_paths
+
+
+def plot_channel_variance_comparison(
+    raw_before: mne.io.BaseRaw,
+    raw_after: mne.io.BaseRaw,
+    subject_id: str,
+    title: str = "Channel Variance: Before vs After Correction",
+) -> matplotlib.figure.Figure:
+    """Plot a comparison of per-channel variance before and after correction."""
+    eeg_before = raw_before.copy().pick_types(eeg=True, exclude="bads")
+    eeg_after = raw_after.copy().pick_types(eeg=True, exclude="bads")
+
+    # Ensure same channels and samples
+    common_chs = [ch for ch in eeg_before.ch_names if ch in eeg_after.ch_names]
+    eeg_before.pick_channels(common_chs)
+    eeg_after.pick_channels(common_chs)
+
+    n_samples = min(eeg_before.n_times, eeg_after.n_times)
+    data_before = eeg_before.get_data()[:, :n_samples]
+    data_after = eeg_after.get_data()[:, :n_samples]
+
+    var_before = np.var(data_before, axis=1) * (1e6**2)  # to uV^2
+    var_after = np.var(data_after, axis=1) * (1e6**2)
+
+    df = pd.DataFrame({
+        "Channel": common_chs,
+        "Before": var_before,
+        "After": var_after,
+    })
+
+    fig, ax = plt.subplots(figsize=(max(10, len(common_chs) * 0.3), 6))
+    x = np.arange(len(common_chs))
+    width = 0.35
+
+    ax.bar(x - width/2, df["Before"], width, label="Before", color="indianred", alpha=0.7)
+    ax.bar(x + width/2, df["After"], width, label="After", color="mediumseagreen", alpha=0.7)
+
+    ax.set_ylabel("Variance (uV^2)")
+    ax.set_title(f"{subject_id} - {title}")
+    ax.set_xticks(x)
+    ax.set_xticklabels(df["Channel"], rotation=45, ha="right")
+    ax.legend()
+    plt.tight_layout()
+    return fig
+
+
+def save_ica_sources_snapshot(
+    ica: Any,
+    raw: mne.io.BaseRaw,
+    fig_dir: Path,
+    subject_id: str,
+    picks: List[int],
+    label: str,
+    start: float = 30.0,
+    duration: float = 20.0,
+) -> str:
+    """Save a clean stacked plot of selected ICA sources.
+    
+    Provides a more compact and customizable alternative to `ica.plot_sources`.
+    """
+    sources_raw = ica.get_sources(raw)
+    sfreq = sources_raw.info['sfreq']
+    
+    # Select channels and crop
+    t_start = min(start, max(0, sources_raw.times[-1] - duration))
+    t_stop = min(t_start + duration, sources_raw.times[-1])
+    
+    # Get labels for the picked components
+    picked_names = [sources_raw.ch_names[i] for i in picks]
+    data, times = sources_raw[picks, int(t_start * sfreq):int(t_stop * sfreq)]
+    
+    n_chs = len(picks)
+    # Reasonable standard vertical space: 1.2 inches per channel
+    fig_height = max(2, 1.2 * n_chs)
+    fig, axes = plt.subplots(n_chs, 1, figsize=(10, fig_height), sharex=True)
+    if n_chs == 1:
+        axes = [axes]
+        
+    for i, ax in enumerate(axes):
+        trace = data[i]
+        # Plots are black (not red) for cleaner look
+        ax.plot(times, trace, color="black", linewidth=0.6)
+        ax.set_ylabel(picked_names[i], rotation=0, labelpad=25, verticalalignment='center')
+        ax.set_yticks([])
+        ax.grid(True, alpha=0.3)
+        if i < n_chs - 1:
+            ax.spines['bottom'].set_visible(False)
+            ax.tick_params(bottom=False)
+            
+    axes[-1].set_xlabel("Time (s)")
+    fig.suptitle(f"{subject_id} - {label} Excluded ICA Components", fontsize=12)
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    
+    path = fig_dir / f"{subject_id}_{label.lower()}_ica_sources.png"
     fig.savefig(path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     return str(path)

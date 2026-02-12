@@ -9,8 +9,8 @@ annotations from `base.py` to exclude bad segments during model fitting.
 """
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional, Tuple
 
 import mne
 import numpy as np
@@ -19,215 +19,55 @@ import sys
 import argparse
 import json
 from pathlib import Path
+import matplotlib.pyplot as plt
+
+from eeg_adhd_epilepsy.viz import qc as viz_qc
 
 from .utils import benchmark_step, NumpyEncoder
 from .base import _collect_block_windows
-from eeg_adhd_epilepsy.reports.correct import create_correction_report
-from eeg_adhd_epilepsy.features.spectral import compute_spectral_metrics
+from .dss_utils import _get_dss_profile, _run_dss_artifact
+from .ica_utils import fit_ica_context, apply_ica_artifact
+from eeg_adhd_epilepsy.reports.correct import create_correction_report, create_correction_dataset_report
+from eeg_adhd_epilepsy.features.spectral import compute_spectral_metrics, compute_lsd, compute_aperiodic_slope
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 from eeg_adhd_epilepsy.io import bids
 
 LOGGER = logging.getLogger(__name__)
 
-from mne_denoise.dss import DSS, IterativeDSS, AverageBias, BandpassBias
-from mne_denoise.viz import (
-    plot_score_curve,
-    plot_component_summary,
-    plot_component_time_series,
-    plot_evoked_comparison,
-    plot_overlay_comparison,
-    plot_psd_comparison,
-    plot_spatial_patterns,
-    plot_spectral_psd_comparison,
-    plot_time_course_comparison,
-)
-
-from mne_denoise.dss.denoisers import QuasiPeriodicDenoiser
-
-from mne_icalabel import label_components
-import pywt
-
 
 @dataclass
 class ArtifactCorrectionConfig:
     """Configuration for Stage 1 Artifact Correction."""
-    
-    # EOG Removal (Part 5 vs Part 2)
-    eog_method: Optional[str] = "dss"  # 'dss', 'ica', 'blind', None
-    
-    # ECG Removal (Part 5 vs Part 2)
+
+    # Methods
+    eog_method: Optional[str] = "dss"  # 'dss', 'ica', 'blind-dss', None
     ecg_method: Optional[str] = "dss"  # 'dss', 'ica', 'quasiperiodic', None
-    
-    # EMG Removal (Part 2.1 options + Part 5)
     emg_method: Optional[str] = "mwf"  # 'mwf', 'wica', 'ica', 'dss', None
-    
-    # Shared ICA Parameters (when ICA is used)
+
+    # Shared ICA Parameters
     ica_n_components: int = 20
-    exclude_probability: float = 0.8
-    
-    # DSS Parameters (when DSS is used)
+    ica_exclude_prob: float = 0.8
+
+    # DSS Parameters
     dss_n_components: int = 10
-    dss_emg_n_remove: int = 2  # For DSS-EMG: how many components to remove
+    dss_n_remove_eog: int = 1
+    dss_n_remove_ecg: int = 1
+    dss_n_remove_emg: int = 2
     
-    # MWF Parameters (Part 2.1, RELAX)
+    # Blind DSS / Adaptive Parameters
+    blind_nonlinearity: str = "cube"  # 'cube', 'tanh', 'gauss', 'smooth_tanh'
+    blind_alpha: float = 1.0
+    blind_smooth_window: int = 10
+
+    # MWF Parameters
     mwf_n_components: int = 30
-    
-    # wICA Parameters (Part 2.1, RELAX-Jr)
-    wavelet_type: str = 'db4'
+
+    # wICA Parameters (Placeholder)
+    wavelet_type: str = "db4"
     wavelet_level: int = 5
-    
-    # random state for reproducibility
+
+    # General
     random_state: int = 42
-
-
-def _save_eeg_snapshot(
-    raw: mne.io.BaseRaw,
-    fig_dir: Path,
-    subject_id: str,
-    label: str,
-    start: float = 5.0,
-    duration: float = 30.0,
-    n_channels: int = 20
-) -> str:
-    """Save a butterfly plot snapshot of EEG channels.
-    
-    Captures `duration` seconds of raw EEG data as a static butterfly plot.
-    Starts at `start` seconds to skip initial transients.
-    """
-    import matplotlib.pyplot as plt
-    
-    raw_eeg = raw.copy().pick_types(eeg=True, exclude='bads')
-    # Ensure start is within bounds
-    max_start = max(0, raw_eeg.times[-1] - duration)
-    start = min(start, max_start)
-    ch_names = raw_eeg.ch_names[:min(n_channels, len(raw_eeg.ch_names))]
-    stop = min(start + duration, raw_eeg.times[-1])
-    sfreq = raw_eeg.info['sfreq']
-    data, times = raw_eeg[ch_names, int(start * sfreq):int(stop * sfreq)]
-    
-    fig, ax = plt.subplots(figsize=(16, 5))
-    data_uv = data * 1e6
-    for i, ch in enumerate(ch_names):
-        ax.plot(times[:data.shape[1]], data_uv[i], linewidth=0.4, alpha=0.7)
-    
-    ax.set_xlabel('Time (s)')
-    ax.set_ylabel('Amplitude (µV)')
-    ax.set_title(f'{subject_id} — {label.replace("_", " ").title()}')
-    ax.set_xlim(times[0], times[min(data.shape[1]-1, len(times)-1)])
-    ax.grid(True, alpha=0.3)
-    
-    path = fig_dir / f'{subject_id}_{label}.png'
-    fig.savefig(path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    return str(path)
-
-
-def _save_artifact_comparison(
-    raw_before: mne.io.BaseRaw,
-    raw_after: mne.io.BaseRaw,
-    fig_dir: Path,
-    subject_id: str,
-    artifact_type: str,
-    window: float = 3.0,
-    n_channels: int = 8
-) -> str:
-    """Save a 3-panel before/after/removed comparison at the largest artifact peak.
-    
-    Finds the time of maximum artifact removal (largest absolute difference),
-    then plots a window around that peak showing the Original, Cleaned,
-    and what was Removed.
-    
-    For EOG: uses frontal channels to detect blinks.
-    For ECG/EMG: uses the channel with the largest removed power.
-    """
-    import matplotlib.pyplot as plt
-    from scipy.signal import find_peaks
-    
-    eeg_before = raw_before.copy().pick_types(eeg=True, exclude='bads')
-    eeg_after = raw_after.copy().pick_types(eeg=True, exclude='bads')
-    sfreq = eeg_before.info['sfreq']
-    
-    # Compute the removed signal
-    data_before = eeg_before.get_data()
-    data_after = eeg_after.get_data()
-    
-    # Ensure same shape
-    n_samples = min(data_before.shape[1], data_after.shape[1])
-    data_before = data_before[:, :n_samples]
-    data_after = data_after[:, :n_samples]
-    removed = data_before - data_after
-    
-    # Choose channels to display and find peaks
-    ch_names = eeg_before.ch_names
-    if artifact_type == 'eog':
-        # Prefer frontal channels for EOG
-        frontal = [i for i, ch in enumerate(ch_names)
-                   if any(f in ch.upper() for f in ['FP1', 'FP2', 'F3', 'F4', 'FZ', 'AF'])]
-        if not frontal:
-            frontal = list(range(min(4, len(ch_names))))
-        # Find blink peaks using envelope of frontal removed signal
-        envelope = np.abs(removed[frontal]).mean(axis=0)
-        display_idx = frontal[:n_channels]
-    else:
-        # For ECG/EMG — find channel with max removed power
-        ch_power = np.sum(removed ** 2, axis=1)
-        top_ch = np.argsort(ch_power)[::-1][:n_channels]
-        envelope = np.abs(removed[top_ch[0]])
-        display_idx = list(top_ch)
-    
-    # Find peaks in the envelope
-    min_dist = int(0.5 * sfreq)  # at least 0.5s apart
-    peaks, properties = find_peaks(envelope, distance=min_dist, height=np.percentile(envelope, 95))
-    
-    if len(peaks) == 0:
-        # Fallback: use the point of maximum absolute difference
-        peak_idx = int(np.argmax(envelope))
-    else:
-        # Use the tallest peak
-        peak_idx = peaks[np.argmax(properties['peak_heights'])]
-    
-    # Convert to time
-    peak_time = peak_idx / sfreq
-    half_win = window / 2
-    t_start = max(0, peak_time - half_win)
-    t_end = min(n_samples / sfreq, peak_time + half_win)
-    s_start = int(t_start * sfreq)
-    s_end = int(t_end * sfreq)
-    times = np.arange(s_start, s_end) / sfreq
-    
-    display_names = [ch_names[i] for i in display_idx]
-    
-    fig, axes = plt.subplots(3, 1, figsize=(16, 10), sharex=True)
-    
-    artifact_label = artifact_type.upper()
-    colors = plt.cm.tab10(np.linspace(0, 1, len(display_idx)))
-    
-    for panel_idx, (ax, title_sfx, signal) in enumerate([
-        (axes[0], 'Before (Original)', data_before),
-        (axes[1], 'After (Cleaned)', data_after),
-        (axes[2], f'Removed ({artifact_label} Artifact)', removed),
-    ]):
-        for j, ch_idx in enumerate(display_idx):
-            sig_uv = signal[ch_idx, s_start:s_end] * 1e6
-            ax.plot(times[:len(sig_uv)], sig_uv, linewidth=0.6, alpha=0.8,
-                    color=colors[j], label=display_names[j] if panel_idx == 0 else None)
-        ax.set_ylabel('µV')
-        ax.set_title(f'{title_sfx}', fontsize=11)
-        ax.grid(True, alpha=0.3)
-        # Mark the peak time
-        ax.axvline(peak_time, color='red', linestyle='--', alpha=0.5, linewidth=1)
-    
-    axes[2].set_xlabel('Time (s)')
-    axes[0].legend(loc='upper right', fontsize=7, ncol=min(4, len(display_idx)))
-    
-    fig.suptitle(f'{subject_id} — {artifact_label} Artifact Removal (peak at {peak_time:.2f}s)',
-                 fontsize=13, fontweight='bold')
-    fig.tight_layout()
-    
-    path = fig_dir / f'{subject_id}_{artifact_type}_artifact_comparison.png'
-    fig.savefig(path, dpi=150, bbox_inches='tight')
-    plt.close(fig)
-    return str(path)
 
 
 def run_source_correction(
@@ -236,7 +76,8 @@ def run_source_correction(
     condition_name: Optional[str] = None,
     fit_segments: Optional[List[Tuple[float, float]]] = None,
     output_dir: Optional[Path] = None,
-    subject_id: str = "unknown"
+    subject_id: str = "unknown",
+    artifact_profile: Optional[Dict] = None
 ) -> Tuple[mne.io.BaseRaw, Dict]:
     """Orchestrate Stage 1 artifact correction.
     
@@ -244,23 +85,57 @@ def run_source_correction(
         raw: The raw data object. Corrected version is returned.
         config: Configuration for artifact correction.
         condition_name: If provided, only process blocks matching this condition.
-                        The returned raw will contain ONLY the processed data for this condition.
         fit_segments: Optional list of (onset, duration) tuples defining segments to use 
                       for model fitting (ICA/DSS). If None, fits on the data being corrected.
-                      Useful for training on stable 'Rest' blocks and applying to task blocks.
         output_dir: Directory to save plots.
         subject_id: Subject identifier for plot filenames.
+        artifact_profile: Optional dictionary from Base stage provenance to guide auto-tuning.
     
     Returns:
         (corrected_raw, provenance_dict)
     """
+    eog_method = config.eog_method
+    ecg_method = config.ecg_method
+    emg_method = config.emg_method
+
     provenance = {
         "steps_completed": [],
         "correction_stats": {},
-        "timings": {},
+        "benchmarks": {"timing": {}},
         "condition_name": condition_name,
-        "fit_segments_used": fit_segments is not None
+        "fit_segments_used": fit_segments is not None,
+        "methods": {
+            "eog": eog_method,
+            "ecg": ecg_method,
+            "emg": emg_method,
+        },
     }
+
+    # Auto-Tuning Logic based on artifact_profile from Base Stage
+    if artifact_profile:
+        # 1. Muscle Load Tuning
+        # Check if muscle was frequently detected in Base stage
+        muscle_load = artifact_profile.get("autoreject_bad_fraction", 0) 
+        if muscle_load > 0.15:
+            LOGGER.info(f"Significant artifact load detected ({muscle_load:.1%}). Boosting correction aggression.")
+            # Increase DSS removal if defaults were used
+            if config.emg_method == "mwf" and config.mwf_n_components < 40:
+                config.mwf_n_components = 40
+            if config.eog_method == "dss" and config.dss_n_remove_eog == 1:
+                config.dss_n_remove_eog = 2
+                
+        # 2. Add tuning influence to provenance for transparency
+        provenance["base_profile_influence"] = {
+            "tuning_applied": muscle_load > 0.15,
+            "muscle_load": float(muscle_load),
+            "adjusted_mwf_n": config.mwf_n_components,
+            "adjusted_eog_n": config.dss_n_remove_eog
+        }
+    
+    # 0. Initialize plot/snapshot tracking
+    eeg_snapshots: Dict[str, str] = {}
+    artifact_comparisons: Dict[str, str] = {}
+    snap_dir = output_dir / "figures" if output_dir else None
     
     # 1. Determine Target Data (Data to be Corrected)
     if condition_name:
@@ -308,117 +183,106 @@ def run_source_correction(
         else:
             LOGGER.warning("fit_segments provided but no valid data extracted. Fallback to target data.")
             raw_fit = None # Will fallback to corrected_raw inside functions
-    
-    # If raw_fit is still None, functions default to using corrected_raw for training.
-    
-    # Extract bad segments to exclude from fitting (if fitting on corrected_raw)
-    # If fitting on raw_fit, ideally it should also respect bad segments within it.
-    # The helper extracts from annotations.
-    # MNE's reject_by_annotation handles this if annotations are present.
-    # When we crop/concatenate, annotations are preserved.
+
     bad_segments = _extract_bad_segments(corrected_raw)
     provenance["n_bad_segments"] = len(bad_segments)
-    
-    # EEG Snapshots — before/after each correction step
-    eeg_snapshots = {}
-    artifact_comparisons = {}
-    snap_dir = None
-    if output_dir:
-        snap_dir = output_dir / 'figures' / 'eeg_snapshots'
-        snap_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            eeg_snapshots['before_correction'] = _save_eeg_snapshot(
-                corrected_raw, snap_dir, subject_id, 'before_correction')
-        except Exception as e:
-            LOGGER.warning(f"EEG snapshot failed (before_correction): {e}")
-    
-    # Step 1.1: EOG (Eye) Removal
-    if config.eog_method:
-        raw_before_eog = corrected_raw.copy()
-        with benchmark_step("eog_removal", provenance):
-            s = {}
-            if config.eog_method == "dss":
-                corrected_raw, s = _remove_eog_dss(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-                if s.get('skipped'):
-                    LOGGER.info("DSS EOG skipped. Falling back to Blind DSS.")
-                    corrected_raw, s = _remove_eog_blind(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-            elif config.eog_method == "ica":
-                corrected_raw, s = _remove_eog_ica(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-            elif config.eog_method == "blind":
-                corrected_raw, s = _remove_eog_blind(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-            provenance["correction_stats"]["eog"] = s
-        provenance["steps_completed"].append("eog_removal")
-        if snap_dir:
-            try:
-                eeg_snapshots['after_eog'] = _save_eeg_snapshot(
-                    corrected_raw, snap_dir, subject_id, 'after_eog')
-            except Exception as e:
-                LOGGER.warning(f"EEG snapshot failed (after_eog): {e}")
-            try:
-                artifact_comparisons['eog'] = _save_artifact_comparison(
-                    raw_before_eog, corrected_raw, snap_dir, subject_id, 'eog')
-            except Exception as e:
-                LOGGER.warning(f"Artifact comparison failed (eog): {e}")
-    
-    # Step 1.2: ECG (Heart) Removal
-    if config.ecg_method:
-        raw_before_ecg = corrected_raw.copy()
-        with benchmark_step("ecg_removal", provenance):
-            s = {}
-            if config.ecg_method == "dss":
-                corrected_raw, s = _remove_ecg_dss(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-                if s.get('skipped'):
-                    LOGGER.info("DSS ECG skipped. Falling back to QuasiPeriodic Denoiser.")
-                    corrected_raw, s = _remove_ecg_quasiperiodic(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-            elif config.ecg_method == "ica":
-                corrected_raw, s = _remove_ecg_ica(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-            elif config.ecg_method == "quasiperiodic":
-                corrected_raw, s = _remove_ecg_quasiperiodic(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-            provenance["correction_stats"]["ecg"] = s
-        provenance["steps_completed"].append("ecg_removal")
-        if snap_dir:
-            try:
-                eeg_snapshots['after_ecg'] = _save_eeg_snapshot(
-                    corrected_raw, snap_dir, subject_id, 'after_ecg')
-            except Exception as e:
-                LOGGER.warning(f"EEG snapshot failed (after_ecg): {e}")
-            try:
-                artifact_comparisons['ecg'] = _save_artifact_comparison(
-                    raw_before_ecg, corrected_raw, snap_dir, subject_id, 'ecg')
-            except Exception as e:
-                LOGGER.warning(f"Artifact comparison failed (ecg): {e}")
 
-    # Step 1.3: EMG (Muscle) Removal
-    if config.emg_method:
-        raw_before_emg = corrected_raw.copy()
-        with benchmark_step("emg_removal", provenance):
-            s = {}
-            if config.emg_method == "mwf":
-                cleaned, s = _remove_emg_mwf(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
+    ica_context: Optional[Dict[str, Any]] = None
+
+    def _get_ica_context(current_raw: mne.io.BaseRaw) -> Dict[str, Any]:
+        nonlocal ica_context
+        if ica_context is None:
+            fit_raw = raw_fit if raw_fit is not None else current_raw
+            ica_context = fit_ica_context(fit_raw, config)
+            LOGGER.info("Computed shared ICA + ICLabel context.")
+        return ica_context
+    
+    provenance["eeg_snapshots"] = eeg_snapshots
+    provenance["artifact_comparisons"] = artifact_comparisons
+
+    # Artifact Correction Orchestration using Registry
+    artifacts = [
+        ("eog", eog_method, ("eye blink", "eye")),
+        ("ecg", ecg_method, ("heart beat", "heart")),
+        ("emg", emg_method, ("muscle artifact", "muscle")),
+    ]
+
+    for art_type, method, ica_labels in artifacts:
+        if not method or method.lower() == "none":
+            continue
+
+        raw_before = corrected_raw.copy()
+        with benchmark_step(f"{art_type}_removal", provenance):
+            LOGGER.info(f"--- Running {art_type.upper()} removal using {method} ---")
+            stats = {}
+            
+            if method == "ica":
+                corrected_raw, stats = apply_ica_artifact(
+                    corrected_raw,
+                    _get_ica_context(corrected_raw),
+                    target_labels=ica_labels,
+                    exclude_probability=config.ica_exclude_prob,
+                    output_dir=output_dir,
+                    subject_id=subject_id,
+                    artifact_label=art_type.upper()
+                )
+            elif method in ("dss", "blind-dss", "quasiperiodic"):
+                # Profile-based DSS (EOG, ECG, or EMG)
+                profile = _get_dss_profile(art_type, method, config, float(corrected_raw.info["sfreq"]))
+                corrected_raw, stats = _run_dss_artifact(
+                    corrected_raw,
+                    config,
+                    profile,
+                    raw_fit=raw_fit,
+                    output_dir=output_dir,
+                    subject_id=subject_id,
+                )
+                # Specialized fallback for EOG dss
+                if art_type == "eog" and method == "dss" and stats.get("skipped"):
+                    LOGGER.info("DSS EOG skipped. Falling back to Blind DSS.")
+                    blind_prof = _get_dss_profile("eog", "blind-dss", config, float(corrected_raw.info["sfreq"]))
+                    corrected_raw, stats = _run_dss_artifact(
+                        corrected_raw, config, blind_prof, raw_fit=raw_fit, output_dir=output_dir, subject_id=subject_id
+                    )
+                # Specialized fallback for ECG dss
+                elif art_type == "ecg" and method == "dss" and stats.get("skipped"):
+                     LOGGER.info("DSS ECG skipped. Falling back to QuasiPeriodic Denoiser.")
+                     qp_prof = _get_dss_profile("ecg", "quasiperiodic", config, float(corrected_raw.info["sfreq"]))
+                     corrected_raw, stats = _run_dss_artifact(
+                         corrected_raw, config, qp_prof, raw_fit=raw_fit, output_dir=output_dir, subject_id=subject_id
+                     )
+            elif art_type == "emg" and method == "mwf":
+                cleaned, stats = _remove_emg_mwf(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
                 if cleaned is not None:
-                     corrected_raw = cleaned
-            elif config.emg_method == "wica":
-                corrected_raw, s = _remove_emg_wica(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-            elif config.emg_method == "ica":
-                corrected_raw, s = _remove_emg_ica(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-            elif config.emg_method == "dss":
-                corrected_raw, s = _remove_emg_dss(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
-            provenance["correction_stats"]["emg"] = s
-        provenance["steps_completed"].append("emg_removal")
-        if snap_dir:
-            try:
-                eeg_snapshots['after_emg'] = _save_eeg_snapshot(
-                    corrected_raw, snap_dir, subject_id, 'after_emg')
-            except Exception as e:
-                LOGGER.warning(f"EEG snapshot failed (after_emg): {e}")
-            try:
-                artifact_comparisons['emg'] = _save_artifact_comparison(
-                    raw_before_emg, corrected_raw, snap_dir, subject_id, 'emg')
-            except Exception as e:
-                LOGGER.warning(f"Artifact comparison failed (emg): {e}")
-        
-    provenance['eeg_snapshots'] = eeg_snapshots
-    provenance['artifact_comparisons'] = artifact_comparisons
+                    corrected_raw = cleaned
+            elif art_type == "emg" and method == "wica":
+                corrected_raw, stats = _remove_emg_wica(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
+            else:
+                LOGGER.warning(f"Unknown {art_type} method '{method}'; skipping.")
+                stats = {"skipped": True, "reason": "unknown_method", "method": method}
+
+            provenance["correction_stats"][art_type] = stats
+            provenance["steps_completed"].append(f"{art_type}_removal")
+
+        if snap_dir and not stats.get("skipped"):
+            eeg_snapshots[f"after_{art_type}"] = viz_qc.save_eeg_snapshot(
+                corrected_raw, snap_dir, subject_id, f"after_{art_type}")
+            artifact_comparisons[art_type] = viz_qc.save_artifact_comparison(
+                raw_before, corrected_raw, snap_dir, subject_id, art_type)
+            
+            # New: Removed Variance Topomap
+            topo_path = snap_dir / f"{subject_id}_{art_type}_removed_variance_topo.png"
+            fig_topo = viz_qc.plot_removed_variance_topomap(
+                raw_before, corrected_raw, title=f"Removed {art_type.upper()} Variance")
+            if fig_topo:
+                fig_topo.savefig(topo_path, dpi=150, bbox_inches='tight')
+                plt.close(fig_topo)
+                # Store in plot_paths for reporting
+                if "plot_paths" not in stats:
+                    stats["plot_paths"] = {}
+                stats["plot_paths"]["removed_variance_topo"] = str(topo_path)
+
+    return corrected_raw, provenance
         
     return corrected_raw, provenance
 
@@ -430,637 +294,6 @@ def _extract_bad_segments(raw: mne.io.BaseRaw) -> List[Tuple[float, float]]:
         for a in raw.annotations 
         if a['description'].startswith('BAD_')
     ]
-
-
-# ------------------------------------------------------------------------------
-# EOG (Eye) Removal Functions
-# ------------------------------------------------------------------------------
-
-def _remove_eog_dss(
-    raw: mne.io.BaseRaw, 
-    config: ArtifactCorrectionConfig, 
-    bad_segments: List[Tuple[float, float]],
-    raw_fit: Optional[mne.io.BaseRaw] = None,
-    output_dir: Optional[Path] = None,
-    subject_id: str = "unknown"
-) -> Tuple[mne.io.BaseRaw, Dict]:
-    """Remove eye blinks using DSS with blink event bias."""
-        
-    from mne_denoise.dss import DSS, AverageBias
-    from mne.preprocessing import create_eog_epochs
-
-    train_raw = raw_fit if raw_fit is not None else raw
-    
-    # 1. Create EOG epochs on training data
-    # 1. Create EOG epochs on training data
-    try:
-        eog_epochs = create_eog_epochs(
-            train_raw, 
-            baseline=(-0.5, -0.2), 
-            tmin=-0.5, 
-            tmax=0.5,
-            reject_by_annotation=True,
-            verbose="ERROR"
-        )
-    except RuntimeError:
-        # Fallback: Use Frontal channels if available
-        eog_ch = None
-        if 'Fp1' in train_raw.ch_names:
-            eog_ch = 'Fp1'
-        elif 'Fp2' in train_raw.ch_names:
-            eog_ch = 'Fp2'
-        elif 'Fpz' in train_raw.ch_names:
-            eog_ch = 'Fpz'
-            
-        if eog_ch:
-            LOGGER.info(f"No EOG channels found. Using {eog_ch} for blink detection.")
-            try:
-                eog_epochs = create_eog_epochs(
-                    train_raw,
-                    ch_name=eog_ch,
-                    baseline=(-0.5, -0.2), 
-                    tmin=-0.5, 
-                    tmax=0.5,
-                    reject_by_annotation=True,
-                    verbose="ERROR"
-                )
-            except Exception as e:
-                LOGGER.warning(f"Blink detection on {eog_ch} failed: {e}")
-                return raw, {'skipped': True, 'reason': 'blink_detection_failed'}
-        else:
-            LOGGER.warning("No EOG or Frontal channels (Fp1/Fp2/Fpz) found, skipping EOG-DSS.")
-            return raw, {'skipped': True, 'reason': 'no_eog_or_frontal'}
-    
-    if len(eog_epochs) < 5:
-        LOGGER.warning("Too few blinks detected (<5), skipping EOG-DSS")
-        return raw, {'n_blinks': len(eog_epochs), 'skipped': True}
-    
-    eog_epochs.pick_types(eeg=True, eog=False, exclude='bads')
-    
-    # 2. Fit DSS with Trial Average Bias
-    dss = DSS(n_components=config.dss_n_components, bias=AverageBias(axis='epochs'))
-    dss.fit(eog_epochs.get_data())
-    
-    # PLOTTING
-    plot_paths = {}
-    if output_dir:
-        try:
-            import matplotlib.pyplot as plt
-            fig_dir = output_dir / 'figures' / 'dss_eog'
-            fig_dir.mkdir(parents=True, exist_ok=True)
-            eeg_info = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True, exclude='bads'))
-
-            # 1. Score curve
-            fig_score = plot_score_curve(dss, show=False)
-            score_path = fig_dir / f'{subject_id}_eog_score.png'
-            fig_score.savefig(score_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_score)
-            plot_paths['score_curve'] = str(score_path)
-
-            # 2. Component Summary (Top 3)
-            fig_comp = plot_component_summary(dss, eog_epochs.get_data(), info=eeg_info, n_components=3, show=False)
-            comp_path = fig_dir / f'{subject_id}_eog_comps.png'
-            fig_comp.savefig(comp_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_comp)
-            plot_paths['component_summary'] = str(comp_path)
-
-            # 3. Spatial Patterns (topomaps)
-            fig_topo = plot_spatial_patterns(dss, info=eeg_info, n_components=3, show=False)
-            topo_path = fig_dir / f'{subject_id}_eog_topo.png'
-            fig_topo.savefig(topo_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_topo)
-            plot_paths['spatial_patterns'] = str(topo_path)
-
-            # 4. Component Time Series (stacked traces)
-            fig_ts = plot_component_time_series(dss, eog_epochs.get_data(), n_components=5, show=False)
-            ts_path = fig_dir / f'{subject_id}_eog_timeseries.png'
-            fig_ts.savefig(ts_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_ts)
-            plot_paths['component_time_series'] = str(ts_path)
-
-            # 5. Evoked Comparison (GFP before/after)
-            sources_viz = dss.transform(eog_epochs.get_data())
-            n_remove = config.dss_eog_n_remove or 1
-            if sources_viz.shape[1] >= n_remove:
-                sources_viz[:, :n_remove, :] = 0
-            clean_data = dss.inverse_transform(sources_viz)
-            clean_epochs = eog_epochs.copy()
-            clean_epochs._data = clean_data
-
-            fig_evoked = plot_evoked_comparison(eog_epochs, clean_epochs, show=False)
-            evoked_path = fig_dir / f'{subject_id}_eog_evoked.png'
-            fig_evoked.savefig(evoked_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_evoked)
-            plot_paths['evoked_comparison'] = str(evoked_path)
-
-        except Exception as e:
-            LOGGER.warning(f"Plotting failed in EOG-DSS: {e}")
-
-    # 3. Transform Target
-    target_eeg = raw.copy().pick_types(eeg=True, exclude='bads')
-    # Use config.dss_psd_threshold if implemented, else hardcode
-    
-    # dss.transform expects (n_epochs, n_channels, n_times) if fitted on epochs,
-    # or (n_channels, n_times) if fitted on continuous data.
-    # Here, dss was fitted on eog_epochs.get_data() which is (n_epochs, n_channels, n_times).
-    # To transform continuous raw data, we need to pass it as (1, n_channels, n_times)
-    # or ensure the DSS object can handle 2D continuous data directly.
-    # MNE-denoise DSS, when fitted on epochs, can transform 2D continuous data.
-    # It applies the spatial filters (n_comp, n_chan) to (n_chan, n_time) -> (n_comp, n_time).
-    
-    sources = dss.transform(target_eeg.get_data()) # (n_comp, n_samples)
-    
-    n_remove = config.dss_eog_n_remove or 1
-    if sources.shape[0] >= n_remove:
-         # Zero out blink components (first ones)
-         sources[:n_remove, :] = 0
-         
-    cleaned_data = dss.inverse_transform(sources)
-    
-    try:
-        raw_out = raw.copy()
-        picks = mne.pick_types(raw.info, eeg=True, exclude='bads')
-        raw_out._data[picks, :] = cleaned_data
-    except Exception as e:
-        return raw, {'error': str(e)}
-    
-    # Post-cleaning comparison plots (need raw_out)
-    if output_dir:
-        try:
-            import matplotlib.pyplot as plt
-            fig_dir = output_dir / 'figures' / 'dss_eog'
-            fig_dir.mkdir(parents=True, exist_ok=True)
-
-            # 6. PSD Comparison (before/after)
-            fig_psd = plot_psd_comparison(raw, raw_out, fmax=50, show=False)
-            psd_path = fig_dir / f'{subject_id}_eog_psd.png'
-            fig_psd.savefig(psd_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_psd)
-            plot_paths['psd_comparison'] = str(psd_path)
-
-            # 7. Overlay Comparison (first 5 seconds)
-            fig_ov = plot_overlay_comparison(raw, raw_out, start=0.0, stop=5.0, title='EOG DSS: Signal Overlay (0-5s)', show=False)
-            ov_path = fig_dir / f'{subject_id}_eog_overlay.png'
-            fig_ov.savefig(ov_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_ov)
-            plot_paths['overlay_comparison'] = str(ov_path)
-
-            # 8. Time Course Comparison (first 5 channels)
-            fig_tc = plot_time_course_comparison(raw, raw_out, start=0, stop=int(5 * raw.info['sfreq']), show=False)
-            tc_path = fig_dir / f'{subject_id}_eog_timecourse.png'
-            fig_tc.savefig(tc_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_tc)
-            plot_paths['time_course_comparison'] = str(tc_path)
-        except Exception as e:
-            LOGGER.warning(f"Post-cleaning plots failed in EOG-DSS: {e}")
-
-    return raw_out, {
-        'method': 'dss',
-        'n_components_removed': n_remove,
-        'bias_type': 'blink_average',
-        'n_blinks': len(eog_epochs),
-        'plot_paths': plot_paths
-    }
-
-
-def _remove_eog_ica(
-    raw: mne.io.BaseRaw, 
-    config: ArtifactCorrectionConfig,
-    bad_segments: List[Tuple[float, float]],
-    raw_fit: Optional[mne.io.BaseRaw] = None,
-    output_dir: Optional[Path] = None,
-    subject_id: str = "unknown"
-) -> Tuple[mne.io.BaseRaw, Dict]:
-    """Remove eye artifacts using ICA + ICLabel."""
-    from mne.preprocessing import ICA
-    from mne_icalabel import label_components
-    
-    train_raw = raw_fit if raw_fit is not None else raw
-    
-    # 1. Fit ICA
-    ica = ICA(
-        n_components=config.ica_n_components, 
-        method='fastica',
-        max_iter='auto',
-        random_state=config.random_state,
-        verbose="ERROR"
-    )
-    # MNE's ICA.fit respects annotations if reject_by_annotation=True is passed.
-    ica.fit(train_raw, reject_by_annotation=True)
-    
-    # 2. Classify
-    labels = label_components(train_raw, ica, method='iclabel')
-    
-    # 3. Exclude 'eye' components
-    exclude_idx = []
-    probas = []
-    for i, (label, prob) in enumerate(zip(labels['labels'], labels['y_pred_proba'])):
-        if label == 'eye' and prob > config.exclude_probability:
-            exclude_idx.append(i)
-            probas.append(prob)
-            
-    ica.exclude = exclude_idx
-    
-    # 4. Apply to target
-    raw_clean = ica.apply(raw.copy())
-    
-    # No plotting specified for ICA in the instruction, so plot_paths will be empty.
-    plot_paths = {}
-
-    return raw_clean, {
-        'method': 'ica',
-        'n_components_removed': len(exclude_idx),
-        'probabilities': probas,
-        'total_components': config.ica_n_components,
-        'plot_paths': plot_paths
-    }
-
-
-def _remove_eog_blind(
-    raw: mne.io.BaseRaw, 
-    config: ArtifactCorrectionConfig, 
-    bad_segments: List[Tuple[float, float]],
-    raw_fit: Optional[mne.io.BaseRaw] = None,
-    output_dir: Optional[Path] = None,
-    subject_id: str = "unknown"
-) -> Tuple[mne.io.BaseRaw, Dict]:
-    """Remove eye artifacts using Blind DSS (Kurtosis/Tanh)."""
-    from mne_denoise.dss import IterativeDSS
-    from mne_denoise.dss.denoisers import KurtosisDenoiser
-    
-    train_raw = raw_fit if raw_fit is not None else raw
-    train_eeg = train_raw.copy().pick_types(eeg=True, exclude='bads')
-    
-    # Fit Kurtosis-DSS (FastICA-like)
-    # Use 2D data to avoid mne-denoise 3D bugs
-    train_data = train_eeg.get_data()
-    dss = IterativeDSS(
-        denoiser=KurtosisDenoiser(nonlinearity="cube"),
-        method="deflation",
-        n_components=config.dss_n_components,
-        beta=-3.0
-    )
-    dss.fit(train_data)
-    
-    # PLOTTING
-    plot_paths = {}
-    if output_dir:
-        try:
-            import matplotlib.pyplot as plt
-            fig_dir = output_dir / 'figures' / 'dss_blind_eog'
-            fig_dir.mkdir(parents=True, exist_ok=True)
-            eeg_info = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True, exclude='bads'))
-
-            # 1. Score curve
-            fig_score = plot_score_curve(dss, show=False)
-            if fig_score is not None:
-                score_path = fig_dir / f'{subject_id}_blind_score.png'
-                fig_score.savefig(score_path, dpi=150, bbox_inches='tight')
-                plt.close(fig_score)
-                plot_paths['score_curve'] = str(score_path)
-
-            # 2. Spatial Patterns (topomaps)
-            fig_topo = plot_spatial_patterns(dss, info=eeg_info, n_components=3, show=False)
-            topo_path = fig_dir / f'{subject_id}_blind_topo.png'
-            fig_topo.savefig(topo_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_topo)
-            plot_paths['spatial_patterns'] = str(topo_path)
-
-            # 3. Component Time Series (first 60s for speed)
-            n_plot = min(train_data.shape[1], int(raw.info['sfreq'] * 60))
-            fig_ts = plot_component_time_series(dss, train_data[:, :n_plot], n_components=5, show=False)
-            ts_path = fig_dir / f'{subject_id}_blind_timeseries.png'
-            fig_ts.savefig(ts_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_ts)
-            plot_paths['component_time_series'] = str(ts_path)
-
-        except Exception as e:
-            LOGGER.warning(f"Plotting failed in Blind DSS: {e}")
-
-    # Transform Target (2D)
-    target_eeg = raw.copy().pick_types(eeg=True, exclude='bads')
-    if target_eeg.ch_names != train_eeg.ch_names:
-         return raw, {'skipped': True, 'error': 'channel mismatch'}
-
-    target_data = target_eeg.get_data()
-    sources = dss.transform(target_data) # (n_comp, n_times)
-    
-    # Remove first component (Blink)
-    if sources.shape[0] > 0:
-        sources[0, :] = 0
-
-    cleaned_data = dss.inverse_transform(sources) # Returns (n_ch, n_times)
-    
-    try:
-        raw_out = raw.copy()
-        picks = mne.pick_types(raw.info, eeg=True, exclude='bads')
-        raw_out._data[picks, :] = cleaned_data
-    except Exception as e:
-        return raw, {'error': str(e)}
-
-    return raw_out, {'method': 'blind_dss', 'n_components_removed': 1, 'plot_paths': plot_paths}
-
-
-# ------------------------------------------------------------------------------
-# ECG (Heart) Removal Functions
-# ------------------------------------------------------------------------------
-
-def _remove_ecg_dss(
-    raw: mne.io.BaseRaw, 
-    config: ArtifactCorrectionConfig, 
-    bad_segments: List[Tuple[float, float]],
-    raw_fit: Optional[mne.io.BaseRaw] = None,
-    output_dir: Optional[Path] = None,
-    subject_id: str = "unknown"
-) -> Tuple[mne.io.BaseRaw, Dict]:
-    """Remove heartbeat using DSS with QRS event bias."""
-    
-    from mne_denoise.dss import DSS, AverageBias
-    from mne.preprocessing import create_ecg_epochs
-    
-    train_raw = raw_fit if raw_fit is not None else raw
-    
-    # 1. Create ECG epochs (bias = QRS timing)
-    try:
-        ecg_epochs = create_ecg_epochs(
-            train_raw, 
-            baseline=(-0.2, -0.05), 
-            tmin=-0.3, 
-            tmax=0.3,
-            reject_by_annotation=True,
-            verbose="ERROR"
-        )
-    except Exception as e:
-        LOGGER.warning(f"ECG event detection failed ({type(e).__name__}), skipping ECG-DSS.")
-        return raw, {'skipped': True, 'reason': 'no_ecg_channel'}
-    
-    if len(ecg_epochs) < 10:
-        LOGGER.warning("Too few QRS events detected, skipping ECG-DSS")
-        return raw, {'n_qrs': 0, 'skipped': True}
-    
-    ecg_epochs.pick_types(eeg=True, ecg=False, exclude='bads')
-    
-    # 2. Fit DSS
-    dss = DSS(n_components=config.dss_n_components, bias=AverageBias(axis='epochs'))
-    dss.fit(ecg_epochs.get_data())
-    
-    # PLOTTING
-    plot_paths = {}
-    if output_dir:
-        try:
-            import matplotlib.pyplot as plt
-            fig_dir = output_dir / 'figures' / 'dss_ecg'
-            fig_dir.mkdir(parents=True, exist_ok=True)
-            eeg_info = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True, exclude='bads'))
-
-            # 1. Score curve
-            fig_score = plot_score_curve(dss, show=False)
-            score_path = fig_dir / f'{subject_id}_ecg_score.png'
-            fig_score.savefig(score_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_score)
-            plot_paths['score_curve'] = str(score_path)
-
-            # 2. Component Summary (Top 3)
-            fig_comp = plot_component_summary(dss, ecg_epochs.get_data(), info=eeg_info, n_components=3, show=False)
-            comp_path = fig_dir / f'{subject_id}_ecg_comps.png'
-            fig_comp.savefig(comp_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_comp)
-            plot_paths['component_summary'] = str(comp_path)
-
-            # 3. Spatial Patterns (topomaps)
-            fig_topo = plot_spatial_patterns(dss, info=eeg_info, n_components=3, show=False)
-            topo_path = fig_dir / f'{subject_id}_ecg_topo.png'
-            fig_topo.savefig(topo_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_topo)
-            plot_paths['spatial_patterns'] = str(topo_path)
-
-            # 4. Component Time Series (stacked traces)
-            fig_ts = plot_component_time_series(dss, ecg_epochs.get_data(), n_components=5, show=False)
-            ts_path = fig_dir / f'{subject_id}_ecg_timeseries.png'
-            fig_ts.savefig(ts_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_ts)
-            plot_paths['component_time_series'] = str(ts_path)
-
-            # 5. Evoked Comparison (GFP before/after)
-            sources_viz = dss.transform(ecg_epochs.get_data())
-            n_remove = config.dss_ecg_n_remove or 1
-            if sources_viz.shape[1] >= n_remove:
-                sources_viz[:, :n_remove, :] = 0
-            clean_data = dss.inverse_transform(sources_viz)
-            clean_epochs = ecg_epochs.copy()
-            clean_epochs._data = clean_data
-
-            fig_evoked = plot_evoked_comparison(ecg_epochs, clean_epochs, show=False)
-            evoked_path = fig_dir / f'{subject_id}_ecg_evoked.png'
-            fig_evoked.savefig(evoked_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_evoked)
-            plot_paths['evoked_comparison'] = str(evoked_path)
-
-        except Exception as e:
-            LOGGER.warning(f"Plotting failed in ECG-DSS: {e}")
-
-    # 3. Transform Target Raw
-    raw_eeg = raw.copy().pick_types(eeg=True, eog=False, exclude='bads')
-    
-    if raw_eeg.ch_names != ecg_epochs.ch_names:
-         LOGGER.warning("Channel mismatch between fit and target in ECG-DSS. Skipping.")
-         return raw, {'skipped': True, 'error': 'channel mismatch'}
-
-    data_continuous = raw_eeg.get_data() # (n_channels, n_times)
-    data_reshaped = data_continuous[np.newaxis, :, :] # (1, n_ch, n_times)
-    
-    sources = dss.transform(data_reshaped) # (1, n_comp, n_times)
-    
-    n_remove = config.dss_ecg_n_remove or 1
-    # Zero cardiac component
-    if sources.shape[1] >= n_remove:
-        sources[:, :n_remove, :] = 0  
-    
-    cleaned_data = dss.inverse_transform(sources)[0]
-    
-    # 4. Create new Raw with cleaned EEG data
-    try:
-        raw_out = raw.copy()
-        picks = mne.pick_types(raw.info, eeg=True, exclude='bads')
-        raw_out._data[picks, :] = cleaned_data
-    except Exception as e:
-         LOGGER.error(f"Failed to merge clean data: {e}")
-         return raw, {'error': str(e)}
-
-    # Post-cleaning comparison plots (need raw_out)
-    if output_dir:
-        try:
-            import matplotlib.pyplot as plt
-            fig_dir = output_dir / 'figures' / 'dss_ecg'
-            fig_dir.mkdir(parents=True, exist_ok=True)
-
-            # 6. PSD Comparison (before/after)
-            fig_psd = plot_psd_comparison(raw, raw_out, fmax=50, show=False)
-            psd_path = fig_dir / f'{subject_id}_ecg_psd.png'
-            fig_psd.savefig(psd_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_psd)
-            plot_paths['psd_comparison'] = str(psd_path)
-
-            # 7. Overlay Comparison (first 5 seconds)
-            fig_ov = plot_overlay_comparison(raw, raw_out, start=0.0, stop=5.0, title='ECG DSS: Signal Overlay (0-5s)', show=False)
-            ov_path = fig_dir / f'{subject_id}_ecg_overlay.png'
-            fig_ov.savefig(ov_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_ov)
-            plot_paths['overlay_comparison'] = str(ov_path)
-
-            # 8. Time Course Comparison (first 5 channels)
-            fig_tc = plot_time_course_comparison(raw, raw_out, start=0, stop=int(5 * raw.info['sfreq']), show=False)
-            tc_path = fig_dir / f'{subject_id}_ecg_timecourse.png'
-            fig_tc.savefig(tc_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_tc)
-            plot_paths['time_course_comparison'] = str(tc_path)
-        except Exception as e:
-            LOGGER.warning(f"Post-cleaning plots failed in ECG-DSS: {e}")
-
-    return raw_out, {
-        'method': 'dss', 
-        'n_qrs': len(ecg_epochs), 
-        'n_components_removed': n_remove,
-        'plot_paths': plot_paths
-    }
-
-
-def _remove_ecg_ica(
-    raw: mne.io.BaseRaw, 
-    config: ArtifactCorrectionConfig,
-    bad_segments: List[Tuple[float, float]],
-    raw_fit: Optional[mne.io.BaseRaw] = None,
-    output_dir: Optional[Path] = None,
-    subject_id: str = "unknown"
-) -> Tuple[mne.io.BaseRaw, Dict]:
-    """Remove cardiac artifacts using ICA + ICLabel."""
-    from mne.preprocessing import ICA
-    from mne_icalabel import label_components
-    
-    train_raw = raw_fit if raw_fit is not None else raw
-    
-    ica = ICA(n_components=config.ica_n_components, method='fastica', max_iter='auto', random_state=config.random_state, verbose="ERROR")
-    ica.fit(train_raw, reject_by_annotation=True)
-    
-    labels = label_components(train_raw, ica, method='iclabel')
-    
-    exclude_idx = []
-    probas = []
-    for i, (label, prob) in enumerate(zip(labels['labels'], labels['y_pred_proba'])):
-        if label == 'heart' and prob > config.exclude_probability:
-            exclude_idx.append(i)
-            probas.append(prob)
-            
-    ica.exclude = exclude_idx
-    raw_clean = ica.apply(raw.copy())
-    
-    plot_paths = {}
-
-    return raw_clean, {
-        'method': 'ica', 
-        'n_components_removed': len(exclude_idx),
-        'probabilities': probas,
-        'total_components': config.ica_n_components,
-        'plot_paths': plot_paths
-    }
-
-
-def _remove_ecg_quasiperiodic(
-    raw: mne.io.BaseRaw, 
-    config: ArtifactCorrectionConfig, 
-    bad_segments: List[Tuple[float, float]],
-    raw_fit: Optional[mne.io.BaseRaw] = None,
-    output_dir: Optional[Path] = None,
-    subject_id: str = "unknown"
-) -> Tuple[mne.io.BaseRaw, Dict]:
-    """Remove cardiac artifacts using QuasiPeriodicDenoiser template matching."""
-    from mne_denoise.dss import IterativeDSS
-    from mne_denoise.dss.denoisers import QuasiPeriodicDenoiser
-    
-    train_raw = raw_fit if raw_fit is not None else raw
-    
-    sfreq = train_raw.info['sfreq']
-    
-    qp_denoiser = QuasiPeriodicDenoiser(
-        peak_distance=int(0.5 * sfreq),  # 120 BPM max
-        peak_height_percentile=85,
-        smooth_template=True
-    )
-    
-    # Fit (using 2D data)
-    train_eeg = train_raw.copy().pick_types(eeg=True, exclude='bads')
-    idss = IterativeDSS(denoiser=qp_denoiser, n_components=config.dss_n_components, max_iter=5)
-    train_data = train_eeg.get_data()
-    idss.fit(train_data)
-    
-    # Transform Target (2D)
-    target_eeg = raw.copy().pick_types(eeg=True, exclude='bads')
-    if target_eeg.ch_names != train_eeg.ch_names:
-         return raw, {'skipped': True, 'error': 'channel mismatch'}
-
-    target_data = target_eeg.get_data()
-    sources = idss.transform(target_data)
-    
-    # Zero cardiac component (first one usually, as QP maximizes periodicity)
-    if sources.shape[0] > 0:
-        sources[0, :] = 0
-        
-    cleaned_data = idss.inverse_transform(sources)
-    
-    try:
-        raw_out = raw.copy()
-        picks = mne.pick_types(raw.info, eeg=True, exclude='bads')
-        raw_out._data[picks, :] = cleaned_data
-    except Exception as e:
-         return raw, {'error': str(e)}
-
-    # PLOTTING (after cleaning so we can do before/after)
-    plot_paths = {}
-    if output_dir:
-        try:
-            import matplotlib.pyplot as plt
-            fig_dir = output_dir / 'figures' / 'dss_quasiperiodic_ecg'
-            fig_dir.mkdir(parents=True, exist_ok=True)
-            eeg_info = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True, exclude='bads'))
-
-            # 1. Spatial Patterns (topomaps)
-            fig_topo = plot_spatial_patterns(idss, info=eeg_info, n_components=3, show=False)
-            if fig_topo is not None:
-                topo_path = fig_dir / f'{subject_id}_qp_ecg_topo.png'
-                fig_topo.savefig(topo_path, dpi=150, bbox_inches='tight')
-                plt.close(fig_topo)
-                plot_paths['spatial_patterns'] = str(topo_path)
-
-            # 2. Component Time Series (first 60s of 2D data)
-            n_plot = min(train_data.shape[1], int(sfreq * 60))
-            fig_ts = plot_component_time_series(idss, train_data[:, :n_plot], n_components=5, show=False)
-            if fig_ts is not None:
-                ts_path = fig_dir / f'{subject_id}_qp_ecg_timeseries.png'
-                fig_ts.savefig(ts_path, dpi=150, bbox_inches='tight')
-                plt.close(fig_ts)
-                plot_paths['component_time_series'] = str(ts_path)
-
-            # 3. PSD Comparison (before/after cleaning)
-            fig_psd = plot_psd_comparison(raw, raw_out, fmax=50, show=False)
-            if fig_psd is not None:
-                psd_path = fig_dir / f'{subject_id}_qp_ecg_psd.png'
-                fig_psd.savefig(psd_path, dpi=150, bbox_inches='tight')
-                plt.close(fig_psd)
-                plot_paths['psd_comparison'] = str(psd_path)
-
-            # 4. Overlay Comparison (first 5 seconds)
-            fig_ov = plot_overlay_comparison(raw, raw_out, start=0.0, stop=5.0,
-                                            title='ECG QuasiPeriodic: Signal Overlay (0-5s)', show=False)
-            if fig_ov is not None:
-                ov_path = fig_dir / f'{subject_id}_qp_ecg_overlay.png'
-                fig_ov.savefig(ov_path, dpi=150, bbox_inches='tight')
-                plt.close(fig_ov)
-                plot_paths['overlay_comparison'] = str(ov_path)
-
-        except Exception as e:
-            LOGGER.warning(f"Plotting failed in QuasiPeriodic DSS: {e}")
-
-    return raw_out, {'method': 'quasiperiodic', 'n_components_removed': 1, 'plot_paths': plot_paths}
 
 
 # ------------------------------------------------------------------------------
@@ -1083,7 +316,6 @@ def _remove_emg_mwf(
         LOGGER.warning("No muscle annotations from base.py, skipping MWF")
         return None, {'skipped': True, 'reason': 'no_muscle_annotations'}
     
-    # Simplified implementation based on strategy doc
     try:
         clean_mask = _get_clean_to_artifact_mask(raw, muscle_annot)
         artifact_mask = ~clean_mask
@@ -1106,12 +338,6 @@ def _remove_emg_mwf(
         n_keep = config.mwf_n_components
         if n_keep >= len(eigenvalues):
             n_keep = len(eigenvalues) - 1
-            
-        # Reconstruct (using separate W for reconstruction if needed, or simplified projection)
-        # Strategy doc code:
-        # data_clean = W[:, -n_keep:].T @ data
-        # raw._data = W[:, -n_keep:] @ data_clean
-        # This assumes W is orthogonal which satisfies reconstruction.
         
         W_keep = W[:, -n_keep:]
         data_clean = W_keep.T @ data
@@ -1148,197 +374,6 @@ def _remove_emg_wica(
     return raw, {'skipped': True, 'reason': 'not_implemented'}
 
 
-def _remove_emg_ica(
-    raw: mne.io.BaseRaw, 
-    config: ArtifactCorrectionConfig,
-    bad_segments: List[Tuple[float, float]],
-    raw_fit: Optional[mne.io.BaseRaw] = None,
-    output_dir: Optional[Path] = None,
-    subject_id: str = "unknown"
-) -> Tuple[mne.io.BaseRaw, Dict]:
-    """Remove muscle artifacts using Standard ICA + ICLabel."""
-    from mne.preprocessing import ICA
-    from mne_icalabel import label_components
-    
-    train_raw = raw_fit if raw_fit is not None else raw
-    
-    ica = ICA(n_components=config.ica_n_components, method='fastica', max_iter='auto', random_state=config.random_state, verbose="ERROR")
-    ica.fit(train_raw, reject_by_annotation=True)
-    
-    labels = label_components(train_raw, ica, method='iclabel')
-    
-    exclude_idx = []
-    probas = []
-    for i, (label, prob) in enumerate(zip(labels['labels'], labels['y_pred_proba'])):
-        if label == 'muscle' and prob > config.exclude_probability:
-            exclude_idx.append(i)
-            probas.append(prob)
-            
-    ica.exclude = exclude_idx
-    raw_clean = ica.apply(raw.copy())
-    
-    plot_paths = {}
-    if output_dir and 'plot_ica_components' in globals() and 'plot_ica_sources' in globals():
-        try:
-            import matplotlib.pyplot as plt
-            fig_dir = output_dir / 'figures' / 'ica_emg'
-            fig_dir.mkdir(parents=True, exist_ok=True)
-
-            # Plot components
-            fig_comp = plot_ica_components(ica, raw, show=False)
-            comp_path = fig_dir / f'{subject_id}_emg_ica_components.png'
-            fig_comp.savefig(comp_path)
-            plt.close(fig_comp)
-            plot_paths['ica_components'] = str(comp_path)
-
-            # Plot sources
-            fig_sources = plot_ica_sources(ica, raw, show=False)
-            sources_path = fig_dir / f'{subject_id}_emg_ica_sources.png'
-            fig_sources.savefig(sources_path)
-            plt.close(fig_sources)
-            plot_paths['ica_sources'] = str(sources_path)
-
-        except Exception as e:
-            LOGGER.warning(f"Plotting failed in EMG-ICA: {e}")
-
-    return raw_clean, {
-        'method': 'ica', 
-        'n_components_removed': len(exclude_idx),
-        'probabilities': probas,
-        'total_components': config.ica_n_components,
-        'plot_paths': plot_paths
-    }
-
-
-
-
-def _remove_emg_dss(
-    raw: mne.io.BaseRaw, 
-    config: ArtifactCorrectionConfig, 
-    bad_segments: List[Tuple[float, float]],
-    raw_fit: Optional[mne.io.BaseRaw] = None,
-    output_dir: Optional[Path] = None,
-    subject_id: str = "unknown"
-) -> Tuple[mne.io.BaseRaw, Dict]:
-    """Remove muscle artifacts using DSS with high-frequency power bias."""
-    
-    train_raw = raw_fit if raw_fit is not None else raw
-    # train_eeg = train_raw.copy().pick_types(eeg=True, exclude='bads') # Not needed if we pass array to fit
-    
-    # Use BandpassBias to emphasize high-frequency (>30Hz) activity
-    sfreq = raw.info['sfreq']
-    nyquist = sfreq / 2
-    high_freq = nyquist - 1.0 # Safety margin
-    
-    bias = BandpassBias(freq_band=(30, high_freq), sfreq=sfreq)
-    
-    dss = DSS(n_components=config.dss_n_components, bias=bias)
-    
-    # Fit on training data (2D: n_ch, n_samples) — exclude bads for consistency
-    train_eeg = train_raw.copy().pick_types(eeg=True, exclude='bads')
-    train_data = train_eeg.get_data()
-    dss.fit(train_data)
-    
-    # PLOTTING
-    plot_paths = {}
-    if output_dir:
-        try:
-            import matplotlib.pyplot as plt
-            fig_dir = output_dir / 'figures' / 'dss_emg'
-            fig_dir.mkdir(parents=True, exist_ok=True)
-            eeg_info = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True, exclude='bads'))
-            n_samples_plot = min(train_data.shape[1], int(sfreq * 60))
-
-            # 1. Score curve
-            fig_score = plot_score_curve(dss, show=False)
-            score_path = fig_dir / f'{subject_id}_emg_score.png'
-            fig_score.savefig(score_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_score)
-            plot_paths['score_curve'] = str(score_path)
-
-            # 2. Component Summary (Top 3, 60s slice)
-            fig_comp = plot_component_summary(dss, train_data[:, :n_samples_plot], info=eeg_info, n_components=3, show=False)
-            comp_path = fig_dir / f'{subject_id}_emg_comps.png'
-            fig_comp.savefig(comp_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_comp)
-            plot_paths['component_summary'] = str(comp_path)
-
-            # 3. Spatial Patterns (topomaps)
-            fig_topo = plot_spatial_patterns(dss, info=eeg_info, n_components=3, show=False)
-            topo_path = fig_dir / f'{subject_id}_emg_topo.png'
-            fig_topo.savefig(topo_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_topo)
-            plot_paths['spatial_patterns'] = str(topo_path)
-
-            # 4. Component Time Series (60s slice)
-            fig_ts = plot_component_time_series(dss, train_data[:, :n_samples_plot], n_components=5, show=False)
-            ts_path = fig_dir / f'{subject_id}_emg_timeseries.png'
-            fig_ts.savefig(ts_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_ts)
-            plot_paths['component_time_series'] = str(ts_path)
-
-            # 5. Spectral PSD Comparison (component vs original PSDs)
-            sources_viz = dss.transform(train_data[:, :n_samples_plot])
-            fig_spsd = plot_spectral_psd_comparison(
-                mne.io.RawArray(train_data[:, :n_samples_plot], eeg_info),
-                sources_viz, sfreq=sfreq, fmin=1, fmax=min(80, sfreq/2 - 1), show=False
-            )
-            spsd_path = fig_dir / f'{subject_id}_emg_spectral_psd.png'
-            fig_spsd.savefig(spsd_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_spsd)
-            plot_paths['spectral_psd_comparison'] = str(spsd_path)
-
-        except Exception as e:
-            LOGGER.warning(f"Plotting failed in EMG-DSS: {e}")
-
-    # 4. Transform Target
-    target_eeg = raw.copy().pick_types(eeg=True, exclude='bads')
-    sources = dss.transform(target_eeg.get_data()) # (n_comp, n_samples)
-    
-    n_remove = config.dss_emg_n_remove or 2
-    if sources.shape[0] >= n_remove:
-        sources[:n_remove, :] = 0  # Zero out muscle components (first ones)
-    
-    cleaned_data = dss.inverse_transform(sources)
-    
-    try:
-        raw_out = raw.copy()
-        picks = mne.pick_types(raw.info, eeg=True, exclude='bads')
-        raw_out._data[picks, :] = cleaned_data
-    except Exception as e:
-        return raw, {'error': str(e)}
-    
-    # Post-cleaning comparison plots (need raw_out)
-    if output_dir:
-        try:
-            import matplotlib.pyplot as plt
-            fig_dir = output_dir / 'figures' / 'dss_emg'
-            fig_dir.mkdir(parents=True, exist_ok=True)
-
-            # 6. PSD Comparison (before/after) — especially useful for EMG (HF reduction)
-            fig_psd = plot_psd_comparison(raw, raw_out, fmax=min(100, sfreq/2 - 1), show=False)
-            psd_path = fig_dir / f'{subject_id}_emg_psd.png'
-            fig_psd.savefig(psd_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_psd)
-            plot_paths['psd_comparison'] = str(psd_path)
-
-            # 7. Overlay Comparison (first 5 seconds)
-            fig_ov = plot_overlay_comparison(raw, raw_out, start=0.0, stop=5.0, title='EMG DSS: Signal Overlay (0-5s)', show=False)
-            ov_path = fig_dir / f'{subject_id}_emg_overlay.png'
-            fig_ov.savefig(ov_path, dpi=150, bbox_inches='tight')
-            plt.close(fig_ov)
-            plot_paths['overlay_comparison'] = str(ov_path)
-        except Exception as e:
-            LOGGER.warning(f"Post-cleaning plots failed in EMG-DSS: {e}")
-
-    return raw_out, {
-        'method': 'dss',
-        'n_components_removed': n_remove,
-        'bias_type': 'high_frequency_bandpass',
-        'plot_paths': plot_paths
-    }
-
-
 def _get_clean_to_artifact_mask(raw, annotations):
     """Helper stub."""
     n_samples = raw.n_times
@@ -1358,7 +393,8 @@ def run_correction_pipeline(
     subject_id: str,
     bids_root: Path,
     config: ArtifactCorrectionConfig,
-    output_dir: Optional[Path] = None,
+    preproc_root: Optional[Path] = None,
+    reports_root: Optional[Path] = None,
     condition_name: Optional[str] = None,
     train_condition: Optional[str] = None,
     output_desc: str = "correct"
@@ -1369,7 +405,8 @@ def run_correction_pipeline(
         subject_id: Subject ID (e.g. 'sub-001').
         bids_root: Path to BIDS dataset root.
         config: Correction configuration.
-        output_dir: Directory to save results (default: BIDS derivatives).
+        preproc_root: Root directory of stage FIF/provenance artifacts.
+        reports_root: Root directory for reports/logs.
         condition_name: Optional condition to process (e.g. 'task-rest').
         train_condition: Optional condition to use for training (e.g. 'task-rest'). 
                          If provided, segments from this condition are used to fit cleanup models.
@@ -1377,14 +414,25 @@ def run_correction_pipeline(
                      Use e.g. 'correctDss' or 'correctIca' for comparison runs.
     """
     try:
-        # Resolve Paths
-        derivatives_root = bids_root / "derivatives" / "preproc"
-        subj_deriv_dir = derivatives_root / subject_id / "eeg"
-        
-        # Input: Output of Base Pipeline
-        # Pattern: sub-001_desc-base_eeg.fif
-        input_fname = f"{subject_id}_desc-base_eeg.fif"
-        input_path = subj_deriv_dir / input_fname
+        subject_id = bids.normalize_subject_id(subject_id)
+        output_desc = bids.validate_stage_desc(output_desc)
+        bids_root = Path(bids_root).expanduser()
+
+        preproc_root = bids.get_preproc_root(
+            bids_root=bids_root,
+            preproc_root=Path(preproc_root).expanduser() if preproc_root is not None else None,
+        )
+        reports_root = bids.get_reports_root(
+            bids_root=bids_root,
+            reports_root=Path(reports_root).expanduser() if reports_root is not None else None,
+        )
+
+        # Stage 0 -> Stage 1 handoff
+        input_path = bids.get_stage_output_path(
+            subject_id=subject_id,
+            preproc_root=preproc_root,
+            desc="base",
+        )
         
         if not input_path.exists():
             LOGGER.error(f"Input file not found: {input_path}")
@@ -1392,19 +440,21 @@ def run_correction_pipeline(
             
         LOGGER.info(f"Loading base pipeline output: {input_path}")
         raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
-        
-        # Resolve Output Directory
-        if output_dir is None:
-            output_dir = derivatives_root # Standard BIDS structure
-            
-        out_subj_dir = output_dir / subject_id / "eeg"
-        out_subj_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Reports Directory
-        # Match base.py structure: qc/preproc/subjects_reports_{output_desc}
-        report_suffix = output_desc.replace('correct', 'correct_').rstrip('_') if output_desc != 'correct' else 'correct'
-        qc_root = output_dir.parent.parent / "qc" / "preproc" / f"subjects_reports_{report_suffix}"
-        qc_root.mkdir(parents=True, exist_ok=True)
+
+        subject_report_path = bids.get_subject_report_path(
+            reports_root=reports_root,
+            stage="correct",
+            subject_id=subject_id,
+            create_dir=True,
+        )
+        figures_dir = subject_report_path.parent / "figures"
+        figures_dir.mkdir(parents=True, exist_ok=True)
+
+        report_path = subject_report_path
+        if output_desc != "correct":
+            report_path = subject_report_path.with_name(
+                f"{subject_id}_correct_{output_desc}_report.html"
+            )
 
         # 0. Pre-Correction PSD
         LOGGER.info("Computing pre-correction spectral metrics...")
@@ -1413,6 +463,13 @@ def run_correction_pipeline(
              raw, picks=None, fmin=0.5, fmax=60.0
         )
         psd_before = (freqs_pre, psd_pre_data)
+
+        # Signal Snapshot (Before)
+        snapshot_pre_path = viz_qc.save_eeg_snapshot(
+            raw, figures_dir, subject_id, "before_correction"
+        )
+        eeg_snapshots = {"before_correction": str(snapshot_pre_path)}
+        artifact_comparisons = {}
 
         # 1. Resolve Train Condition (Fit Segments)
         fit_segments = None
@@ -1426,44 +483,93 @@ def run_correction_pipeline(
             else:
                 LOGGER.warning(f"Train condition '{train_condition}' not found. Fitting on target data.")
 
+        # 1b. Load Base Artifact Profile for Auto-Tuning
+        base_prov = _load_base_provenance(subject_id, preproc_root)
+        artifact_profile = {}
+        if base_prov:
+            artifact_profile = base_prov.get("integrity_stats", {})
+            LOGGER.info(f"Loaded Base stage artifact profile for {subject_id}")
+
         # 2. Run Correction
-        LOGGER.info("Starting artifact correction...")
+        LOGGER.info("Starting artifact correction orchestration...")
         corrected_raw, provenance = run_source_correction(
-            raw, 
-            config, 
-            condition_name=condition_name, 
+            raw,
+            config,
+            condition_name=condition_name,
             fit_segments=fit_segments,
-            output_dir=output_dir,
-            subject_id=subject_id
+            output_dir=subject_report_path.parent,
+            subject_id=subject_id,
+            artifact_profile=artifact_profile,
         )
         
-        # Add basic info to provenance
+        # Merge initial snapshots into returned provenance
+        provenance.setdefault("eeg_snapshots", {}).update(eeg_snapshots)
+        provenance.setdefault("artifact_comparisons", {}).update(artifact_comparisons)
+        
+        task_token = condition_name if condition_name else None
+        out_path = bids.get_stage_output_path(
+            subject_id=subject_id,
+            preproc_root=preproc_root,
+            desc=output_desc,
+            task=task_token,
+            create_dir=True,
+        )
+        prov_path = bids.get_stage_provenance_path(
+            subject_id=subject_id,
+            preproc_root=preproc_root,
+            desc=output_desc,
+            task=task_token,
+            create_dir=True,
+        )
+
+        # Enrich provenance schema.
         provenance["subject_id"] = subject_id
         provenance["input_file"] = str(input_path)
+        provenance["output_file"] = str(out_path)
+        provenance["provenance_file"] = str(prov_path)
+        provenance["preproc_root"] = str(preproc_root)
+        provenance["reports_root"] = str(reports_root)
+        provenance["input_desc"] = "base"
+        provenance["output_desc"] = output_desc
+        provenance["condition_name"] = condition_name
         provenance["train_condition"] = train_condition
 
         # 3. Post-Correction PSD
         LOGGER.info("Computing post-correction spectral metrics...")
-        psd_after = (np.array([]), np.array([]))
-        _, psd_post_data, freqs_post, _, _, _ = compute_spectral_metrics(
+        _, psd_post_data, freqs_post, alpha_peak_post, _, _ = compute_spectral_metrics(
              corrected_raw, picks=None, fmin=0.5, fmax=60.0
         )
         psd_after = (freqs_post, psd_post_data)
+        
+        # Spectral Comparison Metrics
+        lsd_val = compute_lsd(psd_post_data, psd_pre_data)
+        slope_val, _, _, _ = compute_aperiodic_slope(psd_post_data, freqs_post)
+        
+        provenance["spectral_stats"] = {
+            "alpha_peak": float(alpha_peak_post),
+            "aperiodic_slope": float(slope_val),
+            "lsd": float(lsd_val),
+        }
+
+        # 4. Diagnostic Plots
+        # Signal Snapshot (Butterfly)
+        snapshot_path = viz_qc.save_eeg_snapshot(
+            corrected_raw, figures_dir, subject_id, "after_correction"
+        )
+        provenance.setdefault("eeg_snapshots", {})["after_correction"] = str(snapshot_path)
+
+        # Variance Comparison
+        fig_var = viz_qc.plot_channel_variance_comparison(raw, corrected_raw, subject_id)
+        var_path = figures_dir / f"{subject_id}_variance_comparison.png"
+        fig_var.savefig(var_path, dpi=150, bbox_inches="tight")
+        plt.close(fig_var)
+        provenance.setdefault("artifact_comparisons", {})["variance_comparison"] = str(var_path)
 
         # 4. Save Outputs
-        out_fname = f"{subject_id}_desc-{output_desc}_eeg.fif"
-        if condition_name:
-             # If processed specific condition, append to filename
-             safe_cond = condition_name.lower().replace(" ", "")
-             out_fname = f"{subject_id}_task-{safe_cond}_desc-{output_desc}_eeg.fif"
-             
-        out_path = out_subj_dir / out_fname
-        prov_path = out_subj_dir / out_fname.replace("_eeg.fif", "_provenance.json")
-        
         LOGGER.info(f"Saving corrected raw to {out_path}")
         corrected_raw.save(out_path, overwrite=True, verbose="ERROR")
         
-        with open(prov_path, "w") as f:
+        with open(prov_path, "w", encoding="utf-8") as f:
             json.dump(provenance, f, cls=NumpyEncoder, indent=2)
             
         # 5. Generate Report
@@ -1473,10 +579,11 @@ def run_correction_pipeline(
             psd_before=psd_before,
             psd_after=psd_after,
             provenance=provenance,
-            output_dir=qc_root
+            subject_report_path=report_path,
+            figures_dir=figures_dir,
         )
         
-        LOGGER.info(f"Correction pipeline completed for {subject_id}")
+        LOGGER.info("Correction pipeline completed for %s. Output: %s", subject_id, out_path)
         return True
 
     except Exception as e:
@@ -1484,10 +591,36 @@ def run_correction_pipeline(
         return False
 
 
+def _load_base_provenance(subject_id: str, preproc_root: Path) -> Optional[Dict]:
+    """Helper: Load provenance from the base stage if available."""
+    # Pattern: sub-XXX_desc-base_provenance.json (rglob to handle task/no-task subdirs)
+    prov_files = list(preproc_root.rglob(f"{subject_id}_*desc-base_provenance.json"))
+    if not prov_files:
+        LOGGER.debug(f"No base provenance found for {subject_id}")
+        return None
+    try:
+        with open(prov_files[0], "r") as f:
+            return json.load(f)
+    except Exception as e:
+        LOGGER.warning(f"Failed to load base provenance for {subject_id}: {e}")
+        return None
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run Stage 1 Artifact Correction")
     parser.add_argument("--bids_root", type=str, required=True, help="Path to BIDS dataset root")
-    parser.add_argument("--output_dir", type=str, help="Custom output directory")
+    parser.add_argument(
+        "--preproc_root",
+        type=str,
+        default=None,
+        help="Directory for stage FIF/provenance artifacts (default: <bids_root>/derivatives/preproc)",
+    )
+    parser.add_argument(
+        "--reports_root",
+        type=str,
+        default=None,
+        help="Directory for reports/logs (default: <cwd>/results/reports/preproc)",
+    )
     
     # Selection Arguments
     parser.add_argument("--subjects", nargs="+", help="List of specific subjects to process (e.g. sub-001 sub-002)")
@@ -1500,7 +633,38 @@ def main():
     parser.add_argument("--config", type=str, help="Path to JSON config file")
     
     # Checkbox args for quick config override
-    parser.add_argument("--eog-method", type=str, default="dss", choices=["dss", "ica", "none"], help="EOG removal method")
+    parser.add_argument(
+        "--eog-method",
+        type=str,
+        default="dss",
+        choices=["dss", "ica", "blind-dss", "none"],
+        help="EOG removal method",
+    )
+    parser.add_argument(
+        "--blind-nonlinearity",
+        type=str,
+        default="cube",
+        choices=["cube", "tanh", "gauss", "smooth_tanh"],
+        help="Nonlinearity used when --eog-method=blind-dss",
+    )
+    parser.add_argument(
+        "--blind-alpha",
+        type=float,
+        default=1.0,
+        help="Alpha parameter for blind-dss tanh/gauss nonlinearities",
+    )
+    parser.add_argument(
+        "--blind-smooth-window",
+        type=int,
+        default=10,
+        help="Smoothing window (samples) for blind-dss smooth_tanh nonlinearity",
+    )
+    parser.add_argument(
+        "--dss-n-remove-eog",
+        type=int,
+        default=1,
+        help="Number of leading DSS components to remove for EOG",
+    )
     parser.add_argument("--ecg-method", type=str, default="dss", choices=["dss", "ica", "quasiperiodic", "none"], help="ECG removal method")
     parser.add_argument("--emg-method", type=str, default="mwf", choices=["mwf", "wica", "ica", "dss", "none"], help="EMG removal method")
     parser.add_argument("--output-desc", type=str, default="correct", help="BIDS desc entity for output (e.g. correctDss, correctIca)")
@@ -1510,11 +674,21 @@ def main():
     
     args = parser.parse_args()
     
-    bids_root = Path(args.bids_root)
-    output_dir = Path(args.output_dir) if args.output_dir else bids_root / "derivatives" / "preproc"
+    bids_root = Path(args.bids_root).expanduser()
+    preproc_root_arg = Path(args.preproc_root).expanduser() if args.preproc_root else None
+    preproc_root = bids.get_preproc_root(
+        bids_root=bids_root,
+        preproc_root=preproc_root_arg,
+    )
+    reports_root = bids.get_reports_root(
+        bids_root=bids_root,
+        reports_root=Path(args.reports_root).expanduser() if args.reports_root else None,
+    )
+    preproc_root.mkdir(parents=True, exist_ok=True)
+    reports_root.mkdir(parents=True, exist_ok=True)
     
     # Setup Logging
-    log_file = output_dir / "logs" / "correct_pipeline.log"
+    log_file = reports_root / "logs" / "correct_pipeline.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
     setup_logging(log_file, "INFO")
     
@@ -1524,32 +698,35 @@ def main():
         
     # Load/Create Config
     if args.config:
-        with open(args.config, 'r') as f:
+        with open(args.config, "r") as f:
             config_dict = json.load(f)
         config = ArtifactCorrectionConfig(**config_dict)
     else:
         config = ArtifactCorrectionConfig(
             eog_method=args.eog_method if args.eog_method != "none" else None,
             ecg_method=args.ecg_method if args.ecg_method != "none" else None,
-            emg_method=args.emg_method if args.emg_method != "none" else None
+            emg_method=args.emg_method if args.emg_method != "none" else None,
+            blind_nonlinearity=args.blind_nonlinearity,
+            blind_alpha=args.blind_alpha,
+            blind_smooth_window=args.blind_smooth_window,
+            dss_n_remove_eog=args.dss_n_remove_eog,
         )
     
     LOGGER.info(f"Running Correction with Config: {config}")
 
     # Discover files (Stage 0 Output) to find subjects
     LOGGER.info("Scanning preproc directory for available subjects...")
-    preproc_dir = bids_root / "derivatives" / "preproc"
+    preproc_dir = preproc_root
     
     if not preproc_dir.exists():
         LOGGER.error(f"Preproc directory not found: {preproc_dir}")
         sys.exit(1)
-        
-    # Use BIDS discovery on the derivatives folder
-    # This finds sub-XXX_..._eeg.fif
-    files = bids.discover_bids_files(preproc_dir, suffix="eeg", extension=".fif")
+
+    # Only use Stage 0 outputs as Stage 1 inputs.
+    files = sorted(preproc_dir.rglob("*_desc-base_eeg.fif"))
     
     if not files:
-        LOGGER.error(f"No .fif files found in {preproc_dir} via BIDS discovery.")
+        LOGGER.error(f"No Stage 0 FIF files found in {preproc_dir} (pattern: *_desc-base_eeg.fif).")
         sys.exit(1)
         
     file_map = {}
@@ -1564,11 +741,12 @@ def main():
     subjects_to_process = set()
     
     if args.subjects:
-        subjects_to_process = set(args.subjects)
-        LOGGER.info(f"Selected specific subjects: {args.subjects}")
+        normalized_subjects = [bids.normalize_subject_id(s) for s in args.subjects]
+        subjects_to_process = set(normalized_subjects)
+        LOGGER.info(f"Selected specific subjects: {normalized_subjects}")
         
     elif args.start_from:
-        start_sub = args.start_from
+        start_sub = bids.normalize_subject_id(args.start_from)
         subjects_to_process = {s for s in subjects_found if s >= start_sub}
         if not subjects_to_process:
             LOGGER.error(f"No subjects found starting from {start_sub}.")
@@ -1597,16 +775,15 @@ def main():
     # Apply --skip-existing filter
     if args.skip_existing:
         LOGGER.info("Checking for existing correction output to skip...")
-        # Check for _desc-correct_eeg.fif or provenance ? 
-        # Usually stage 1 output is _desc-correct_eeg.fif
         
         subjects_to_skip = set()
         for sid in subjects_to_process:
-            # Check if output exists
-            # We assume output layout matches input: derivatives/preproc/sub-X/eeg/...
-            # or custom output_dir
-            out_subj_dir = output_dir / sid / "eeg"
-            out_file = out_subj_dir / f"{sid}_desc-{args.output_desc}_eeg.fif"
+            out_file = bids.get_stage_output_path(
+                subject_id=sid,
+                preproc_root=preproc_root,
+                desc=bids.validate_stage_desc(args.output_desc),
+                task=args.condition if args.condition else None,
+            )
             if out_file.exists():
                 subjects_to_skip.add(sid)
         
@@ -1625,6 +802,8 @@ def main():
     # Processing Loop
     success_count = 0
     fail_count = 0
+    success_ids: List[str] = []
+    failed_ids: List[str] = []
     
     for sub in subjects_sorted:
         LOGGER.info(f"Processing {sub}...")
@@ -1633,21 +812,48 @@ def main():
                 subject_id=sub,
                 bids_root=bids_root,
                 config=config,
-                output_dir=output_dir,
+                preproc_root=preproc_root,
+                reports_root=reports_root,
                 condition_name=args.condition,
                 train_condition=args.train_condition,
                 output_desc=args.output_desc
             )
             if success:
                 success_count += 1
+                success_ids.append(sub)
             else:
                 fail_count += 1
+                failed_ids.append(sub)
                 LOGGER.error(f"Failed processing {sub}")
         except Exception as e:
             LOGGER.error(f"Exception processing {sub}: {e}")
             fail_count += 1
+            failed_ids.append(sub)
             
     LOGGER.info(f"Batch processing complete. Success: {success_count}, Failed: {fail_count}")
+    LOGGER.info("Succeeded subjects: %s", sorted(success_ids))
+    LOGGER.info("Failed subjects: %s", sorted(failed_ids))
+    
+    # Generate Dataset-Level Summary Report
+    summary_path = bids.get_stage_summary_report_path(
+        reports_root=reports_root,
+        stage="correct",
+        create_dir=True,
+    )
+    output_desc_token = bids.validate_stage_desc(args.output_desc)
+    if output_desc_token != "correct":
+        summary_path = summary_path.with_name(
+            f"correct_{output_desc_token}_dataset_summary.html"
+        )
+    
+    LOGGER.info("Generating dataset-level correction report...")
+    create_correction_dataset_report(
+        search_dir=preproc_root,
+        summary_report_path=summary_path,
+        output_desc=output_desc_token,
+        success_subjects=success_ids,
+        failed_subjects=failed_ids,
+    )
 
 if __name__ == "__main__":
     main()
