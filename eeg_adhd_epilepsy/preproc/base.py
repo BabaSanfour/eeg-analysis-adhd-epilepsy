@@ -444,7 +444,8 @@ def annotate_artifacts_blockwise(
     raw: mne.io.BaseRaw, 
     config: PreprocConfig, 
     figures_dir: Optional[Path] = None,
-    subject_id: str = "unknown"
+    subject_id: str = "unknown",
+    n_interpolate: List[int] = None,
 ) -> Tuple[mne.io.BaseRaw, Dict]:
     """Run condition-wise AutoReject and add non-destructive BAD annotations.
 
@@ -489,7 +490,8 @@ def annotate_artifacts_blockwise(
     min_epochs = int(artifacts_cfg.get("min_epochs", DEFAULT_ARTIFACT_MIN_EPOCHS))
     min_epochs = max(1, min_epochs)
 
-    n_interpolate = [0]
+    if n_interpolate is None:
+        n_interpolate = [0]
 
     n_jobs = int(config.get("n_jobs", 1))
     random_seed = int(config.get("random_seed", 42))
