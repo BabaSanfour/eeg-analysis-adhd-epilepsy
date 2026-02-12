@@ -108,11 +108,16 @@ def get_stage_provenance_path(
 
 
 def get_reports_root(
-    reports_root: Path | None = None, project_root: Path | None = None
+    bids_root: Path | None = None,
+    reports_root: Path | None = None,
+    project_root: Path | None = None,
 ) -> Path:
     """Return unified reports root (outside BIDS by default)."""
     if reports_root is not None:
         return Path(reports_root).expanduser()
+    if bids_root is not None:
+        # User preference: same level as BIDS
+        return Path(bids_root).expanduser().parent / "reports"
     base = Path(project_root).expanduser() if project_root is not None else Path.cwd()
     return base / "results" / "reports" / "preproc"
 

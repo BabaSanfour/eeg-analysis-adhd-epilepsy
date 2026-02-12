@@ -115,7 +115,7 @@ def benchmark_step(name: str, provenance: Dict):
         logging.getLogger(__name__).info("Step '%s' finished in %.2f sec", name, duration)
 
 
-DEFAULT_ARTIFACT_N_INTERPOLATE = (1, 2, 4)
+DEFAULT_ARTIFACT_N_INTERPOLATE = (0,)
 DEFAULT_REST_KEYWORDS = (
     "raw_baseline",
     "eo_baseline",
@@ -305,7 +305,7 @@ def _sanitize_n_interpolate(raw_value: Any) -> List[int]:
                 parsed = int(value)
             except (TypeError, ValueError):
                 continue
-            if parsed > 0:
+            if parsed >= 0:
                 clean.add(parsed)
         clean = sorted(clean)
         if clean:

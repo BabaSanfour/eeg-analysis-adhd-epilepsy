@@ -502,3 +502,146 @@ def save_subject_figures(
              paths["signal_quality_grid"] = str(out_qual)
 
     return paths
+
+def save_eeg_snapshot(
+    raw: mne.io.BaseRaw,
+    fig_dir: Path,
+    subject_id: str,
+    label: str,
+    start: float = 5.0,
+    duration: float = 30.0,
+    n_channels: int = 20
+) -> str:
+    """Save a butterfly plot snapshot of EEG channels.
+    
+    Captures `duration` seconds of raw EEG data as a static butterfly plot.
+    Starts at `start` seconds to skip initial transients.
+    """
+    raw_eeg = raw.copy().pick_types(eeg=True, exclude='bads')
+    # Ensure start is within bounds
+    max_start = max(0, raw_eeg.times[-1] - duration)
+    start = min(start, max_start)
+    ch_names = raw_eeg.ch_names[:min(n_channels, len(raw_eeg.ch_names))]
+    stop = min(start + duration, raw_eeg.times[-1])
+    sfreq = raw_eeg.info['sfreq']
+    data, times = raw_eeg[ch_names, int(start * sfreq):int(stop * sfreq)]
+    
+    fig, ax = plt.subplots(figsize=(16, 5))
+    data_uv = data * 1e6
+    for i, _ in enumerate(ch_names):
+        ax.plot(times[:data.shape[1]], data_uv[i], linewidth=0.4, alpha=0.7)
+    
+    ax.set_xlabel('Time (s)')
+    ax.set_ylabel('Amplitude (µV)')
+    ax.set_title(f'{subject_id} — {label.replace("_", " ").title()}')
+    ax.set_xlim(times[0], times[min(data.shape[1]-1, len(times)-1)])
+    ax.grid(True, alpha=0.3)
+    
+    path = fig_dir / f'{subject_id}_{label}.png'
+    fig.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    return str(path)
+
+
+def save_artifact_comparison(
+    raw_before: mne.io.BaseRaw,
+    raw_after: mne.io.BaseRaw,
+    fig_dir: Path,
+    subject_id: str,
+    artifact_type: str,
+    window: float = 3.0,
+    n_channels: int = 8
+) -> str:
+    """Save a 3-panel before/after/removed comparison at the largest artifact peak.
+    
+    Finds the time of maximum artifact removal (largest absolute difference),
+    then plots a window around that peak showing the Original, Cleaned,
+    and what was Removed.
+    """
+    from scipy.signal import find_peaks
+    
+    eeg_before = raw_before.copy().pick_types(eeg=True, exclude='bads')
+    eeg_after = raw_after.copy().pick_types(eeg=True, exclude='bads')
+    sfreq = eeg_before.info['sfreq']
+    
+    # Compute the removed signal
+    data_before = eeg_before.get_data()
+    data_after = eeg_after.get_data()
+    
+    # Ensure same shape
+    n_samples = min(data_before.shape[1], data_after.shape[1])
+    data_before = data_before[:, :n_samples]
+    data_after = data_after[:, :n_samples]
+    removed = data_before - data_after
+    
+    # Choose channels to display and find peaks
+    ch_names = eeg_before.ch_names
+    if artifact_type == 'eog':
+        # Prefer frontal channels for EOG
+        frontal = [i for i, ch in enumerate(ch_names)
+                   if any(f in ch.upper() for f in ['FP1', 'FP2', 'F3', 'F4', 'FZ', 'AF'])]
+        if not frontal:
+            frontal = list(range(min(4, len(ch_names))))
+        # Find blink peaks using envelope of frontal removed signal
+        envelope = np.abs(removed[frontal]).mean(axis=0)
+        display_idx = frontal[:n_channels]
+    else:
+        # For ECG/EMG — find channel with max removed power
+        ch_power = np.sum(removed ** 2, axis=1)
+        top_ch = np.argsort(ch_power)[::-1][:n_channels]
+        envelope = np.abs(removed[top_ch[0]])
+        display_idx = list(top_ch)
+    
+    # Find peaks in the envelope
+    min_dist = int(0.5 * sfreq)  # at least 0.5s apart
+    peaks, properties = find_peaks(envelope, distance=min_dist, height=np.percentile(envelope, 95))
+    
+    if len(peaks) == 0:
+        # Fallback: use the point of maximum absolute difference
+        peak_idx = int(np.argmax(envelope))
+    else:
+        # Use the tallest peak
+        peak_idx = peaks[np.argmax(properties['peak_heights'])]
+    
+    # Convert to time
+    peak_time = peak_idx / sfreq
+    half_win = window / 2
+    t_start = max(0, peak_time - half_win)
+    t_end = min(n_samples / sfreq, peak_time + half_win)
+    s_start = int(t_start * sfreq)
+    s_end = int(t_end * sfreq)
+    times = np.arange(s_start, s_end) / sfreq
+    
+    display_names = [ch_names[i] for i in display_idx]
+    
+    fig, axes = plt.subplots(3, 1, figsize=(16, 10), sharex=True)
+    
+    artifact_label = artifact_type.upper()
+    colors = plt.cm.tab10(np.linspace(0, 1, len(display_idx)))
+    
+    for panel_idx, (ax, title_sfx, signal) in enumerate([
+        (axes[0], 'Before (Original)', data_before),
+        (axes[1], 'After (Cleaned)', data_after),
+        (axes[2], f'Removed ({artifact_label} Artifact)', removed),
+    ]):
+        for j, ch_idx in enumerate(display_idx):
+            sig_uv = signal[ch_idx, s_start:s_end] * 1e6
+            ax.plot(times[:len(sig_uv)], sig_uv, linewidth=0.6, alpha=0.8,
+                    color=colors[j], label=display_names[j] if panel_idx == 0 else None)
+        ax.set_ylabel('µV')
+        ax.set_title(f'{title_sfx}', fontsize=11)
+        ax.grid(True, alpha=0.3)
+        # Mark the peak time
+        ax.axvline(peak_time, color='red', linestyle='--', alpha=0.5, linewidth=1)
+    
+    axes[2].set_xlabel('Time (s)')
+    axes[0].legend(loc='upper right', fontsize=7, ncol=min(4, len(display_idx)))
+    
+    fig.suptitle(f'{subject_id} — {artifact_label} Artifact Removal (peak at {peak_time:.2f}s)',
+                 fontsize=13, fontweight='bold')
+    fig.tight_layout()
+    
+    path = fig_dir / f'{subject_id}_{artifact_type}_artifact_comparison.png'
+    fig.savefig(path, dpi=150, bbox_inches='tight')
+    plt.close(fig)
+    return str(path)

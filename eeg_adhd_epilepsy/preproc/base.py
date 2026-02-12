@@ -40,6 +40,7 @@ from eeg_adhd_epilepsy.preproc.utils import (
     _group_consecutive_indices,
     _event_sample_to_onset,
     inflate_bad_annotations,
+    NumpyEncoder,
 )
 import sys
 import argparse
@@ -90,19 +91,15 @@ def run_base_pipeline(
     subject_id = bids.normalize_subject_id(subject_id)
 
     bids_root = Path(config.get("bids_root", Path.cwd())).expanduser()
-    preproc_root_cfg = config.get("preproc_root")
-    reports_root_cfg = config.get("reports_root")
-
     preproc_root = bids.get_preproc_root(
         bids_root=bids_root,
-        preproc_root=Path(preproc_root_cfg).expanduser() if preproc_root_cfg else None,
+        preproc_root=Path(config["preproc_root"]).expanduser() if config.get("preproc_root") else None,
     )
     reports_root = bids.get_reports_root(
-        reports_root=Path(reports_root_cfg).expanduser() if reports_root_cfg else None,
-        project_root=Path.cwd(),
+        bids_root=bids_root,
+        reports_root=Path(config["reports_root"]).expanduser() if config.get("reports_root") else None,
     )
 
-    bids.get_subject_eeg_dir(preproc_root, subject_id, create=True)
     subject_report_path = bids.get_subject_report_path(
         reports_root=reports_root,
         stage="base",
@@ -196,7 +193,7 @@ def run_base_pipeline(
                 "method": "zapline", 
                 "line_freq": line_freq, 
                 "adaptive": adaptive,
-                "n_removed": zapline_obj.n_removed_
+                "n_removed": int(zapline_obj.n_removed_)
             }
             
         else:
@@ -319,7 +316,7 @@ def run_base_pipeline(
     )
     
     with open(prov_path, "w") as f:
-        json.dump(provenance, f, default=str, indent=4) # serialize np types
+        json.dump(provenance, f, cls=NumpyEncoder, indent=4)
 
     raw.save(out_path, overwrite=True, verbose="ERROR")
     
@@ -492,9 +489,7 @@ def annotate_artifacts_blockwise(
     min_epochs = int(artifacts_cfg.get("min_epochs", DEFAULT_ARTIFACT_MIN_EPOCHS))
     min_epochs = max(1, min_epochs)
 
-    n_interpolate = _sanitize_n_interpolate(
-        artifacts_cfg.get("n_interpolate", bad_channels_cfg.get("n_interpolate"))
-    )
+    n_interpolate = [0]
 
     n_jobs = int(config.get("n_jobs", 1))
     random_seed = int(config.get("random_seed", 42))
@@ -770,8 +765,8 @@ def main():
         preproc_root=Path(args.preproc_root).expanduser() if args.preproc_root else None,
     )
     reports_root = bids.get_reports_root(
+        bids_root=bids_root,
         reports_root=Path(args.reports_root).expanduser() if args.reports_root else None,
-        project_root=Path.cwd(),
     )
     reports_root.mkdir(parents=True, exist_ok=True)
     

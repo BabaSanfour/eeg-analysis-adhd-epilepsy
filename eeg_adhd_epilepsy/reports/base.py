@@ -18,6 +18,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 
 from eeg_adhd_epilepsy.viz import qc as viz_qc
+from eeg_adhd_epilepsy.viz.topo import plot_bad_channels_topo
 
 LOGGER = logging.getLogger("preproc_reports")
 matplotlib.use("Agg")
@@ -155,6 +156,40 @@ def create_preprocessing_report(
 
     report.add_html(summary_html, title="Summary", section="Overview")
 
+    # 1.5 Topographic Bad Channels & Artifact Frequency
+    # -----------------------------------------------
+    try:
+        fig_topo = plot_bad_channels_topo(
+            raw=raw,
+            global_bads=bads,
+            artifact_stats=art_stats,
+            title=f"Channel Quality Map - {subject_id}"
+        )
+        report.add_figure(fig_topo, title="Topographic Quality Map", section="Overview")
+        plt.close(fig_topo)
+    except Exception as e:
+        LOGGER.warning(f"Could not generate topographic map for {subject_id}: {e}")
+
+    # 1.6 Artifact Profile
+    # ------------------
+    # Composition Chart: Manual vs AutoReject vs Clean
+    fig_profile, ax = plt.subplots(figsize=(6, 6))
+    profile_data = [100 - (manual_bad_pct + ar_bad_pct), manual_bad_pct, ar_bad_pct]
+    profile_labels = ['Clean', 'Manual Bad', 'AutoReject Bad']
+    profile_colors = ['mediumseagreen', 'indianred', 'salmon']
+    # Filter out 0% to avoid clutter
+    mask = np.array(profile_data) > 0
+    ax.pie(
+        np.array(profile_data)[mask], 
+        labels=np.array(profile_labels)[mask], 
+        autopct='%1.1f%%',
+        colors=np.array(profile_colors)[mask],
+        startangle=90
+    )
+    ax.set_title("Artifact Composition")
+    report.add_figure(fig_profile, title="Artifact Profile", section="Overview")
+    plt.close(fig_profile)
+
     # 2. Spectral Analysis (PSD Overlay)
     # ----------------------------------
     # Use standard EPS to avoid log(0)
@@ -197,9 +232,10 @@ def create_preprocessing_report(
         try:
             from mne_denoise.viz.zapline import plot_cleaning_summary
             
-            # Get effective line freq from provenance or default
-            line_freq = provenance.get("zapline_stats", {}).get("line_freq", 60.0)
-            adaptive = provenance.get("zapline_stats", {}).get("adaptive", False)
+            # Get effective line freq 
+            zap_stats = provenance.get("zapline_stats", {})
+            line_freq = zap_stats.get("line_freq", 60.0)
+            adaptive = zap_stats.get("adaptive", False)
             
             # Use auto-detected freq if available
             eff_line_freq = line_freq
@@ -221,12 +257,12 @@ def create_preprocessing_report(
             
         except Exception as e:
             LOGGER.warning(f"Could not generate dynamic ZapLine plot for {subject_id}: {e}")
-            
-    # Legacy/Fallback: Load from disk if available
-    elif figures_dir and figures_dir.exists():
-        zapline_path = figures_dir / f"{subject_id}_zapline_summary.png"
-        if zapline_path.exists():
-            report.add_image(str(zapline_path), title="Line Noise Removal (ZapLine Summary)", section="Line Noise")
+            # Fallback to simple PSD overlay if summary fails
+            try:
+                # Add a message that plot failed
+                report.add_html(f"<p style='color:red;'>Could not generate ZapLine summary: {e}</p>", section="Line Noise")
+            except:
+                pass
             
     # AutoReject Logs
     ar_plots: List[Path] = []
@@ -347,6 +383,16 @@ def create_dataset_report(
 
     df = pd.DataFrame(records)
     
+    # Ensure numeric columns are indeed numeric (handles mixed types from old records)
+    numeric_cols = [
+        "Bad Channels", "ZapLine Removed", "Bad Epochs", "Artifact Segments",
+        "Alpha Peak (Hz)", "1/f Slope", "LSD (dB)", "Clean Data %",
+        "Manual Overlap %", "Process Time (s)"
+    ]
+    for col in numeric_cols:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    
     # Generate Report
     report = mne.Report(title="Dataset Preprocessing Summary")
     
@@ -361,7 +407,6 @@ def create_dataset_report(
         <li><b>Subjects Processed:</b> {len(success_subjects) + len(failed_subjects)}</li>
         <li><b>Succeeded:</b> {len(success_subjects)}</li>
         <li><b>Failed:</b> {len(failed_subjects)}</li>
-        <li><b>Succeeded IDs:</b> {', '.join(success_subjects) if success_subjects else 'None'}</li>
         <li><b>Failed IDs:</b> {', '.join(failed_subjects) if failed_subjects else 'None'}</li>
     </ul>
     """
