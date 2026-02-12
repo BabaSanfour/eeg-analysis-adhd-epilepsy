@@ -10,6 +10,55 @@ import numpy as np
 import pandas as pd
 import mne
 from typing import Any, Dict, List, Literal, TypedDict, Optional, Sequence, Tuple, Union
+from eeg_adhd_epilepsy.io import bids
+
+
+def load_stage_artifacts(
+    subject_id: str,
+    preproc_root: Path,
+    desc: str,
+    task: Optional[str] = None,
+) -> Tuple[Optional[mne.io.BaseRaw], Dict[str, Any], List[str]]:
+    """Load stage raw + provenance for one subject/desc.
+    
+    Returns:
+        (raw_obj, provenance_dict, issues_list)
+    """
+    issues: List[str] = []
+    out_path = bids.get_stage_output_path(
+        subject_id=subject_id,
+        preproc_root=preproc_root,
+        desc=desc,
+        task=task,
+    )
+    prov_path = bids.get_stage_provenance_path(
+        subject_id=subject_id,
+        preproc_root=preproc_root,
+        desc=desc,
+        task=task,
+    )
+
+    raw_obj: Optional[mne.io.BaseRaw] = None
+    prov: Dict[str, Any] = {}
+
+    if not out_path.exists():
+        issues.append(f"missing_raw:{out_path}")
+    else:
+        try:
+            raw_obj = mne.io.read_raw_fif(out_path, preload=True, verbose="ERROR")
+        except Exception as exc:
+            issues.append(f"bad_raw:{out_path}:{exc}")
+
+    if not prov_path.exists():
+        issues.append(f"missing_provenance:{prov_path}")
+    else:
+        try:
+            with open(prov_path, "r", encoding="utf-8") as f:
+                prov = json.load(f)
+        except Exception as exc:
+            issues.append(f"bad_provenance:{prov_path}:{exc}")
+
+    return raw_obj, prov, issues
 
 
 class NumpyEncoder(json.JSONEncoder):

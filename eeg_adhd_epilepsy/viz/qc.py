@@ -957,3 +957,383 @@ def save_ica_sources_snapshot(
     fig.savefig(path, dpi=150, bbox_inches='tight')
     plt.close(fig)
     return str(path)
+
+
+# -----------------------------------------------------------------------------
+# Comparison Plots (DSS vs ICA vs Original)
+# -----------------------------------------------------------------------------
+
+def plot_compare_psd(
+    raw_orig: mne.io.BaseRaw,
+    raw_dss: mne.io.BaseRaw,
+    raw_ica: mne.io.BaseRaw,
+    subject_id: str,
+    fig_dir: Path,
+) -> str:
+    """Plot PSD comparison (Side-by-side + Overlay)."""
+    fig_dir.mkdir(parents=True, exist_ok=True)
+    eeg_picks = mne.pick_types(raw_orig.info, eeg=True, exclude="bads")
+    
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5), sharey=True)
+    methods = [
+        (axes[0], raw_orig, "Original", "#666666"),
+        (axes[1], raw_dss, "DSS", "#2196F3"),
+        (axes[2], raw_ica, "ICA", "#FF5722"),
+    ]
+
+    for ax, raw, label, color in methods:
+        try:
+            psd = raw.compute_psd(fmin=0.5, fmax=50, picks=eeg_picks, verbose=False)
+            psd_data = psd.get_data() * 1e12  # to uV^2/Hz
+            freqs = psd.freqs
+            mean_psd = np.mean(psd_data, axis=0)
+            ax.semilogy(freqs, mean_psd, color=color, lw=2, label=label)
+            ax.fill_between(
+                freqs,
+                np.percentile(psd_data, 5, axis=0),
+                np.percentile(psd_data, 95, axis=0),
+                alpha=0.2,
+                color=color,
+            )
+            ax.set_xlabel("Frequency (Hz)")
+            ax.set_title(label, fontsize=14, fontweight="bold")
+            ax.grid(alpha=0.3)
+        except Exception as exc:
+            ax.text(0.5, 0.5, f"Error: {exc}", transform=ax.transAxes, ha="center")
+
+    axes[0].set_ylabel("Power (uV^2/Hz)")
+    fig.suptitle(f"{subject_id} - PSD Comparison", fontsize=16, fontweight="bold")
+    plt.tight_layout()
+    
+    path = fig_dir / f"{subject_id}_psd_comparison.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(path)
+
+
+def plot_compare_butterfly(
+    raw_orig: mne.io.BaseRaw,
+    raw_dss: mne.io.BaseRaw,
+    raw_ica: mne.io.BaseRaw,
+    subject_id: str,
+    fig_dir: Path,
+    start: float = 30.0,
+    duration: float = 10.0,
+) -> str:
+    """Plot Butterfly comparison for a specific segment."""
+    eeg_picks = mne.pick_types(raw_orig.info, eeg=True, exclude="bads")
+    max_start = raw_orig.times[-1] - duration
+    t_start = min(start, max(0, max_start))
+    n_start = int(t_start * raw_orig.info["sfreq"])
+    n_dur = int(duration * raw_orig.info["sfreq"])
+
+    fig, axes = plt.subplots(3, 1, figsize=(16, 9), sharex=True, sharey=True)
+    times = raw_orig.times[n_start : n_start + n_dur] - raw_orig.times[n_start]
+
+    for ax, raw, label, color in [
+        (axes[0], raw_orig, "Original", "#888888"),
+        (axes[1], raw_dss, "DSS Corrected", "#2196F3"),
+        (axes[2], raw_ica, "ICA Corrected", "#FF5722"),
+    ]:
+        data = raw.get_data(picks=eeg_picks)[:, n_start : n_start + n_dur] * 1e6
+        for ch in data:
+            ax.plot(times, ch, color=color, alpha=0.3, lw=0.5)
+        ax.set_ylabel("uV")
+        ax.set_title(label, fontsize=12, fontweight="bold", loc="left")
+        ax.grid(alpha=0.2)
+
+    axes[2].set_xlabel("Time (s)")
+    fig.suptitle(f"{subject_id} - Signal Butterfly ({t_start:.0f}-{t_start + duration:.0f}s)", fontsize=14, fontweight="bold")
+    plt.tight_layout()
+    
+    path = fig_dir / f"{subject_id}_butterfly.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(path)
+
+
+def plot_compare_band_power(
+    bp_orig: Dict[str, float],
+    bp_dss: Dict[str, float],
+    bp_ica: Dict[str, float],
+    subject_id: str,
+    fig_dir: Path,
+) -> str:
+    """Plot band power comparison across methods."""
+    bands = list(bp_orig.keys())
+    x = np.arange(len(bands))
+    width = 0.25
+    
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.bar(x - width, [bp_orig[b] * 1e12 for b in bands], width, label="Original", color="#888888", alpha=0.8)
+    ax.bar(x, [bp_dss[b] * 1e12 for b in bands], width, label="DSS", color="#2196F3", alpha=0.8)
+    ax.bar(x + width, [bp_ica[b] * 1e12 for b in bands], width, label="ICA", color="#FF5722", alpha=0.8)
+    
+    ax.set_xticks(x)
+    ax.set_xticklabels([b.capitalize() for b in bands], fontsize=12)
+    ax.set_ylabel("Power (uV^2/Hz)")
+    ax.set_title(f"{subject_id} - Band Power Comparison", fontsize=14, fontweight="bold")
+    ax.legend(fontsize=11)
+    ax.grid(axis='y', alpha=0.3)
+    
+    path = fig_dir / f"{subject_id}_band_power.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(path)
+
+
+def plot_compare_channel_correlation(
+    corr_map: Dict[str, float],
+    subject_id: str,
+    fig_dir: Path,
+) -> str:
+    """Plot channel correlation between DSS and ICA versions."""
+    channels = list(corr_map.keys())
+    values = list(corr_map.values())
+    
+    fig, ax = plt.subplots(figsize=(12, 5))
+    colors = ["#4CAF50" if v > 0.95 else "#FFC107" if v > 0.9 else "#F44336" for v in values]
+    ax.bar(range(len(channels)), values, color=colors, alpha=0.85)
+    ax.set_xticks(range(len(channels)))
+    ax.set_xticklabels(channels, rotation=45, ha="right", fontsize=9)
+    ax.axhline(0.95, color="green", ls="--", alpha=0.5)
+    ax.axhline(0.90, color="orange", ls="--", alpha=0.5)
+    ax.set_ylim(min(0.5, min(values) - 0.05 if values else 1.0), 1.02)
+    ax.set_ylabel("Pearson r", fontsize=12)
+    ax.set_title(f"{subject_id} - DSS vs ICA Channel Correlation", fontsize=14, fontweight="bold")
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    
+    path = fig_dir / f"{subject_id}_channel_correlation.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(path)
+
+
+def plot_compare_variance_topomaps(
+    raw_orig: mne.io.BaseRaw,
+    raw_dss: mne.io.BaseRaw,
+    raw_ica: mne.io.BaseRaw,
+    subject_id: str,
+    fig_dir: Path,
+) -> str:
+    """Compare topographic distribution of variance removed by each method."""
+    
+    # Actually, let's implement it directly to avoid complexity
+    picks = mne.pick_types(raw_orig.info, eeg=True, exclude="bads")
+    n_samples = min(raw_orig.n_times, raw_dss.n_times, raw_ica.n_times)
+    
+    data_orig = raw_orig.get_data(picks=picks)[:, :n_samples]
+    data_dss = raw_dss.get_data(picks=picks)[:, :n_samples]
+    data_ica = raw_ica.get_data(picks=picks)[:, :n_samples]
+    
+    var_orig = np.var(data_orig, axis=1)
+    var_dss = np.var(data_dss, axis=1)
+    var_ica = np.var(data_ica, axis=1)
+    
+    # Removed variance
+    rem_dss = np.maximum(0, var_orig - var_dss)
+    rem_ica = np.maximum(0, var_orig - var_ica)
+    
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+    
+    # 1. Original Variance
+    mne.viz.plot_topomap(var_orig, raw_orig.info, axes=axes[0], show=False)
+    axes[0].set_title("Original Variance")
+    
+    # 2. Variance Removed by DSS
+    mne.viz.plot_topomap(rem_dss, raw_orig.info, axes=axes[1], show=False, cmap="Reds")
+    axes[1].set_title("Variance Removed (DSS)")
+    
+    # 3. Variance Removed by ICA
+    mne.viz.plot_topomap(rem_ica, raw_orig.info, axes=axes[2], show=False, cmap="Reds")
+    axes[2].set_title("Variance Removed (ICA)")
+    
+    fig.suptitle(f"{subject_id} - Spatial Distribution of Variance Reduction", fontsize=14)
+    plt.tight_layout()
+    
+    path = fig_dir / f"{subject_id}_variance_topomap_comparison.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(path)
+
+
+def plot_compare_timing(timing_data: List[Dict[str, Any]], fig_dir: Path) -> str:
+    """Plot processing time comparison across subjects."""
+    df = pd.DataFrame(timing_data)
+    if df.empty:
+        return ""
+
+    subjects = sorted(df["subject"].unique())
+    x = np.arange(len(subjects))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(max(8, len(subjects) * 1.5), 5))
+    for i, method in enumerate(["dss", "ica"]):
+        mdf = df[df["method"] == method].set_index("subject")
+        vals = [mdf.loc[s, "duration_sec"] if s in mdf.index else 0 for s in subjects]
+        color = "#2196F3" if method == "dss" else "#FF5722"
+        ax.bar(x + (i - 0.5) * width, vals, width, label=method.upper(), color=color, alpha=0.85)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(subjects, rotation=30, ha="right", fontsize=10)
+    ax.set_ylabel("Processing Time (sec)", fontsize=12)
+    ax.set_title("Processing Time: DSS vs ICA", fontsize=14, fontweight="bold")
+    ax.legend(fontsize=11)
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    
+    path = fig_dir / "timing_comparison.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(path)
+
+
+def plot_compare_components_removed(comp_data: List[Dict[str, Any]], fig_dir: Path) -> str:
+    """Plot average components removed per artifact type."""
+    df = pd.DataFrame(comp_data)
+    if df.empty:
+        return ""
+
+    artifact_types = ["eog", "ecg", "emg"]
+    methods = ["dss", "ica"]
+    x = np.arange(len(artifact_types))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for i, method in enumerate(methods):
+        mdf = df[df["method"] == method]
+        vals = []
+        for art in artifact_types:
+            col = f"{art}_components"
+            vals.append(mdf[col].mean() if col in mdf.columns else 0)
+        color = "#2196F3" if method == "dss" else "#FF5722"
+        ax.bar(x + (i - 0.5) * width, vals, width, label=method.upper(), color=color, alpha=0.85)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([a.upper() for a in artifact_types], fontsize=12)
+    ax.set_ylabel("Components Removed (avg)", fontsize=12)
+    ax.set_title("Artifact Components Removed: DSS vs ICA", fontsize=14, fontweight="bold")
+    ax.legend(fontsize=11)
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    
+    path = fig_dir / "components_removed.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(path)
+
+
+def plot_compare_variance_removed(var_data: List[Dict[str, Any]], fig_dir: Path) -> str:
+    """Plot variance removed percentage across subjects."""
+    df = pd.DataFrame(var_data)
+    if df.empty:
+        return ""
+
+    subjects = sorted(df["subject"].unique())
+    x = np.arange(len(subjects))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(max(8, len(subjects) * 1.5), 5))
+    for i, method in enumerate(["dss", "ica"]):
+        mdf = df[df["method"] == method].set_index("subject")
+        vals = [mdf.loc[s, "variance_removed_pct"] if s in mdf.index else 0 for s in subjects]
+        color = "#2196F3" if method == "dss" else "#FF5722"
+        ax.bar(x + (i - 0.5) * width, vals, width, label=method.upper(), color=color, alpha=0.85)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(subjects, rotation=30, ha="right", fontsize=10)
+    ax.set_ylabel("Variance Removed (%)", fontsize=12)
+    ax.set_title("Total Variance Removed: DSS vs ICA", fontsize=14, fontweight="bold")
+    ax.legend(fontsize=11)
+    ax.grid(axis="y", alpha=0.3)
+    plt.tight_layout()
+    
+    path = fig_dir / "variance_removed.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(path)
+
+
+def plot_compare_summary_dashboard(metrics_df: pd.DataFrame, fig_dir: Path) -> str:
+    """Plot comprehensive comparison dashboard."""
+    if metrics_df.empty:
+        return ""
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    colors = {"dss": "#2196F3", "ica": "#FF5722"}
+
+    ax = axes[0, 0]
+    for method in ["dss", "ica"]:
+        mdf = metrics_df[metrics_df["method"] == method]
+        ax.bar(
+            mdf["subject"],
+            mdf["duration_sec"],
+            alpha=0.7,
+            color=colors[method],
+            label=method.upper(),
+            width=0.4,
+            align="edge" if method == "ica" else "center",
+        )
+    ax.set_ylabel("Time (sec)")
+    ax.set_title("Processing Time", fontsize=13, fontweight="bold")
+    ax.legend()
+    ax.tick_params(axis="x", rotation=30)
+    ax.grid(axis="y", alpha=0.3)
+
+    ax = axes[0, 1]
+    for method in ["dss", "ica"]:
+        mdf = metrics_df[metrics_df["method"] == method]
+        ax.bar(
+            mdf["subject"],
+            mdf["variance_removed_pct"],
+            alpha=0.7,
+            color=colors[method],
+            label=method.upper(),
+            width=0.4,
+            align="edge" if method == "ica" else "center",
+        )
+    ax.set_ylabel("Variance Removed (%)")
+    ax.set_title("Variance Removed", fontsize=13, fontweight="bold")
+    ax.legend()
+    ax.tick_params(axis="x", rotation=30)
+    ax.grid(axis="y", alpha=0.3)
+
+    ax = axes[1, 0]
+    corr_data = metrics_df[metrics_df["method"] == "dss"][["subject", "mean_dss_ica_corr"]].dropna()
+    if not corr_data.empty:
+        color_map = ["#4CAF50" if v > 0.95 else "#FFC107" if v > 0.9 else "#F44336" for v in corr_data["mean_dss_ica_corr"]]
+        ax.bar(corr_data["subject"], corr_data["mean_dss_ica_corr"], color=color_map, alpha=0.85)
+        ax.axhline(0.95, color="green", ls="--", alpha=0.5)
+        ax.set_ylim(0.5, 1.02)
+    ax.set_ylabel("Pearson r")
+    ax.set_title("DSS-ICA Signal Correlation", fontsize=13, fontweight="bold")
+    ax.tick_params(axis="x", rotation=30)
+    ax.grid(axis="y", alpha=0.3)
+
+    ax = axes[1, 1]
+    for method in ["dss", "ica"]:
+        mdf = metrics_df[metrics_df["method"] == method]
+        total = mdf[["eog_components", "ecg_components", "emg_components"]].sum(axis=1)
+        ax.bar(
+            mdf["subject"],
+            total.values,
+            alpha=0.7,
+            color=colors[method],
+            label=method.upper(),
+            width=0.4,
+            align="edge" if method == "ica" else "center",
+        )
+    ax.set_ylabel("Total Components")
+    ax.set_title("Components Removed", fontsize=13, fontweight="bold")
+    ax.legend()
+    ax.tick_params(axis="x", rotation=30)
+    ax.grid(axis="y", alpha=0.3)
+
+    fig.suptitle("DSS vs ICA - Comparison Dashboard", fontsize=16, fontweight="bold")
+    plt.tight_layout()
+    
+    path = fig_dir / "comparison_dashboard.png"
+    fig.savefig(path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    return str(path)
