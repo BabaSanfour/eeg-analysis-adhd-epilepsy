@@ -3,31 +3,35 @@ import argparse
 import logging
 import os
 import re
-import csv
-from typing import Any
+from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import mne
 
-from models.cbramod import CBraMod  # from CBraMod repo
+# Try importing CBraMod, handle failure gracefully if not in path
+try:
+    from models.cbramod import CBraMod
+except ImportError:
+    # If running from a different root, we might need to adjust path or assume user has it installed
+    logging.warning("Could not import models.cbramod. Ensure 'models' package is in PYTHONPATH.")
+    pass
 
 LOG = logging.getLogger(__name__)
-DEFAULT_MAX_CHANNELS = int(os.environ.get("MAX_CHANNELS", 128))
 
 # ---------------------------------------------------------------------
 # ARGUMENT PARSING
 # ---------------------------------------------------------------------
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Compute CBraMod embeddings per segment (default: 10s)."
+        description="Compute CBraMod embeddings for '_desc-base_eeg.fif' files."
     )
-    parser.add_argument("--deriv-root", required=True)
-    parser.add_argument("--out-csv", required=True)
-    parser.add_argument("--weights", required=True)
-    parser.add_argument("--device", default="cuda")
-    parser.add_argument("--ses", default="ses-01")
+    parser.add_argument("--deriv-root", required=True, help="Root directory containing subject folders")
+    parser.add_argument("--out-file", required=True, help="Output file path (.h5)")
+    parser.add_argument("--weights", required=True, help="Path to model weights")
+    parser.add_argument("--device", default="cuda", help="Device to run on (cuda/cpu)")
     parser.add_argument(
         "--segment-duration",
         type=float,
@@ -40,7 +44,12 @@ def parse_args():
         default=None,
         help="Number of samples per patch (overrides --segment-duration).",
     )
-    parser.add_argument("--max-subjects", type=int, default=None)
+    parser.add_argument("--max-subjects", type=int, default=None, help="Debug: limit number of subjects")
+    
+    # args unused but kept/modified for compatibility if needed
+    parser.add_argument("--out-csv", help="Legacy argument, use --out-file") 
+    parser.add_argument("--ses", help="Legacy argument, ignored for this flat structure")
+
     return parser.parse_args()
 
 
@@ -48,37 +57,49 @@ def parse_args():
 # HELPERS
 # ---------------------------------------------------------------------
 def find_subject_dirs(root):
+    """Finds all subject directories (starting with sub-) in root."""
     subs = []
-    if not os.path.isdir(root):
+    if not os.path.exists(root):
         return subs
-    for name in os.listdir(root):
+    
+    # Sort to ensure consistent processing order
+    for name in sorted(os.listdir(root)):
         full = os.path.join(root, name)
-        if os.path.isdir(full) and re.match(r"sub-\d{4}$", name):
+        if os.path.isdir(full) and name.startswith("sub-"):
             subs.append((name, full))
-    subs.sort()
     return subs
 
-def find_any_vhdr(sub_dir, ses):
-    eeg_dir = os.path.join(sub_dir, ses, "eeg")
+def find_target_file(sub_dir):
+    """
+    Looks for *desc-base_eeg.fif in sub_dir/eeg/
+    """
+    eeg_dir = os.path.join(sub_dir, "eeg")
     if not os.path.isdir(eeg_dir):
         return None
+        
     for f in os.listdir(eeg_dir):
-        if f.endswith(".vhdr"):
+        if f.endswith("desc-base_eeg.fif"):
             return os.path.join(eeg_dir, f)
+            
     return None
 
 def load_cbramod(weights_path, device="cuda"):
     dev = torch.device("cuda" if device == "cuda" and torch.cuda.is_available() else "cpu")
-    LOG.info("Loading CBraMod from %s", weights_path)
+    LOG.info("Loading CBraMod from %s (device=%s)", weights_path, dev)
+    
+    # Initialize model
     model = CBraMod().to(dev)
+    
+    # Load weights
     state = torch.load(weights_path, map_location=dev)
     model.load_state_dict(state)
+    
+    # Remove projection head if present to get embeddings
     if hasattr(model, "proj_out"):
         model.proj_out = nn.Identity()
+        
     model.eval()
     return model, dev
-
-
 
 
 def compute_patches(eeg_data, sfreq, seg_dur=10.0, points_per_patch=None):
@@ -87,31 +108,44 @@ def compute_patches(eeg_data, sfreq, seg_dur=10.0, points_per_patch=None):
     """
     C, T = eeg_data.shape
     P = int(points_per_patch) if points_per_patch is not None else int(seg_dur * sfreq)
+    
+    if P <= 0:
+        raise ValueError(f"Invalid patch size P={P}")
+
     S = T // P
 
     if S < 1:
+        # If signal is shorter than one patch, we can't do anything
         raise ValueError(f"Recording too short: T={T} < P={P}")
 
     usable = S * P
     data_block = eeg_data[:, :usable]
+    
+    # Reshape to (Channels, Segments, Points)
     patches = data_block.reshape(C, S, P)
     return patches, S, P
 
 
 # ---------------------------------------------------------------------
-# CORE LOGIC: SEGMENT-WISE EMBEDDING
+# CORE LOGIC
 # ---------------------------------------------------------------------
 def compute_embedding(
-    vhdr_path,
+    file_path,
     model,
     device,
     seg_dur=10.0,
     points_per_patch=None,
 ):
-    LOG.info("Reading %s", vhdr_path)
-    # Load and Resample
-    raw = mne.io.read_raw_brainvision(vhdr_path, preload=True, verbose="ERROR")
-    raw.resample(200.0, npad="auto")
+    LOG.info("Processing %s", file_path)
+    
+    # Load .fif
+    # preload=True is needed for resampling
+    raw = mne.io.read_raw_fif(file_path, preload=True, verbose="ERROR")
+    
+    # Resample to 200Hz if needed (CBraMod requirement)
+    if raw.info["sfreq"] != 200.0:
+        # LOG.info("Resampling %.1f -> 200.0 Hz", raw.info["sfreq"])
+        raw.resample(200.0, npad="auto")
     
     data = raw.get_data()
     sfreq = raw.info["sfreq"]
@@ -123,25 +157,25 @@ def compute_embedding(
     x = torch.from_numpy(patches).float().unsqueeze(0).to(device)
 
     with torch.no_grad():
-        out = model(x)  # Shape is likely (1, C, S, P) or (1, C, S, Hidden)
-
-        # KEY CHANGE: Pool over 'P' (time within patch) but KEEP 'S' (segments)
+        out = model(x) 
+        
+        # Check output shape
+        # Expected: (Batch, Channel, Segment, Time/Feat) -> (1, C, S, 200)
         if out.dim() == 4:
-            # (Batch, Channel, Segment, Time/Feat)
-            # Flatten last two dims: (1, C, S, 200) -> (1, C, S, 200)
-            # We want (S, C*200) eventually.
-            # First, permute to (1, S, C, 200)
-            out = out.permute(0, 2, 1, 3) # (1, S, C, 200)
-            # Flatten C and 200: (1, S, C*200)
+            # We want to stack everything into a flat vector per segment
+            # Target shape: (S, C*200)
+            
+            # 1. Permute to (Batch, Segment, Channel, Time) -> (1, S, C, 200)
+            out = out.permute(0, 2, 1, 3) 
+            
+            # 2. Flatten Channel and Time dimensions
+            # (1, S, C*200)
             out = out.reshape(1, out.size(1), -1)
+            
+            emb_flat = out.squeeze(0).cpu().numpy()
         else:
-            # Fallback if model outputs something else
             raise RuntimeError(f"Unexpected CBraMod output shape: {tuple(out.shape)}")
 
-        # Convert to numpy (S, C*200)
-        emb_flat = out.squeeze(0).cpu().numpy()
-
-    # Returns: (S, C*200) array, plus metadata
     return emb_flat, patches.shape[0], S, P
 
 
@@ -151,116 +185,138 @@ def compute_embedding(
 def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     args = parse_args()
+    
+    # Resolve output path
+    # output arg might be --out-file or --out-csv (legacy)
+    out_path = args.out_file if args.out_file else args.out_csv
+    if not out_path:
+        raise ValueError("Output file path is required (--out-file)")
 
-    # Prep output
-    out_dir = os.path.dirname(args.out_csv)
-    if out_dir:
-        os.makedirs(out_dir, exist_ok=True)
-
+    # Ensure output directory exists
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    
+    # Find subjects
     subs = find_subject_dirs(args.deriv_root)
+    if not subs:
+        LOG.error("No subject directories found in %s", args.deriv_root)
+        return
+
+    # Check for existing results to resume
+    processed_subs = set()
+    if os.path.exists(out_path):
+        try:
+            # Check if valid HDF and read processed subjects
+            with pd.HDFStore(out_path, mode='r') as store:
+                if 'embeddings' in store:
+                    # Read only the 'subject', 'segment' columns just to identify unique subjects efficiently?
+                    # Actually, 'subject' is sufficient.
+                    # We can use select_column if indexed, but it might not be indexed.
+                    # Reading full 'subject' column is safer.
+                    # If file is huge, this might be slow, but better than crashing.
+                    existing_df = pd.read_hdf(out_path, key="embeddings", columns=["subject"])
+                    processed_subs = set(existing_df["subject"].unique())
+                    LOG.info("Resuming: Found %d subjects already processed in %s.", len(processed_subs), out_path)
+                else:
+                    LOG.warning("File exists but 'embeddings' key not found. Starting fresh (appending).")
+        except Exception as e:
+            LOG.warning("Could not read existing file %s to resume: %s. Proceeding with caution (appending mode).", out_path, e)
+
+    # Filter subjects
+    original_count = len(subs)
+    subs = [s for s in subs if s[0] not in processed_subs]
+    
     if args.max_subjects:
         subs = subs[: args.max_subjects]
 
-    LOG.info("Found %d subjects", len(subs))
+    if not subs and len(processed_subs) > 0:
+        LOG.info("All subjects already processed! (%d total)", len(processed_subs))
+        return
+
+    LOG.info("Found %d pending subjects (out of %d total). Starting processing...", len(subs), original_count)
+
+    LOG.info("Found %d subjects. Starting processing...", len(subs))
+    
+    # Load Model
     model, device = load_cbramod(args.weights, args.device)
 
-    # We write incrementally to avoid OOM with large S*Subjects
-    # We need to know fieldnames first. We'll do a quick pass or dynamic write?
-    # Better: Open file, write header once we process the first subject, then append.
+    # Processing Loop
+    total_segments = 0
     
-    file_initialized = False
-    f_handle = open(args.out_csv, "w", newline="")
-    writer = None
+    # We need to know column names for the DataFrame. 
+    # Validating on the first subject, then enforcing consistency.
+    feat_cols = None
     
-    total_rows = 0
+    # Monitoring
+    skipped_subs = []
+    failed_subs = []
+    
+    for sub_id, sub_dir in subs:
+        target_file = find_target_file(sub_dir)
+        
+        if not target_file:
+            LOG.warning("SKIP [%s]: No '_desc-base_eeg.fif' found in %s", sub_id, sub_dir)
+            skipped_subs.append(sub_id)
+            continue
+            
+        try:
+            emb_flat, C, S, P = compute_embedding(
+                target_file,
+                model,
+                device,
+                args.segment_duration,
+                args.points_per_patch
+            )
+        except Exception as e:
+            LOG.error("ERROR [%s]: Processing failed: %s", sub_id, e)
+            failed_subs.append(sub_id)
+            continue
 
-    try:
-        for sub_id, sub_dir in subs:
-            vhdr = find_any_vhdr(sub_dir, args.ses)
-            if vhdr is None:
-                continue
+        # Column Naming / Schema Validation
+        current_n_feats = C * 200
+        
+        if feat_cols is None:
+            # Initialize columns based on first valid subject
+            feat_cols = []
+            for c in range(C):
+                for d in range(200):
+                    feat_cols.append(f"ch{c:02d}_dim{d:03d}")
+        elif len(feat_cols) != current_n_feats:
+            LOG.error("ERROR [%s]: Channel mismatch (Expected %d, Got %d). Skipping.", 
+                      sub_id, len(feat_cols), current_n_feats)
+            failed_subs.append(sub_id)
+            continue
+            
+        # Create DataFrame
+        df = pd.DataFrame(emb_flat, columns=feat_cols)
+        
+        # Add Metadata
+        df.insert(0, "n_channels", C)
+        df.insert(0, "segment", np.arange(S))
+        df.insert(0, "subject", sub_id)
+        
+        # Save to HDF5
+        try:
+            df.to_hdf(
+                out_path, 
+                key="embeddings", 
+                mode="a", 
+                format="table", 
+                append=True, 
+                min_itemsize={"subject": 32}, 
+                index=False
+            )
+            total_segments += S
+            LOG.info("SAVED [%s]: %d segments (Total: %d)", sub_id, S, total_segments)
+            
+        except Exception as e:
+            LOG.error("ERROR [%s]: Failed to write HDF5: %s", sub_id, e)
+            failed_subs.append(sub_id)
 
-            try:
-                # Get (S, C*200) matrix
-                emb_flat, C, S, P = compute_embedding(
-                    vhdr,
-                    model,
-                    device,
-                    args.segment_duration,
-                    args.points_per_patch,
-                )
-            except Exception as e:
-                LOG.warning("Failed %s: %s", sub_id, e)
-                continue
-
-            # Generate rows for this subject
-            current_batch = []
-            for s_idx in range(S):
-                row = {
-                    "subject": sub_id,
-                    "segment": s_idx,
-                    "n_channels": C,
-                    # "points_per_patch": P # Optional, static
-                }
-                
-                # Add features: cbramod_mean_0000 ... cbramod_mean_0060
-                # Add flattened features
-                # emb_flat is (S, C*200). We need to map this to columns.
-                # Naming convention: ch01_feat000 ... ch19_feat199
-                # Actually, simpler: just feat_0000 to feat_3799 (if 19ch)
-                # But to keep channel sanity, let's do: ch{c}_dim{d}
-                
-                # OPTIMIZATION: Assigning 3800 items to a dict one by one is slow.
-                # Better to construct keys once and zip?
-                # For now, keep it simple but maybe slow.
-                row_vals = emb_flat[s_idx] # (C*200,)
-                
-                # We need a stable ordering. 
-                # The flatten was (1, S, C, 200) -> reshape (1, S, C*200)
-                # So it iterates Channel 0 (all dims), Channel 1 (all dims)...
-                
-                feat_idx = 0
-                for c in range(C):
-                    for d in range(200): # Assuming 200 dim
-                        row[f"ch{c:02d}_dim{d:03d}"] = row_vals[feat_idx]
-                        feat_idx += 1
-                
-                current_batch.append(row)
-
-            if not current_batch:
-                continue
-
-            # Initialize CSV on first valid batch
-            if not file_initialized:
-                meta = ["subject", "segment", "n_channels"]
-                feats = []
-                # Pre-calculate header based on first subject's channel count
-                # NOTE: This assumes all subjects have same number of channels or we pad?
-                # If channels vary, this simple flatten approach breaks alignment.
-                # CBraMod usually requires fixed channels or handles them? 
-                # For now, we assume standard 19ch or similar.
-                # But wait, earlier code had "DEFAULT_MAX_CHANNELS".
-                # If we flatten, minimal channel mismatches will be catastrophic for alignment.
-                # WARNING: We must ensure channel consistency or include channel names.
-                # For this implementation, we proceed with C * 200.
-                
-                for c in range(C):
-                    for d in range(200):
-                        feats.append(f"ch{c:02d}_dim{d:03d}")
-                fieldnames = meta + feats
-
-                writer = csv.DictWriter(f_handle, fieldnames=fieldnames, restval="")
-                writer.writeheader()
-                file_initialized = True
-
-            # Write batch
-            writer.writerows(current_batch)
-            total_rows += len(current_batch)
-            LOG.info("Appended %d segments for %s (Total rows: %d)", S, sub_id, total_rows)
-
-    finally:
-        f_handle.close()
-        LOG.info("Done. Saved to %s", args.out_csv)
+    LOG.info("All finished. Output saved to %s", out_path)
+    if skipped_subs:
+        LOG.info("SUMMARY: Skipped %d subjects: %s", len(skipped_subs), skipped_subs)
+    if failed_subs:
+        LOG.info("SUMMARY: Failed %d subjects: %s", len(failed_subs), failed_subs)
 
 if __name__ == "__main__":
     main()
