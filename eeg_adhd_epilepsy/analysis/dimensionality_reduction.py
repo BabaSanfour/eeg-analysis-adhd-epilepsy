@@ -45,6 +45,10 @@ from coco_pipe.report.core import Report, Section, PlotlyElement, ImageElement, 
 from coco_pipe.viz import dim_reduction as viz
 from coco_pipe.viz.plotly_utils import plot_embedding_interactive
 
+from eeg_adhd_epilepsy.io.bids import discover_bids_files
+from eeg_adhd_epilepsy.qc.segmentation import extract_condition_segments
+from eeg_adhd_epilepsy.utils.config import MAPPING_PSYCHOSTIMULANT
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -53,6 +57,20 @@ ALL_REDUCERS = [
     "PCA", "UMAP", "TSNE", "PHATE", "PACMAP", "TRIMAP",
     "MDS", "ISOMAP", "LLE", "SPECTRALEMBEDDING"
 ]
+
+
+def norm_id(s):
+    """Normalize subject ID to sub-XXXX format."""
+    s = str(s).lower().strip()
+    if '_' in s: s = s.split('_')[0]
+    if s.startswith('p'): s = s[1:]
+    if s.startswith('sub-'): s = s[4:]
+    s = s.lstrip('0')
+    if not s: s = '0'
+    try:
+        return f"sub-{int(s):04d}"
+    except:
+        return f"sub-{s}"
 
 
 def load_bids_data(
@@ -166,6 +184,289 @@ def load_bids_data(
     if container.y is None and 'subject' in container.coords:
          container.y = container.coords['subject']
 
+    return container
+
+
+def load_derivatives_data(
+    bids_root: Path,
+    subjects: Optional[List[str]] = None,
+    segment_duration: float = 10.0,
+    overlap: float = 0.0,
+    stacking_mode: Literal["flat", "channel_as_sample", "time_as_sample"] = "flat",
+    metadata_df: Optional[pd.DataFrame] = None,
+    subject_col: str = "Study ID",
+    target_col: str = "Group",
+    desc: str = "base",
+    condition: Optional[str] = None,
+    ignore_annotations: bool = True
+) -> DataContainer:
+    """
+    Load preprocessed EEG data (desc-base) from derivatives/preproc using exhaustive search.
+    Manually constructs a DataContainer.
+    """
+    import mne
+    from coco_pipe.io.structures import DataContainer
+    from tqdm import tqdm
+    
+    # 1. Extensive Search for Files
+    preproc_root = bids_root / "derivatives" / "preproc"
+    logger.info(f"Searching for *desc-{desc}_eeg.fif in {preproc_root}...")
+    
+    # Use discover_bids_files if possible, but it searches for .vhdr primarily in config
+    # Let's stick to Path.rglob for simplicity as we know the structure is derivatives/preproc
+    # Or use the exact pattern we know works.
+    files_to_load = sorted(list(preproc_root.rglob(f"*desc-{desc}_eeg.fif")))
+    
+    if not files_to_load:
+        raise FileNotFoundError(f"No preprocessed files found in {preproc_root}")
+        
+    # 2. Filter Subjects
+    if subjects:
+        filtered_files = []
+        normalized_subjects = [s if s.startswith('sub-') else f"sub-{s}" for s in subjects]
+        for f in files_to_load:
+             sid = f.name.split('_')[0]
+             if sid in normalized_subjects:
+                 filtered_files.append(f)
+        files_to_load = filtered_files
+        
+    logger.info(f"Selected {len(files_to_load)} files for loading.")
+    if not files_to_load:
+         raise ValueError("No files matching subject selection found.")
+
+    # 3. Load and Segment Data
+    all_epochs = []
+    all_ids = []
+    
+    # Metadata accumulator
+    # We will accumulate all subjects and then merge with DataFrame later
+    # to avoid repeated lookups.
+    epoch_subjects = [] 
+    
+    import warnings
+    
+    for fpath in tqdm(files_to_load, desc="Loading Subjects"):
+        # Load Raw
+        raw = mne.io.read_raw_fif(fpath, preload=True, verbose="ERROR")
+        sid = fpath.name.split('_')[0]
+        
+        # Find segments CSV for this subject in BIDS root
+        # Pattern: sub-sid/ses-??/eeg/sub-sid_ses-??_task-clinical_segments.csv
+        segments_files = list(bids_root.rglob(f"{sid}_*task-clinical_segments.csv"))
+        
+        if not segments_files:
+            logger.warning(f"No segments.csv found for {sid} in {bids_root}. Skipping.")
+            continue
+        
+        csv_path = segments_files[0]
+        try:
+            df_segments = pd.read_csv(csv_path)
+        except Exception as e:
+            logger.error(f"Failed to read segments CSV {csv_path}: {e}")
+            continue
+
+        # Condition Filtering logic strictly using CSV
+        if condition:
+            cond_lower = condition.lower()
+            target_types = []
+            
+            # Dynamic mapping of requested condition to CSV segment_type
+            if cond_lower == "baseline_eo" or cond_lower == "eo_baseline":
+                target_types = ["EO_baseline"]
+            elif cond_lower == "baseline_ec" or cond_lower == "ec_baseline":
+                target_types = ["EC_baseline"]
+            elif cond_lower == "hv":
+                target_types = [t for t in df_segments['segment_type'].unique() if str(t).startswith("HV")]
+            elif cond_lower == "photo":
+                target_types = [t for t in df_segments['segment_type'].unique() if str(t).startswith("PHOTO")]
+            elif cond_lower == "raw_baseline":
+                target_types = ["RAW_baseline"]
+            else:
+                # Direct match fallback
+                target_types = [condition]
+            
+            mask = df_segments['segment_type'].isin(target_types)
+            filtered = df_segments[mask]
+            
+            if filtered.empty:
+                logger.warning(f"Condition '{condition}' (targets: {target_types}) not found in segments for {sid}. Skipping.")
+                continue
+            
+            logger.info(f"Found {len(filtered)} segments for {sid} matching {condition}")
+            events_list = []
+            for _, seg in filtered.iterrows():
+                t_start = float(seg['t_start'])
+                t_stop = float(seg['t_stop'])
+                if t_stop - t_start < segment_duration:
+                    continue
+                try:
+                    # Make fixed length events WITHIN this block according to CSV timing
+                    chunk_events = mne.make_fixed_length_events(
+                        raw, id=1, start=t_start, stop=t_stop, duration=segment_duration, overlap=overlap
+                    )
+                    events_list.append(chunk_events)
+                except: # TOFIX
+                    continue        
+            if not events_list:
+                logger.warning(f"No events created for condition {condition} in {sid} within CSV boundaries.")
+                continue
+            events = np.concatenate(events_list)
+            events = events[events[:, 0].argsort()]
+            logger.info(f"Total events for {sid}: {len(events)}")
+        else:
+            # Use whole file
+            events = mne.make_fixed_length_events(
+                raw, id=1, start=0, stop=None, duration=segment_duration, overlap=overlap
+            )
+        
+        if len(events) == 0:
+            logger.warning(f"No events found for {sid}")
+            continue
+            
+        epochs = mne.Epochs(
+            raw, events, tmin=0, tmax=segment_duration, baseline=None,
+            reject=None, verbose="ERROR", preload=True, proj=False,
+            reject_by_annotation=not ignore_annotations
+        )
+        
+        # Extract Data
+        if len(epochs) == 0:
+            logger.warning(f"Epochs object for {sid} is empty after creation. Events: {len(events)}")
+            continue
+            
+        data = epochs.get_data() # (n_epochs, n_channels, n_times)
+        logger.info(f"Successfully loaded {data.shape[0]} epochs for {sid}")
+        
+        if data.shape[0] > 0:
+            all_epochs.append(data)
+            
+            n_ep = data.shape[0]
+            # ID: subject_idx
+            start_idx = len(all_ids)
+            new_ids = [f"{sid}_{i}" for i in range(start_idx, start_idx+n_ep)]
+            all_ids.extend(new_ids)
+            epoch_subjects.extend([sid] * n_ep)
+            
+    if not all_epochs:
+        raise RuntimeError(f"No valid epochs loaded. Check if condition '{condition}' exists in the data.")
+        
+    X_all = np.concatenate(all_epochs, axis=0) # (N, C, T)
+    
+    # 4. Construct DataContainer
+    coords = {
+        'subject': np.array(epoch_subjects),
+        'channel': np.array(epochs.ch_names),
+        'time': epochs.times
+    }
+    if condition:
+        coords['condition'] = np.array([condition] * len(epoch_subjects))
+    
+    container = DataContainer(
+        X=X_all,
+        dims=('obs', 'channel', 'time'),
+        coords=coords,
+        ids=np.array(all_ids)
+    )
+    
+    # -------------------------------------------------------------------------
+    # 4. Stacking / Reshaping (Happening before metadata merge)
+    # -------------------------------------------------------------------------
+    if stacking_mode == "flat":
+        container = container.flatten(preserve='obs')
+    elif stacking_mode == "channel_as_sample":
+        container = container.stack(dims=('obs', 'channel'), new_dim='obs')
+    elif stacking_mode == "time_as_sample":
+        container = container.stack(dims=('obs', 'time'), new_dim='obs')
+
+    # -------------------------------------------------------------------------
+    # 5. Metadata Integration (ON FINAL FLATTENED CONTAINER)
+    # -------------------------------------------------------------------------
+    if metadata_df is not None:
+        logger.info(f"Merging external metadata from CSV onto {container.X.shape[0]} samples...")
+        csv_df = metadata_df.copy()
+        
+        if subject_col in csv_df.columns:
+            csv_df['match_id'] = csv_df[subject_col].apply(norm_id)
+            
+            sub_vals = container.coords.get('subject', container.ids)
+            if sub_vals is not None:
+                # Normalize container IDs too
+                sub_series = pd.Series(sub_vals, name='subject_key').astype(str).str.strip().apply(norm_id)
+                merged = pd.merge(sub_series, csv_df, left_on='subject_key', right_on='match_id', how='left')
+                
+                # Ensure normalized subject is back in coords
+                container.coords['subject'] = merged['subject_key'].values
+
+                # Prepare Derived Columns
+                if 'Age' in merged.columns:
+                    def get_age_group(age_str):
+                        import re
+                        match = re.search(r'\d+', str(age_str))
+                        if not match: return "Unknown"
+                        age_val = int(match.group())
+                        if 5 <= age_val <= 8: return "5-8"
+                        if 9 <= age_val <= 12: return "9-12"
+                        if 13 <= age_val <= 18: return "13-18"
+                        return "Other"
+                    merged['Age_Group'] = merged['Age'].apply(get_age_group)
+                    
+                diag_cols = ['TDAH', 'TSA', 'Epilepsy']
+                def combine_diagnosis(row):
+                    diags = []
+                    for col in diag_cols:
+                        if col in row and str(row[col]).lower().startswith(('yes', 'oui', '1', 'true')):
+                            if col == 'TDAH': diags.append("ADHD")
+                            elif col == 'TSA': diags.append("ASD")
+                            else: diags.append(col)
+                    if not diags: return "Control"
+                    return "+".join(diags)
+                merged['Diagnosis_Combined'] = merged.apply(combine_diagnosis, axis=1)
+                
+                asm_cols = ['LEV', 'LTG', 'LCS', 'CLB', 'CBZ', 'VPA', 'ETH', 'TPM', 'RUF', 'BRV', 'STP', 'OXZ', 'CBM']
+                def get_asm_types(row):
+                    drugs = []
+                    for col in asm_cols:
+                        if col in row and str(row[col]).lower().startswith(('yes', 'oui', '1', 'true')):
+                             drugs.append(col)
+                    return "+".join(drugs) if drugs else "No_ASM"
+                merged['ASM_Types'] = merged.apply(get_asm_types, axis=1)
+                merged['ASM_dichotomous'] = np.where(merged['ASM_Types'] == "No_ASM", "No", "Yes")
+                
+                if 'psychostimulant_description' in merged.columns:
+                     merged['Psychostim_Category_Mapped'] = merged['psychostimulant_description'].apply(lambda x: MAPPING_PSYCHOSTIMULANT.get(str(x), 0))
+
+                ps_col = 'Psychostimulant (y/n)'
+                if ps_col in merged.columns:
+                    def get_meds_status(row):
+                        has_asm = row['ASM_dichotomous'] == "Yes"
+                        has_psy = str(row[ps_col]).lower().startswith(('yes', 'oui', '1', 'true'))
+                        if has_asm and has_psy: return "ASM+Psychostim"
+                        if has_asm: return "ASM"
+                        if has_psy: return "Psychostim"
+                        return "No Med"
+                    merged['Meds'] = merged.apply(get_meds_status, axis=1)
+                
+                cols_to_add = [
+                    'Age_Group', 'Diagnosis_Combined', 'ASM_Types', 
+                    'ASM_dichotomous', 'Meds', 'Psychostim_Category_Mapped',
+                    'TDAH', 'TSA', 'Epilepsy', 'Sex', 'Age', 'Group'
+                ]
+                for col in cols_to_add:
+                    if col in merged.columns:
+                         container.coords[col] = merged[col].values
+
+                if target_col in container.coords:
+                     container.y = np.array(container.coords[target_col]).astype(str)
+                else:
+                    for fb in ['Diagnosis_Combined', 'Meds', 'ASM_dichotomous', 'Age_Group', 'Sex']:
+                        if fb in container.coords:
+                             container.y = np.array(container.coords[fb]).astype(str)
+                             logger.info(f"Target col '{target_col}' missing. Using '{fb}'.")
+                             break
+
+    if container.y is not None:
+         container.y = np.array(container.y).astype(str)
+    
     return container
 
 
@@ -371,22 +672,22 @@ def create_reducer_section(
             else:
                 sec.add_element(ImageElement(fig_scree))
     
-    # 5. Shepard Diagram (quality diagnostic)
-    if emb_2d is not None:
-        try:
-            fig_shepard = viz.plot_shepard_diagram(
-                X_orig=X_orig,
-                X_emb=emb_2d,
-                sample_size=min(500, X_orig.shape[0]),
-                title=f"{name.upper()} - Shepard Diagram",
-                interactive=interactive
-            )
-            if interactive:
-                sec.add_element(PlotlyElement(fig_shepard))
-            else:
-                sec.add_element(ImageElement(fig_shepard))
-        except Exception as e:
-            logger.warning(f"Could not create Shepard diagram for {name}: {e}")
+    # # 5. Shepard Diagram (quality diagnostic)
+    # if emb_2d is not None:
+    #     try:
+    #         fig_shepard = viz.plot_shepard_diagram(
+    #             X_orig=X_orig,
+    #             X_emb=emb_2d,
+    #             sample_size=min(500, X_orig.shape[0]),
+    #             title=f"{name.upper()} - Shepard Diagram",
+    #             interactive=interactive
+    #         )
+    #         if interactive:
+    #             sec.add_element(PlotlyElement(fig_shepard))
+    #         else:
+    #             sec.add_element(ImageElement(fig_shepard))
+    #     except Exception as e:
+    #         logger.warning(f"Could not create Shepard diagram for {name}: {e}")
     
     # 6. Trajectory Plot (if temporal data)
     if emb_2d is not None and times is not None:
@@ -576,8 +877,15 @@ def main():
     parser.add_argument("--save_embeddings", action="store_true", help="Save embeddings to disk")
     parser.add_argument("--with_trajectory", action="store_true", help="Include trajectory plots")
     parser.add_argument("--run_selector", action="store_true", help="Run MethodSelector comparison")
+    parser.add_argument("--use_derivatives", action="store_true", help="Load from derivatives/preproc instead of raw BIDS")
+    parser.add_argument("--desc", default="base", help="Desc to load from derivatives (default: base)")
+    parser.add_argument("--subjects", nargs="+", default=None, help="Specific subjects to process")
+    parser.add_argument("--ignore_annotations", action="store_true", default=True, help="Ignore BAD_ annotations during epoching")
     
     args = parser.parse_args()
+    
+    # Force logging level
+    logging.getLogger().setLevel(logging.INFO)
     
     interactive = not args.static
     
@@ -587,15 +895,21 @@ def main():
     out_path.mkdir(parents=True, exist_ok=True)
     
     # Subject Selection
-    subjects = get_entity_vals(bids_root, 'subject')
-    logger.info(f"Found {len(subjects)} subjects in BIDS root.")
-    
-    if args.subsample and args.subsample < len(subjects):
-        random.seed(42)
-        subjects = random.sample(subjects, args.subsample)
-        logger.info(f"Subsampled to {len(subjects)} subjects.")
-        
-    # Load Metadata
+    if args.subjects:
+        subjects = args.subjects
+        logger.info(f"Using provided subjects: {subjects}")
+    elif args.use_derivatives:
+        preproc_root = bids_root / "derivatives" / "preproc"
+        # Discover subjects from the derivatives directory
+        # Filenames look like sub-XXXX_desc-base_eeg.fif
+        derivatives_files = list(preproc_root.rglob(f"*desc-{args.desc}_eeg.fif"))
+        subjects = sorted(list(set([f.name.split('_')[0].replace('sub-', '') for f in derivatives_files])))
+        logger.info(f"Found {len(subjects)} subjects with {args.desc} preprocessed data.")
+    else:
+        subjects = get_entity_vals(bids_root, 'subject')
+        logger.info(f"Found {len(subjects)} subjects in BIDS root.")
+
+    # Load Metadata early for filtering
     meta_df = None
     if args.metadata:
         try:
@@ -608,23 +922,45 @@ def main():
          if default_csv.exists():
              meta_df = pd.read_csv(default_csv)
              logger.info(f"Loaded default metadata: {default_csv}")
+    
     if meta_df is not None:
         meta_df = meta_df.loc[:, ~meta_df.columns.str.contains('^Unnamed')]
-    
-    # Load Data
-    dc = load_bids_data(
+        
+        # Clinical Filtering: Exclude subjects with "0 (potentiel)" in diagnostic columns
+        diag_cols = ['TDAH', 'TSA', 'Epilepsy']
+        existing_diag_cols = [c for c in diag_cols if c in meta_df.columns]
+        if existing_diag_cols:
+            exclude_mask = meta_df[existing_diag_cols].astype(str).apply(
+                lambda x: x.str.lower().str.contains(r'0 \(potentiel\)')
+            ).any(axis=1)
+            
+            excluded_df = meta_df[exclude_mask]
+            if not excluded_df.empty:
+                excluded_ids = excluded_df[args.subject_col].apply(norm_id).tolist()
+                logger.info(f"Excluding {len(excluded_ids)} subjects due to 'Potential' status: {excluded_ids}")
+                
+                # Filter subjects list
+                subjects = [s for s in subjects if norm_id(s) not in excluded_ids]
+                logger.info(f"Remaining subjects after clinical filtering: {len(subjects)}")
+
+    if args.subsample and args.subsample < len(subjects):
+        random.seed(42)
+        subjects = random.sample(subjects, args.subsample)
+        logger.info(f"Subsampled to {len(subjects)} subjects.")
+        
+    # Load Data (Already loaded metadata above)
+    dc = load_derivatives_data(
         bids_root=bids_root,
-        subjects=subjects,
-        task=args.task,
-        session=args.session,
-        segment_mode=args.segment_mode,
-        condition=args.condition,
+        subjects=subjects if subjects else None, 
         segment_duration=args.segment_duration,
         overlap=args.overlap,
         stacking_mode=args.stacking_mode,
         metadata_df=meta_df,
         subject_col=args.subject_col,
-        target_col=args.target_col
+        target_col=args.target_col,
+        desc=args.desc,
+        condition=args.condition,
+        ignore_annotations=args.ignore_annotations
     )
     
     X = dc.X
@@ -687,11 +1023,14 @@ def main():
     meta_dict = {}
     for col_name, col_values in dc.coords.items():
         if len(col_values) == n_samples:
-            arr = np.array(col_values)
-            # Only include columns with reasonable number of unique values (categorical)
-            n_unique = len(np.unique(arr[~pd.isna(arr)]))
-            if 1 < n_unique <= 50:  # Skip constant columns and high-cardinality columns
-                meta_dict[col_name] = arr
+            s = pd.Series(col_values)
+            # Filter constants that are clearly not labels (like channel, time)
+            if col_name in ['channel', 'time']: continue
+            
+            n_unique = s.astype(str).nunique()
+            # Include if it has between 1 and 200 unique values
+            if 1 <= n_unique <= 200:
+                meta_dict[col_name] = col_values
     
     logger.info(f"Available labels for color coding: {list(meta_dict.keys())}")
     
