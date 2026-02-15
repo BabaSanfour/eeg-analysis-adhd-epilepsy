@@ -198,7 +198,8 @@ def load_derivatives_data(
     target_col: str = "Group",
     desc: str = "base",
     condition: Optional[str] = None,
-    ignore_annotations: bool = True
+    ignore_annotations: bool = True,
+    subject_average: bool = False
 ) -> DataContainer:
     """
     Load preprocessed EEG data (desc-base) from derivatives/preproc using exhaustive search.
@@ -367,6 +368,13 @@ def load_derivatives_data(
         coords=coords,
         ids=np.array(all_ids)
     )
+
+    # 4.5 Optional: Subject-Level Averaging
+    if subject_average:
+        logger.info(f"Averaging data across segments per subject. Groups sample: {coords['subject'][:5]}")
+        logger.info(f"Unique subjects in coords: {pd.Series(coords['subject']).unique()}")
+        container = container.aggregate(by='subject', method='mean')
+        logger.info(f"Shape after averaging: {container.X.shape}")
     
     # -------------------------------------------------------------------------
     # 4. Stacking / Reshaping (Happening before metadata merge)
@@ -881,6 +889,7 @@ def main():
     parser.add_argument("--desc", default="base", help="Desc to load from derivatives (default: base)")
     parser.add_argument("--subjects", nargs="+", default=None, help="Specific subjects to process")
     parser.add_argument("--ignore_annotations", action="store_true", default=True, help="Ignore BAD_ annotations during epoching")
+    parser.add_argument("--subject_average", action="store_true", help="Average all segments per subject into 1 point")
     
     args = parser.parse_args()
     
@@ -960,7 +969,8 @@ def main():
         target_col=args.target_col,
         desc=args.desc,
         condition=args.condition,
-        ignore_annotations=args.ignore_annotations
+        ignore_annotations=args.ignore_annotations,
+        subject_average=args.subject_average
     )
     
     X = dc.X
