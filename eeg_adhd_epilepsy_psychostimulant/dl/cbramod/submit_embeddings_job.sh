@@ -4,7 +4,7 @@
 #SBATCH --error=/home/mat/projects/EEG_psychostimulant/eeg_adhd_epilepsy_psychostimulant/data/results/dl/logs/cbramod/embed_%j.err
 #SBATCH --time=03:00:00
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=24G
+#SBATCH --mem=128G
 #SBATCH --partition=gpubase_bygpu_b1
 #SBATCH --gres=gpu:1
 # #SBATCH --account=def-kjerbi
@@ -25,9 +25,9 @@ mkdir -p "$PROJECT_ROOT/data/results/dl/embeddings/cbramod"
 # Input: Preprocessed baseline data
 DERIV_ROOT=${DERIV_ROOT:-"/home/mat/scratch/preproc/baseline/"}
 
-# Output: HDF5 file
+# Output: Directory for .npy files (one per subject)
 # Default location
-OUT_FILE=${OUT_FILE:-"$PROJECT_ROOT/data/results/dl/embeddings/cbramod/cbramod_embeddings.h5"}
+OUT_FILE=${OUT_FILE:-"/home/mat/scratch/cbrmod_embeddings"}
 
 # Model Weights
 WEIGHTS=${WEIGHTS:-"/home/mat/CBraMod/pretrained_weights/pretrained_weights.pth"}

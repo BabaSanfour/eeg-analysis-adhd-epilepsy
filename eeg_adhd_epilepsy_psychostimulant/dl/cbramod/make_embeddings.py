@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import gc
 import logging
 import os
 import re
@@ -186,14 +187,13 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     args = parse_args()
     
-    # Resolve output path
-    # output arg might be --out-file or --out-csv (legacy)
-    out_path = args.out_file if args.out_file else args.out_csv
-    if not out_path:
-        raise ValueError("Output file path is required (--out-file)")
+    # Resolve output path (now expects a directory, not a file)
+    out_dir = args.out_file if args.out_file else args.out_csv
+    if not out_dir:
+        raise ValueError("Output directory path is required (--out-file)")
 
     # Ensure output directory exists
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
     
     # Find subjects
     subs = find_subject_dirs(args.deriv_root)
@@ -201,25 +201,15 @@ def main():
         LOG.error("No subject directories found in %s", args.deriv_root)
         return
 
-    # Check for existing results to resume
+    # Check for existing results to resume (look for .npy files)
     processed_subs = set()
-    if os.path.exists(out_path):
-        try:
-            # Check if valid HDF and read processed subjects
-            with pd.HDFStore(out_path, mode='r') as store:
-                if 'embeddings' in store:
-                    # Read only the 'subject', 'segment' columns just to identify unique subjects efficiently?
-                    # Actually, 'subject' is sufficient.
-                    # We can use select_column if indexed, but it might not be indexed.
-                    # Reading full 'subject' column is safer.
-                    # If file is huge, this might be slow, but better than crashing.
-                    existing_df = pd.read_hdf(out_path, key="embeddings", columns=["subject"])
-                    processed_subs = set(existing_df["subject"].unique())
-                    LOG.info("Resuming: Found %d subjects already processed in %s.", len(processed_subs), out_path)
-                else:
-                    LOG.warning("File exists but 'embeddings' key not found. Starting fresh (appending).")
-        except Exception as e:
-            LOG.warning("Could not read existing file %s to resume: %s. Proceeding with caution (appending mode).", out_path, e)
+    for f in os.listdir(out_dir):
+        if f.endswith("_embeddings.npy"):
+            sub_id = f.replace("_embeddings.npy", "")
+            processed_subs.add(sub_id)
+    
+    if processed_subs:
+        LOG.info("Resuming: Found %d subjects already processed in %s.", len(processed_subs), out_dir)
 
     # Filter subjects
     original_count = len(subs)
@@ -233,22 +223,18 @@ def main():
         return
 
     LOG.info("Found %d pending subjects (out of %d total). Starting processing...", len(subs), original_count)
-
-    LOG.info("Found %d subjects. Starting processing...", len(subs))
     
     # Load Model
     model, device = load_cbramod(args.weights, args.device)
 
     # Processing Loop
     total_segments = 0
-    
-    # We need to know column names for the DataFrame. 
-    # Validating on the first subject, then enforcing consistency.
-    feat_cols = None
+    expected_n_feats = None
     
     # Monitoring
     skipped_subs = []
     failed_subs = []
+    success_subs = []
     
     for sub_id, sub_dir in subs:
         target_file = find_target_file(sub_dir)
@@ -271,48 +257,54 @@ def main():
             failed_subs.append(sub_id)
             continue
 
-        # Column Naming / Schema Validation
+        # Validate channel consistency
         current_n_feats = C * 200
-        
-        if feat_cols is None:
-            # Initialize columns based on first valid subject
-            feat_cols = []
-            for c in range(C):
-                for d in range(200):
-                    feat_cols.append(f"ch{c:02d}_dim{d:03d}")
-        elif len(feat_cols) != current_n_feats:
+        if expected_n_feats is None:
+            expected_n_feats = current_n_feats
+            LOG.info("First subject [%s]: %d channels, %d features", sub_id, C, current_n_feats)
+        elif expected_n_feats != current_n_feats:
             LOG.error("ERROR [%s]: Channel mismatch (Expected %d, Got %d). Skipping.", 
-                      sub_id, len(feat_cols), current_n_feats)
+                      sub_id, expected_n_feats, current_n_feats)
             failed_subs.append(sub_id)
             continue
-            
-        # Create DataFrame
-        df = pd.DataFrame(emb_flat, columns=feat_cols)
         
-        # Add Metadata
-        df.insert(0, "n_channels", C)
-        df.insert(0, "segment", np.arange(S))
-        df.insert(0, "subject", sub_id)
-        
-        # Save to HDF5
+        # Save as .npy (embeddings only, no metadata columns)
         try:
-            df.to_hdf(
-                out_path, 
-                key="embeddings", 
-                mode="a", 
-                format="table", 
-                append=True, 
-                min_itemsize={"subject": 32}, 
-                index=False
-            )
+            import json
+            
+            emb_file = os.path.join(out_dir, f"{sub_id}_embeddings.npy")
+            meta_file = os.path.join(out_dir, f"{sub_id}_metadata.json")
+            
+            # Save embeddings array
+            np.save(emb_file, emb_flat)
+            
+            # Save metadata separately
+            metadata = {
+                "subject": sub_id,
+                "n_channels": int(C),
+                "n_segments": int(S),
+                "n_features": int(current_n_feats),
+                "points_per_patch": int(P)
+            }
+            with open(meta_file, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
             total_segments += S
-            LOG.info("SAVED [%s]: %d segments (Total: %d)", sub_id, S, total_segments)
+            success_subs.append(sub_id)
+            LOG.info("SAVED [%s]: %d segments → %s", sub_id, S, emb_file)
             
         except Exception as e:
-            LOG.error("ERROR [%s]: Failed to write HDF5: %s", sub_id, e)
+            LOG.error("ERROR [%s]: Failed to write .npy: %s", sub_id, e)
             failed_subs.append(sub_id)
+        
+        # Explicit memory cleanup
+        del emb_flat
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
-    LOG.info("All finished. Output saved to %s", out_path)
+    LOG.info("All finished. Output saved to %s", out_dir)
+    LOG.info("SUMMARY: Successfully processed %d subjects (Total segments: %d)", len(success_subs), total_segments)
     if skipped_subs:
         LOG.info("SUMMARY: Skipped %d subjects: %s", len(skipped_subs), skipped_subs)
     if failed_subs:
