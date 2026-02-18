@@ -22,17 +22,20 @@ mkdir -p "$PROJECT_ROOT/data/results/dl/logs/cbramod"
 mkdir -p "$PROJECT_ROOT/data/results/dl/embeddings/cbramod"
 
 # 2. Configuration
-# Input: Preprocessed baseline data
-DERIV_ROOT=${DERIV_ROOT:-"/home/mat/scratch/preproc/baseline/"}
+# Input: Preprocessed data root
+DERIV_PROC_ROOT=${DERIV_PROC_ROOT:-"/home/mat/scratch/preproc/"}
 
 # Output: Directory for .npy files (one per subject)
 # Default location
-OUT_FILE=${OUT_FILE:-"/home/mat/scratch/cbrmod_embeddings"}
+# Output: Directory for .npy files (one per subject)
+# Default location
+OUT_FILE=${OUT_FILE:-"/home/mat/scratch/extracted_embeddings/cbramod"}
 
 # Model Weights
 WEIGHTS=${WEIGHTS:-"/home/mat/CBraMod/pretrained_weights/pretrained_weights.pth"}
 
 DEVICE=${DEVICE:-"cuda"}
+STAGE=${STAGE:-"base"}
 
 # Hardcoded settings
 POINTS_PER_PATCH=200
@@ -44,17 +47,19 @@ export PYTHONPATH=$PROJECT_ROOT:$PYTHONPATH
 
 echo "Starting embedding generation via SLURM..."
 echo "  - Script: $PROJECT_ROOT/dl/cbramod/make_embeddings.py"
-echo "  - Input: $DERIV_ROOT"
+echo "  - Input: $DERIV_PROC_ROOT"
 echo "  - Output: $OUT_FILE"
+echo "  - Stage: $STAGE"
 echo "  - Device: $DEVICE"
 
 # 3. Build Command
 # Using absolute path to the script
 cmd=("python" "$PROJECT_ROOT/dl/cbramod/make_embeddings.py" \
-  --deriv-root "$DERIV_ROOT" \
+  --deriv-proc-root "$DERIV_PROC_ROOT" \
   --out-file "$OUT_FILE" \
   --weights "$WEIGHTS" \
   --device "$DEVICE" \
+  --stage "$STAGE" \
   --points-per-patch "$POINTS_PER_PATCH")
 
 # 4. Execute

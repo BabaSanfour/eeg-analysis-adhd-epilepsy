@@ -1,0 +1,9 @@
+torch>=2.0.0
+numpy
+scipy
+mne
+pandas
+scikit-learn
+einops
+# Optional but recommended for speed
+# flash-attn 

@@ -29,7 +29,7 @@ def parse_args():
     parser = argparse.ArgumentParser(
         description="Compute CBraMod embeddings for '_desc-base_eeg.fif' files."
     )
-    parser.add_argument("--deriv-root", required=True, help="Root directory containing subject folders")
+    parser.add_argument("--deriv-proc-root", required=True, help="Root directory containing subject folders")
     parser.add_argument("--out-file", required=True, help="Output file path (.h5)")
     parser.add_argument("--weights", required=True, help="Path to model weights")
     parser.add_argument("--device", default="cuda", help="Device to run on (cuda/cpu)")
@@ -44,6 +44,12 @@ def parse_args():
         type=int,
         default=None,
         help="Number of samples per patch (overrides --segment-duration).",
+    )
+    parser.add_argument(
+        "--stage", 
+        default="base", 
+        choices=["base", "correct_ica", "correct_dss", "denoise_ar", "denoise_dss_ar"], 
+        help="Preprocessing stage to extract"
     )
     parser.add_argument("--max-subjects", type=int, default=None, help="Debug: limit number of subjects")
     
@@ -70,16 +76,26 @@ def find_subject_dirs(root):
             subs.append((name, full))
     return subs
 
-def find_target_file(sub_dir):
+def find_eeg_file(sub_dir, stage="base"):
     """
-    Looks for *desc-base_eeg.fif in sub_dir/eeg/
+    Looks for eeg file matching stage pattern in sub_dir/eeg/
     """
     eeg_dir = os.path.join(sub_dir, "eeg")
     if not os.path.isdir(eeg_dir):
         return None
         
+    # Pattern map
+    patterns = {
+        "base": "desc-base_eeg.fif",
+        "correct_ica": "desc-correctIca_eeg.fif",
+        "correct_dss": "desc-correctDss_eeg.fif",
+        "denoise_ar": "desc-denoiseAr_eeg.fif",
+        "denoise_dss_ar": "denoiseWienerDss_eeg.fif"
+    }
+    suffix = patterns.get(stage, "desc-base_eeg.fif")
+        
     for f in os.listdir(eeg_dir):
-        if f.endswith("desc-base_eeg.fif"):
+        if f.endswith(suffix):
             return os.path.join(eeg_dir, f)
             
     return None
@@ -163,7 +179,7 @@ def compute_embedding(
         # Check output shape
         # Expected: (Batch, Channel, Segment, Time/Feat) -> (1, C, S, 200)
         if out.dim() == 4:
-            # We want to stack everything into a flat vector per segment
+            # Stack everything into a flat vector per segment
             # Target shape: (S, C*200)
             
             # 1. Permute to (Batch, Segment, Channel, Time) -> (1, S, C, 200)
@@ -187,7 +203,7 @@ def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     args = parse_args()
     
-    # Resolve output path (now expects a directory, not a file)
+    # output path
     out_dir = args.out_file if args.out_file else args.out_csv
     if not out_dir:
         raise ValueError("Output directory path is required (--out-file)")
@@ -196,9 +212,9 @@ def main():
     Path(out_dir).mkdir(parents=True, exist_ok=True)
     
     # Find subjects
-    subs = find_subject_dirs(args.deriv_root)
+    subs = find_subject_dirs(args.deriv_proc_root)
     if not subs:
-        LOG.error("No subject directories found in %s", args.deriv_root)
+        LOG.error("No subject directories found in %s", args.deriv_proc_root)
         return
 
     # Check for existing results to resume (look for .npy files)
@@ -237,10 +253,10 @@ def main():
     success_subs = []
     
     for sub_id, sub_dir in subs:
-        target_file = find_target_file(sub_dir)
+        target_file = find_eeg_file(sub_dir, stage=args.stage)
         
         if not target_file:
-            LOG.warning("SKIP [%s]: No '_desc-base_eeg.fif' found in %s", sub_id, sub_dir)
+            LOG.warning("SKIP [%s]: No EEG file found for stage '%s' in %s", sub_id, args.stage, sub_dir)
             skipped_subs.append(sub_id)
             continue
             
@@ -268,12 +284,26 @@ def main():
             failed_subs.append(sub_id)
             continue
         
-        # Save as .npy (embeddings only, no metadata columns)
+        # Save as .npy 
         try:
             import json
             
-            emb_file = os.path.join(out_dir, f"{sub_id}_embeddings.npy")
-            meta_file = os.path.join(out_dir, f"{sub_id}_metadata.json")
+            # Create subject-specific output directory
+            sub_out_dir = os.path.join(out_dir, sub_id)
+            os.makedirs(sub_out_dir, exist_ok=True)
+            
+            # Map stage to filename suffix:
+            suffix_map = {
+                "base": "desc-base",
+                "correct_ica": "desc-correctIca",
+                "correct_dss": "desc-correctDss",
+                "denoise_ar": "desc-denoiseAr",
+                "denoise_wiener_dss": "denoiseWienerDss"
+            }
+            desc = suffix_map.get(args.stage, "desc-base")
+            
+            emb_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_embed_cbramod.npy")
+            meta_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_metadata_cbramod.json")
             
             # Save embeddings array
             np.save(emb_file, emb_flat)
