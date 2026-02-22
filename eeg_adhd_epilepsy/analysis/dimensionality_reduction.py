@@ -62,7 +62,7 @@ ALL_REDUCERS = [
 ]
 
 
-def ç(reducer_obj):
+def _get_inner_reducer(reducer_obj):
     """Return wrapped reducer across coco-pipe API variants."""
     return getattr(reducer_obj, "reducer", getattr(reducer_obj, "reducer_", reducer_obj))
 
@@ -186,7 +186,7 @@ def load_bids_data(
     condition: Optional[str] = None,
     segment_duration: float = 10.0,
     overlap: float = 0.0,
-    stacking_mode: Literal["flat", "channel_as_sample", "time_as_sample"] = "flat",
+    stacking_mode: Literal["flat", "time_as_sample"] = "flat",
     metadata_df: Optional[pd.DataFrame] = None,
     subject_col: str = "Study ID",
     target_col: str = "Group"
@@ -195,7 +195,10 @@ def load_bids_data(
     Load EEG data from BIDS and structure into a DataContainer.
     """
     subjects = subjects or []
-    logger.info(f"Loading data for {len(subjects)} subjects. Task: {task}, Mode: {segment_mode}, Stacking: {stacking_mode}")
+    logger.info(
+        f"Loading data for {len(subjects)} subjects. Task: {task}, Mode: {segment_mode}, "
+        f"Stacking: {stacking_mode}"
+    )
     
     container = None
 
@@ -235,8 +238,6 @@ def load_bids_data(
     # 1. Stacking / Reshaping using DataContainer methods
     if stacking_mode == "flat":
         container = container.flatten(preserve='obs')
-    elif stacking_mode == "channel_as_sample":
-        container = container.stack(dims=('obs', 'channel'), new_dim='obs')
     elif stacking_mode == "time_as_sample":
         container = container.stack(dims=('obs', 'time'), new_dim='obs')
         
@@ -297,7 +298,7 @@ def load_derivatives_data(
     subjects: Optional[List[str]] = None,
     segment_duration: float = 10.0,
     overlap: float = 0.0,
-    stacking_mode: Literal["flat", "channel_as_sample", "time_as_sample"] = "flat",
+    stacking_mode: Literal["flat", "time_as_sample"] = "flat",
     metadata_df: Optional[pd.DataFrame] = None,
     subject_col: str = "Study ID",
     target_col: str = "Group",
@@ -486,8 +487,6 @@ def load_derivatives_data(
     # -------------------------------------------------------------------------
     if stacking_mode == "flat":
         container = container.flatten(preserve='obs')
-    elif stacking_mode == "channel_as_sample":
-        container = container.stack(dims=('obs', 'channel'), new_dim='obs')
     elif stacking_mode == "time_as_sample":
         container = container.stack(dims=('obs', 'time'), new_dim='obs')
 
@@ -1104,7 +1103,16 @@ def main():
     parser.add_argument("--segment_duration", type=float, default=60.0, help="Segment duration in seconds")
     parser.add_argument("--overlap", type=float, default=0.0, help="Window overlap in seconds")
     
-    parser.add_argument("--stacking_mode", choices=["flat", "channel_as_sample", "time_as_sample"], default="flat", help="How to stack data matrices")
+    parser.add_argument(
+        "--stacking_mode",
+        choices=["flat", "time_as_sample"],
+        default="flat",
+        help=(
+            "Feature layout for reducers: "
+            "'flat' => columns=(channel x time), "
+            "'time_as_sample' => columns=channel"
+        ),
+    )
     
     parser.add_argument("--subsample", type=int, default=None, help="Number of subjects to random sample")
     parser.add_argument("--subject_col", default="Study ID", help="Column in metadata")
