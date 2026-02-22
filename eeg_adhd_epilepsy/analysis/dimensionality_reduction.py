@@ -5,12 +5,12 @@ End-to-end Dimensionality Reduction Analysis for EEG Data.
 Workflow:
 1. Load EEG data from BIDS directory (Raw or Specific Segments).
 2. Stack/Flatten data based on strategy (flat, per-channel, per-time).
-3. Apply dimensionality reduction using coco-pipe (all 12 available reducers).
+3. Apply dimensionality reduction using coco-pipe (selected supported reducers).
 4. Compute quality metrics and compare methods using MethodSelector.
 5. Generate comprehensive interactive HTML reports with all visualizations.
 
 Available Reducers:
-- pca, umap, tsne, phate, pacmap, trimap, mds, isomap, lle, spectral, kpca, factor
+- pca, umap, phate, isomap
 
 Available Visualizations:
 - Embeddings (2D/3D), loss history, scree plots, Shepard diagrams
@@ -37,7 +37,13 @@ from eeg_adhd_epilepsy.utils.config import results_dir, csv_dir
 
 # Coco-pipe imports
 from coco_pipe.dim_reduction.core import DimReduction
-from coco_pipe.dim_reduction.evaluation import MethodSelector, compute_coranking_matrix
+from coco_pipe.dim_reduction.evaluation import (
+    MethodSelector,
+    compute_coranking_matrix,
+    compute_mrre,
+    compute_velocity_fields,
+    shepard_diagram_data,
+)
 from coco_pipe.dim_reduction import trustworthiness, continuity, lcmc
 from coco_pipe.io.structures import DataContainer
 from coco_pipe.io import load_data
@@ -45,18 +51,116 @@ from coco_pipe.report.core import Report, Section, PlotlyElement, ImageElement, 
 from coco_pipe.viz import dim_reduction as viz
 from coco_pipe.viz.plotly_utils import plot_embedding_interactive
 
-from eeg_adhd_epilepsy.io.bids import discover_bids_files
-from eeg_adhd_epilepsy.qc.segmentation import extract_condition_segments
 from eeg_adhd_epilepsy.utils.config import MAPPING_PSYCHOSTIMULANT
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# All available reducers in coco-pipe
+# Default reducers for this analysis profile
 ALL_REDUCERS = [
-    "PCA", "UMAP", "TSNE", "PHATE", "PACMAP", "TRIMAP",
-    "MDS", "ISOMAP", "LLE", "SPECTRALEMBEDDING"
+    "PCA", "UMAP", "PHATE", "ISOMAP"
 ]
+
+
+def ç(reducer_obj):
+    """Return wrapped reducer across coco-pipe API variants."""
+    return getattr(reducer_obj, "reducer", getattr(reducer_obj, "reducer_", reducer_obj))
+
+
+def _extract_scalar_values(values: Dict, prefix: str = "") -> Dict[str, float]:
+    """Extract scalar-compatible entries from dict for report tables."""
+    out = {}
+    if not isinstance(values, dict):
+        return out
+
+    for key, value in values.items():
+        if isinstance(value, (dict, list, tuple, np.ndarray)):
+            continue
+        if not np.isscalar(value):
+            continue
+
+        normalized = value.item() if isinstance(value, np.generic) else value
+        out[f"{prefix}{key}"] = normalized
+
+    return out
+
+
+def _compute_local_overlap_scores(X_orig: np.ndarray, X_emb: np.ndarray, k: int = 10) -> np.ndarray:
+    """
+    Compute per-sample kNN overlap between original and embedded spaces.
+    Used as a local quality proxy for `viz.plot_local_metrics`.
+    """
+    from sklearn.neighbors import NearestNeighbors
+
+    n_samples = X_orig.shape[0]
+    if n_samples < 3:
+        raise ValueError("At least 3 samples are needed for local overlap scores.")
+
+    k_eff = max(1, min(k, n_samples - 1))
+    nn_high = NearestNeighbors(n_neighbors=k_eff + 1).fit(X_orig)
+    nn_low = NearestNeighbors(n_neighbors=k_eff + 1).fit(X_emb)
+    idx_high = nn_high.kneighbors(return_distance=False)[:, 1:]
+    idx_low = nn_low.kneighbors(return_distance=False)[:, 1:]
+
+    local_scores = np.zeros(n_samples, dtype=float)
+    for i in range(n_samples):
+        overlap = np.intersect1d(idx_high[i], idx_low[i], assume_unique=False).size
+        local_scores[i] = overlap / float(k_eff)
+
+    return local_scores
+
+
+def _compute_groupwise_velocity(
+    X_orig: np.ndarray,
+    X_emb: np.ndarray,
+    times: Optional[np.ndarray] = None,
+    groups: Optional[np.ndarray] = None,
+    delta_t: int = 1,
+) -> Optional[np.ndarray]:
+    """Compute velocity vectors per group to avoid mixing unrelated trajectories."""
+    if times is None:
+        return None
+    if X_emb.shape[1] != 2:
+        return None
+
+    n_samples = X_orig.shape[0]
+    times_arr = np.asarray(times)
+    if times_arr.shape[0] != n_samples:
+        return None
+
+    group_values = np.asarray(groups) if groups is not None else np.array(["all"] * n_samples)
+    if group_values.shape[0] != n_samples:
+        return None
+
+    V_emb = np.zeros_like(X_emb, dtype=float)
+    has_velocity = np.zeros(n_samples, dtype=bool)
+
+    for group_name in np.unique(group_values):
+        group_idx = np.where(group_values == group_name)[0]
+        if group_idx.size < max(5, delta_t + 2):
+            continue
+
+        sorted_idx = group_idx[np.argsort(times_arr[group_idx])]
+        n_neighbors = min(30, sorted_idx.size - 1)
+        if n_neighbors < 2:
+            continue
+
+        try:
+            group_velocity = compute_velocity_fields(
+                X=X_orig[sorted_idx],
+                X_emb=X_emb[sorted_idx],
+                delta_t=delta_t,
+                n_neighbors=n_neighbors,
+            )
+            V_emb[sorted_idx] = group_velocity
+            has_velocity[sorted_idx] = True
+        except Exception as err:
+            logger.warning(f"Velocity computation failed for group '{group_name}': {err}")
+
+    if not np.any(has_velocity):
+        return None
+
+    return V_emb
 
 
 def norm_id(s):
@@ -75,7 +179,7 @@ def norm_id(s):
 
 def load_bids_data(
     bids_root: Path,
-    subjects: List[str],
+    subjects: Optional[List[str]] = None,
     task: str = "clinical",
     session: str = "01",
     segment_mode: Literal["raw", "condition"] = "condition",
@@ -90,6 +194,7 @@ def load_bids_data(
     """
     Load EEG data from BIDS and structure into a DataContainer.
     """
+    subjects = subjects or []
     logger.info(f"Loading data for {len(subjects)} subjects. Task: {task}, Mode: {segment_mode}, Stacking: {stacking_mode}")
     
     container = None
@@ -103,7 +208,7 @@ def load_bids_data(
         loading_mode="epochs",
         window_length=segment_duration,
         stride=segment_duration - overlap,
-        subjects=subjects,
+        subjects=subjects if subjects else None,
         datatype="eeg",
         suffix="eeg"
     )
@@ -493,6 +598,16 @@ def compute_quality_metrics(X_orig: np.ndarray, X_emb: np.ndarray, labels: Optio
         metrics['trustworthiness'] = trustworthiness(Q, k=k)
         metrics['continuity'] = continuity(Q, k=k)
         metrics['lcmc'] = lcmc(Q, k=k)
+        mrre_intrusion, mrre_extrusion = compute_mrre(Q, k=k)
+        metrics['mrre_intrusion'] = mrre_intrusion
+        metrics['mrre_extrusion'] = mrre_extrusion
+        metrics['mrre_total'] = mrre_intrusion + mrre_extrusion
+
+        dist_high, dist_low = shepard_diagram_data(
+            X_orig, X_emb, sample_size=min(1000, X_orig.shape[0]), random_state=42
+        )
+        if len(dist_high) > 1:
+            metrics['shepard_correlation'] = float(np.corrcoef(dist_high, dist_low)[0, 1])
     except Exception as e:
         logger.warning(f"Could not compute coranking metrics: {e}")
     
@@ -519,12 +634,8 @@ def run_method_selector(
     Run MethodSelector comparison across all reducers.
     """
     logger.info(f"Running MethodSelector comparison for {len(reducers_dict)} reducers...")
-    selector = MethodSelector(
-        reducers=reducers_dict,
-        data=data,
-        target=target
-    )
-    selector.run()
+    selector = MethodSelector(reducers=reducers_dict)
+    selector.run(X=data, y=target)
     return selector
 
 
@@ -588,116 +699,230 @@ def create_reducer_section(
         Keys are column names, values are arrays of values per sample.
     """
     sec = Section(title=name.upper(), icon="📉")
-    
-    emb_2d = embedding_results.get('embedding_2d')
-    emb_3d = embedding_results.get('embedding_3d')
-    reducer_2d = embedding_results.get('reducer_2d')
-    
-    # 1. 2D Embedding - with metadata dropdown for color selection
+
+    emb_2d = embedding_results.get("embedding_2d")
+    emb_3d = embedding_results.get("embedding_3d")
+    reducer_2d = embedding_results.get("reducer_2d")
+
+    reducer_metrics: Dict = {}
+    reducer_quality_meta: Dict = {}
+    reducer_diagnostics: Dict = {}
+
+    if reducer_2d is not None and emb_2d is not None and X_orig is not None:
+        try:
+            if X_orig.shape[0] > 3:
+                k_neighbors = max(2, min(10, X_orig.shape[0] - 2))
+                score_payload = reducer_2d.score(
+                    X=X_orig, X_emb=emb_2d, n_neighbors=k_neighbors
+                )
+                reducer_metrics = score_payload.get("metrics", {}) or {}
+                reducer_quality_meta = score_payload.get("metadata", {}) or {}
+                reducer_diagnostics = score_payload.get("diagnostics", {}) or {}
+        except Exception as err:
+            logger.warning(f"Could not compute API score payload for {name}: {err}")
+
+        if not reducer_quality_meta:
+            try:
+                reducer_quality_meta = reducer_2d.get_quality_metadata() or {}
+            except Exception as err:
+                logger.warning(f"Could not fetch quality metadata for {name}: {err}")
+
+        if not reducer_diagnostics:
+            try:
+                reducer_diagnostics = reducer_2d.get_diagnostics() or {}
+            except Exception as err:
+                logger.warning(f"Could not fetch diagnostics for {name}: {err}")
+
+    api_summary = {}
+    api_summary.update(_extract_scalar_values(reducer_metrics, prefix="metric_"))
+    api_summary.update(_extract_scalar_values(reducer_quality_meta, prefix="meta_"))
+    api_summary.update(_extract_scalar_values(reducer_diagnostics, prefix="diag_"))
+    if api_summary:
+        df_api = pd.DataFrame([api_summary], index=[name.upper()])
+        sec.add_element(
+            MetricsTableElement(df_api, title=f"{name.upper()} - API Metrics & Metadata")
+        )
+
+    # 1. 2D Embedding
     if emb_2d is not None:
-        if interactive and meta_dict:
-            # Use plot_embedding_interactive directly with meta for dropdown
+        if interactive:
             fig = plot_embedding_interactive(
                 embedding=emb_2d,
                 labels=labels,
-                meta=meta_dict,
+                meta=meta_dict if meta_dict else None,
                 title=f"{name.upper()} - 2D Embedding",
-                dimensions=2
+                dimensions=2,
             )
+            sec.add_element(PlotlyElement(fig))
         else:
             fig = viz.plot_embedding(
                 X_emb=emb_2d,
                 labels=labels,
                 dims=(0, 1),
                 title=f"{name.upper()} - 2D Embedding",
-                interactive=interactive
+                interactive=False,
             )
-        if interactive:
-            sec.add_element(PlotlyElement(fig))
-        else:
             sec.add_element(ImageElement(fig))
-    
-    # 2. 3D Embedding - with metadata dropdown for color selection
+
+    # 2. 3D Embedding
     if emb_3d is not None:
-        if interactive and meta_dict:
+        if interactive:
             fig_3d = plot_embedding_interactive(
                 embedding=emb_3d,
                 labels=labels,
-                meta=meta_dict,
+                meta=meta_dict if meta_dict else None,
                 title=f"{name.upper()} - 3D Embedding",
-                dimensions=3
+                dimensions=3,
             )
+            sec.add_element(PlotlyElement(fig_3d))
         else:
             fig_3d = viz.plot_embedding(
                 X_emb=emb_3d,
                 labels=labels,
                 dims=(0, 1, 2),
                 title=f"{name.upper()} - 3D Embedding",
-                interactive=interactive
+                interactive=False,
             )
-        if interactive:
-            sec.add_element(PlotlyElement(fig_3d))
-        else:
             sec.add_element(ImageElement(fig_3d))
-    
-    # 3. Loss History (for iterative methods)
-    if reducer_2d is not None:
-        reducer_obj = getattr(reducer_2d, 'reducer_', reducer_2d)
-        if hasattr(reducer_obj, 'loss_history_') and reducer_obj.loss_history_ is not None:
+
+    # 3. Loss History (diagnostics API first)
+    loss_history = reducer_diagnostics.get("loss_history_")
+    if loss_history is None and reducer_2d is not None:
+        reducer_obj = _get_inner_reducer(reducer_2d)
+        if hasattr(reducer_obj, "loss_history_"):
+            loss_history = reducer_obj.loss_history_
+
+    if loss_history is not None:
+        loss_array = np.asarray(loss_history).ravel()
+        if loss_array.size > 0:
             fig_loss = viz.plot_loss_history(
-                loss_history=reducer_obj.loss_history_,
+                loss_history=loss_array,
                 title=f"{name.upper()} - Training Loss",
-                interactive=interactive
+                interactive=interactive,
             )
             if interactive:
                 sec.add_element(PlotlyElement(fig_loss))
             else:
                 sec.add_element(ImageElement(fig_loss))
-    
-    # 4. Eigenvalue/Scree Plot (for PCA-like methods)
-    if reducer_2d is not None:
-        reducer_obj = getattr(reducer_2d, 'reducer_', reducer_2d)
-        if hasattr(reducer_obj, 'explained_variance_ratio_'):
+
+    # 4. Scree / Eigen diagnostics
+    variance_values = reducer_diagnostics.get("explained_variance_ratio_")
+    if variance_values is None and reducer_2d is not None:
+        reducer_obj = _get_inner_reducer(reducer_2d)
+        if hasattr(reducer_obj, "explained_variance_ratio_"):
+            variance_values = reducer_obj.explained_variance_ratio_
+
+    if variance_values is not None:
+        variance_values = np.asarray(variance_values).ravel()
+        if variance_values.size > 0:
             fig_scree = viz.plot_eigenvalues(
-                values=reducer_obj.explained_variance_ratio_,
+                values=variance_values,
                 title=f"{name.upper()} - Explained Variance Ratio",
                 ylabel="Explained Variance Ratio",
-                interactive=interactive
+                interactive=interactive,
             )
             if interactive:
                 sec.add_element(PlotlyElement(fig_scree))
             else:
                 sec.add_element(ImageElement(fig_scree))
-        elif hasattr(reducer_obj, 'eigenvalues_'):
-            fig_scree = viz.plot_eigenvalues(
-                values=reducer_obj.eigenvalues_,
-                title=f"{name.upper()} - Eigenvalues",
-                ylabel="Eigenvalue",
-                interactive=interactive
-            )
+    else:
+        eigenvalues = reducer_diagnostics.get("eigenvalues_")
+        if eigenvalues is None:
+            eigenvalues = reducer_diagnostics.get("eigs_")
+        if eigenvalues is None and reducer_2d is not None:
+            reducer_obj = _get_inner_reducer(reducer_2d)
+            if hasattr(reducer_obj, "eigenvalues_"):
+                eigenvalues = reducer_obj.eigenvalues_
+            elif hasattr(reducer_obj, "eigs_"):
+                eigenvalues = reducer_obj.eigs_
+
+        if eigenvalues is not None:
+            eigenvalues = np.asarray(eigenvalues).ravel()
+            if np.iscomplexobj(eigenvalues):
+                eigenvalues = np.abs(eigenvalues)
+            if eigenvalues.size > 0:
+                fig_scree = viz.plot_eigenvalues(
+                    values=eigenvalues,
+                    title=f"{name.upper()} - Eigenvalues",
+                    ylabel="Eigenvalue",
+                    interactive=interactive,
+                )
+                if interactive:
+                    sec.add_element(PlotlyElement(fig_scree))
+                else:
+                    sec.add_element(ImageElement(fig_scree))
+
+    # 5. Shepard Diagram
+    if emb_2d is not None:
+        fig_shepard = None
+        if reducer_2d is not None:
+            try:
+                fig_shepard = reducer_2d.plot(
+                    mode="shepard",
+                    X=X_orig,
+                    sample_size=min(500, X_orig.shape[0]),
+                    title=f"{name.upper()} - Shepard Diagram",
+                    interactive=interactive,
+                )
+            except Exception as err:
+                logger.warning(f"Reducer Shepard plot failed for {name}: {err}")
+
+        if fig_shepard is None:
+            try:
+                fig_shepard = viz.plot_shepard_diagram(
+                    X_orig=X_orig,
+                    X_emb=emb_2d,
+                    sample_size=min(500, X_orig.shape[0]),
+                    title=f"{name.upper()} - Shepard Diagram",
+                    interactive=interactive,
+                )
+            except Exception as err:
+                logger.warning(f"Could not create Shepard diagram for {name}: {err}")
+
+        if fig_shepard is not None:
             if interactive:
-                sec.add_element(PlotlyElement(fig_scree))
+                sec.add_element(PlotlyElement(fig_shepard))
             else:
-                sec.add_element(ImageElement(fig_scree))
-    
-    # # 5. Shepard Diagram (quality diagnostic)
-    # if emb_2d is not None:
-    #     try:
-    #         fig_shepard = viz.plot_shepard_diagram(
-    #             X_orig=X_orig,
-    #             X_emb=emb_2d,
-    #             sample_size=min(500, X_orig.shape[0]),
-    #             title=f"{name.upper()} - Shepard Diagram",
-    #             interactive=interactive
-    #         )
-    #         if interactive:
-    #             sec.add_element(PlotlyElement(fig_shepard))
-    #         else:
-    #             sec.add_element(ImageElement(fig_shepard))
-    #     except Exception as e:
-    #         logger.warning(f"Could not create Shepard diagram for {name}: {e}")
-    
-    # 6. Trajectory Plot (if temporal data)
+                sec.add_element(ImageElement(fig_shepard))
+
+    # 6. Local neighborhood quality map
+    if emb_2d is not None:
+        try:
+            local_scores = _compute_local_overlap_scores(X_orig, emb_2d, k=10)
+            fig_local = viz.plot_local_metrics(
+                X_emb=emb_2d,
+                local_scores=local_scores,
+                title=f"{name.upper()} - Local Neighborhood Overlap",
+            )
+            sec.add_element(ImageElement(fig_local))
+        except Exception as err:
+            logger.warning(f"Could not create local quality map for {name}: {err}")
+
+    # 7. Velocity streamlines (requires temporal ordering)
+    if emb_2d is not None and times is not None:
+        try:
+            V_emb = _compute_groupwise_velocity(
+                X_orig=X_orig,
+                X_emb=emb_2d,
+                times=times,
+                groups=groups,
+                delta_t=1,
+            )
+            if V_emb is not None:
+                fig_stream = viz.plot_streamlines(
+                    X_emb=emb_2d,
+                    V_emb=V_emb,
+                    title=f"{name.upper()} - Velocity Streamlines",
+                    interactive=interactive,
+                )
+                if interactive:
+                    sec.add_element(PlotlyElement(fig_stream))
+                else:
+                    sec.add_element(ImageElement(fig_stream))
+        except Exception as err:
+            logger.warning(f"Could not create velocity streamlines for {name}: {err}")
+
+    # 8. Trajectory plot (if temporal data)
     if emb_2d is not None and times is not None:
         try:
             fig_traj = viz.plot_trajectory(
@@ -706,15 +931,15 @@ def create_reducer_section(
                 groups=groups,
                 dimensions=2,
                 title=f"{name.upper()} - Trajectory Over Time",
-                interactive=interactive
+                interactive=interactive,
             )
             if interactive:
                 sec.add_element(PlotlyElement(fig_traj))
             else:
                 sec.add_element(ImageElement(fig_traj))
-        except Exception as e:
-            logger.warning(f"Could not create trajectory plot for {name}: {e}")
-    
+        except Exception as err:
+            logger.warning(f"Could not create trajectory plot for {name}: {err}")
+
     return sec
 
 
@@ -728,7 +953,15 @@ def create_comparison_section(
     Create a comparison section with method selector results.
     """
     if metrics_to_plot is None:
-        metrics_to_plot = ["trustworthiness", "continuity", "lcmc", "silhouette"]
+        metrics_to_plot = [
+            "trustworthiness",
+            "continuity",
+            "lcmc",
+            "mrre_total",
+            "mrre_intrusion",
+            "mrre_extrusion",
+            "silhouette",
+        ]
     
     sec = Section(title="Method Comparison", icon="📊")
     
@@ -828,7 +1061,7 @@ def create_feature_importance_section(
         reducer = res.get('reducer_2d')
         
         if reducer is not None:
-            reducer_obj = getattr(reducer, 'reducer_', reducer)
+            reducer_obj = _get_inner_reducer(reducer)
             if hasattr(reducer_obj, 'components_'):
                 try:
                     loadings = np.abs(reducer_obj.components_).sum(axis=0)
@@ -880,15 +1113,25 @@ def main():
     parser.add_argument("--reducers", nargs="+", default=ALL_REDUCERS, help="List of reducers")
     parser.add_argument("--n_components_2d", type=int, default=2, help="Components for 2D")
     parser.add_argument("--n_components_3d", type=int, default=3, help="Components for 3D")
-    parser.add_argument("--interactive", action="store_true", default=True, help="Interactive plots")
-    parser.add_argument("--static", action="store_true", help="Static plots instead")
+    parser.add_argument(
+        "--interactive",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable interactive plots (use --no-interactive for static report figures)",
+    )
+    parser.add_argument("--static", action="store_true", help="Deprecated alias for --no-interactive")
     parser.add_argument("--save_embeddings", action="store_true", help="Save embeddings to disk")
     parser.add_argument("--with_trajectory", action="store_true", help="Include trajectory plots")
     parser.add_argument("--run_selector", action="store_true", help="Run MethodSelector comparison")
     parser.add_argument("--use_derivatives", action="store_true", help="Load from derivatives/preproc instead of raw BIDS")
     parser.add_argument("--desc", default="base", help="Desc to load from derivatives (default: base)")
     parser.add_argument("--subjects", nargs="+", default=None, help="Specific subjects to process")
-    parser.add_argument("--ignore_annotations", action="store_true", default=True, help="Ignore BAD_ annotations during epoching")
+    parser.add_argument(
+        "--ignore_annotations",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Ignore BAD_ annotations during epoching (use --no-ignore-annotations to enforce them)",
+    )
     parser.add_argument("--subject_average", action="store_true", help="Average all segments per subject into 1 point")
     
     args = parser.parse_args()
@@ -896,7 +1139,9 @@ def main():
     # Force logging level
     logging.getLogger().setLevel(logging.INFO)
     
-    interactive = not args.static
+    if args.static:
+        logger.warning("--static is deprecated; use --no-interactive instead.")
+    interactive = args.interactive and not args.static
     
     # Setup Paths
     bids_root = Path(args.bids_root)
@@ -958,20 +1203,36 @@ def main():
         logger.info(f"Subsampled to {len(subjects)} subjects.")
         
     # Load Data (Already loaded metadata above)
-    dc = load_derivatives_data(
-        bids_root=bids_root,
-        subjects=subjects if subjects else None, 
-        segment_duration=args.segment_duration,
-        overlap=args.overlap,
-        stacking_mode=args.stacking_mode,
-        metadata_df=meta_df,
-        subject_col=args.subject_col,
-        target_col=args.target_col,
-        desc=args.desc,
-        condition=args.condition,
-        ignore_annotations=args.ignore_annotations,
-        subject_average=args.subject_average
-    )
+    if args.use_derivatives:
+        dc = load_derivatives_data(
+            bids_root=bids_root,
+            subjects=subjects if subjects else None,
+            segment_duration=args.segment_duration,
+            overlap=args.overlap,
+            stacking_mode=args.stacking_mode,
+            metadata_df=meta_df,
+            subject_col=args.subject_col,
+            target_col=args.target_col,
+            desc=args.desc,
+            condition=args.condition,
+            ignore_annotations=args.ignore_annotations,
+            subject_average=args.subject_average
+        )
+    else:
+        dc = load_bids_data(
+            bids_root=bids_root,
+            subjects=subjects if subjects else None,
+            task=args.task,
+            session=args.session,
+            segment_mode=args.segment_mode,
+            condition=args.condition,
+            segment_duration=args.segment_duration,
+            overlap=args.overlap,
+            stacking_mode=args.stacking_mode,
+            metadata_df=meta_df,
+            subject_col=args.subject_col,
+            target_col=args.target_col
+        )
     
     X = dc.X
     labels = dc.y

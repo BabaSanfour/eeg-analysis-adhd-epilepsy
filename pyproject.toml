@@ -22,6 +22,7 @@ dependencies = [
   "pandas",
   "mne",
   "mne-bids",
+  "coco-pipe @ git+https://github.com/BabaSanfour/coco-pipe.git@dim_red_v3",
   "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",
