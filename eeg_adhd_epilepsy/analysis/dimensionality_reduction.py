@@ -4,7 +4,7 @@ End-to-end Dimensionality Reduction Analysis for EEG Data.
 
 Workflow:
 1. Load EEG data from BIDS directory (Raw or Specific Segments).
-2. Stack/Flatten data based on strategy (flat, time_as_sample).
+2. Stack/Flatten data based on strategy (flat, time_as_sample, epoch_scalar_mean).
 3. Apply dimensionality reduction using coco-pipe (selected supported reducers).
 4. Compute quality metrics and compare methods using MethodSelector.
 5. Generate comprehensive interactive HTML reports with all visualizations.
@@ -205,6 +205,48 @@ def norm_id(s):
         return f"sub-{s}"
 
 
+def _to_epoch_scalar_mean(container: DataContainer) -> DataContainer:
+    """
+    Collapse each epoch to a single scalar value using coco-pipe stack+aggregate.
+
+    Input expected dims: ('obs', 'channel', 'time')
+    Output dims: ('obs', 'feature') with feature size = 1.
+    """
+    required_dims = {"obs", "channel", "time"}
+    if not required_dims.issubset(set(container.dims)):
+        raise ValueError(
+            f"epoch_scalar_mean requires dims {required_dims}, got {container.dims}"
+        )
+
+    # One scalar per (obs, channel, time), then aggregate back to original epoch id.
+    scalar_series = container.stack(dims=("obs", "channel", "time"), new_dim="obs")
+    epoch_ids = np.array([str(i).rsplit("_", 2)[0] for i in scalar_series.ids])
+    epoch_means = scalar_series.aggregate(by=epoch_ids, method="mean")
+
+    X_epoch = np.asarray(epoch_means.X)
+    if X_epoch.ndim == 1:
+        X_epoch = X_epoch[:, np.newaxis]
+
+    n_obs = X_epoch.shape[0]
+    coords = {}
+    for key, values in epoch_means.coords.items():
+        try:
+            if len(values) == n_obs:
+                coords[key] = np.asarray(values)
+        except TypeError:
+            continue
+    coords["feature"] = np.array(["epoch_scalar_mean"])
+
+    return DataContainer(
+        X=X_epoch,
+        dims=("obs", "feature"),
+        coords=coords,
+        y=epoch_means.y,
+        ids=np.asarray(epoch_means.ids) if epoch_means.ids is not None else None,
+        meta=dict(epoch_means.meta),
+    )
+
+
 def load_bids_data(
     bids_root: Path,
     subjects: Optional[List[str]] = None,
@@ -214,7 +256,7 @@ def load_bids_data(
     condition: Optional[str] = None,
     segment_duration: float = 10.0,
     overlap: float = 0.0,
-    stacking_mode: Literal["flat", "time_as_sample"] = "flat",
+    stacking_mode: Literal["flat", "time_as_sample", "epoch_scalar_mean"] = "flat",
     metadata_df: Optional[pd.DataFrame] = None,
     subject_col: str = "Study ID",
     target_col: str = "Group"
@@ -268,6 +310,8 @@ def load_bids_data(
         container = container.flatten(preserve='obs')
     elif stacking_mode == "time_as_sample":
         container = container.stack(dims=('obs', 'time'), new_dim='obs')
+    elif stacking_mode == "epoch_scalar_mean":
+        container = _to_epoch_scalar_mean(container)
         
     logger.info(f"Final Data Shape: {container.X.shape}")
     logger.info(f"Final Dims: {container.dims}")
@@ -326,7 +370,7 @@ def load_derivatives_data(
     subjects: Optional[List[str]] = None,
     segment_duration: float = 10.0,
     overlap: float = 0.0,
-    stacking_mode: Literal["flat", "time_as_sample"] = "flat",
+    stacking_mode: Literal["flat", "time_as_sample", "epoch_scalar_mean"] = "flat",
     metadata_df: Optional[pd.DataFrame] = None,
     subject_col: str = "Study ID",
     target_col: str = "Group",
@@ -532,6 +576,8 @@ def load_derivatives_data(
         container = container.flatten(preserve='obs')
     elif stacking_mode == "time_as_sample":
         container = container.stack(dims=('obs', 'time'), new_dim='obs')
+    elif stacking_mode == "epoch_scalar_mean":
+        container = _to_epoch_scalar_mean(container)
 
     # Rebuild sample-level metadata on the reshaped container.
     current_subjects = np.array([str(i).split('_')[0] for i in container.ids])
@@ -1301,12 +1347,13 @@ def main():
     
     parser.add_argument(
         "--stacking_mode",
-        choices=["flat", "time_as_sample"],
+        choices=["flat", "time_as_sample", "epoch_scalar_mean"],
         default="flat",
         help=(
             "Feature layout for reducers: "
             "'flat' => columns=(channel x time), "
-            "'time_as_sample' => columns=channel"
+            "'time_as_sample' => columns=channel, "
+            "'epoch_scalar_mean' => columns=1 (mean over channel x time per epoch)"
         ),
     )
     
