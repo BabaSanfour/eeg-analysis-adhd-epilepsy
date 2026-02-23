@@ -4,7 +4,7 @@ End-to-end Dimensionality Reduction Analysis for EEG Data.
 
 Workflow:
 1. Load EEG data from BIDS directory (Raw or Specific Segments).
-2. Stack/Flatten data based on strategy (flat, per-channel, per-time).
+2. Stack/Flatten data based on strategy (flat, time_as_sample).
 3. Apply dimensionality reduction using coco-pipe (selected supported reducers).
 4. Compute quality metrics and compare methods using MethodSelector.
 5. Generate comprehensive interactive HTML reports with all visualizations.
@@ -61,6 +61,13 @@ ALL_REDUCERS = [
     "PCA", "UMAP", "PHATE", "ISOMAP"
 ]
 
+# Guardrails for quadratic-time diagnostics on very large sample counts.
+MAX_CORANKING_SAMPLES = 2000
+MAX_CLUSTER_METRIC_SAMPLES = 5000
+MAX_SELECTOR_SAMPLES = 2000
+MAX_REDUCER_SCORE_SAMPLES = 2000
+MAX_LOCAL_DIAGNOSTIC_SAMPLES = 50000
+
 
 def _get_inner_reducer(reducer_obj):
     """Return wrapped reducer across coco-pipe API variants."""
@@ -83,6 +90,27 @@ def _extract_scalar_values(values: Dict, prefix: str = "") -> Dict[str, float]:
         out[f"{prefix}{key}"] = normalized
 
     return out
+
+
+def _coerce_sample_vector(values, n_samples: int) -> Optional[np.ndarray]:
+    """Return 1D array only if values are sample-aligned."""
+    if values is None:
+        return None
+
+    arr = np.asarray(values).ravel()
+    if arr.shape[0] != n_samples:
+        return None
+    return arr
+
+
+def _sample_indices(n_samples: int, max_samples: int, random_state: int = 42) -> np.ndarray:
+    """Deterministic subsample indices used for expensive diagnostics."""
+    if n_samples <= max_samples:
+        return np.arange(n_samples)
+    rng = np.random.default_rng(random_state)
+    idx = rng.choice(n_samples, size=max_samples, replace=False)
+    idx.sort()
+    return idx
 
 
 def _compute_local_overlap_scores(X_orig: np.ndarray, X_emb: np.ndarray, k: int = 10) -> np.ndarray:
@@ -481,17 +509,39 @@ def load_derivatives_data(
         logger.info(f"Unique subjects in coords: {pd.Series(coords['subject']).unique()}")
         container = container.aggregate(by='subject', method='mean')
         logger.info(f"Shape after averaging: {container.X.shape}")
+
+    # Capture per-observation metadata before reshaping so we can realign
+    # after coco-pipe flatten/stack (these operations can drop/keep stale coords).
+    obs_dim_idx = container.dims.index('obs')
+    n_obs_pre = container.shape[obs_dim_idx]
+    pre_stack_meta = {}
+    for key, values in container.coords.items():
+        try:
+            if len(values) == n_obs_pre:
+                pre_stack_meta[key] = np.asarray(values)
+        except TypeError:
+            continue
+    if 'subject' not in pre_stack_meta:
+        pre_stack_meta['subject'] = np.array([str(i).split('_')[0] for i in container.ids])
+    df_obs = pd.DataFrame(pre_stack_meta).drop_duplicates(subset=['subject'])
     
     # -------------------------------------------------------------------------
-    # 4. Stacking / Reshaping (Happening before metadata merge)
+    # 5. Stacking / Reshaping (Happening before metadata merge)
     # -------------------------------------------------------------------------
     if stacking_mode == "flat":
         container = container.flatten(preserve='obs')
     elif stacking_mode == "time_as_sample":
         container = container.stack(dims=('obs', 'time'), new_dim='obs')
 
+    # Rebuild sample-level metadata on the reshaped container.
+    current_subjects = np.array([str(i).split('_')[0] for i in container.ids])
+    df_current = pd.DataFrame({'subject': current_subjects})
+    merged_obs = pd.merge(df_current, df_obs, on='subject', how='left')
+    for col in merged_obs.columns:
+        container.coords[col] = merged_obs[col].values
+
     # -------------------------------------------------------------------------
-    # 5. Metadata Integration (ON FINAL FLATTENED CONTAINER)
+    # 6. Metadata Integration (ON FINAL FLATTENED CONTAINER)
     # -------------------------------------------------------------------------
     if metadata_df is not None:
         logger.info(f"Merging external metadata from CSV onto {container.X.shape[0]} samples...")
@@ -576,13 +626,25 @@ def load_derivatives_data(
                              logger.info(f"Target col '{target_col}' missing. Using '{fb}'.")
                              break
 
+    if container.y is None:
+        subject_y = _coerce_sample_vector(container.coords.get('subject'), container.X.shape[0])
+        if subject_y is not None:
+            container.y = subject_y.astype(str)
+
     if container.y is not None:
-         container.y = np.array(container.y).astype(str)
+        container.y = np.array(container.y).astype(str)
     
     return container
 
 
-def compute_quality_metrics(X_orig: np.ndarray, X_emb: np.ndarray, labels: Optional[np.ndarray] = None, k: int = 10) -> Dict[str, float]:
+def compute_quality_metrics(
+    X_orig: np.ndarray,
+    X_emb: np.ndarray,
+    labels: Optional[np.ndarray] = None,
+    k: int = 10,
+    max_coranking_samples: int = MAX_CORANKING_SAMPLES,
+    max_cluster_metric_samples: int = MAX_CLUSTER_METRIC_SAMPLES,
+) -> Dict[str, float]:
     """
     Compute comprehensive quality metrics for an embedding.
     Uses coranking matrix for manifold preservation metrics.
@@ -590,20 +652,39 @@ def compute_quality_metrics(X_orig: np.ndarray, X_emb: np.ndarray, labels: Optio
     from sklearn.metrics import silhouette_score, calinski_harabasz_score, davies_bouldin_score
     
     metrics = {}
+    n_samples = X_orig.shape[0]
+
+    if X_emb.shape[0] != n_samples:
+        logger.warning(
+            "Skipping quality metrics: X_orig and X_emb lengths mismatch "
+            f"({n_samples} vs {X_emb.shape[0]})."
+        )
+        return metrics
     
     # Compute coranking matrix (needed for manifold metrics)
     try:
-        Q = compute_coranking_matrix(X_orig, X_emb)
-        metrics['trustworthiness'] = trustworthiness(Q, k=k)
-        metrics['continuity'] = continuity(Q, k=k)
-        metrics['lcmc'] = lcmc(Q, k=k)
-        mrre_intrusion, mrre_extrusion = compute_mrre(Q, k=k)
+        idx_q = _sample_indices(n_samples, max_coranking_samples, random_state=42)
+        X_q = X_orig[idx_q]
+        X_emb_q = X_emb[idx_q]
+        if len(idx_q) < n_samples:
+            metrics['coranking_sample_size'] = int(len(idx_q))
+            logger.info(
+                "Computing coranking metrics on a subsample: "
+                f"{len(idx_q)}/{n_samples} samples."
+            )
+
+        k_eff = max(2, min(k, X_q.shape[0] - 2))
+        Q = compute_coranking_matrix(X_q, X_emb_q)
+        metrics['trustworthiness'] = trustworthiness(Q, k=k_eff)
+        metrics['continuity'] = continuity(Q, k=k_eff)
+        metrics['lcmc'] = lcmc(Q, k=k_eff)
+        mrre_intrusion, mrre_extrusion = compute_mrre(Q, k=k_eff)
         metrics['mrre_intrusion'] = mrre_intrusion
         metrics['mrre_extrusion'] = mrre_extrusion
         metrics['mrre_total'] = mrre_intrusion + mrre_extrusion
 
         dist_high, dist_low = shepard_diagram_data(
-            X_orig, X_emb, sample_size=min(1000, X_orig.shape[0]), random_state=42
+            X_q, X_emb_q, sample_size=min(1000, X_q.shape[0]), random_state=42
         )
         if len(dist_high) > 1:
             metrics['shepard_correlation'] = float(np.corrcoef(dist_high, dist_low)[0, 1])
@@ -611,13 +692,27 @@ def compute_quality_metrics(X_orig: np.ndarray, X_emb: np.ndarray, labels: Optio
         logger.warning(f"Could not compute coranking metrics: {e}")
     
     # Clustering metrics (if labels provided)
-    if labels is not None:
+    labels_aligned = _coerce_sample_vector(labels, X_emb.shape[0])
+    if labels is not None and labels_aligned is None:
+        logger.warning(
+            "Skipping clustering metrics: labels are not sample-aligned "
+            f"(labels={len(np.asarray(labels).ravel())}, samples={X_emb.shape[0]})."
+        )
+
+    if labels_aligned is not None:
         try:
-            unique_labels = np.unique(labels)
-            if len(unique_labels) > 1 and len(unique_labels) < len(labels):
-                metrics['silhouette'] = silhouette_score(X_emb, labels)
-                metrics['calinski_harabasz'] = calinski_harabasz_score(X_emb, labels)
-                metrics['davies_bouldin'] = davies_bouldin_score(X_emb, labels)
+            idx_c = _sample_indices(X_emb.shape[0], max_cluster_metric_samples, random_state=123)
+            X_cluster = X_emb[idx_c]
+            labels_cluster = labels_aligned[idx_c]
+
+            if len(idx_c) < X_emb.shape[0]:
+                metrics['cluster_metric_sample_size'] = int(len(idx_c))
+
+            unique_labels = np.unique(labels_cluster)
+            if len(unique_labels) > 1 and len(unique_labels) < len(labels_cluster):
+                metrics['silhouette'] = silhouette_score(X_cluster, labels_cluster)
+                metrics['calinski_harabasz'] = calinski_harabasz_score(X_cluster, labels_cluster)
+                metrics['davies_bouldin'] = davies_bouldin_score(X_cluster, labels_cluster)
         except Exception as e:
             logger.warning(f"Could not compute clustering metrics: {e}")
     
@@ -627,14 +722,36 @@ def compute_quality_metrics(X_orig: np.ndarray, X_emb: np.ndarray, labels: Optio
 def run_method_selector(
     reducers_dict: Dict[str, DimReduction],
     data: np.ndarray,
-    target: Optional[np.ndarray] = None
+    target: Optional[np.ndarray] = None,
+    max_samples: int = MAX_SELECTOR_SAMPLES,
 ) -> MethodSelector:
     """
     Run MethodSelector comparison across all reducers.
     """
     logger.info(f"Running MethodSelector comparison for {len(reducers_dict)} reducers...")
+
+    idx = _sample_indices(data.shape[0], max_samples=max_samples, random_state=42)
+    X_selector = data[idx]
+    y_selector = None
+
+    if len(idx) < data.shape[0]:
+        logger.info(
+            "Running MethodSelector on a subsample to avoid O(N^2) memory: "
+            f"{len(idx)}/{data.shape[0]} samples."
+        )
+
+    if target is not None:
+        y_full = _coerce_sample_vector(target, data.shape[0])
+        if y_full is None:
+            logger.warning(
+                "MethodSelector target is not sample-aligned; proceeding without labels "
+                f"(labels={len(np.asarray(target).ravel())}, samples={data.shape[0]})."
+            )
+        else:
+            y_selector = y_full[idx]
+
     selector = MethodSelector(reducers=reducers_dict)
-    selector.run(X=data, y=target)
+    selector.run(X=X_selector, y=y_selector)
     return selector
 
 
@@ -681,7 +798,7 @@ def compute_all_embeddings(
 def create_reducer_section(
     name: str,
     embedding_results: Dict,
-    labels: np.ndarray,
+    labels: Optional[np.ndarray],
     X_orig: np.ndarray,
     meta_dict: Optional[Dict[str, np.ndarray]] = None,
     times: Optional[np.ndarray] = None,
@@ -703,30 +820,76 @@ def create_reducer_section(
     emb_3d = embedding_results.get("embedding_3d")
     reducer_2d = embedding_results.get("reducer_2d")
 
+    n_2d = emb_2d.shape[0] if emb_2d is not None else 0
+    labels_2d = _coerce_sample_vector(labels, n_2d) if n_2d else None
+    if labels is not None and n_2d and labels_2d is None:
+        logger.warning(
+            f"Skipping labels for {name} 2D plot due to size mismatch "
+            f"(labels={len(np.asarray(labels).ravel())}, samples={n_2d})."
+        )
+
+    meta_2d = None
+    if meta_dict and n_2d:
+        filtered = {}
+        for col_name, col_values in meta_dict.items():
+            arr = _coerce_sample_vector(col_values, n_2d)
+            if arr is not None:
+                filtered[col_name] = arr
+        if filtered:
+            meta_2d = filtered
+
+    n_3d = emb_3d.shape[0] if emb_3d is not None else 0
+    labels_3d = _coerce_sample_vector(labels, n_3d) if n_3d else None
+    meta_3d = None
+    if meta_dict and n_3d:
+        filtered = {}
+        for col_name, col_values in meta_dict.items():
+            arr = _coerce_sample_vector(col_values, n_3d)
+            if arr is not None:
+                filtered[col_name] = arr
+        if filtered:
+            meta_3d = filtered
+
     reducer_metrics: Dict = {}
     reducer_quality_meta: Dict = {}
     reducer_diagnostics: Dict = {}
 
     if reducer_2d is not None and emb_2d is not None and X_orig is not None:
         try:
-            if X_orig.shape[0] > 3:
-                k_neighbors = max(2, min(10, X_orig.shape[0] - 2))
+            if X_orig.shape[0] == emb_2d.shape[0] and X_orig.shape[0] > 3:
+                idx_score = _sample_indices(
+                    X_orig.shape[0], max_samples=MAX_REDUCER_SCORE_SAMPLES, random_state=42
+                )
+                X_score = X_orig[idx_score]
+                emb_score = emb_2d[idx_score]
+                if len(idx_score) < X_orig.shape[0]:
+                    logger.info(
+                        f"Computing {name} API diagnostics on a subsample: "
+                        f"{len(idx_score)}/{X_orig.shape[0]} samples."
+                    )
+
+                k_neighbors = max(2, min(10, X_score.shape[0] - 2))
                 score_payload = reducer_2d.score(
-                    X=X_orig, X_emb=emb_2d, n_neighbors=k_neighbors
+                    X=X_score, X_emb=emb_score, n_neighbors=k_neighbors
                 )
                 reducer_metrics = score_payload.get("metrics", {}) or {}
                 reducer_quality_meta = score_payload.get("metadata", {}) or {}
                 reducer_diagnostics = score_payload.get("diagnostics", {}) or {}
+            elif X_orig.shape[0] != emb_2d.shape[0]:
+                logger.warning(
+                    f"Skipping API diagnostics for {name}: X/embedding size mismatch "
+                    f"({X_orig.shape[0]} vs {emb_2d.shape[0]})."
+                )
         except Exception as err:
             logger.warning(f"Could not compute API score payload for {name}: {err}")
 
-        if not reducer_quality_meta:
+        if not reducer_quality_meta and hasattr(reducer_2d, "get_quality_metadata"):
             try:
                 reducer_quality_meta = reducer_2d.get_quality_metadata() or {}
             except Exception as err:
                 logger.warning(f"Could not fetch quality metadata for {name}: {err}")
 
-        if not reducer_diagnostics:
+        if not reducer_diagnostics and hasattr(reducer_2d, "get_diagnostics"):
             try:
                 reducer_diagnostics = reducer_2d.get_diagnostics() or {}
             except Exception as err:
@@ -747,8 +910,8 @@ def create_reducer_section(
         if interactive:
             fig = plot_embedding_interactive(
                 embedding=emb_2d,
-                labels=labels,
-                meta=meta_dict if meta_dict else None,
+                labels=labels_2d,
+                meta=meta_2d,
                 title=f"{name.upper()} - 2D Embedding",
                 dimensions=2,
             )
@@ -756,7 +919,7 @@ def create_reducer_section(
         else:
             fig = viz.plot_embedding(
                 X_emb=emb_2d,
-                labels=labels,
+                labels=labels_2d,
                 dims=(0, 1),
                 title=f"{name.upper()} - 2D Embedding",
                 interactive=False,
@@ -768,8 +931,8 @@ def create_reducer_section(
         if interactive:
             fig_3d = plot_embedding_interactive(
                 embedding=emb_3d,
-                labels=labels,
-                meta=meta_dict if meta_dict else None,
+                labels=labels_3d,
+                meta=meta_3d,
                 title=f"{name.upper()} - 3D Embedding",
                 dimensions=3,
             )
@@ -777,7 +940,7 @@ def create_reducer_section(
         else:
             fig_3d = viz.plot_embedding(
                 X_emb=emb_3d,
-                labels=labels,
+                labels=labels_3d,
                 dims=(0, 1, 2),
                 title=f"{name.upper()} - 3D Embedding",
                 interactive=False,
@@ -851,15 +1014,29 @@ def create_reducer_section(
                 else:
                     sec.add_element(ImageElement(fig_scree))
 
+    X_for_2d = None
+    if emb_2d is not None and X_orig is not None and X_orig.shape[0] == emb_2d.shape[0]:
+        X_for_2d = X_orig
+    elif emb_2d is not None and X_orig is not None:
+        logger.warning(
+            f"Skipping some {name} diagnostics: X/embedding size mismatch "
+            f"({X_orig.shape[0]} vs {emb_2d.shape[0]})."
+        )
+
     # 5. Shepard Diagram
-    if emb_2d is not None:
+    if emb_2d is not None and X_for_2d is not None:
+        idx_shepard = _sample_indices(
+            X_for_2d.shape[0], max_samples=MAX_REDUCER_SCORE_SAMPLES, random_state=42
+        )
+        X_shepard = X_for_2d[idx_shepard]
+        emb_shepard = emb_2d[idx_shepard]
         fig_shepard = None
         if reducer_2d is not None:
             try:
                 fig_shepard = reducer_2d.plot(
                     mode="shepard",
-                    X=X_orig,
-                    sample_size=min(500, X_orig.shape[0]),
+                    X=X_shepard,
+                    sample_size=min(500, X_shepard.shape[0]),
                     title=f"{name.upper()} - Shepard Diagram",
                     interactive=interactive,
                 )
@@ -869,9 +1046,9 @@ def create_reducer_section(
         if fig_shepard is None:
             try:
                 fig_shepard = viz.plot_shepard_diagram(
-                    X_orig=X_orig,
-                    X_emb=emb_2d,
-                    sample_size=min(500, X_orig.shape[0]),
+                    X_orig=X_shepard,
+                    X_emb=emb_shepard,
+                    sample_size=min(500, X_shepard.shape[0]),
                     title=f"{name.upper()} - Shepard Diagram",
                     interactive=interactive,
                 )
@@ -885,26 +1062,37 @@ def create_reducer_section(
                 sec.add_element(ImageElement(fig_shepard))
 
     # 6. Local neighborhood quality map
-    if emb_2d is not None:
+    if emb_2d is not None and X_for_2d is not None:
         try:
-            local_scores = _compute_local_overlap_scores(X_orig, emb_2d, k=10)
-            fig_local = viz.plot_local_metrics(
-                X_emb=emb_2d,
-                local_scores=local_scores,
-                title=f"{name.upper()} - Local Neighborhood Overlap",
-            )
-            sec.add_element(ImageElement(fig_local))
+            if X_for_2d.shape[0] <= MAX_LOCAL_DIAGNOSTIC_SAMPLES:
+                local_scores = _compute_local_overlap_scores(X_for_2d, emb_2d, k=10)
+                fig_local = viz.plot_local_metrics(
+                    X_emb=emb_2d,
+                    local_scores=local_scores,
+                    title=f"{name.upper()} - Local Neighborhood Overlap",
+                )
+                sec.add_element(ImageElement(fig_local))
+            else:
+                logger.info(
+                    f"Skipping local overlap map for {name}: "
+                    f"{X_for_2d.shape[0]} samples > {MAX_LOCAL_DIAGNOSTIC_SAMPLES}."
+                )
         except Exception as err:
             logger.warning(f"Could not create local quality map for {name}: {err}")
 
     # 7. Velocity streamlines (requires temporal ordering)
-    if emb_2d is not None and times is not None:
+    if emb_2d is not None and times is not None and X_for_2d is not None:
         try:
+            times_aligned = _coerce_sample_vector(times, emb_2d.shape[0])
+            groups_aligned = _coerce_sample_vector(groups, emb_2d.shape[0]) if groups is not None else None
+            if times_aligned is None:
+                raise ValueError("Times are not sample-aligned with the embedding.")
+
             V_emb = _compute_groupwise_velocity(
-                X_orig=X_orig,
+                X_orig=X_for_2d,
                 X_emb=emb_2d,
-                times=times,
-                groups=groups,
+                times=times_aligned,
+                groups=groups_aligned,
                 delta_t=1,
             )
             if V_emb is not None:
@@ -924,10 +1112,15 @@ def create_reducer_section(
     # 8. Trajectory plot (if temporal data)
     if emb_2d is not None and times is not None:
         try:
+            times_aligned = _coerce_sample_vector(times, emb_2d.shape[0])
+            groups_aligned = _coerce_sample_vector(groups, emb_2d.shape[0]) if groups is not None else None
+            if times_aligned is None:
+                raise ValueError("Times are not sample-aligned with the embedding.")
+
             fig_traj = viz.plot_trajectory(
                 X=emb_2d,
-                times=times,
-                groups=groups,
+                times=times_aligned,
+                groups=groups_aligned,
                 dimensions=2,
                 title=f"{name.upper()} - Trajectory Over Time",
                 interactive=interactive,
@@ -1010,7 +1203,7 @@ def create_comparison_section(
 def create_quality_section(
     embedding_results: Dict[str, Dict],
     X_orig: np.ndarray,
-    labels: np.ndarray,
+    labels: Optional[np.ndarray],
     interactive: bool = True
 ) -> Tuple[Section, Dict[str, Dict[str, float]]]:
     """
@@ -1023,7 +1216,10 @@ def create_quality_section(
         emb_2d = res.get('embedding_2d')
         if emb_2d is not None:
             try:
-                scores = compute_quality_metrics(X_orig, emb_2d, labels, k=10)
+                labels_aligned = _coerce_sample_vector(labels, emb_2d.shape[0])
+                scores = compute_quality_metrics(
+                    X_orig, emb_2d, labels_aligned, k=10
+                )
                 all_metrics[name] = scores
                 
                 # Individual metrics plot
@@ -1244,8 +1440,37 @@ def main():
     
     X = dc.X
     labels = dc.y
-    
-    logger.info(f"Data shape: {X.shape}, Labels: {labels.shape if labels is not None else 'None'}")
+    n_samples = X.shape[0]
+
+    if labels is not None:
+        labels = np.asarray(labels).ravel().astype(str)
+        if labels.shape[0] != n_samples:
+            logger.warning(
+                "Target labels are not sample-aligned after stacking "
+                f"(labels={labels.shape[0]}, samples={n_samples})."
+            )
+            labels = None
+
+    if labels is None:
+        for candidate_col in [
+            args.target_col,
+            "Group",
+            "Diagnosis_Combined",
+            "Meds",
+            "ASM_dichotomous",
+            "Age_Group",
+            "Sex",
+            "subject",
+        ]:
+            candidate_vals = _coerce_sample_vector(dc.coords.get(candidate_col), n_samples)
+            if candidate_vals is not None:
+                labels = candidate_vals.astype(str)
+                logger.info(f"Using '{candidate_col}' as labels.")
+                break
+
+    logger.info(
+        f"Data shape: {X.shape}, Labels: {labels.shape if labels is not None else 'None'}"
+    )
     
     # Compute All Embeddings (2D and 3D)
     embedding_results, reducers_2d = compute_all_embeddings(
