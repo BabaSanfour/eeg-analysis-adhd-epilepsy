@@ -14,10 +14,10 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Extract REVE embeddings for epilepsy classification")
     parser.add_argument("--data-root", required=True, help="Root directory containing BIDS-like subject folders")
     parser.add_argument("--csv-path", default="/home/mat/projects/EEG_psychostimulant/data/results/dl/subjects.csv", help="Path to subjects CSV file")
-    parser.add_argument("--output-dir", default="/home/mat/scratch/embeddings/reve/base", help="Directory to save per-subject embeddings (BIDS format)")
+    parser.add_argument("--output-dir", default="/home/mat/scratch/embeddings/reve/baseline", help="Directory to save per-subject embeddings (BIDS format)")
     parser.add_argument("--output-csv", default=None, help="Optional: Save all embeddings as CSV file")
     parser.add_argument("--model-size", default="base", choices=["base", "large"], help="REVE model size")
-    parser.add_argument("--stage", default="base", choices=["base", "correct_ica", "correct_dss", "denoise_ar", "denoise_dss_ar"], help="Preprocessing stage to extract")
+    parser.add_argument("--stage", default="baseline", choices=["baseline", "correct_ica", "correct_dss", "denoise_ar", "denoise_dss_ar"], help="Preprocessing stage to extract")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="Device to use")
     parser.add_argument("--subject", default=None, help="Specific subject ID to process (e.g., '1' or 'sub-0001')")
     return parser.parse_args()
@@ -26,7 +26,7 @@ def find_eeg_file(sub_dir, stage="base"):
     """Find the first .fif file matching the stage in the subject directory, searching recursively."""
     # Pattern map
     patterns = {
-        "base": "desc-base_eeg.fif",
+        "baseline": "desc-base_eeg.fif",
         "correct_ica": "desc-correctIca_eeg.fif",
         "correct_dss": "desc-correctDss_eeg.fif",
         "denoise_ar": "desc-denoiseAr_eeg.fif",
@@ -80,20 +80,20 @@ def extract_features(args):
         # Check if already processed
         # Update filename based on stage
         suffix_map = {
-            "base": "desc-base",
+            "baseline": "desc-baseline",
             "correct_ica": "desc-correctIca",
             "correct_dss": "desc-correctDss",
             "denoise_ar": "desc-denoiseAr",
             "denoise_dss_ar": "desc-denoiseDssAr"
         }
 
-        desc = suffix_map.get(args.stage, "desc-base")
+        desc = suffix_map.get(args.stage, "desc-baseline")
         
         # Create subject output directory
         sub_out_dir = os.path.join(args.output_dir, sub_id)
         os.makedirs(sub_out_dir, exist_ok=True)
         
-        emb_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_embed_reve.npy")
+        emb_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_embed_reve_{args.model_size}.npy")
         if os.path.exists(emb_file):
             print(f"SKIP [{sub_id}]: Already processed")
             success_count += 1
@@ -160,7 +160,7 @@ def extract_features(args):
             emb_array = np.concatenate(subject_embs, axis=0)
             
             # Save embeddings with BIDS naming
-            meta_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_metadata_reve.json")
+            meta_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_metadata_reve_{args.model_size}.json")
             
             np.save(emb_file, emb_array)
             

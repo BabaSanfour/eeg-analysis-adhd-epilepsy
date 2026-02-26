@@ -42,14 +42,17 @@ echo "  - Data Root: $DATA_ROOT"
 echo "  - Output Dir: $OUT_DIR"
 
 # 3. Build command
-STAGE=${STAGE:-"base"}
+STAGE=${STAGE:-"baseline"}
+MODEL_SIZE=${MODEL_SIZE:-"base"}
 echo "  - Stage: $STAGE"
+echo "  - Model Size: $MODEL_SIZE"
 
 cmd=(python eeg_adhd_epilepsy_psychostimulant/dl/reve/reve_extract.py \
   --data-root "$DATA_ROOT" \
   --csv-path "$CSV_PATH" \
   --output-dir "$OUT_DIR" \
   --stage "$STAGE" \
+  --model-size "$MODEL_SIZE" \
   --device "$DEVICE")
 
 # Add subject filter if specified
