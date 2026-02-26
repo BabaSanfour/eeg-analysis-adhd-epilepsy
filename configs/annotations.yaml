@@ -1,0 +1,478 @@
+annotations:
+  eyes_open:
+    - eyes open
+    - eye open
+    - eyes-open
+    - eo
+    - yeux ouverts
+    - yeux ouvert
+  eyes_closed:
+    - eyes closed
+    - eye closed
+    - eyes-closed
+    - ec
+    - yeux fermes
+    - yeux ferme
+  hv:
+    - hv
+  post_hv:
+    - post hv
+  photo:
+    - photo
+  movement:
+    - bouge
+    - movement
+    - mouvement
+    - mouv
+    - mvts
+    - mvt
+    - mouvement
+    - wiggle
+    - mouv de resp
+    - mvts paupieres
+    - mvt paupieres
+    - tape des mains
+    - donne des coups
+    - tape
+    - serre les poings
+    - serre les pojngs
+    - serrer le poing
+    - legers mouv des doigts
+    - legers mouv des mains
+    - leger mouv des doigts
+    - leger mouv des mains
+    - mains pt nerveux
+    - reviens sur le dos
+    - couche sur le dos
+    - couche cote
+    - couche cote d
+    - couchee cote g
+    - remet sur le dos
+    - s'assoit
+    - assoit
+    - ne veut pas rester coucher
+    - pt s'assoit
+    - gratte
+    - gratte l'epaule
+    - se gratte les yeux
+    - relache bras
+    - relache
+    - ouge
+    - timule
+    - sur le dos
+    - installe pt assis
+    - installe patient assis
+    - enleve main sous la tete
+    - debranche le lit
+    - baisse le masque
+    - sursaut
+  artefact:
+    - artefact
+    - artefacts
+    - artifact
+    - artifacts
+    - artefatc
+    - arteafct
+    - atefact
+    - bruit
+    - bruit exterieur
+  effort:
+    - effort
+    - Bon effot
+    - bbonn effforrt
+    - bon rffort
+    - bon effrt
+    - bonne efforr
+  pat_montage:
+    - pat montage
+  yawn_cough:
+    - baille
+    - baile
+    - bille
+    - baille
+    - baile
+    - yawn
+    - yawning
+    - tousse
+    - tousse trop
+    - patiente tousse
+    - pt tousse++, ralenti HV
+    - cough
+    - coughing
+    - eternue
+    - eternu
+    - sneeze
+  sleepy:
+    - somnolence
+    - somnolence?
+    - somnolent
+    - somnolente
+    - somnoler
+    - somnole
+    - sommeil?
+    - semble vouloir sendormir
+    - semble vouloir s'endormir
+    - laisse pt somnoler
+    - sli meme si te dort
+    - pte se dit fatiguee
+    - pte se dit fatiguee depuis ce am
+    - privation de sommeil
+    - privation sommeil
+  sleep:
+    - dort
+    - dort?
+    - dort pendant eeg
+    - reste sur le dos pour dormir
+    - installe pour dormir
+    - se tourne pour dormir
+    - sleep
+    - asleep
+    - no sleep
+    - reste pour dormir
+    - prepare pour dormir
+    - patiente enleve ses bottes pour dormir
+    - REM
+  collaboration:
+    - peu de collaboration
+    - faible collaboration
+    - collabore peu
+    - collabore pas
+    - pas de collaboration
+    - aucune collaboration
+    - aucune collaboraton
+    - aucune collabortion
+    - collaboration moyenne
+    - collaboration reduite
+    - colaboreation reduite
+    - collaboration limite
+    - collabore + ou-
+    - collabore + ou -
+    - collabore peu selon maman
+    - collabore pas vraiment
+    - ne collabore pas
+    - ne collabore pas vraiment
+    - faible collab
+    - peu de collab
+    - pte collabore pas
+    - pte collabore peu
+    - collabore selon maman
+    - collabore peu tsa
+    - collabore peu adhd
+    - collabore un peu
+  jaw_face_tension:
+    - relaxe machoire
+    - relacher machoire
+    - relache machoire
+    - relache la machoire
+    - relacher la machoire
+    - serre machoire
+    - machoire tendu
+    - machoire tendue
+    - detendre la machoire
+    - detendre le visage
+    - relacher le visage
+    - relache visage
+    - relacher visage
+    - serre front
+    - serre le front
+    - seere front
+    - serre dents
+    - serre les dents
+  sensor_electrode_verbs:
+    - place
+    - ouche
+    - touche
+    - toucher
+    - retouche
+    - retoucher
+    - frotte
+    - frotter
+    - refrotte
+    - refrotter
+    - replace
+    - replacer
+    - change
+    - changer
+    - pont
+    - bridge
+    - pontage
+    - bris contact
+    - bris de contact
+    - filtre 60 hertz
+    - filtre 60hz
+    - filtre 60
+    - 60hz
+    - 60 hz
+    - change le ground
+    - change ground
+    - ground
+    - masse
+    - replace les fils
+    - retouche les electrodes
+    - refrotte fils
+    - replace electrode
+    - change electrode
+    - replace les electrodes
+    - retouche les fils
+    - tete mouillee
+    - t5ouche
+    - touvhe
+    - touhe
+    - arrange
+    - hange
+  emotion_behavior:
+    - pleure
+    - pleur
+    - cri
+    - crie
+    - parle
+    - parle
+    - parler
+    - parle beaucoup
+    - rit
+    - rie
+    - la pte rit
+    - la pte arret pas de rire
+    - bof
+    - tete qui tourne
+    - pte mal au ventre
+    - pt mal au ventre
+    - pt a tres mal au ventre pas d'hyper
+  oral_activity:
+    - machonne
+    - machonnement
+    - pt machonne
+    - ouvre la bouche
+    - reniffle
+    - sucer
+    - suce fort
+    - suce son pouce
+    - prend la suce
+    - prend sa suce
+    - prend suce
+    - avale
+    - boit de l'eau
+    - boit de leau
+    - pte a le push button
+    - gavage en cours
+    - demande au patient de jeter sa gomme
+  eye_movement:
+    - cligne des yeux
+    - revulsion des yeux
+    - impossible de fermer les yeux
+    - impossible de lui faire ouvrir les yeux
+    - ne veut pas fermer les yeux
+    - ne veut pas ferme ses yeux
+    - ne ferme pas les yeux
+    - ouvre et ferme les yeux
+    - ouvre et ferme les yeux souvent
+    - ouvre yeux
+    - ouvre les yeux
+    - yeux ouvres et fermes
+    - yeux mi-clos
+    - yeux semi-ouvert
+    - yeux semi ouvert
+    - yeux semi ouverts
+    - yeux semi
+    - les yeux sont fermes par maman
+    - tres difficile de fermer les yeux
+    - incapable de fermer les yeux
+    - essaye douvrir les yeux
+    - yeux vers la d
+  wakefulness:
+    - se reveille
+    - se revelle
+    - reveille la pte
+    - reveille pt
+    - reveille le pt
+    - reveille le pt
+    - reveille la petite
+    - reville la pte
+    - reville la pt
+    - reveille la pt
+    - reveille le patient
+    - pte reveiller
+    - tente de reveiller
+    - tente de reveiller la pte
+    - tente de reveiller pt
+    - va reveiller pt
+    - reveille pt
+    - reveiller
+    - tente reveiller pte
+    - tente reveiller la pte
+    - reveil pt
+    - reveil la pte
+  respiration:
+    - arret des respirations
+    - arret respiration
+    - arrete de respirer
+    - reprise des respirations
+    - reprise des repirations
+    - reprise respiration
+    - reprend respiration
+  
+  clinical_spikes:
+    - pointe-lente
+    - pointe?
+    - vertex pointu
+    - vertex pointus
+    - vertex pointu?
+    - spike
+    - spike?
+    - b9 spike
+    - posts
+    - posts?-->
+    - polypp
+    - polypp ftg
+    - pfd
+    - ppd
+    - pcd
+    - pfd?
+    - ppd?
+    - pcd?
+    - spindle?
+    - spindle
+    - posts?
+    - vertex
+  clinical_slowing:
+    - delta
+    - delta frontal
+    - delta front raide
+    - frontal delta
+    - ralentissement
+    - ralentissement diffus
+    - ralentissement diffus asynchrone
+    - "lent "
+    - slowing
+    - lpq slowing
+    - lent temp
+    - lent diffus
+    - lent persiste
+    - lent ft
+    - lent d
+    - gene-frontal
+    - lent un peu asym
+  clinical_seizure:
+    - crise
+    - absence
+    - absemce
+    - absence?
+    - pte absence
+    - episode
+    - episode clinique
+    - spasme
+    - spasmes
+    - spasme pied
+    - spasme bras
+    - myoclonie
+    - myclonie
+    - mioclonie
+    - petite crise
+    - possiblement clinique
+    - pte crise
+    - dissociation
+  clinical_background:
+    - pdr
+    - pdr 10
+    - pdr 11
+    - pdr 11-12
+    - posts
+    - mu?
+    - pswy
+    - background
+    - pdr 10
+
+  demographics:
+    - "13"
+    - "17"
+    - garcon de 9 abns
+    - garcon
+    - fille
+    - fillette
+    - adolescent
+    - adolescente
+    - garcon de
+    - fille de
+    - adolescent de
+    - adolescente de
+    - jeune garcon
+    - jeune fille
+    - grcon de
+    - folle de
+    - 6 ans gracon
+    - gartcon de
+    - garson de
+    - garson de 16ans
+    - garon de
+    - garcon de 9
+    - garcon de 9 abns
+    - garcon de 11a
+    - garon de 12 ans
+    - garon de 12ans
+    - garcon de 12 ans
+    - garcon de 11 ans
+    - rcon de 11 ans
+    - rcon de 10 ans
+    - pt de 10 ans
+    - pte de 18 ans
+    - pt de 10
+    - pt de 
+    - pte de 
+    - rcon de
+    - e 17 ans
+    - e 16 ans
+    - e 10 ans
+    - ado de 17 ans
+    - 11 ans
+    - 13 ans
+    - 17 ans
+    - 15 ans
+    - 12 ans
+    
+  recording_start:
+    - a1+a2 off
+
+  sensor_action_keywords:
+    - touche
+    - toucher
+    - retouche
+    - retoucher
+    - frotte
+    - frotter
+    - refrotte
+    - refrotter
+    - replace
+    - replacer
+    - change
+    - changer
+    - pont
+    - bridge
+    - pontage
+    - bris contact
+    - bris de contact
+    - filtre 60
+    - 60hz
+    - 60 hz
+    - ground
+    - masse
+    - t5ouche
+    - touvhe
+    - touhe
+    - arrange
+    - hange
+  HV_ignore:
+    - HV non fait
+    - ajuste rythme HV
+    - ajuste rythme d'HV
+    - ajuste rythme de l'HV
+    - arret HV pt a mal au coeur
+    - arret hv
+    - beaucoup de spasmes durant HV
+    - lent, mais hv + sym
+    - ne veut pas faire hv
+    - ne veut plus faire hv
+    - ordi nateur bogue reprise HV plus tard
+    - pas HV
+    - recommence hv
+    - reprise hv
+    - slow with HV

@@ -1,40 +1,116 @@
-# EEG Psychostimulant Analysis Repository
+# EEG Analysis for ADHD, Epilepsy and Medication Effects
 
-This repository contains scripts and data for comparing EEG signals between psychostimulant and non-psychostimulant subjects.
+[![Python Version](https://img.shields.io/badge/python-3.13%2B-blue.svg)](https://www.python.org/downloads/release/python-3130/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-## Directory Structure and Scripts
-- **data**: Contains scripts to convert raw EEG files and metadata into BIDS format and performs minimal processing (e.g., filtering, channel removal, montage setting).
-- **utils**: Utility scripts.
-- **explore**: Data exploration utilities for CSVs and analysis setup.
-- **ml_pipelines**: Scripts for building general machine learning pipelines and executing them for various analyses.
-- **dl_pipelines**: Scripts for running the reve_model and extracting embeddings.
-- **viz**: Visualization tools and scripts.
+This repository contains a complete framework for analyzing EEG data from patients with ADHD and/or Epilepsy with medication effects. The project includes tools for data preprocessing, feature extraction, machine learning with `CoCo-Pipe`, deep learning models like REVE for embeddings, and various visualization techniques.
 
+## Features
 
-## To-Do (Scripts)
-- Add comprehensive documentation for each script.
-- Automate ML functions and pipeline steps to support various datasets and CSV files.
-- Integrate additional machine learning analyses.
-- Merge pipeline components into a single class and consolidate the run_ml_pipe function into one class that returns a unified object. This object will maintain consistent keys (with empty values when results are unavailable) to simplify visualization.
-- Enhance the reve_model to automate processing across different datasets and prepare outputs for both visualization and ML pipeline analyses.
-- Create a visualzation class for decoding results and another for embeddings (umap, tsne, pca)
+*   End-to-end EEG analysis pipeline from raw data to publication-ready figures.
+*   BIDS-compatible data organization.
+*   Preprocessing and quality control for EEG signals using MNE.
+*   Feature extraction from EEG data, including spectral and connectivity measures.
+*   Machine learning pipelines for classification and regression tasks.
+*   Deep learning models for generating EEG embeddings.
+*   A comprehensive suite of visualization tools for results, including topographic maps, embeddings, and feature importance plots.
+*   Statistical analysis of findings.
 
-## To-Do (Analysis)
-- Incorporate additional features.
-- Conduct further experiments with the reve_model to diagnose and resolve issues (Test the reve_model on sleep and eyes open/closed EEG data; Fine tune the model on the data?).
-- Develop an automated analysis workflow that tests different conditions (e.g., with/without specific factors like ADHD, Epilepsy, TSA), considers age groups, and analyzes different medication types. This may include generating selections via a JSON configuration file.
-- Normalize the data before feeding it to REVE!
-- Test finetuning strategies (REVE)!
+## Installation
 
-## Quick CSV Exploration
+1.  **Clone the repository:**
+    ```bash
+    git clone https://github.com/your-username/eeg-analysis-adhd-epilepsy.git
+    cd eeg-analysis-adhd-epilepsy
+    ```
 
-Use the patients CSV explorer to print dataset info, counts, and confusion matrices (e.g., TDAH x Psychostimulant):
+2.  **Create and activate a virtual environment (Python >= 3.10 is required):**
+    ```bash
+    python -m venv .venv
+    source .venv/bin/activate
+    ```
+
+3.  **Install dependencies:**
+    This project uses `pyproject.toml` to manage dependencies. Install the project in editable mode, which will install all necessary dependencies:
+    ```bash
+    pip install -e .
+    ```
+
+## Usage
+
+This project provides several command-line scripts for running different parts of the analysis pipeline.
+
+### Preprocessing and BIDS conversion
+
+The `eeg_adhd_epilepsy/preproc` module contains scripts for converting raw data to BIDS format and for preprocessing the EEG data. These scripts are meant to be run before the main analysis pipelines.
+
+### Feature Extraction and Exploration
+
+The `eeg_adhd_epilepsy/explore` module is used for feature extraction and initial data exploration.
+
+### Machine Learning Pipeline
+
+The `eeg_adhd_epilepsy/ml` module contains the machine learning pipeline. You can run the pipeline using the `eeg-ml-run` script with a configuration file.
+
+```bash
+# Example of running the ML pipeline for ADHD
+eeg-ml-run --config eeg_adhd_epilepsy/ml/config_adhd.yml
+```
+
+### Deep Learning Embeddings
+
+The `eeg_adhd_epilepsy/dl` module contains deep learning models. You can generate EEG embeddings using the `eeg-embeddings` script.
+
+```bash
+# Example of generating EEG embeddings
+eeg-embeddings
+```
+
+### Visualization
+
+The `eeg_adhd_epilepsy/viz` module contains scripts for generating plots and visualizations.
+
+```bash
+# Example of dimensionality reduction for visualization
+eeg-dim-reduce
+
+# Example of plotting embeddings
+python -m eeg_adhd_epilepsy.viz.plot_embeddings
+```
+
+## Data and Results
+
+The `data/` and `results/` directories are not tracked by Git. You need to create them manually.
+
+*   **`data/`**: This directory should contain the raw and processed EEG data. The preprocessing scripts expect the raw data to be in a specific format.
+*   **`results/`**: This directory will store the outputs of the analysis, such as figures, tables, and trained models.
+
+You can create these directories with the following command:
+
+```bash
+mkdir data results
+```
+
+## Project Structure
 
 ```
-python -m eeg_adhd_epilepsy_psychostimulant.explore.patients_csv_explorer \
-  --csv_file data/csv/EEG_Psychostimulants_PatientList_08-2025.csv --grouped --save
+.
+├── data/                  # Raw and processed data (not tracked by Git)
+├── eeg_adhd_epilepsy/     # Main Python package
+│   ├── dl/                # Deep learning models (e.g., REVE)
+│   ├── explore/           # Feature extraction and data exploration
+│   ├── io/                # Input/output functions
+│   ├── ml/                # Machine learning pipelines (CoCo-Pipe)
+│   ├── preproc/           # EEG preprocessing and BIDS conversion
+│   ├── utils/             # Utility functions
+│   └── viz/               # Visualization scripts
+├── results/               # Analysis results and figures (not tracked by Git)
+├── tests/                 # Tests for the package
+├── .gitignore             # Files and directories to be ignored by Git
+├── LICENSE                # Project license
+├── pyproject.toml         # Project metadata and dependencies
+└── README.md              # This file
 ```
+## License
 
-Notes:
-- The loader auto-detects comma/semicolon separators and drops empty trailing columns.
-- If the environment variable `EEG_DATA_DIR` is unset, it defaults to the repo-local `data` directory.
+This project is licensed under the MIT License. See the `LICENSE` file for more details.
