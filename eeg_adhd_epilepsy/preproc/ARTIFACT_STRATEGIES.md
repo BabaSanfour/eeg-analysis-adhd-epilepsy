@@ -148,72 +148,127 @@ While DSS is powerful, there are scenarios where it offers little benefit or cou
 
 ---
 
-## Part 6: Technical Implementation Plan (`preproc/clean.py`)
+## Part 6: Technical Implementation Plan
 
 This entire phase runs **after** the non-destructive baseline (`base.py`). The input is the `raw` object returned by `base.py` (which has RANSAC-corrected bad channels and initial AutoReject annotations from Part 1).
 
-**Philosophy**: `base.py` provides a conservative foundation. This phase implements advanced cleaning in **2 sequential stages**, drawing inspiration from Parts 2-5. Each step allows choosing between multiple methods.
+**Philosophy**: `base.py` provides a conservative foundation. This phase implements advanced cleaning in **2 sequential stages** across **3 new modules**, drawing inspiration from Parts 2-5. Each step allows choosing between multiple methods.
 
 **Key Integration Points**:
 1.  Uses `base.py` annotations to exclude bad segments during ICA fitting
 2.  Follows `base.py` structure with `benchmark_step()` and provenance tracking
 3.  Tracks correction effectiveness by comparing pre/post artifact annotations
 
-### 1. Architecture: The `clean.py` Module
+### 1. Architecture: Strict 2-Stage Pipeline
 
-We will create `eeg_adhd_epilepsy/preproc/clean.py` as a standalone module. It does **not** modify `base.py`.
+We enforce a strict separation of concerns where `denoise.py` consumes the output of `correct.py`.
 
-**Goal**: Implement a **step-wise** pipeline (not pipeline-wise) with method selection per step, organized into 2 major stages:
-1.  **Stage 1**: Specific Physiological Artifacts (ECG, EOG, EMG)
-2.  **Stage 2**: Aggressive/General Cleaning (transients, final repair)
+```
+[Raw Data] → base.py (Detect) → [Raw + Bad Annotations] 
+                                        ↓
+                                   correct.py (Stage 1: Source Correction)
+                                   Main: run_source_correction()
+                                        ↓
+                                   [Raw Corrected]
+                                        ↓
+                                   denoise.py (Stage 2: Residual Denoising)
+                                   Main: run_residual_denoising()
+                                        ↓
+                                   [Raw Final]
+```
 
-### 2. Core Orchestrator
+**Benchmarking (`compare.py`)**: Now compares `Raw Corrected` vs `Raw Final` to quantify the added value of stage 2.
 
-Following `base.py` structure with provenance tracking:
+### 1b. Module Imports
+
+#### `correct.py` imports
+```python
+"""
+Source Correction Module (Stage 1).
+Main Entry: run_source_correction()
+"""
+import logging
+from typing import Any, Dict, Optional, Tuple
+import mne
+import numpy as np
+import scipy.linalg
+from .utils import benchmark_step
+
+LOGGER = logging.getLogger(__name__)
+
+# Optional dependencies...
+```
+
+#### `denoise.py` imports
+```python
+"""
+Residual Denoising Module (Stage 2).
+Main Entry: run_residual_denoising()
+"""
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+import mne
+import numpy as np
+
+from .utils import benchmark_step, PreprocConfig
+from .base import annotate_artifacts_blockwise, _collect_block_windows
+
+# Import Stage 1 for the unified pipeline wrapper (optional)
+# But denoise.py logic primarily operates on the OUTPUT of Stage 1
+from .correct import run_source_correction
+
+LOGGER = logging.getLogger(__name__)
+# Optional dependencies...
+```
+
+#### `compare.py` imports
+```python
+"""
+Pipeline Benchmarking.
+Compares: Base vs Corrected (Stage 1) vs Final (Stage 2)
+"""
+import logging
+import mne
+import pandas as pd
+from .correct import run_source_correction
+from .denoise import run_residual_denoising
+
+LOGGER = logging.getLogger(__name__)
+```
+
+
+### 2. Core Orchestrators
+
+#### 2a. Source Correction (`correct.py` Main)
+
+Runs Stage 1: Removal of specific physiological artifacts (EOG, ECG, EMG).
 
 ```python
-def run_advanced_artifact_removal(
+def run_source_correction(
     raw: mne.io.BaseRaw, 
-    config: ArtifactCorrectionConfig, 
-    subject_id: str,
-    output_dir: Optional[Path] = None,
+    config: 'ArtifactCorrectionConfig'
 ) -> Tuple[mne.io.BaseRaw, Dict]:
     """
-    Step-wise artifact removal pipeline.
-    Operates on the output of base.py.
-    
-    Draws inspiration from:
-    - Part 2: RELAX (MWF, wICA, ICLabel) & ASR strategies
-    - Part 4: Sequential roadmap
-    - Part 5: DSS as alternative to ICA
+    Stage 1: Remove specific physiological artifacts.
+    Output is fed into denoise.py.
     """
-    LOGGER.info(f"Starting advanced cleaning for {subject_id}")
-    
-    # Initialize provenance (following base.py structure)
-    provenance: Dict[str, Any] = {
-        "subject_id": subject_id,
-        "config": config,
+    provenance = {
         "steps_completed": [],
         "correction_stats": {},
-        "base_annotations_used": True,  # Using base.py annotations
+        "timings": {}
     }
     
-    # Extract base.py annotations for ICA exclusion
-    base_bad_segments = _extract_bad_segments(raw)
-    provenance["n_base_bad_segments"] = len(base_bad_segments)
-    
-    # ===== STAGE 1: Specific Physiological Artifacts =====
-    # Remove well-defined, stereotyped artifacts
+    # Extract base.py bad segments to exclude from fitting
+    bad_segments = _extract_bad_segments(raw)
     
     # Step 1.1: EOG (Eye) Removal
     if config.eog_method:
         with benchmark_step("eog_removal", provenance):
             if config.eog_method == "dss":
-                # Part 5: DSS with blink bias
-                raw, s = _remove_eog_dss(raw, config, base_bad_segments)
+                raw, s = _remove_eog_dss(raw, config, bad_segments)
             elif config.eog_method == "ica":
-                # Part 2: ICA + ICLabel (exclude base.py bad segments)
-                raw, s = _remove_eog_ica(raw, config, base_bad_segments)
+                raw, s = _remove_eog_ica(raw, config, bad_segments)
             provenance["correction_stats"]["eog"] = s
         provenance["steps_completed"].append("eog_removal")
     
@@ -221,46 +276,78 @@ def run_advanced_artifact_removal(
     if config.ecg_method:
         with benchmark_step("ecg_removal", provenance):
             if config.ecg_method == "dss":
-                # Part 5: DSS with QRS bias
-                raw, s = _remove_ecg_dss(raw, config, base_bad_segments)
+                raw, s = _remove_ecg_dss(raw, config, bad_segments)
             elif config.ecg_method == "ica":
-                # Part 2: ICA + ICLabel (exclude base.py bad segments)
-                raw, s = _remove_ecg_ica(raw, config, base_bad_segments)
+                raw, s = _remove_ecg_ica(raw, config, bad_segments)
+            elif config.ecg_method == "quasiperiodic":
+                raw, s = _remove_ecg_quasiperiodic(raw, config, bad_segments)
             provenance["correction_stats"]["ecg"] = s
         provenance["steps_completed"].append("ecg_removal")
-    
+
     # Step 1.3: EMG (Muscle) Removal
     if config.emg_method:
         with benchmark_step("emg_removal", provenance):
             if config.emg_method == "mwf":
-                # Part 2: Multi-Channel Wiener Filter (from RELAX)
-                raw, s = _remove_emg_mwf(raw, config, base_bad_segments)
+                raw, s = _remove_emg_mwf(raw, config, bad_segments)
             elif config.emg_method == "wica":
-                # Part 2: Wavelet-ICA (from RELAX-Jr)
-                raw, s = _remove_emg_wica(raw, config, base_bad_segments)
+                raw, s = _remove_emg_wica(raw, config, bad_segments)
             elif config.emg_method == "ica":
-                # Part 2: Standard ICA + ICLabel
-                raw, s = _remove_emg_ica(raw, config, base_bad_segments)
+                raw, s = _remove_emg_ica(raw, config, bad_segments)
             elif config.emg_method == "dss":
-                # Part 5: DSS with high-frequency bias
-                raw, s = _remove_emg_dss(raw, config, base_bad_segments)
+                raw, s = _remove_emg_dss(raw, config, bad_segments)
             provenance["correction_stats"]["emg"] = s
         provenance["steps_completed"].append("emg_removal")
+        
+    return raw, provenance
+
+def _extract_bad_segments(raw: mne.io.BaseRaw) -> List[Tuple[float, float]]:
+    """Helper: Extract bad segment timestamps from base.py annotations."""
+    return [
+        (a['onset'], a['duration']) 
+        for a in raw.annotations 
+        if a['description'].startswith('BAD_')
+    ]
+```
+
+#### 2b. Residual Denoising (`denoise.py` Main)
+
+Runs Stage 2: Removal of transients and final refinement.
+
+```python
+def run_residual_denoising(
+    raw: mne.io.BaseRaw, 
+    config: 'ArtifactCorrectionConfig', 
+    subject_id: str,
+    output_dir: Optional[Path] = None,
+    stage1_provenance: Optional[Dict] = None
+) -> Tuple[mne.io.BaseRaw, Dict]:
+    """
+    Stage 2: Remove transients and perform final refinement.
+    Consumes output of correct.py.
+    """
+    provenance = {
+        "steps_completed": [],
+        "correction_stats": {},
+        "timings": {},
+        "stage1_provenance": stage1_provenance or {}
+    }
     
-    # ===== STAGE 2: Aggressive/General Cleaning =====
-    # Handle non-stationary and residual artifacts
+    # Extract base.py bad segments again (needed for final comparison)
+    # We can reuse the helper logic or import it
+    bad_segments = [
+        (a['onset'], a['duration']) 
+        for a in raw.annotations 
+        if a['description'].startswith('BAD_')
+    ]
     
     # Step 2.1: Transient/Movement Removal
     if config.transient_method:
         with benchmark_step("transient_removal", provenance):
             if config.transient_method == "asr":
-                # Part 2.2 & Part 4 Step 3: ASR for bursts
                 raw, s = _remove_transients_asr(raw, config)
             elif config.transient_method == "dss":
-                # Part 5: DSS for non-stationary artifacts
                 raw, s = _remove_transients_dss(raw, config)
             elif config.transient_method == "wiener_mask":
-                # Adaptive Wiener Masking for bursty signals (BEST for epilepsy/ADHD)
                 raw, s = _remove_transients_wiener_mask(raw, config)
             provenance["correction_stats"]["transients"] = s
         provenance["steps_completed"].append("transient_removal")
@@ -268,42 +355,36 @@ def run_advanced_artifact_removal(
     # Step 2.2: Final Refinement (AutoReject)
     if config.final_autoreject:
         with benchmark_step("autoreject_refinement", provenance):
-            # Part 4 Step 4: Second-pass AutoReject
-            # Compare against base.py annotations
-            raw, s = _refine_autoreject(raw, config, base_bad_segments)
+            raw, s = _refine_autoreject(raw, config, bad_segments)
             provenance["correction_stats"]["autoreject_stage2"] = s
         provenance["steps_completed"].append("autoreject_refinement")
     
-    # Calculate overall correction effectiveness
+    # Calculate overall effectiveness
     provenance["correction_effectiveness"] = _calculate_correction_effectiveness(
-        base_bad_segments, 
+        bad_segments, 
         provenance["correction_stats"]
     )
+    
+    # Generate Report
+    if output_dir:
+        plot_paths = {} 
+        # ... (Collect plots from output_dir and generate report) ...
+        # logic for plot collection goes here
+        
+        try:
+            provenance['report_path'] = str(generate_cleaning_html_report(
+                provenance, plot_paths, output_dir, subject_id
+            ))
+        except Exception as e:
+            LOGGER.warning(f"Failed to generate report: {e}")
          
     return raw, provenance
 ```
 
-### 3. Helper: Extract Bad Segments from base.py
 
-```python
-def _extract_bad_segments(raw: mne.io.BaseRaw) -> List[Tuple[float, float]]:
-    """
-    Extract bad segment timestamps from base.py annotations.
-    Used to exclude these segments when fitting ICA.
-    
-    Returns:
-        List of (onset, duration) tuples for bad segments
-    """
-    bad_segments = []
-    for annot in raw.annotations:
-        if annot['description'].startswith('BAD_'):
-            bad_segments.append((annot['onset'], annot['duration']))
-    
-    LOGGER.info(f"Extracted {len(bad_segments)} bad segments from base.py")
-    return bad_segments
-```
 
-### 4. Stage 1 Implementation: Specific Artifacts (ECG, EOG, EMG)
+
+### 4. Stage 1 Implementation: Specific Artifacts (ECG, EOG, EMG) → `correct.py`
 
 Drawing from Parts 2 and 5, each physiological artifact can be removed using DSS or ICA.
 
@@ -346,11 +427,8 @@ def _remove_eog_dss(raw, config, base_bad_segments):
     sources = dss.transform(raw_eeg.get_data().T).T  # (n_components, n_times)
     sources[0, :] = 0  # Zero out blink component
     cleaned_data = dss.inverse_transform(sources.T).T
-    raw_eeg._data = cleaned_data
-    
-    # 4. Update original raw object
-    raw.pick_types(eeg=True).load_data()
-    raw._data = raw_eeg._data
+    # 4. Create new Raw with cleaned EEG data
+    raw = mne.io.RawArray(cleaned_data, raw_eeg.info, first_samp=raw.first_samp)
     
     return raw, {
         'method': 'dss', 
@@ -436,11 +514,8 @@ def _remove_ecg_dss(raw, config, base_bad_segments):
     sources = dss.transform(raw_eeg.get_data().T).T
     sources[0, :] = 0  # Zero out cardiac component
     cleaned_data = dss.inverse_transform(sources.T).T
-    raw_eeg._data = cleaned_data
-    
-    # 4. Update original raw object
-    raw.pick_types(eeg=True).load_data()
-    raw._data = raw_eeg._data
+    # 4. Create new Raw with cleaned EEG data
+    raw = mne.io.RawArray(cleaned_data, raw_eeg.info, first_samp=raw.first_samp)
     
     return raw, {
         'method': 'dss', 
@@ -480,7 +555,47 @@ def _remove_ecg_ica(raw, config, base_bad_segments):
     }
 ```
 
+##### Option C: QuasiPeriodicDenoiser (Template-Based)
+```python
+def _remove_ecg_quasiperiodic(raw, config, base_bad_segments):
+    """
+    Remove cardiac artifacts using template-based QuasiPeriodicDenoiser.
+    Best when: ECG channel available with clear R-peaks.
+    Algorithm: Detect R-peaks → Build adaptive template → Subtract
+    """
+    from mne_denoise.dss import IterativeDSS
+    from mne_denoise.dss.denoisers import QuasiPeriodicDenoiser
+    
+    ecg_picks = mne.pick_types(raw.info, ecg=True)
+    if len(ecg_picks) == 0:
+        LOGGER.warning("No ECG channel, falling back to DSS")
+        return _remove_ecg_dss(raw, config, base_bad_segments)
+    
+    sfreq = raw.info['sfreq']
+    
+    qp_denoiser = QuasiPeriodicDenoiser(
+        peak_distance=int(0.5 * sfreq),  # 120 BPM max
+        peak_height_percentile=85,
+        smooth_template=True
+    )
+    
+    raw_eeg = raw.copy().pick_types(eeg=True)
+    idss = IterativeDSS(denoiser=qp_denoiser, n_components=config.dss_n_components, max_iter=5)
+    idss.fit(raw_eeg)
+    
+    sources = idss.transform(raw_eeg)
+    sources[0, :] = 0  # Zero cardiac component
+    cleaned_data = idss.inverse_transform(sources)
+    
+    # Create new Raw with cleaned EEG data
+    raw = mne.io.RawArray(cleaned_data, raw_eeg.info, first_samp=raw.first_samp)
+    
+    return raw, {'method': 'quasiperiodic', 'n_components_removed': 1}
+```
+
+
 #### Step 1.3: EMG (Muscle) Removal
+
 
 ##### Option A: Multi-Channel Wiener Filter (Part 2.1, RELAX)
 ```python
@@ -619,11 +734,8 @@ def _remove_emg_dss(raw, config, base_bad_segments):
     for i in range(n_remove):
         sources[i, :] = 0  # Zero out muscle components
     cleaned_data = dss.inverse_transform(sources.T).T
-    raw_eeg._data = cleaned_data
-    
-    # 5. Update original raw object
-    raw.pick_types(eeg=True).load_data()
-    raw._data = raw_eeg._data
+    # 5. Create new Raw with cleaned EEG data
+    raw = mne.io.RawArray(cleaned_data, raw_eeg.info, first_samp=raw.first_samp)
     
     return raw, {
         'method': 'dss',
@@ -632,7 +744,7 @@ def _remove_emg_dss(raw, config, base_bad_segments):
     }
 ```
 
-### 5. Stage 2 Implementation: Aggressive Cleaning
+### 5. Stage 2 Implementation: Aggressive Cleaning → `denoise.py`
 
 #### Step 2.1: Transient/Movement Removal
 
@@ -643,7 +755,7 @@ def _remove_transients_asr(raw, config):
     Remove transient artifacts (pops, movement) using ASR.
     Part 2.2: Calibrate on clean reference, remove high-variance bursts.
     """
-    from meegkit import asr
+    from meegkit import asr # could also use asrpy 
     
     # 1. Find clean reference window (lowest variance, avoiding annotated bads)
     data = raw.get_data()
@@ -774,10 +886,8 @@ def _remove_transients_wiener_mask(raw, config):
     # This preserves bursty clinical signals while removing stationary artifacts
     data_clean = dss.inverse_transform(data_denoised.T).T
     
-    # 5. Update raw object
-    raw_eeg._data = data_clean
-    raw.pick_types(eeg=True).load_data()
-    raw._data = raw_eeg._data
+    # 5. Create new Raw with cleaned EEG data
+    raw = mne.io.RawArray(data_clean, raw_eeg.info, first_samp=raw.first_samp)
     
     # 6. Calculate effectiveness
     variance_original = np.var(data)
@@ -807,38 +917,48 @@ def _refine_autoreject(raw, config, base_bad_segments):
     
     Compares Stage 2 annotations to base.py annotations to measure effectiveness.
     """
-    from autoreject import AutoReject
+    # ===== REUSE base.py's annotate_artifacts_blockwise =====
+    # This gives us condition-level AutoReject with chunking for free!
+    from .base import annotate_artifacts_blockwise
     
-    # 1. Epoch
-    events = mne.make_fixed_length_events(raw, duration=config.epoch_duration)
-    epochs = mne.Epochs(raw, events, tmin=0, tmax=config.epoch_duration, baseline=None)
+    # Create a minimal config dict for the function
+    ar_config = PreprocConfig({
+        'artifacts': {
+            'epoch_duration_s': config.epoch_duration,
+            'n_interpolate': [1, 4, 8],
+            'ar_max_chunk_minutes': config.get('ar_max_chunk_minutes', 30),
+        }
+    })
     
-    # 2. AutoReject
-    ar = AutoReject(n_interpolate=[1, 4, 8], random_state=42, n_jobs=-1, verbose=False)
-    epochs_clean, reject_log = ar.fit_transform(epochs, return_log=True)
+    # Run condition-level AutoReject (same as base.py)
+    raw, ar_stats = annotate_artifacts_blockwise(
+        raw, ar_config, 
+        figures_dir=output_dir / 'figures' if output_dir else None,
+        subject_id=subject_id
+    )
     
-    # 3. Update annotations
-    bad_segments_stage2 = []
-    bad_segments = reject_log.bad_epochs
-    for i, is_bad in enumerate(bad_segments):
-        if is_bad:
-            onset = events[i, 0] / raw.info['sfreq']
-            duration = config.epoch_duration
-            raw.annotations.append(onset, duration, 'BAD_autoreject_stage2')
-            bad_segments_stage2.append((onset, duration))
+    # Extract Stage 2 bad segments for comparison
+    bad_segments_stage2 = [
+        (a['onset'], a['duration']) 
+        for a in raw.annotations 
+        if a['description'].startswith('BAD_')
+    ]
     
-    # 4. Compare to base.py: How many base.py bad segments are now clean?
+    # Compare to base.py: How many base.py bad segments are now clean?
     n_corrected = _count_corrected_segments(base_bad_segments, bad_segments_stage2)
     
     return raw, {
-        'n_epochs_rejected': bad_segments.sum(),
-        'percent_rejected': 100 * bad_segments.sum() / len(epochs),
+        'n_epochs_rejected': ar_stats.get('bad_epochs', 0),
+        'percent_rejected': ar_stats.get('bad_epochs', 0) / max(1, ar_stats.get('blocks_processed', 1)) * 100,
         'n_base_segments_corrected': n_corrected,
-        'correction_rate': n_corrected / len(base_bad_segments) if base_bad_segments else 0
+        'correction_rate': n_corrected / len(base_bad_segments) if base_bad_segments else 0,
+        'blocks_processed': ar_stats.get('blocks_processed', 0),
+        'reused_base_function': True  # Flag for provenance
     }
 ```
 
-### 6. Helper: Calculate Correction Effectiveness
+
+### 6. Helper: Calculate Correction Effectiveness → `denoise.py`
 
 ```python
 def _count_corrected_segments(base_segments, stage2_segments):
@@ -886,7 +1006,7 @@ def _calculate_correction_effectiveness(base_segments, correction_stats):
     }
 ```
 
-### 6b. Visualization & Plotting for Reports
+### 6b. Visualization & Plotting for Reports → `denoise.py`
 
 **Following `base.py` pattern for report generation**
 
@@ -1157,8 +1277,240 @@ def plot_evoked_artifact_comparison(
     return str(evoked_path)
 ```
 
+### 6c. HTML Report Generation → `denoise.py`
 
-### 7. Configuration Structure
+```python
+def generate_cleaning_html_report(
+    provenance: Dict,
+    plot_paths: Dict[str, str],
+    output_dir: Path,
+    subject_id: str
+) -> Path:
+    """
+    Generate HTML report for advanced cleaning results.
+    Matches base.py report structure for consistency.
+    """
+    report_dir = output_dir / 'reports'
+    report_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Build HTML
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Advanced Cleaning Report - {subject_id}</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 20px; }}
+            h1 {{ color: #2c3e50; }}
+            h2 {{ color: #34495e; border-bottom: 2px solid #3498db; padding-bottom: 5px; }}
+            table {{ border-collapse: collapse; width: 100%; margin: 15px 0; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; text-align: left; }}
+            th {{ background-color: #3498db; color: white; }}
+            tr:nth-child(even) {{ background-color: #f9f9f9; }}
+            .success {{ color: #27ae60; }}
+            .warning {{ color: #f39c12; }}
+            img {{ max-width: 100%; height: auto; margin: 10px 0; }}
+        </style>
+    </head>
+    <body>
+        <h1>🧠 Advanced Artifact Cleaning Report</h1>
+        <h2>Subject: {subject_id}</h2>
+        
+        <h2>Pipeline Configuration</h2>
+        <table>
+            <tr><th>Parameter</th><th>Value</th></tr>
+            <tr><td>EOG Method</td><td>{provenance.get('config', {}).eog_method or 'None'}</td></tr>
+            <tr><td>ECG Method</td><td>{provenance.get('config', {}).ecg_method or 'None'}</td></tr>
+            <tr><td>EMG Method</td><td>{provenance.get('config', {}).emg_method or 'None'}</td></tr>
+            <tr><td>Transient Method</td><td>{provenance.get('config', {}).transient_method or 'None'}</td></tr>
+        </table>
+        
+        <h2>Correction Statistics</h2>
+        <table>
+            <tr><th>Step</th><th>Method</th><th>Components Removed</th><th>Variance Removed</th></tr>
+    """
+    
+    for step, stats in provenance.get('correction_stats', {}).items():
+        method = stats.get('method', 'N/A')
+        n_comp = stats.get('n_components_removed', '-')
+        var_rm = f"{stats.get('variance_removed', 0)*100:.1f}%" if 'variance_removed' in stats else '-'
+        html_content += f"<tr><td>{step}</td><td>{method}</td><td>{n_comp}</td><td>{var_rm}</td></tr>"
+    
+    html_content += """
+        </table>
+        
+        <h2>Effectiveness Summary</h2>
+    """
+    
+    eff = provenance.get('correction_effectiveness', {})
+    html_content += f"""
+        <ul>
+            <li>Total Components Removed: <strong>{eff.get('total_components_removed', 0)}</strong></li>
+            <li>Total Variance Removed: <strong>{eff.get('total_variance_removed', 0)*100:.1f}%</strong></li>
+            <li>Base.py Bad Segments: <strong>{eff.get('n_base_bad_segments', 0)}</strong></li>
+        </ul>
+        
+        <h2>Visualizations</h2>
+    """
+    
+    # Add plots
+    for plot_name, plot_path in plot_paths.items():
+        if plot_path:
+            html_content += f"""
+            <h3>{plot_name.replace('_', ' ').title()}</h3>
+            <img src="{plot_path}" alt="{plot_name}">
+            """
+    
+    html_content += """
+        <h2>Processing Times</h2>
+        <table>
+            <tr><th>Step</th><th>Duration (s)</th></tr>
+    """
+    
+    for step in provenance.get('steps_completed', []):
+        duration = provenance.get('timings', {}).get(step, 0)
+        html_content += f"<tr><td>{step}</td><td>{duration:.2f}</td></tr>"
+    
+    html_content += """
+        </table>
+        
+        <footer>
+            <hr>
+            <p><em>Generated by eeg_adhd_epilepsy.preproc.clean</em></p>
+        </footer>
+    </body>
+    </html>
+    """
+    
+    report_path = report_dir / f'{subject_id}_cleaning_report.html'
+    report_path.write_text(html_content)
+    LOGGER.info(f"HTML report saved: {report_path}")
+    
+    return report_path
+```
+
+### 6d. Condition-Aware Processing → `denoise.py`
+
+```python
+def run_condition_aware_cleaning(
+    raw: mne.io.BaseRaw,
+    config: 'ArtifactCorrectionConfig',
+    subject_id: str,
+    output_dir: Path,
+    conditions: Optional[List[str]] = None
+) -> Tuple[mne.io.BaseRaw, Dict]:
+    """
+    Process each experimental condition separately.
+    Matches base.py condition-aware processing pattern.
+    
+    Args:
+        raw: Raw data with condition annotations (from base.py)
+        config: Cleaning configuration
+        subject_id: Subject identifier
+        output_dir: Output directory
+        conditions: List of conditions to process (default: auto-detect from annotations)
+    
+    Returns:
+        Concatenated cleaned raw and combined provenance
+    """
+    # Auto-detect conditions from annotations if not provided
+    if conditions is None:
+        conditions = _detect_conditions(raw)
+    
+    if not conditions:
+        LOGGER.info("No condition annotations found, processing as single block")
+        return run_advanced_artifact_removal(raw, config, subject_id, output_dir)
+    
+    LOGGER.info(f"Processing {len(conditions)} conditions: {conditions}")
+    
+    combined_provenance = {
+        'subject_id': subject_id,
+        'conditions_processed': conditions,
+        'condition_stats': {}
+    }
+    
+    cleaned_raws = []
+    
+    for condition in conditions:
+        LOGGER.info(f"\n{'='*40}")
+        LOGGER.info(f"Processing condition: {condition}")
+        LOGGER.info(f"{'='*40}")
+        
+        # Extract condition segment
+        raw_cond = _extract_condition_segment(raw, condition)
+        
+        if raw_cond is None:
+            LOGGER.warning(f"Could not extract condition: {condition}")
+            continue
+        
+        # Run cleaning on this condition
+        raw_cond_clean, prov = run_advanced_artifact_removal(
+            raw_cond,
+            config,
+            f"{subject_id}_{condition}",
+            output_dir / condition
+        )
+        
+        cleaned_raws.append(raw_cond_clean)
+        combined_provenance['condition_stats'][condition] = prov
+    
+    # Concatenate cleaned conditions
+    if len(cleaned_raws) > 1:
+        raw_final = mne.concatenate_raws(cleaned_raws)
+    elif len(cleaned_raws) == 1:
+        raw_final = cleaned_raws[0]
+    else:
+        raise ValueError("No conditions could be processed")
+    
+    return raw_final, combined_provenance
+
+
+def _detect_conditions(raw: mne.io.BaseRaw) -> List[str]:
+    """
+    Detect condition annotations from raw.
+    REUSES base.py's _collect_block_windows for consistency.
+    """
+    # Use base.py's block window collection (already imported)
+    block_windows = _collect_block_windows(raw)
+    
+    if not block_windows:
+        # Fallback to simple annotation search
+        conditions = set()
+        condition_prefixes = ['baseline', 'hyperventilation', 'photic', 'rest', 'task']
+        for annot in raw.annotations:
+            desc = annot['description'].lower()
+            for prefix in condition_prefixes:
+                if prefix in desc:
+                    conditions.add(prefix)
+        return sorted(conditions)
+    
+    # Extract unique condition names from block windows
+    return sorted(set(bw.condition for bw in block_windows))
+
+
+def _extract_condition_segment(
+    raw: mne.io.BaseRaw, 
+    condition: str
+) -> Optional[mne.io.BaseRaw]:
+    """
+    Extract raw segment for a specific condition.
+    REUSES base.py's _collect_block_windows for consistency.
+    """
+    block_windows = _collect_block_windows(raw)
+    
+    # Find matching block
+    for bw in block_windows:
+        if condition.lower() in bw.condition.lower():
+            try:
+                return raw.copy().crop(tmin=bw.start, tmax=bw.end)
+            except Exception as e:
+                LOGGER.warning(f"Could not crop for {condition}: {e}")
+                return None
+    
+    return None
+```
+
+### 7. Configuration → `denoise.py`
 
 **Step-wise configuration allows method selection per artifact type**
 
@@ -1211,7 +1563,7 @@ class ArtifactCorrectionConfig:
     epoch_duration: float = 1.0
 ```
 
-### 8. Integration & Execution Plan
+### 8. Integration & Execution Plan → `denoise.py`
 
 **Example configurations for different use cases:**
 
@@ -1254,47 +1606,31 @@ config_hybrid = ArtifactCorrectionConfig(
 )
 
 # Usage (following base.py pattern)
+from eeg_adhd_epilepsy.preproc import base, correct, denoise
 from eeg_adhd_epilepsy.preproc.utils import benchmark_step
-from pathlib import Path
 
-# Load data from base.py
-raw_before = mne.io.read_raw_fif(f'derivatives/preproc/{subject}/eeg/{subject}_eeg.fif')
-raw = raw_before.copy()  # Keep original for comparison
+# 1. Run Base Pipeline
+raw, base_prov = base.run_base_pipeline(raw_original, config, subject_id)
 
-# Run advanced cleaning (RECOMMENDED: config_wiener for epilepsy/ADHD)
-raw_clean, provenance = run_advanced_artifact_removal(
+# 2. Run Stage 1: Source Correction (EOG/ECG/EMG)
+raw_corrected, corr_prov = correct.run_source_correction(
     raw, 
-    config_wiener,  # Use Wiener Mask for bursty clinical signals
-    subject,
-    output_dir=Path('./output')
+    config
 )
 
-# Save with provenance (like base.py)
-output_dir = Path('./output')
-derivatives_dir = output_dir / 'derivatives' / 'cleaned' / subject / 'eeg'
-derivatives_dir.mkdir(parents=True, exist_ok=True)
-
-raw_clean.save(derivatives_dir / f'{subject}_clean_eeg.fif')
-with open(derivatives_dir / f'{subject}_provenance.json', 'w') as f:
-    json.dump(provenance, f, indent=2)
-
-# Generate visualization for reports
-plot_paths = plot_cleaning_summary(
-    raw_before=raw_before,
-    raw_after=raw_clean,
-    provenance=provenance,
+# 3. Run Stage 2: Residual Denoising (Transients/AutoReject)
+raw_final, denoise_prov = denoise.run_residual_denoising(
+    raw_corrected, 
+    config, 
+    subject_id,
     output_dir=output_dir,
-    subject_id=subject
+    stage1_provenance=corr_prov  # Pass Stage 1 stats for final report
 )
 
-# Save plot paths to provenance
-provenance['figures'] = plot_paths
-with open(derivatives_dir / f'{subject}_provenance.json', 'w') as f:
-    json.dump(provenance, f, indent=2)
+# Save result
+raw_final.save(output_dir / f'{subject_id}_clean_eeg.fif', overwrite=True)
 
-# Log correction effectiveness
-LOGGER.info(f"Correction effectiveness: {provenance['correction_effectiveness']}")
-LOGGER.info(f"Figures saved: {plot_paths}")
+# Provenance is automatically saved/reported by run_residual_denoising()
 ```
 
 
@@ -1307,7 +1643,7 @@ LOGGER.info(f"Figures saved: {plot_paths}")
 5.  **Comparison**: Run different configurations, track correction rates.
 
 
-### 9. Pipeline Comparison Framework
+### 9. Pipeline Comparison Framework → `compare.py`
 
 **Compare multiple cleaning strategies on a data subset before full processing**
 
@@ -1451,709 +1787,9 @@ print(df_results.groupby('config')['total_components_removed'].mean())
 - `output/comparison_test/comparison/pipeline_comparison.csv` - Full metrics
 - Individual pipeline outputs in `output/comparison_test/{config_name}/`
 
----
-
-
-## Appendix: DSS Implementation Examples (mne-denoise)
-
-The following Python code demonstrates how to use `mne-denoise` for EOG (Blink) and ECG (Heartbeat) artifact correction. This serves as a reference for integrating DSS into the `DSSStrategy` and `HybridDSSStrategy`.
-
-### EOG and ECG Correction with DSS
-
-```python
-"""
-Artifact Correction with DSS.
-=============================
-DSS is a powerful tool for removing artifacts (ECG, EOG) from data.
-The core idea is: **Artifacts are repetitive**.
-If we can define when artifacts happen (e.g., using EOG/ECG channels),
-we can use **Trial Average Bias** (or Cycle Average Bias) to find the artifact source and remove it.
-"""
-
-import matplotlib.pyplot as plt
-import mne
-import numpy as np
-from mne.preprocessing import create_ecg_epochs, create_eog_epochs
-
-# mne-denoise imports
-from mne_denoise.dss import DSS, AverageBias, CycleAverageBias
-from mne_denoise.viz import (
-    plot_component_summary,
-    plot_component_time_series,
-    plot_evoked_comparison,
-    plot_psd_comparison,
-    plot_score_curve,
-    plot_spatial_patterns,
-)
-
-def run_eog_correction(raw):
-    """
-    Part 1: EOG (Blink) Correction
-    Goal: Remove eye blinks using DSS and Trial Average Bias.
-    """
-    print("\n--- Part 1: EOG (Blink) Correction ---")
-
-    # 1. Create EOG Epochs
-    # We epoch around blink events found via the EOG channel.
-    eog_epochs = create_eog_epochs(
-        raw, ch_name="EOG 061", baseline=(-0.5, -0.2), tmin=-0.5, tmax=0.5, verbose=False
-    )
-    # IMPORTANT: DSS should be fitted on the data channels (MEG/EEG) we want to clean.
-    # Exclude the EOG channel itself from the model.
-    eog_epochs.pick_types(meg="grad", eeg=True, eog=False, ecg=False)
-    print(f"Found {len(eog_epochs)} blink events.")
-
-    # 2. Fit DSS with Trial Average Bias
-    # AverageBias(axis='epochs') works on pre-epoched data.
-    dss_eog = DSS(n_components=10, bias=AverageBias(axis="epochs"), return_type="sources")
-    dss_eog.fit(eog_epochs)
-
-    # 3. Visualize & Diagnosis
-    # Score Curve: Comp 0 should have a high score.
-    plot_score_curve(dss_eog, mode="ratio", show=False)
-    # Component Summary: Shows Time Series, Topography, and PSD
-    plot_component_summary(dss_eog, data=eog_epochs, n_components=[0, 1], show=False)
-    plt.show(block=False)
-
-    # 4. Remove Blink Component
-    print("Removing blink component (Comp 0)...")
-    raw_meg = raw.copy().pick_types(meg="grad", eeg=True, eog=False, ecg=False)
-    sources = dss_eog.transform(raw_meg) # Project continuous data to DSS space
-    sources[0, :] = 0  # Zero out the blink component
-    
-    # Reconstruction
-    cleaned_data = dss_eog.inverse_transform(sources)
-    raw_clean = mne.io.RawArray(cleaned_data, raw_meg.info)
-    
-    # 5. Verification (Evoked Comparison)
-    eog_epochs_clean = mne.Epochs(raw_clean, eog_epochs.events, tmin=-0.5, tmax=0.5, baseline=(-0.5, -0.2))
-    plot_evoked_comparison(eog_epochs, eog_epochs_clean, labels=("Original", "Cleaned"))
-    
-    return raw_clean
-
-def run_ecg_correction(raw):
-    """
-    Part 2: ECG (Heartbeat) Correction
-    Goal: Remove cardiac field artifact using DSS.
-    """
-    print("\n--- Part 2: ECG (Heartbeat) Correction ---")
-
-    # 1. Create ECG Epochs
-    ecg_epochs = create_ecg_epochs(
-        raw, ch_name=None, tmin=-0.1, tmax=0.1, baseline=(None, 0), verbose=False
-    )
-    ecg_epochs.pick_types(meg="grad", eeg=True, eog=False, ecg=False)
-
-    # 2. Fit DSS
-    dss_ecg = DSS(n_components=8, bias=AverageBias(axis="epochs"))
-    dss_ecg.fit(ecg_epochs)
-
-    # 3. Visualize
-    plot_component_summary(dss_ecg, data=ecg_epochs, n_components=[0], show=False)
-    
-    # 4. Remove Cardiac Component
-    print("Removing cardiac component (Comp 0)...")
-    # Apply to continuous data (assuming we have raw_meg from somewhere or just use raw pick types)
-    raw_meg = raw.copy().pick_types(meg="grad", eeg=True, eog=False, ecg=False)
-    sources_ecg = dss_ecg.transform(raw_meg)
-    sources_ecg[0, :] = 0 
-    
-    raw_clean_ecg = mne.io.RawArray(dss_ecg.inverse_transform(sources_ecg), raw_meg.info)
-    
-    return raw_clean_ecg
-```
-
-### Periodic Signals (SSVEP & Quasi-Periodic)
-
-```python
-"""
-=====================================================
-Example 5: Periodic Signals (SSVEP & Quasi-Periodic).
-=====================================================
-
-This example comprehensively demonstrates periodic signal extraction using DSS.
-
-**Periodic Module Functions:**
-- `PeakFilterBias`: Single frequency (narrow bandpass)
-- `CombFilterBias`: Fundamental + harmonics (SSVEP)
-- `QuasiPeriodicDenoiser`: Template-based (ECG, respiration)
-
-**DSS Types:**
-- `DSS`: Linear spatial filtering (bias functions)
-- `IterativeDSS`: Nonlinear denoising (iterative refinement)
-
-**Structure**:
-- Part 0: Single Frequency (PeakFilterBias + DSS)
-- Part 1: SSVEP Harmonics (CombFilterBias + DSS)
-- Part 2: Quasi-Periodic Synthetic (QuasiPeriodicDenoiser + IterativeDSS)
-- Part 3: Real ECG Artifact (QuasiPeriodicDenoiser, single-channel)
-"""
-
-import matplotlib.pyplot as plt
-import mne
-import numpy as np
-from scipy.signal import detrend
-
-from mne_denoise.dss import DSS, IterativeDSS
-from mne_denoise.dss.denoisers import (
-    CombFilterBias,
-    PeakFilterBias,
-    QuasiPeriodicDenoiser,
-)
-from mne_denoise.dss.variants import ssvep_dss
-from mne_denoise.viz import (
-    plot_component_summary,
-    plot_psd_comparison,
-    plot_spectral_psd_comparison,
-    plot_time_course_comparison,
-)
-
-# Part 0: Single Frequency (PeakFilterBias)
-# ==========================================
-# PeakFilterBias applies a narrow bandpass filter at a single frequency.
-# Simpler than CombFilterBias, useful for extracting single oscillations.
-
-print("\n--- Part 0: Single Frequency Extraction (PeakFilterBias) ---")
-
-rng = np.random.default_rng(42)
-sfreq = 250
-n_seconds = 10
-n_times = n_seconds * sfreq
-n_channels = 16
-
-# Simulate alpha rhythm (10 Hz) embedded in noise
-alpha_freq = 10.0
-times = np.arange(n_times) / sfreq
-
-# Pink noise background
-noise = np.cumsum(rng.standard_normal((n_channels, n_times)), axis=1)
-noise = detrend(noise, axis=1)
-
-# Alpha source
-alpha_source = np.sin(2 * np.pi * alpha_freq * times)
-
-# Mix into occipital channels
-mixing = rng.standard_normal(n_channels) * 0.1
-mixing[0:2] = [2.0, 1.5]  # Strong in channels 0, 1
-alpha_component = np.outer(mixing, alpha_source)
-
-data_alpha = noise + alpha_component
-
-# Create MNE Raw with montage
-ch_names = [f"EEG{i:03d}" for i in range(n_channels)]
-info = mne.create_info(ch_names, sfreq, "eeg")
-montage = mne.channels.make_standard_montage("standard_1020")
-# info.set_montage(montage) # Skip montage for dummy channels to avoid errors
-raw_alpha = mne.io.RawArray(data_alpha, info)
-
-print(f"Simulated {n_seconds}s, {n_channels} channels, {sfreq} Hz")
-
-# Apply DSS with PeakFilterBias
-peak_bias = PeakFilterBias(freq=alpha_freq, sfreq=sfreq, q_factor=30)
-dss_peak = DSS(n_components=5, bias=peak_bias)
-dss_peak.fit(raw_alpha)
-
-sources_peak = dss_peak.transform(raw_alpha)
-
-# Part 1: SSVEP (CombFilterBias)
-# ================================
-# CombFilterBias filters fundamental + harmonics, ideal for SSVEP.
-
-print("\n--- Part 1: SSVEP with Harmonics (CombFilterBias) ---")
-
-# Simulate 12 Hz SSVEP with harmonics
-f_stim = 12.0
-ssvep_source = (
-    1.0 * np.sin(2 * np.pi * f_stim * times)  # 12 Hz
-    + 0.5 * np.sin(2 * np.pi * 2 * f_stim * times)  # 24 Hz
-    + 0.2 * np.sin(2 * np.pi * 3 * f_stim * times)  # 36 Hz
-)
-
-noise_ssvep = np.cumsum(rng.standard_normal((n_channels, n_times)), axis=1)
-noise_ssvep = detrend(noise_ssvep, axis=1)
-
-ssvep_component = np.outer(mixing, ssvep_source)
-data_ssvep = noise_ssvep + ssvep_component
-
-raw_ssvep = mne.io.RawArray(data_ssvep, info)
-
-# Method 1: Manual DSS + CombFilterBias
-comb_bias = CombFilterBias(
-    fundamental_freq=f_stim, sfreq=sfreq, n_harmonics=3, q_factor=30
-)
-dss_comb = DSS(n_components=5, bias=comb_bias)
-dss_comb.fit(raw_ssvep)
-sources_comb = dss_comb.transform(raw_ssvep)
-
-# Method 2: Convenience Wrapper (ssvep_dss)
-dss_wrapper = ssvep_dss(sfreq=sfreq, stim_freq=f_stim, n_harmonics=3, n_components=5)
-dss_wrapper.fit(raw_ssvep)
-
-# Part 2: Quasi-Periodic (Iterative DSS + Multi-Channel)
-# =======================================================
-# QuasiPeriodicDenoiser works with IterativeDSS for multi-channel spatial denoising.
-
-print("\n--- Part 2: Quasi-Periodic Denoising (IterativeDSS) ---")
-
-# Simulate multi-channel heartbeat-like signal
-n_beats = 10
-beat_interval = 0.8  # seconds (~75 BPM)
-beat_samples = int(beat_interval * sfreq)
-
-# Single beat template (QRS complex)
-t_beat = np.linspace(0, 1, beat_samples)
-beat_template = (
-    -0.2 * np.exp(-((t_beat - 0.2) ** 2) / 0.001)  # Q wave
-    + 1.0 * np.exp(-((t_beat - 0.25) ** 2) / 0.0005)  # R wave
-    + -0.3 * np.exp(-((t_beat - 0.3) ** 2) / 0.001)  # S wave
-    + 0.15 * np.exp(-((t_beat - 0.55) ** 2) / 0.005)  # T wave
-)
-
-# Multi-channel quasi-periodic signal
-n_times_qp = n_beats * beat_samples
-quasi_periodic_mc = np.zeros((n_channels, n_times_qp))
-
-for i in range(n_beats):
-    start_idx = i * beat_samples
-    amplitude = 1.0 + rng.normal(0, 0.1)
-    
-    actual_start = start_idx
-    actual_end = min(n_times_qp, actual_start + beat_samples)
-    beat_len = actual_end - actual_start
-
-    # Mix into channels with random strengths
-    for ch in range(n_channels):
-        quasi_periodic_mc[ch, actual_start:actual_end] += (
-            rng.random() * amplitude * beat_template[:beat_len]
-        )
-
-# Add noise
-noisy_qp_mc = quasi_periodic_mc + 0.3 * rng.standard_normal((n_channels, n_times_qp))
-raw_qp = mne.io.RawArray(noisy_qp_mc, info)
-
-# Apply IterativeDSS with QuasiPeriodicDenoiser
-qp_denoiser = QuasiPeriodicDenoiser(
-    peak_distance=int(beat_interval * sfreq * 0.7),
-    peak_height_percentile=70,
-    smooth_template=True,
-)
-
-idss_qp = IterativeDSS(n_components=3, denoiser=qp_denoiser, max_iter=3)
-idss_qp.fit(raw_qp)
-sources_qp = idss_qp.transform(raw_qp)
-
-print(f"\nIterativeDSS converged in {len(idss_qp.convergence_info_)} iterations")
-
-# Part 3: Real ECG Artifact (Single-Channel Denoising)
-# =====================================================
-print("\n--- Part 3: Real ECG Artifact (Sample Dataset) ---")
-
-# (Assumes access to MNE sample data, code provided for reference)
-try:
-    from mne.datasets import sample
-    data_path = sample.data_path()
-    raw_fname = data_path / "MEG" / "sample" / "sample_audvis_raw.fif"
-    raw_ecg = mne.io.read_raw_fif(raw_fname, preload=True, verbose=False)
-    raw_ecg.pick_types(meg="grad", eog=False, stim=False, exclude="bads")
-    raw_ecg.filter(0.5, 30, fir_design="firwin", verbose=False)
-    raw_ecg.crop(10, 30)  # 20 seconds
-    
-    channel_data = raw_ecg.get_data()[0]
-    
-    ecg_denoiser = QuasiPeriodicDenoiser(
-        peak_distance=int(0.6 * raw_ecg.info["sfreq"]),  # ~100 BPM
-        peak_height_percentile=85,
-        smooth_template=True,
-    )
-    
-    denoised_channel = ecg_denoiser.denoise(channel_data)
-    print("Applied QuasiPeriodicDenoiser to MEG channel")
-    
-except ImportError:
-    print("MNE sample data not found or mne not installed.")
-    print("MNE sample data not found or mne not installed.")
-```
-
-### Temporal DSS (Time-Shift Regression & Smoothness)
-
-```python
-"""
-=================================================
-Temporal DSS: Time-Shift Regression & Smoothness.
-=================================================
-
-This example demonstrates DSS for extracting **temporally structured** signals:
-autocorrelated components, slow drifts, and smooth waveforms.
-
-We cover both **linear biases** (TimeShiftBias, SmoothingBias) and
-**nonlinear denoisers** (DCTDenoiser, TemporalSmoothnessDenoiser).
-
-**Structure**:
-- Part 0: Synthetic Slow Drift (Random Walk)
-- Part 1: TimeShiftBias + TSR (Time-Shift Regression)
-- Part 2: SmoothingBias (Temporal Smoothing)
-- Part 3: DCTDenoiser + IterativeDSS (DCT Domain)
-- Part 4: Real EEG Slow Cortical Potentials
-"""
-
-import matplotlib.pyplot as plt
-import mne
-import numpy as np
-from scipy import signal
-
-from mne_denoise.dss import DSS, IterativeDSS
-from mne_denoise.dss.denoisers import (
-    DCTDenoiser,
-    SmoothingBias,
-    TimeShiftBias,
-)
-from mne_denoise.dss.variants import smooth_dss, time_shift_dss
-from mne_denoise.viz import (
-    plot_component_summary,
-    plot_psd_comparison,
-    plot_time_course_comparison,
-)
-
-# Part 0: Synthetic Slow Drift (Random Walk)
-# ===========================================
-print("--- Part 0: Synthetic Slow Drift ---")
-
-rng = np.random.default_rng(42)
-sfreq = 250  # Hz
-n_seconds = 30
-n_times = n_seconds * sfreq
-n_channels = 16
-times = np.arange(n_times) / sfreq
-
-# Slow Drift (Random Walk)
-drift_seed = rng.normal(0, 0.05, n_times)
-drift = np.cumsum(drift_seed)
-drift = signal.detrend(drift)
-drift *= 2.0
-
-# Fast Noise (White)
-noise = rng.normal(0, 1.5, (n_channels, n_times))
-
-# Mix: First 4 channels get the drift
-data = noise.copy()
-data[:4] += drift * np.array([[1.0], [0.8], [0.6], [0.4]])
-
-# Create MNE Raw
-ch_names = [f"EEG{i:03d}" for i in range(n_channels)]
-info_sim = mne.create_info(ch_names, sfreq, "eeg")
-# info_sim.set_montage(montage) # Skip montage for dummy channels
-raw_sim = mne.io.RawArray(data, info_sim)
-
-# Part 1: Time-Shift Regression (TimeShiftBias)
-# ==============================================
-print("\n--- Part 1: Time-Shift Regression ---")
-
-# Manual TimeShiftBias
-bias_tsr = TimeShiftBias(shifts=10, method="autocorrelation")
-dss_tsr = DSS(n_components=5, bias=bias_tsr)
-dss_tsr.fit(raw_sim)
-
-# Part 2: Temporal Smoothing (SmoothingBias)
-# ===========================================
-print("\n--- Part 2: Temporal Smoothing ---")
-
-bias_smooth = SmoothingBias(window=50)  # 50 samples = 200ms
-dss_smooth = DSS(n_components=5, bias=bias_smooth)
-dss_smooth.fit(raw_sim)
-
-# Part 3: DCT Denoiser (Nonlinear, IterativeDSS)
-# ===============================================
-print("\n--- Part 3: DCT Denoiser + IterativeDSS ---")
-
-# DCTDenoiser keeps first 30% of DCT coefficients
-dct_denoiser = DCTDenoiser(cutoff_fraction=0.3)
-idss_dct = IterativeDSS(denoiser=dct_denoiser, n_components=3, max_iter=5)
-idss_dct.fit(raw_sim)
-
-# Part 4: Real EEG Data (Slow Cortical Potentials)
-# =================================================
-print("\n--- Part 4: Real EEG Data ---")
-
-try:
-    from mne.datasets import eegbci
-    subject = 1
-    runs = [1]  # Baseline, eyes open
-    raw_path = eegbci.load_data(subject, runs)[0]
-    raw_eeg = mne.io.read_raw_edf(raw_path, preload=True, verbose=False)
-    
-    # Preproc for slow waves
-    raw_eeg.filter(0.1, 10, fir_design="firwin", verbose=False)
-    raw_eeg.set_eeg_reference("average", projection=True, verbose=False)
-    raw_eeg.apply_proj()
-    raw_eeg.crop(0, 30)
-
-    # Apply TSR
-    dss_eeg_tsr = time_shift_dss(shifts=10, n_components=5)
-    dss_eeg_tsr.fit(raw_eeg)
-    sources_eeg = dss_eeg_tsr.transform(raw_eeg)
-    
-    print("TSR extracted components from real EEG.")
-    
-except ImportError:
-    print("MNE eegbci data not found.")
-except Exception as e:
-    print(f"Skipping real data example: {e}")
-```
-
-### Time-Frequency DSS (Spectrogram Masking)
-
-```python
-"""
-========================================
-Time-Frequency DSS: Spectrogram Masking.
-========================================
-
-This example demonstrates DSS for extracting **transient oscillatory bursts**
-using time-frequency (TF) domain constraints via spectrogram masking.
-
-We cover **SpectrogramBias** (linear) and **SpectrogramDenoiser** (nonlinear)
-for isolating activity that is sparse in the TF domain.
-
-**Structure**:
-- Part 0: Synthetic Transient Bursts (Spindles)
-- Part 1: SpectrogramBias with Fixed TF Mask
-- Part 2: SpectrogramDenoiser (Adaptive Masking) + IterativeDSS
-- Part 3: Real MEG Gamma Bursts (Somato Dataset)
-"""
-
-import matplotlib.pyplot as plt
-import mne
-import numpy as np
-from mne.datasets import somato
-from scipy import signal as sp_signal
-
-from mne_denoise.dss import DSS, IterativeDSS
-from mne_denoise.dss.denoisers import SpectrogramBias, SpectrogramDenoiser
-from mne_denoise.viz import (
-    plot_component_spectrogram,
-    plot_component_summary,
-    plot_spectrogram_comparison,
-    plot_tf_mask,
-    plot_time_course_comparison,
-)
-
-# Part 0: Synthetic Transient Bursts (Spindles)
-# ====================================================
-print("--- Part 0: Synthetic Spindle Bursts ---")
-
-rng = np.random.default_rng(42)
-sfreq = 250
-n_seconds = 10
-n_times = n_seconds * sfreq
-times = np.arange(n_times) / sfreq
-
-# Background noise
-noise = rng.normal(0, 1.0, n_times)
-
-# Spindle bursts (12 Hz)
-spindle_freq = 12.0
-envelope = np.zeros_like(times)
-# Burst 1: 2-3s, Burst 2: 7-8s
-mask1 = (times >= 2) & (times < 3)
-mask2 = (times >= 7) & (times < 8)
-envelope[mask1] = np.hanning(mask1.sum())
-envelope[mask2] = np.hanning(mask2.sum())
-
-signal_spindle = envelope * np.sin(2 * np.pi * spindle_freq * times) * 3.0
-data_mixed = signal_spindle + noise
-
-# Part 1: SpectrogramBias with Fixed Mask
-# ========================================
-print("\n--- Part 1: Fixed TF Mask (SpectrogramBias) ---")
-
-nperseg = 128
-noverlap = 96
-_, t_grid, _ = sp_signal.spectrogram(data_mixed, fs=sfreq, nperseg=nperseg, noverlap=noverlap)
-n_freqs = nperseg // 2 + 1
-freq_axis = np.fft.rfftfreq(nperseg, 1 / sfreq)
-
-# Mask: 10-15 Hz during burst times
-mask_fixed = np.zeros((n_freqs, len(t_grid)))
-freq_mask = (freq_axis >= 10) & (freq_axis <= 15)
-time_mask = (t_grid >= 2) & (t_grid < 3) | (t_grid >= 7) & (t_grid < 8)
-mask_fixed[freq_mask[:, None] & time_mask] = 1.0
-
-# Create multi-channel data for DSS
-n_channels = 8
-data_multichan = np.tile(data_mixed, (n_channels, 1)) + rng.normal(0, 0.2, (n_channels, n_times))
-ch_names = [f"EEG{i}" for i in range(n_channels)]
-info = mne.create_info(ch_names, sfreq, "eeg")
-raw_spindle = mne.io.RawArray(data_multichan, info)
-
-# Apply SpectrogramBias
-bias_tf = SpectrogramBias(mask=mask_fixed, nperseg=nperseg, noverlap=noverlap)
-dss_tf = DSS(n_components=3, bias=bias_tf)
-dss_tf.fit(raw_spindle)
-
-# Part 2: SpectrogramDenoiser + IterativeDSS (Adaptive)
-# ======================================================
-print("\n--- Part 2: Adaptive TF Masking (SpectrogramDenoiser) ---")
-
-# Keep top 10% of TF energy
-spec_denoiser = SpectrogramDenoiser(threshold_percentile=90, nperseg=128, noverlap=96)
-idss_spec = IterativeDSS(denoiser=spec_denoiser, n_components=2, max_iter=3)
-idss_spec.fit(raw_spindle)
-
-# Part 3: Real MEG Gamma Bursts (Somato Dataset)
-# ===============================================
-print("\n--- Part 3: Real MEG Data (Gamma Bursts) ---")
-
-try:
-    data_path = somato.data_path(verbose=False)
-    raw_path = data_path / "sub-01" / "meg" / "sub-01_task-somato_meg.fif"
-    raw_somato = mne.io.read_raw_fif(raw_path, preload=True, verbose=False)
-    raw_somato.pick_types(meg="grad", exclude="bads")
-    raw_somato.filter(1, 100, fir_design="firwin", verbose=False)
-    raw_somato.crop(0, 60)
-
-    # Apply SpectrogramDenoiser (Top 5% energy)
-    spec_denoiser_meg = SpectrogramDenoiser(threshold_percentile=95, nperseg=256)
-    idss_meg = IterativeDSS(denoiser=spec_denoiser_meg, n_components=3, max_iter=3)
-    idss_meg.fit(raw_somato)
-    
-    print("IterativeDSS extracted gamma bursts from MEG.")
-    
-    print(f"Skipping real data example: {e}")
-```
-
-### Blind Source Separation (ICA Equivalence)
-
-```python
-"""
-=============================================================================
-08. Blind Source Separation & ICA Equivalence.
-=============================================================================
-
-This example demonstrates how **Nonlinear DSS** can perform Blind Source Separation (BSS),
-effectively recovering independent sources from mixed signals. It explicitly shows
-the equivalence between DSS with specific nonlinearities and Independent Component Analysis (ICA).
-
-We cover:
-1.  **Synthetic BSS**: Separating mixed Super-Gaussian sources (speech/bursts) and Sub-Gaussian sources.
-2.  **ICA Equivalence**: Comparing DSS (`TanhMaskDenoiser`, `KurtosisDenoiser`) against `sklearn.decomposition.FastICA`.
-3.  **Real MEG Data**: Performing blind decomposition of the MNE Sample dataset to find artifacts (EOG/ECG) and brain sources.
-"""
-
-import matplotlib.pyplot as plt
-import mne
-import numpy as np
-from mne.datasets import sample
-from scipy import stats
-
-from mne_denoise.dss import IterativeDSS, KurtosisDenoiser, TanhMaskDenoiser, beta_tanh
-from mne_denoise.viz import (
-    plot_component_summary,
-    plot_component_time_series,
-    plot_overlay_comparison,
-)
-
-# Part 1: Synthetic Blind Source Separation
-# -----------------------------------------
-print("\n--- 1. Creating Synthetic Mixed Data ---")
-
-n_samples = 2000
-time = np.linspace(0, 8, n_samples)
-
-# Sources: Laplace (sparse), Square Wave (kurtotic), Sinusoid (sub-gaussian), Gaussian
-s1 = stats.laplace.rvs(size=n_samples); s1 /= s1.std()
-s2 = np.sign(np.sin(3 * time)); s2 /= s2.std()
-s3 = np.sin(10 * time); s3 /= s3.std()
-s4 = np.random.randn(n_samples)
-
-S_true = np.c_[s1, s2, s3, s4].T
-n_sources = S_true.shape[0]
-
-# Mix sources
-np.random.seed(42)
-A = np.random.randn(n_sources, n_sources)
-X = np.dot(A, S_true)
-
-# Run DSS with Tanh Nonlinearity (Robust ICA)
-# -------------------------------------------
-print("\nRunning DSS with Tanh Nonlinearity (Robust)...")
-
-# Newton Method (Fast - FastICA style)
-dss_tanh = IterativeDSS(
-    denoiser=TanhMaskDenoiser(),
-    method="deflation",
-    n_components=n_sources,
-    beta=beta_tanh,  # Newton step
-    random_state=42,
-    verbose=False,
-)
-dss_tanh.fit(X)
-S_dss_tanh = dss_tanh.transform(X)
-
-# Run DSS with Kurtosis Nonlinearity (Standard FastICA)
-# -----------------------------------------------------
-print("Running DSS with Kurtosis Nonlinearity (FastICA standard)...")
-dss_kurt = IterativeDSS(
-    denoiser=KurtosisDenoiser(nonlinearity="cube"),
-    method="deflation",
-    n_components=n_sources,
-    beta=-3.0,
-    random_state=42,
-    verbose=False,
-)
-dss_kurt.fit(X)
-S_dss_kurt = dss_kurt.transform(X)
-
-# Comparison with sklearn FastICA
-# -------------------------------
-from sklearn.decomposition import FastICA
-print("Running sklearn FastICA (Benchmark)...")
-ica = FastICA(n_components=n_sources, algorithm="deflation", fun="logcosh", random_state=42)
-S_fastica = ica.fit_transform(X.T).T
-
-# Part 2: Blind Separation of Real MEG Data
-# -----------------------------------------
-print("\n--- 2. Real MEG Data (Blind Separation) ---")
-
-try:
-    data_path = sample.data_path()
-    raw_fname = data_path / "MEG" / "sample" / "sample_audvis_raw.fif"
-    raw = mne.io.read_raw_fif(raw_fname, verbose=False)
-    raw.crop(0, 60).pick_types(meg=True, eeg=False, eog=True, stim=False).load_data()
-    raw.filter(1, 40, verbose=False)
-
-    # Prepare MEG-only data
-    raw_meg = raw.copy().pick_types(meg=True, eeg=False, eog=False, stim=False)
-    
-    # Fit DSS-Tanh (Blind Decomposition)
-    print("Fitting Blind DSS (this may take a moment)...")
-    n_components = 15
-    dss_meg = IterativeDSS(
-        denoiser=TanhMaskDenoiser(),
-        method="deflation",
-        n_components=n_components,
-        beta=beta_tanh,
-        verbose=True,
-    )
-    dss_meg.fit(raw_meg)
-    
-    # Identify Artifacts by correlation with EOG
-    eog_ch = raw.get_data(picks="eog")[0]
-    sources = dss_meg.transform(raw_meg)
-    corrs = [np.abs(np.corrcoef(s, eog_ch)[0, 1]) for s in sources]
-    blink_idx = np.argmax(corrs)
-    print(f"\nMost likely EOG component: #{blink_idx} (Corr: {corrs[blink_idx]:.3f})")
-
-except ImportError:
-    print("MNE sample data not found or mne not installed.")
-except Exception as e:
-    print(f"Skipping real data example: {e}")
-```
-
-
-
 #### DSS vs ICA Correlation Validation
 
-**Based on Appendix BSS/ICA Equivalence - Validates DSS ≈ ICA**
+**Validates DSS ≈ ICA using component correlation (from BSS Appendix)**
 
 ```python
 def validate_dss_ica_correlation(
@@ -2177,12 +1813,12 @@ def validate_dss_ica_correlation(
     
     LOGGER.info(f"Validating DSS vs ICA on {subject_id}...")
     
-    data = raw.get_data()  # (n_channels, n_times)
+    data = raw.get_data()
     
     # 1. Fit ICA (sklearn FastICA)
     t_start = time.time()
     ica = FastICA(n_components=n_components, random_state=42, max_iter=500)
-    ica_components = ica.fit_transform(data.T).T  # (n_components, n_times)
+    ica_components = ica.fit_transform(data.T).T
     time_ica = time.time() - t_start
     
     # 2. Fit DSS with Tanh (equivalent to Robust ICA)
@@ -2196,98 +1832,61 @@ def validate_dss_ica_correlation(
         verbose=False
     )
     dss.fit(data.T)
-    dss_components = dss.transform(data.T).T  # (n_components, n_times)
+    dss_components = dss.transform(data.T).T
     time_dss = time.time() - t_start
     
     # 3. Compute correlation matrix between all component pairs
-    corr_matrix = np.zeros((n_components, n_components))
-    for i in range(n_components):
-        for j in range(n_components):
-            # Absolute correlation (components can be sign-flipped)
-            corr = np.abs(np.corrcoef(ica_components[i], dss_components[j])[0, 1])
-            corr_matrix[i, j] = corr
+    corr_matrix = np.abs([[np.corrcoef(ica_components[i], dss_components[j])[0, 1] 
+                           for j in range(n_components)] 
+                          for i in range(n_components)])
     
     # 4. Find best matches (Hungarian assignment)
-    # Maximizes sum of correlations by matching components optimally
     row_ind, col_ind = linear_sum_assignment(-corr_matrix)
     matched_corrs = corr_matrix[row_ind, col_ind]
     avg_correlation = matched_corrs.mean()
     
-    # 5. Identify artifact components (correlate with reference channels if available)
-    # This follows the appendix pattern of correlating with EOG/ECG
+    # 5. Identify artifact components (correlate with EOG/ECG)
     artifact_correlations = {}
     if 'EOG' in [ch['kind'] for ch in raw.info['chs']]:
         eog_data = raw.copy().pick_types(eog=True).get_data()[0]
         dss_eog_corr = [np.abs(np.corrcoef(c, eog_data)[0, 1]) for c in dss_components]
         ica_eog_corr = [np.abs(np.corrcoef(c, eog_data)[0, 1]) for c in ica_components]
         artifact_correlations['eog'] = {
-            'dss_best_idx': np.argmax(dss_eog_corr),
-            'dss_best_corr': np.max(dss_eog_corr),
-            'ica_best_idx': np.argmax(ica_eog_corr),
-            'ica_best_corr': np.max(ica_eog_corr)
+            'dss_best': (np.argmax(dss_eog_corr), np.max(dss_eog_corr)),
+            'ica_best': (np.argmax(ica_eog_corr), np.max(ica_eog_corr))
         }
     
     # 6. Results
     speedup = time_ica / time_dss
     n_high_corr = (matched_corrs > 0.9).sum()
     
-    results = {
-        'subject': subject_id,
-        'n_components': n_components,
-        'time_ica': time_ica,
-        'time_dss': time_dss,
-        'speedup': speedup,
-        'avg_correlation': avg_correlation,
-        'min_correlation': matched_corrs.min(),
-        'max_correlation': matched_corrs.max(),
-        'n_high_correlation': n_high_corr,
-        'pct_high_correlation': 100 * n_high_corr / n_components,
-        'artifact_correlations': artifact_correlations
-    }
-    
-    # 7. Logging
-    LOGGER.info(f"  ICA time: {time_ica:.2f}s")
-    LOGGER.info(f"  DSS time: {time_dss:.2f}s")
-    LOGGER.info(f"  Speedup: {speedup:.2f}x ⚡")
-    LOGGER.info(f"  Avg correlation: {avg_correlation:.3f}")
-    LOGGER.info(f"  Components with >0.9 corr: {n_high_corr}/{n_components}")
+    LOGGER.info(f"  ICA: {time_ica:.2f}s | DSS: {time_dss:.2f}s | Speedup: {speedup:.2f}x ⚡")
+    LOGGER.info(f"  Avg correlation: {avg_correlation:.3f} | High corr: {n_high_corr}/{n_components}")
     
     if avg_correlation > 0.85:
-        LOGGER.info("  ✅ DSS and ICA are EQUIVALENT (high correlation)")
-        LOGGER.info(f"  💡 USE DSS for {speedup:.1f}x speedup!")
-    else:
-        LOGGER.warning("  ⚠️  Low correlation - methods may extract different components")
+        LOGGER.info(f"  ✅ DSS ≈ ICA (equivalent) → USE DSS for {speedup:.1f}x speedup!")
     
-    return results
+    return {
+        'subject': subject_id,
+        'speedup': speedup,
+        'avg_correlation': avg_correlation,
+        'n_high_correlation': n_high_corr,
+        'artifact_correlations': artifact_correlations
+    }
 
-# Example Usage in Pipeline Comparison
-comparison_results = []
+# Example: Validate on test subjects
 for subject in test_subjects:
     raw = mne.io.read_raw_fif(f'derivatives/preproc/{subject}/eeg/{subject}_eeg.fif')
-    
-    val_result = validate_dss_ica_correlation(
-        raw, 
-        Path('output/validation'), 
-        subject,
-        n_components=15
-    )
-    comparison_results.append(val_result)
-
-# Summary
-df_val = pd.DataFrame(comparison_results)
-print(f"\nAverage speedup: {df_val['speedup'].mean():.1f}x")
-print(f"Average correlation: {df_val['avg_correlation'].mean():.2%}")
-print(f"\n→ Conclusion: DSS is {df_val['speedup'].mean():.1f}x faster with {df_val['avg_correlation'].mean():.0%} equivalent components")
+    result = validate_dss_ica_correlation(raw, Path('output/validation'), subject)
+    print(f"{subject}: {result['speedup']:.1f}x faster, {result['avg_correlation']:.0%} corr")
 ```
 
-**Key Insights from BSS Appendix:**
-- DSS with `TanhMaskDenoiser` = Robust ICA
-- DSS with `KurtosisDenoiser` = Standard FastICA
-- Components can be sign-flipped → use absolute correlation
-- Artifact detection: correlate components with reference channels (EOG/ECG)
+**Key Points:**
+- DSS with `TanhMaskDenoiser` = Robust ICA (mathematically equivalent)
+- Uses absolute correlation (components can be sign-flipped)
+- Hungarian assignment finds optimal component matching
+- **Expected**: 2-3x speedup with >90% correlation
 
-**Expected Results:**
-- Speedup: **2-3x faster** than ICA
-- Correlation: **>90%** (proves equivalence)
-- **Recommendation**: Use DSS for artifact removal (faster, equivalent results)
+---
 
+**END OF PART 6 IMPLEMENTATION PLAN**
