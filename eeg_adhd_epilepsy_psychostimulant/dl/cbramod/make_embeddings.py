@@ -52,6 +52,12 @@ def parse_args():
         help="Preprocessing stage to extract"
     )
     parser.add_argument("--max-subjects", type=int, default=None, help="Debug: limit number of subjects")
+    parser.add_argument(
+        "--all-layers",
+        action="store_true",
+        help="Extract embeddings from all transformer encoder layers.",
+    )
+
     
     # args unused but kept/modified for compatibility if needed
     parser.add_argument("--out-csv", help="Legacy argument, use --out-file") 
@@ -124,11 +130,18 @@ def compute_patches(eeg_data, sfreq, seg_dur=10.0, points_per_patch=None):
     Split EEG into N full patches. Output shape: (C, S, P).
     """
     C, T = eeg_data.shape
-    P = int(points_per_patch) if points_per_patch is not None else int(seg_dur * sfreq)
     
-    if P <= 0:
-        raise ValueError(f"Invalid patch size P={P}")
+    # CBraMod strictly expects 1-second patches (e.g., 200 points at 200Hz).
+    P = int(points_per_patch) if points_per_patch is not None else int(1.0 * sfreq) 
+    
+    if P != 200:
+        LOG.warning(f"CBraMod is optimized for P=200. You are using P={P}.")
 
+    # If you want to process in chunk blocks exactly matching the segment duration:
+    max_T = int(seg_dur * sfreq)
+    if T > max_T:
+        T = max_T
+        
     S = T // P
 
     if S < 1:
@@ -138,7 +151,7 @@ def compute_patches(eeg_data, sfreq, seg_dur=10.0, points_per_patch=None):
     usable = S * P
     data_block = eeg_data[:, :usable]
     
-    # Reshape to (Channels, Segments, Points)
+    # Reshape to (Channels, Segments, Points) -> (C, S, 200)
     patches = data_block.reshape(C, S, P)
     return patches, S, P
 
@@ -152,6 +165,7 @@ def compute_embedding(
     device,
     seg_dur=10.0,
     points_per_patch=None,
+    all_layers=False,
 ):
     LOG.info("Processing %s", file_path)
     
@@ -168,25 +182,63 @@ def compute_embedding(
     # Prepare input: (1, C, S, P)
     x = torch.from_numpy(patches).float().unsqueeze(0).to(device)
 
-    with torch.no_grad():
-        out = model(x) 
+    layer_outputs = []
+    hooks = []
+
+    if all_layers:
+        def get_hook():
+            def hook(module, input, output):
+                layer_outputs.append(output)
+            return hook
         
-        # Check output shape
-        # Expected: (Batch, Channel, Segment, Time/Feat) -> (1, C, S, 200)
-        if out.dim() == 4:
-            # Stack everything into a flat vector per segment
-            # Target shape: (S, C*200)
+        found_layers = False
+        for name, module in model.named_modules():
+            if "CrissCrossTransformerBlock" in module.__class__.__name__ or "TransformerBlock" in module.__class__.__name__ or "TransformerEncoderLayer" in module.__class__.__name__:
+                hooks.append(module.register_forward_hook(get_hook()))
+                found_layers = True
+                
+        if not found_layers:
+            LOG.warning("Could not automatically find transformer blocks to hook into!")
+
+    try:
+        with torch.no_grad():
+            out = model(x) 
             
-            # 1. Permute to (Batch, Segment, Channel, Time) -> (1, S, C, 200)
-            out = out.permute(0, 2, 1, 3) 
-            
-            # 2. Flatten Channel and Time dimensions
-            # (1, S, C*200)
-            out = out.reshape(1, out.size(1), -1)
-            
-            emb_flat = out.squeeze(0).cpu().numpy()
-        else:
-            raise RuntimeError(f"Unexpected CBraMod output shape: {tuple(out.shape)}")
+            if all_layers and len(layer_outputs) > 0:
+                all_embs = []
+                for l_out in layer_outputs:
+                    if isinstance(l_out, tuple):
+                        l_out = l_out[0]
+                    if l_out.dim() == 4:
+                        l_out = l_out.permute(0, 2, 1, 3) 
+                        l_out = l_out.reshape(1, l_out.size(1), -1)
+                        emb = l_out.squeeze(0).cpu().numpy()
+                        all_embs.append(emb)
+                    else:
+                        raise RuntimeError(f"Unexpected CBraMod layer output shape: {tuple(l_out.shape)}")
+                
+                # Stack all layers into (S, num_layers, C*200)
+                emb_flat = np.stack(all_embs, axis=1)
+            else:
+                # Check output shape
+                # Expected: (Batch, Channel, Segment, Time/Feat) -> (1, C, S, 200)
+                if out.dim() == 4:
+                    # Stack everything into a flat vector per segment
+                    # Target shape: (S, C*200)
+                    
+                    # 1. Permute to (Batch, Segment, Channel, Time) -> (1, S, C, 200)
+                    out = out.permute(0, 2, 1, 3) 
+                    
+                    # 2. Flatten Channel and Time dimensions
+                    # (1, S, C*200)
+                    out = out.reshape(1, out.size(1), -1)
+                    
+                    emb_flat = out.squeeze(0).cpu().numpy()
+                else:
+                    raise RuntimeError(f"Unexpected CBraMod output shape: {tuple(out.shape)}")
+    finally:
+        for h in hooks:
+            h.remove()
 
     return emb_flat, patches.shape[0], S, P
 
@@ -261,10 +313,12 @@ def main():
                 model,
                 device,
                 args.segment_duration,
-                args.points_per_patch
+                args.points_per_patch,
+                getattr(args, "all_layers", False)
             )
         except Exception as e:
-            LOG.error("ERROR [%s]: Processing failed: %s", sub_id, e)
+            import traceback
+            LOG.error("ERROR [%s]: Processing failed: %s\n%s", sub_id, e, traceback.format_exc())
             failed_subs.append(sub_id)
             continue
 
@@ -297,8 +351,9 @@ def main():
             }
             desc = suffix_map.get(args.stage, "desc-base")
             
-            emb_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_embed_cbramod.npy")
-            meta_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_metadata_cbramod.json")
+            suffix = "_all_layers" if getattr(args, "all_layers", False) else ""
+            emb_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_embed_cbramod{suffix}.npy")
+            meta_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_metadata_cbramod{suffix}.json")
             
             # Save embeddings array
             np.save(emb_file, emb_flat)
@@ -309,7 +364,9 @@ def main():
                 "n_channels": int(C),
                 "n_segments": int(S),
                 "n_features": int(current_n_feats),
-                "points_per_patch": int(P)
+                "points_per_patch": int(P),
+                "embedding_shape": list(emb_flat.shape),
+                "all_layers": getattr(args, "all_layers", False)
             }
             with open(meta_file, 'w') as f:
                 json.dump(metadata, f, indent=2)

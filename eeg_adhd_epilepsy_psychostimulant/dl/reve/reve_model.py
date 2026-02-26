@@ -54,7 +54,7 @@ class REVEFeatureExtractor(nn.Module):
         # Add Pooling Layer
         self.pooler = AttentionPooling(self.dim)
 
-    def forward(self, x, channel_names=None):
+    def forward(self, x, channel_names=None, pool=True):
         """
         x: (Batch, Channels, Time) 
         channel_names: List of strings (e.g. ['Fp1', 'Fp2', ...])
@@ -78,18 +78,49 @@ class REVEFeatureExtractor(nn.Module):
         
         pos = coords.unsqueeze(0).expand(x.shape[0], -1, -1)
         
-        # 2. Forward Pass
-        # We assume standard call structure.
-        
-        outputs = self.encoder(x, pos=pos)
-        
-        # Output handling
-        if hasattr(outputs, 'last_hidden_state'):
-            sequence_output = outputs.last_hidden_state
-        else:
-            sequence_output = outputs
+        layer_outputs = []
+        hooks = []
+        if hasattr(self.encoder, 'transformer') and hasattr(self.encoder.transformer, 'layers'):
+            def get_hook():
+                def hook(module, input, output):
+                    layer_outputs.append(output)
+                return hook
+            for layer in self.encoder.transformer.layers:
+                hooks.append(layer.register_forward_hook(get_hook()))
+
+        try:
+            outputs = self.encoder(x, pos=pos)
             
-        # 3. Pooling
-        embedding = self.pooler(sequence_output)
-        
-        return embedding
+            if len(layer_outputs) > 0:
+                # PAPER ALIGNMENT: Clean tuples if necessary
+                clean_layer_outputs = [out[0] if isinstance(out, tuple) else out for out in layer_outputs]
+                
+                if pool:
+                    # Concatenate the tokens from ALL layers along the sequence dimension
+                    # Resulting shape: (Batch, NumLayers * SeqLen, Dim)
+                    concatenated_tokens = torch.cat(clean_layer_outputs, dim=1) 
+                    
+                    #Pool the massive sequence into a SINGLE global token
+                    # Resulting shape: (Batch, Dim)
+                    embedding = self.pooler(concatenated_tokens) 
+                    
+                    return embedding
+                else:
+                    return torch.stack(clean_layer_outputs, dim=1)
+            else:
+                 # Fallback if no hooks could be registered
+                 if hasattr(outputs, 'last_hidden_state'):
+                    sequence_output = outputs.last_hidden_state
+                 else:
+                    sequence_output = outputs
+                    
+                 if pool:
+                     embedding = self.pooler(sequence_output)
+                     return embedding
+                 else:
+                     return sequence_output
+            
+        finally:
+            for h in hooks:
+                h.remove()
+

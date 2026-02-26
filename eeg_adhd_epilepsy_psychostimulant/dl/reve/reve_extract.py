@@ -20,6 +20,7 @@ def parse_args():
     parser.add_argument("--stage", default="baseline", choices=["baseline", "correct_ica", "correct_dss", "denoise_ar", "denoise_dss_ar"], help="Preprocessing stage to extract")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="Device to use")
     parser.add_argument("--subject", default=None, help="Specific subject ID to process (e.g., '1' or 'sub-0001')")
+    parser.add_argument("--no-pool", action="store_true", help="Disable pooling and return all tokens")
     return parser.parse_args()
 
 def find_eeg_file(sub_dir, stage="base"):
@@ -92,8 +93,13 @@ def extract_features(args):
         # Create subject output directory
         sub_out_dir = os.path.join(args.output_dir, sub_id)
         os.makedirs(sub_out_dir, exist_ok=True)
-        
-        emb_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_embed_reve_{args.model_size}.npy")
+        suffix = ""
+        # All layers is now default
+        suffix = "_all_layers"
+        if getattr(args, "no_pool", False):
+            suffix += "_no_pool"
+            
+        emb_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_embed_reve_{args.model_size}{suffix}.npy")
         if os.path.exists(emb_file):
             print(f"SKIP [{sub_id}]: Already processed")
             success_count += 1
@@ -146,10 +152,11 @@ def extract_features(args):
                     
                     # Forward Pass
                     # Model expects (Batch, Channels, Time)
-                    emb_batch = model(batch, channel_names=ch_names) # (Batch, Dim) or (Batch, Channels, Dim)
+                    do_pool = not getattr(args, "no_pool", False)
+                    emb_batch = model(batch, channel_names=ch_names, pool=do_pool) 
                     
                     # Check and pool if needed (e.g. if model output is per-channel)
-                    if emb_batch.dim() == 3:
+                    if emb_batch.dim() == 3 and do_pool:
                          # handle cases where forward() skips pooling
                          emb_batch = model.pooler(emb_batch)
                     
@@ -160,17 +167,19 @@ def extract_features(args):
             emb_array = np.concatenate(subject_embs, axis=0)
             
             # Save embeddings with BIDS naming
-            meta_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_metadata_reve_{args.model_size}.json")
+            meta_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_metadata_reve_{args.model_size}{suffix}.json")
             
             np.save(emb_file, emb_array)
             
             # Save metadata (No label tracking here anymore)
             metadata = {
                 "subject": sub_id,
-                "n_features": int(emb_array.shape[1]),
                 "n_segments": int(n_segments),
-                "embedding_shape": list(emb_array.shape)
+                "embedding_shape": list(emb_array.shape),
+                "all_layers": True
             }
+            if len(emb_array.shape) > 1:
+                metadata["n_features"] = int(emb_array.shape[-1])
             with open(meta_file, 'w') as f:
                 json.dump(metadata, f, indent=2)
             
