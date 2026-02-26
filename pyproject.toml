@@ -3,12 +3,12 @@ requires = ["setuptools>=64", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "eeg-adhd-epilepsy-psychostimulant"
+name = "eeg-analysis-adhd-epilepsy"
 version = "0.1.0"
 description = "EEG analysis, ML/DL pipelines, and visualization for ADHD/Epilepsy psychostimulant study."
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "Proprietary"}
+license = {text = "MIT"}
 authors = [
   { name = "Hamza Abdelhedi" }
 ]
@@ -22,25 +22,30 @@ dependencies = [
   "pandas",
   "mne",
   "mne-bids",
+  "coco-pipe @ git+https://github.com/BabaSanfour/coco-pipe.git@dim_red_v3",
+  "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",
   "scikit-learn",
   "umap-learn",
-  "fpdf",
+  "pyprep",
+  "asrpy",
+  "autoreject",
 ]
 
 [project.urls]
 Homepage = "https://github.com/"
 
 [project.scripts]
-eeg-embeddings = "eeg_adhd_epilepsy_psychostimulant.dl.reve_model:main"
-eeg-dim-reduce = "eeg_adhd_epilepsy_psychostimulant.viz.dim_reduction:main"
-eeg-analysis-explore = "eeg_adhd_epilepsy_psychostimulant.explore.analysis_exploration:main"
-eeg-ml-run = "eeg_adhd_epilepsy_psychostimulant.ml.run_ml_pipe:main"
+eeg-embeddings = "eeg_analysis_adhd_epilepsy.dl.reve_model:main"
+eeg-dim-reduce = "eeg_analysis_adhd_epilepsy.viz.dim_reduction:main"
+eeg-analysis-explore = "eeg_analysis_adhd_epilepsy.explore.analysis_exploration:main"
+eeg-ml-run = "eeg_analysis_adhd_epilepsy.ml.run_ml_pipe:main"
 eeg-analysis = "eeg_psychostimulant.analysis.design:main"
+eeg-qc = "eeg_analysis_adhd_epilepsy.explore.eeg_qc:main"
 
 [tool.setuptools]
-packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy_psychostimulant*", "eeg_psychostimulant*"], exclude = ["tests*"] } }
+packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy*", "eeg_psychostimulant*"], exclude = ["tests*"] } }
 
 [tool.ruff]
 line-length = 100

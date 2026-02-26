@@ -13,11 +13,11 @@ def load(fpath: str, sep: Optional[str] = None) -> pd.DataFrame:
     - Logs shape, head, columns, missing values, duplicates, and nunique.
     """
     # Use pandas' engine to auto-detect when sep is None
-    read_kwargs = dict(encoding="utf-8", low_memory=False)
+    read_kwargs = dict(encoding="utf-8")
     if sep is None:
-        read_kwargs.update(dict(sep=None))
+        read_kwargs.update(dict(sep=None, engine='python'))
     else:
-        read_kwargs.update(dict(sep=sep))
+        read_kwargs.update(dict(sep=sep, low_memory=False))
 
     df = pd.read_csv(fpath, **read_kwargs)
 
