@@ -45,11 +45,22 @@ def extract_features(args):
     # 1. Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
     
-    # 2. Load Subject Info
-    df = pd.read_csv(args.csv_path, delimiter=";")
-    # Ensure Epilepsy column exists
-    if "Epilepsy" not in df.columns:
-        raise ValueError("CSV must contain 'Epilepsy' column")
+    # 2. Find Subjects
+    sub_dirs = []
+    if os.path.exists(args.data_root):
+        for name in sorted(os.listdir(args.data_root)):
+            # Handle specific subject filter
+            if args.subject:
+                target_sub = str(args.subject).replace('sub-', '')
+                if target_sub not in name:
+                    continue
+                    
+            if name.startswith("sub-"):
+                sub_dirs.append((name, os.path.join(args.data_root, name)))
+    
+    if not sub_dirs:
+        print(f"No valid subject directories found in {args.data_root}")
+        return
     
     # 3. Initialize Model
     print(f"Loading REVE model ({args.model_size}) on {args.device}...")
@@ -61,42 +72,10 @@ def extract_features(args):
     success_count = 0
     skipped_count = 0
     error_count = 0
-    
-    # For optional CSV output
-    all_features = []
-    all_labels = []
-    all_subject_ids = []
-    
-    # Filter for specific subject if requested
-    if args.subject:
-        # Normalize target subject to string, removing 'sub-' prefix if present
-        target_sub = str(args.subject).replace('sub-', '')
-        
-        # Filter dataframe
-        # We assume 'Study ID' is the column, but let's be flexible
-        # Convert column to string and compare
-        df['Study ID_str'] = df['Study ID'].astype(str)
-        df = df[df['Study ID_str'] == target_sub]
-        
-        if len(df) == 0:
-            print(f"Subject {args.subject} (ID: {target_sub}) not found in CSV. Checking if it exists in data folder anyway...")
-            # If not in CSV but we want to process it, we can mock a row or just warn and exit
-            # For now, let's warn and exit to avoid processing without labels
-            print("Processing stopped: Subject not in CSV.")
-            return
 
     # 4. Process Subjects
-    print(f"Processing {len(df)} subjects...")
-    for idx, row in tqdm(df.iterrows(), total=len(df)):
-        sub_id = f"sub-{str(row['Study ID']).zfill(4)}"
-        label = row['Epilepsy']
-        
-        # Handle label cleaning locally if needed, but assuming clean int/str
-        try:
-            label = int(label)
-        except:
-            skipped_count += 1
-            continue # Skip if label is not valid or '0 (potentiel)'
+    print(f"Processing {len(sub_dirs)} subjects...")
+    for sub_id, sub_dir in tqdm(sub_dirs):
         
         # Check if already processed
         # Update filename based on stage
@@ -116,24 +95,13 @@ def extract_features(args):
         
         emb_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_embed_reve.npy")
         if os.path.exists(emb_file):
-            print("SKIP [{}]: Already processed".format(sub_id))
+            print(f"SKIP [{sub_id}]: Already processed")
             success_count += 1
             continue
-            
-        sub_dir = os.path.join(args.data_root, sub_id)
-        if not os.path.exists(sub_dir):
-            # Try without zfill?
-            sub_id_alt = f"sub-{row['Study ID']}"
-            sub_dir_alt = os.path.join(args.data_root, sub_id_alt)
-            if os.path.exists(sub_dir_alt):
-                sub_dir = sub_dir_alt
-            else:
-                skipped_count += 1
-                continue
                 
         eeg_path = find_eeg_file(sub_dir, stage=args.stage)
         if not eeg_path:
-            print("SKIP [{}]: No EEG file found for stage '{}'".format(sub_id, args.stage))
+            print(f"SKIP [{sub_id}]: No EEG file found for stage '{args.stage}'")
             skipped_count += 1
             continue
             
@@ -141,16 +109,11 @@ def extract_features(args):
             # Load EEG (FIF format)
             raw = mne.io.read_raw_fif(eeg_path, preload=True, verbose=False)
             
-            # Preprocess
-            target_sfreq = 200
-            if raw.info['sfreq'] != target_sfreq:
-                raw.resample(target_sfreq, npad="auto")
-                
             data = raw.get_data() # (C, T)
             ch_names = raw.ch_names
             
-            # Additional Preprocessing (Filter, Z-score, Clip)
-            data_tensor = preprocess_signal(data, sfreq=target_sfreq)
+            # Z-score Normalization and Clipping (Target sfreq is 200Hz)
+            data_tensor = preprocess_signal(data)
             
             # 10-second segmentation
             # 10s * 200Hz = 2000 samples
@@ -159,7 +122,7 @@ def extract_features(args):
             n_segments = n_samples // window_size
             
             if n_segments == 0:
-                print(f"SKIP [{{sub_id}}]: Too short (<10s, {{n_samples}} samples)")
+                print(f"SKIP [{sub_id}]: Too short (<10s, {n_samples} samples)")
                 skipped_count += 1
                 continue
             
@@ -187,8 +150,7 @@ def extract_features(args):
                     
                     # Check and pool if needed (e.g. if model output is per-channel)
                     if emb_batch.dim() == 3:
-                         # Use True Attention Pooling (model.pooler) instead of mean
-                         # This handles cases where forward() skips pooling
+                         # handle cases where forward() skips pooling
                          emb_batch = model.pooler(emb_batch)
                     
                     emb_batch = emb_batch.cpu().numpy()
@@ -202,10 +164,9 @@ def extract_features(args):
             
             np.save(emb_file, emb_array)
             
-            # Save metadata
+            # Save metadata (No label tracking here anymore)
             metadata = {
                 "subject": sub_id,
-                "label": int(label),
                 "n_features": int(emb_array.shape[1]),
                 "n_segments": int(n_segments),
                 "embedding_shape": list(emb_array.shape)
@@ -213,43 +174,17 @@ def extract_features(args):
             with open(meta_file, 'w') as f:
                 json.dump(metadata, f, indent=2)
             
-            print("SAVED [{{}}]: {{}} segments, shape {{}} → {{}}".format(sub_id, n_segments, emb_array.shape, emb_file))
+            print(f"SAVED [{sub_id}]: {n_segments} segments, shape {emb_array.shape} → {emb_file}")
             success_count += 1
-            
-            # Also collect for CSV if requested
-            # We add EACH segment as a row
-            for seg_emb in emb_array:
-                all_features.append(seg_emb)
-                all_labels.append(label)
-                all_subject_ids.append(sub_id)
             
         except Exception as e:
             import traceback
             traceback.print_exc()
-            print("ERROR [{{}}]: {{}}".format(sub_id, e))
+            print(f"ERROR [{sub_id}]: {e}")
             error_count += 1
             continue
 
-    # 5. Optional CSV Export
-    if args.output_csv and len(all_features) > 0:
-        X = np.array(all_features)
-        y = np.array(all_labels)
-        ids = np.array(all_subject_ids)
-        
-        # Create output directory
-        csv_dir = os.path.dirname(args.output_csv)
-        if csv_dir:
-            os.makedirs(csv_dir, exist_ok=True)
-        
-        # Create DataFrame
-        feat_cols = [f"feat_{i}" for i in range(X.shape[1])]
-        df_out = pd.DataFrame(X, columns=feat_cols)
-        df_out.insert(0, "subject_id", ids)
-        
-        df_out.to_csv(args.output_csv, index=False)
-        print(f"\nSaved CSV: {args.output_csv} ({len(ids)} subjects, {X.shape[1]} features)")
-    
-    # 6. Print Summary
+    # 5. Print Summary
     print("\n" + "="*60)
     print("REVE Embedding Extraction Complete")
     print("="*60)
@@ -257,8 +192,6 @@ def extract_features(args):
     print(f"Successfully processed: {success_count} subjects")
     print(f"Skipped: {skipped_count} subjects")
     print(f"Errors: {error_count} subjects")
-    if args.output_csv:
-        print(f"CSV file: {args.output_csv}")
     print("="*60)
 
 if __name__ == "__main__":

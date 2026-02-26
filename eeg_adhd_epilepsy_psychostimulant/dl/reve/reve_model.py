@@ -46,7 +46,6 @@ class REVEFeatureExtractor(nn.Module):
         )
         
         # Dimension is usually 512 for base
-        # But let's check config safely
         try:
              self.dim = self.encoder.config.hidden_size 
         except:
@@ -69,7 +68,7 @@ class REVEFeatureExtractor(nn.Module):
 
         # Get positions using the bank
         
-        # Move pos_bank to same device as x temporarily or permanently?
+        # Move pos_bank to same device as x temporarily or permanently
         self.pos_bank.to(x.device)
         
         coords = self.pos_bank(channel_names) # (C, 3)

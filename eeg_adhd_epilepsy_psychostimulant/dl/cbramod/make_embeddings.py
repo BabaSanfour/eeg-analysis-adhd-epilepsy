@@ -155,15 +155,10 @@ def compute_embedding(
 ):
     LOG.info("Processing %s", file_path)
     
-    # Load .fif
-    # preload=True is needed for resampling
-    raw = mne.io.read_raw_fif(file_path, preload=True, verbose="ERROR")
+    # Load .fif (preload is not needed since we don't resample)
+    raw = mne.io.read_raw_fif(file_path, preload=False, verbose="ERROR")
     
-    # Resample to 200Hz if needed (CBraMod requirement)
-    if raw.info["sfreq"] != 200.0:
-        # LOG.info("Resampling %.1f -> 200.0 Hz", raw.info["sfreq"])
-        raw.resample(200.0, npad="auto")
-    
+    # Data is assumed to be already preprocessed and resampled to 200 Hz
     data = raw.get_data()
     sfreq = raw.info["sfreq"]
     
