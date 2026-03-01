@@ -182,7 +182,7 @@ def generate_patients_report(
     if not cleaning_stats:
         bids_html += f"<p><strong>Total Subjects in CSV:</strong> {len(df_clean)}</p>"
     
-    bids_html += f"<p><strong>Subjects with BIDS Folders:</strong> {len(validation_results.get('bids_present', []))}</p>"
+    bids_html += f"<p><strong>Subjects with BIDS Folders:</strong> {len(validation_results.get('present_subjects', []))}</p>"
     
     missing_count = validation_results.get('missing_count', 0)
     if missing_count > 0:
@@ -239,4 +239,3 @@ def generate_patients_report(
     report_path = output_dir / "patients_report.html"
     report_path.write_text(f"<!DOCTYPE html><html>{head}{body}</html>", encoding="utf-8")
     logging.info(f"Saved HTML report: {report_path}")
-

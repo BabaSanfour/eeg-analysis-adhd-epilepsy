@@ -28,5 +28,5 @@ eeg_adhd_epilepsy_psychostimulant/dl/cbramod/cbramod_embed.py
 eeg_adhd_epilepsy_psychostimulant/data/results/dl/embeddings/cbramod_embeddings.csv
 results*/
 .old
-analysis*/
+analysis_*/
 /derivatives

@@ -7,10 +7,12 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Set
+from typing import Any, Dict, List, Optional, Tuple, Set
 
 import numpy as np
 import pandas as pd
+from mne_bids import get_entity_vals
+
 from eeg_adhd_epilepsy.io.csv import load as load_csv
 from eeg_adhd_epilepsy.utils.config import MAPPING_PSYCHOSTIMULANT
 
@@ -52,72 +54,87 @@ def _log_potential_entries(df: pd.DataFrame) -> None:
         # User requested exact format: "Columns with '0 (potentiel)': {'TDAH': 10, ...}"
         logging.info(f"Columns with '0 (potentiel)': {cols_with_potential}")
 
-def _study_id_to_folder(study_id) -> str | None:
-    """Convert Study ID to BIDS folder name."""
-    sid = pd.to_numeric(study_id, errors="coerce")
-    if pd.isna(sid):
-        return None
-    try:
-        return f"sub-{int(sid):04d}"
-    except (ValueError, TypeError):
-        return None
+def validate_bids_coverage(
+    df: Optional[pd.DataFrame],
+    root: Path,
+    desc: Optional[str] = None,
+    suffix: Optional[str] = None,
+    subject_col: str = "Study ID",
+) -> Dict[str, object]:
+    """Discover present subjects in raw BIDS or derivatives and optionally compare metadata coverage."""
+    root = Path(root)
 
-def validate_bids_coverage(df: pd.DataFrame, bids_root: Path) -> Dict[str, object]:
-    """Check which Study IDs exist in the BIDS folder structure."""
-    results: Dict[str, object] = {}
-    if "Study ID" not in df.columns:
+    ignore_descriptions = None
+    if desc is not None:
+        available_descs = set(get_entity_vals(root, "description"))
+        ignore_descriptions = sorted(d for d in available_descs if d != desc)
+
+    ignore_suffixes = None
+    if suffix == "epo":
+        ignore_suffixes = ["eeg"]
+    elif suffix == "eeg":
+        ignore_suffixes = ["epo"]
+
+    present = sorted(
+        set(
+            get_entity_vals(
+                root,
+                "subject",
+                ignore_descriptions=ignore_descriptions,
+                ignore_suffixes=ignore_suffixes,
+            )
+        )
+    )
+
+    results: Dict[str, object] = {
+        "present_subjects": present,
+        "present_count": len(present),
+    }
+
+    logging.info(f"Found {len(present)} subjects in {root}")
+
+    if df is None:
+        return results
+    if subject_col not in df.columns:
         return results
 
-    bids_root = Path(bids_root)
-    sid_series = df["Study ID"].dropna().unique()
     expected = []
-    
-    # Identify expected headers
-    for sid in sid_series:
-        folder = _study_id_to_folder(sid)
-        if folder:
-            expected.append(folder)
+    for sid in df[subject_col].dropna().unique():
+        sid_num = pd.to_numeric(sid, errors="coerce")
+        if pd.isna(sid_num):
+            continue
+        expected.append(f"{int(sid_num):04d}")
 
-    present = []
-    missing = []
+    present_set = set(present)
+    missing = [subject for subject in expected if subject not in present_set]
     missing_ids = []
+    for subject in missing:
+        try:
+            missing_ids.append(int(subject))
+        except ValueError:
+            continue
 
-    for folder in expected:
-        if (bids_root / folder).exists():
-            present.append(folder)
-        else:
-            missing.append(folder)
-            try:
-                missing_ids.append(int(folder.split("-")[1]))
-            except (IndexError, ValueError):
-                pass
-    
-    results["bids_present"] = present
-    results["bids_missing"] = missing
-    results["missing_study_ids"] = missing_ids
+    results["expected_subjects"] = expected
     results["expected_count"] = len(expected)
+    results["missing_subjects"] = missing
+    results["missing_study_ids"] = missing_ids
     results["missing_count"] = len(missing)
-    
+
     if missing:
-        logging.info(f"Missing EEG data for {len(missing)} subjects.")
-        
-    if missing_ids:
-        # Also find the Pt ID for missing Study IDs for logging
-        if "Pt ID" in df.columns:
-            missing_pairs = []
-            for m_sid in missing_ids:
-                row = df[df["Study ID"] == m_sid]
-                if not row.empty:
-                    # Handle if there are duplicates (take first)
-                    ptid = row.iloc[0]["Pt ID"]
-                    # Format: 'PtID:StudyID'
-                    pt_str = str(int(ptid)) if pd.notna(ptid) else '?'
-                    sid_str = str(m_sid)
-                    missing_pairs.append(f"'{pt_str}:{sid_str}'")
-            if missing_pairs:
-                # Format: ['2395351:119', '3146650:276']
-                formatted_list = "[" + ", ".join(missing_pairs) + "]"
-                logging.info(f"- Missing (Pt ID:Study ID): {formatted_list}")
+        logging.info(f"Missing {len(missing)} subjects.")
+
+    if missing_ids and "Pt ID" in df.columns:
+        missing_pairs = []
+        for m_sid in missing_ids:
+            row = df[df[subject_col] == m_sid]
+            if row.empty:
+                continue
+            ptid = row.iloc[0]["Pt ID"]
+            pt_str = str(int(ptid)) if pd.notna(ptid) else "?"
+            missing_pairs.append(f"'{pt_str}:{m_sid}'")
+        if missing_pairs:
+            formatted_list = "[" + ", ".join(missing_pairs) + "]"
+            logging.info(f"- Missing (Pt ID:Study ID): {formatted_list}")
 
     return results
 
@@ -272,7 +289,6 @@ def clean_patients_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         n_missing_pt = 0
     
     # 1. Log & Drop "0 (potentiel)"
-    # 1. Log & Drop "0 (potentiel)"
     _log_potential_entries(df)
     out = _drop_zero_potential_rows(df)
     n_after_potential = len(out)
@@ -291,14 +307,17 @@ def clean_patients_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     tdah_col = "TDAH" if "TDAH" in out.columns else ("ADHD" if "ADHD" in out.columns else None)
     if tdah_col:
         vals = to_numeric_safe(out[tdah_col])
+        out[tdah_col] = vals.fillna(0).astype(int)
         out["has_adhd"] = vals.isin([1])
         
     if "Epilepsy" in out.columns:
         vals = to_numeric_safe(out["Epilepsy"])
+        out["Epilepsy"] = vals.fillna(0).astype(int)
         out["has_epilepsy"] = vals.isin([1])
         
     if "TSA" in out.columns:
         vals = to_numeric_safe(out["TSA"])
+        out["TSA"] = vals.fillna(0).astype(int)
         out["has_tsa"] = vals.isin([1])
 
     # 5. Psychostimulants
@@ -341,7 +360,7 @@ def clean_patients_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
         out["age_group"] = pd.cut(
             out["Age"],
             bins=[5, 9, 13, 19],
-            labels=["late_childhood_5_8", "early_ado_9_12", "ado_13_18"],
+            labels=["5-8", "9-12", "13-18"],
             right=False
         )
     
@@ -364,6 +383,44 @@ def clean_patients_df(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     out = _drop_pt_id_duplicates_keep_smallest_study(out, force_drop_mask=pd.Series(False, index=out.index))
     n_final = len(out)
     logging.info(f"Subjects after dropping duplicates: {n_final}")
+
+    # 9. Additional derived columns needed for downstream analyses
+    if {"has_adhd", "has_epilepsy", "has_tsa"}.intersection(out.columns):
+        def combine_diagnosis(row: pd.Series) -> str:
+            labels = []
+            if bool(row.get("has_adhd", False)):
+                labels.append("ADHD")
+            if bool(row.get("has_tsa", False)):
+                labels.append("ASD")
+            if bool(row.get("has_epilepsy", False)):
+                labels.append("Epilepsy")
+            return "+".join(labels) if labels else "Control"
+
+        out["Diagnosis_Combined"] = out.apply(combine_diagnosis, axis=1)
+
+    asm_cols = [col for col in EPILEPSY_MED_COLS if col in out.columns]
+    if asm_cols:
+        asm_numeric = out[asm_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+        out["ASM_Types"] = asm_numeric.apply(
+            lambda row: "+".join(row.index[row.eq(1)].tolist()) or "No_ASM",
+            axis=1,
+        )
+    else:
+        out["ASM_Types"] = "No_ASM"
+
+    if {"has_epilepsy_med", "has_psychostimulant"}.intersection(out.columns):
+        def meds_status(row: pd.Series) -> str:
+            has_asm = bool(row.get("has_epilepsy_med", False))
+            has_psy = bool(row.get("has_psychostimulant", False))
+            if has_asm and has_psy:
+                return "ASM+Psychostim"
+            if has_asm:
+                return "ASM"
+            if has_psy:
+                return "Psychostim"
+            return "No Med"
+
+        out["Meds"] = out.apply(meds_status, axis=1)
     
     logging.info(f"Total subjects used: {n_final}")
     

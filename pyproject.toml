@@ -43,6 +43,7 @@ eeg-analysis-explore = "eeg_analysis_adhd_epilepsy.explore.analysis_exploration:
 eeg-ml-run = "eeg_analysis_adhd_epilepsy.ml.run_ml_pipe:main"
 eeg-analysis = "eeg_psychostimulant.analysis.design:main"
 eeg-qc = "eeg_analysis_adhd_epilepsy.explore.eeg_qc:main"
+eeg-save-epochs = "eeg_adhd_epilepsy.preproc.epochs:main"
 
 [tool.setuptools]
 packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy*", "eeg_psychostimulant*"], exclude = ["tests*"] } }
