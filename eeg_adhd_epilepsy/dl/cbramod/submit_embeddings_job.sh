@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=embed_cbramod
-#SBATCH --output=/home/mat/projects/EEG_psychostimulant/eeg_adhd_epilepsy_psychostimulant/data/results/dl/logs/cbramod/embed_%j.out
-#SBATCH --error=/home/mat/projects/EEG_psychostimulant/eeg_adhd_epilepsy_psychostimulant/data/results/dl/logs/cbramod/embed_%j.err
-#SBATCH --time=03:00:00
+#SBATCH --output=/home/mat/projects/EEG_psychostimulant/eeg_adhd_epilepsy/data/results/dl/logs/cbramod/embed_%j.out
+#SBATCH --error=/home/mat/projects/EEG_psychostimulant/eeg_adhd_epilepsy/data/results/dl/logs/cbramod/embed_%j.err
+#SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=128G
 #SBATCH --partition=gpubase_bygpu_b1
@@ -15,7 +15,7 @@ set -euo pipefail
 source /home/mat/projects/EEG_psychostimulant/.venv/bin/activate
 
 # Define Project Root ensuring absolute paths
-PROJECT_ROOT="/home/mat/projects/EEG_psychostimulant/eeg_adhd_epilepsy_psychostimulant"
+PROJECT_ROOT="/home/mat/projects/EEG_psychostimulant/eeg_adhd_epilepsy"
 
 # Create directories
 mkdir -p "$PROJECT_ROOT/data/results/dl/logs/cbramod"
@@ -26,9 +26,6 @@ mkdir -p "$PROJECT_ROOT/data/results/dl/embeddings/cbramod"
 DERIV_PROC_ROOT=${DERIV_PROC_ROOT:-"/home/mat/scratch/preproc/"}
 
 # Output: Directory for .npy files (one per subject)
-# Default location
-# Output: Directory for .npy files (one per subject)
-# Default location
 OUT_FILE=${OUT_FILE:-"/home/mat/scratch/extracted_embeddings/cbramod"}
 
 # Model Weights
@@ -37,12 +34,10 @@ WEIGHTS=${WEIGHTS:-"/home/mat/CBraMod/pretrained_weights/pretrained_weights.pth"
 DEVICE=${DEVICE:-"cuda"}
 STAGE=${STAGE:-"base"}
 
-# Hardcoded settings
+# Settings
 POINTS_PER_PATCH=200
 export NUMBA_CACHE_DIR=${NUMBA_CACHE_DIR:-/tmp/numba_cache}
-# Add project root to PYTHONPATH so models.cbramod can be imported if needed, 
-# though CBraMod seems to be installed or available in venv/user modules.
-# Just in case local modules are needed:
+# Add project root to PYTHONPATH so models.cbramod can be imported if needed
 export PYTHONPATH=$PROJECT_ROOT:$PYTHONPATH
 
 echo "Starting embedding generation via SLURM..."
@@ -51,6 +46,9 @@ echo "  - Input: $DERIV_PROC_ROOT"
 echo "  - Output: $OUT_FILE"
 echo "  - Stage: $STAGE"
 echo "  - Device: $DEVICE"
+
+MAX_SUBJECTS=${MAX_SUBJECTS:-""}
+ALL_LAYERS=${ALL_LAYERS:-""}
 
 # 3. Build Command
 # Using absolute path to the script
@@ -61,6 +59,15 @@ cmd=("python" "$PROJECT_ROOT/dl/cbramod/make_embeddings.py" \
   --device "$DEVICE" \
   --stage "$STAGE" \
   --points-per-patch "$POINTS_PER_PATCH")
+
+# Optional flags
+if [ -n "$MAX_SUBJECTS" ]; then
+  cmd+=(--max-subjects "$MAX_SUBJECTS")
+fi
+
+if [ -n "$ALL_LAYERS" ]; then
+  cmd+=(--all-layers)
+fi
 
 # 4. Execute
 "${cmd[@]}"

@@ -13,7 +13,6 @@ from reve_preprocessing import preprocess_signal
 def parse_args():
     parser = argparse.ArgumentParser(description="Extract REVE embeddings for epilepsy classification")
     parser.add_argument("--data-root", required=True, help="Root directory containing BIDS-like subject folders")
-    parser.add_argument("--csv-path", default="/home/mat/projects/EEG_psychostimulant/data/results/dl/subjects.csv", help="Path to subjects CSV file")
     parser.add_argument("--output-dir", default="/home/mat/scratch/embeddings/reve/baseline", help="Directory to save per-subject embeddings (BIDS format)")
     parser.add_argument("--output-csv", default=None, help="Optional: Save all embeddings as CSV file")
     parser.add_argument("--model-size", default="base", choices=["base", "large"], help="REVE model size")
@@ -21,6 +20,7 @@ def parse_args():
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu", help="Device to use")
     parser.add_argument("--subject", default=None, help="Specific subject ID to process (e.g., '1' or 'sub-0001')")
     parser.add_argument("--no-pool", action="store_true", help="Disable pooling and return all tokens")
+    parser.add_argument("--limit", type=int, default=None, help="Process only the first N subjects")
     return parser.parse_args()
 
 def find_eeg_file(sub_dir, stage="base"):
@@ -63,6 +63,9 @@ def extract_features(args):
         print(f"No valid subject directories found in {args.data_root}")
         return
     
+    if args.limit:
+        sub_dirs = sub_dirs[:args.limit]
+    
     # 3. Initialize Model
     print(f"Loading REVE model ({args.model_size}) on {args.device}...")
     model = REVEFeatureExtractor(model_size=args.model_size)
@@ -93,12 +96,7 @@ def extract_features(args):
         # Create subject output directory
         sub_out_dir = os.path.join(args.output_dir, sub_id)
         os.makedirs(sub_out_dir, exist_ok=True)
-        suffix = ""
-        # All layers is now default
-        suffix = "_all_layers"
-        if getattr(args, "no_pool", False):
-            suffix += "_no_pool"
-            
+        suffix = "_no_pool" if getattr(args, "no_pool", False) else "_pool"
         emb_file = os.path.join(sub_out_dir, f"{sub_id}_{desc}_embed_reve_{args.model_size}{suffix}.npy")
         if os.path.exists(emb_file):
             print(f"SKIP [{sub_id}]: Already processed")
@@ -143,7 +141,7 @@ def extract_features(args):
             subject_embs = []
             
             # Process in batches to manage memory
-            batch_size = 16
+            batch_size = 4
             with torch.no_grad():
                 for i in range(0, n_segments, batch_size):
                     batch = data_batch[i : i + batch_size]
@@ -154,11 +152,7 @@ def extract_features(args):
                     # Model expects (Batch, Channels, Time)
                     do_pool = not getattr(args, "no_pool", False)
                     emb_batch = model(batch, channel_names=ch_names, pool=do_pool) 
-                    
-                    # Check and pool if needed (e.g. if model output is per-channel)
-                    if emb_batch.dim() == 3 and do_pool:
-                         # handle cases where forward() skips pooling
-                         emb_batch = model.pooler(emb_batch)
+
                     
                     emb_batch = emb_batch.cpu().numpy()
                     subject_embs.append(emb_batch)
@@ -171,7 +165,7 @@ def extract_features(args):
             
             np.save(emb_file, emb_array)
             
-            # Save metadata (No label tracking here anymore)
+            # Save metadata
             metadata = {
                 "subject": sub_id,
                 "n_segments": int(n_segments),

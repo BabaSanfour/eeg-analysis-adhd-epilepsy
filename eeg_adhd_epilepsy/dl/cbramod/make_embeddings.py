@@ -125,9 +125,9 @@ def load_cbramod(weights_path, device="cuda"):
     return model, dev
 
 
-def compute_patches(eeg_data, sfreq, seg_dur=10.0, points_per_patch=None):
+def compute_patches(eeg_data, sfreq, points_per_patch=None):
     """
-    Split EEG into N full patches. Output shape: (C, S, P).
+    Split EEG into 1-second patches across the full recording. Output shape: (C, S, P).
     """
     C, T = eeg_data.shape
     
@@ -137,15 +137,9 @@ def compute_patches(eeg_data, sfreq, seg_dur=10.0, points_per_patch=None):
     if P != 200:
         LOG.warning(f"CBraMod is optimized for P=200. You are using P={P}.")
 
-    # If you want to process in chunk blocks exactly matching the segment duration:
-    max_T = int(seg_dur * sfreq)
-    if T > max_T:
-        T = max_T
-        
-    S = T // P
+    S = T // P  # Use the full recording; any partial trailing patch is discarded
 
     if S < 1:
-        # If signal is shorter than one patch, we can't do anything
         raise ValueError(f"Recording too short: T={T} < P={P}")
 
     usable = S * P
@@ -177,7 +171,8 @@ def compute_embedding(
     sfreq = raw.info["sfreq"]
     
     # Create Patches: (C, S, P)
-    patches, S, P = compute_patches(data, sfreq, seg_dur, points_per_patch)
+    # Create Patches: (C, S, P) — full recording, 1-second patches
+    patches, S, P = compute_patches(data, sfreq, points_per_patch)
 
     # Prepare input: (1, C, S, P)
     x = torch.from_numpy(patches).float().unsqueeze(0).to(device)

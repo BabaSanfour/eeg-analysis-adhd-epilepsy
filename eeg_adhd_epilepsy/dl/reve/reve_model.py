@@ -32,7 +32,8 @@ class REVEFeatureExtractor(nn.Module):
         self.encoder = AutoModel.from_pretrained(
             self.model_id, 
             trust_remote_code=True, 
-            torch_dtype="auto"
+            torch_dtype="auto",
+            token=True
         )
         
         # Load Position Bank
@@ -42,14 +43,21 @@ class REVEFeatureExtractor(nn.Module):
         self.pos_bank = AutoModel.from_pretrained(
             "brain-bzh/reve-positions", 
             trust_remote_code=True, 
-            torch_dtype="auto"
+            torch_dtype="auto",
+            token=True
         )
         
-        # Dimension is usually 512 for base
-        try:
-             self.dim = self.encoder.config.hidden_size 
-        except:
-             self.dim = 512 # Fallback
+        # Dimension is usually 512 for base, 1216 for large
+        self.dim = getattr(self.encoder.config, "hidden_size", None)
+        if self.dim is None:
+             self.dim = getattr(self.encoder.config, "embed_dim", None)
+
+        if self.dim is None:
+             # Fallback
+             if model_size == 'large':
+                 self.dim = 1216
+             else:
+                 self.dim = 512
         
         # Add Pooling Layer
         self.pooler = AttentionPooling(self.dim)
@@ -75,52 +83,38 @@ class REVEFeatureExtractor(nn.Module):
         coords = coords.to(x.device)
         
         # Expand for batch: (B, C, 3)
-        
         pos = coords.unsqueeze(0).expand(x.shape[0], -1, -1)
         
-        layer_outputs = []
-        hooks = []
-        if hasattr(self.encoder, 'transformer') and hasattr(self.encoder.transformer, 'layers'):
-            def get_hook():
-                def hook(module, input, output):
-                    layer_outputs.append(output)
-                return hook
-            for layer in self.encoder.transformer.layers:
-                hooks.append(layer.register_forward_hook(get_hook()))
+        # Pass return_output=True to natively extract all intermediate transformer layers
+        outputs = self.encoder(x, pos=pos, return_output=True)
+        
+        # If it returned a list of tensors (all layers)
+        if isinstance(outputs, (list, tuple)):
+            clean_layer_outputs = list(outputs)
+            
+            B = x.shape[0]
+            C = x.shape[1]
 
-        try:
-            outputs = self.encoder(x, pos=pos)
-            
-            if len(layer_outputs) > 0:
-                # PAPER ALIGNMENT: Clean tuples if necessary
-                clean_layer_outputs = [out[0] if isinstance(out, tuple) else out for out in layer_outputs]
+            if pool:
+                # Concatenate all tokens from all layers together
+                # Each layer_out is [Batch, C*P, Dim]. 
+                # Concatenating them along dim=1 makes a massive sequence [Batch, NumLayers * C * P, Dim]
+                massive_sequence = torch.cat(clean_layer_outputs, dim=1)
                 
-                if pool:
-                    # Concatenate the tokens from ALL layers along the sequence dimension
-                    # Resulting shape: (Batch, NumLayers * SeqLen, Dim)
-                    concatenated_tokens = torch.cat(clean_layer_outputs, dim=1) 
-                    
-                    #Pool the massive sequence into a SINGLE global token
-                    # Resulting shape: (Batch, Dim)
-                    embedding = self.pooler(concatenated_tokens) 
-                    
-                    return embedding
-                else:
-                    return torch.stack(clean_layer_outputs, dim=1)
+                # The pooler squashes all layers, channels, and patches into ONE vector
+                global_token = self.pooler(massive_sequence) # -> [Batch, Dim]
+                
+                return global_token
             else:
-                 # Fallback if no hooks could be registered
-                 if hasattr(outputs, 'last_hidden_state'):
-                    sequence_output = outputs.last_hidden_state
-                 else:
-                    sequence_output = outputs
-                    
-                 if pool:
-                     embedding = self.pooler(sequence_output)
-                     return embedding
-                 else:
-                     return sequence_output
-            
-        finally:
-            for h in hooks:
-                h.remove()
+                # The transformer returns [Batch, C*P, Dim].
+                # Stack the layers to return [Batch, Layers, Tokens, Dim]
+                return torch.stack(clean_layer_outputs, dim=1)
+                
+        else:
+            # If return_output=True is not supported by this model version, we fail hard
+            raise RuntimeError(
+                f"REVE model returned a single tensor instead of a list of layer outputs. "
+                f"return_output=True may not be supported by this model version. "
+                f"Output type: {type(outputs)}, shape: {getattr(outputs, 'shape', 'N/A')}"
+            )
 
