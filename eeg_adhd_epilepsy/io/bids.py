@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
-import pandas as pd
 import mne
+import pandas as pd
+from coco_pipe.io import load_data
+from coco_pipe.io.structures import DataContainer
 from mne_bids import BIDSPath, read_raw_bids
+
+logger = logging.getLogger(__name__)
 
 
 _ALNUM_RE = re.compile(r"^[A-Za-z0-9]+$")
@@ -321,3 +326,60 @@ def load_meas_datetimes(bids_root: Path) -> pd.Series:
     except TypeError:
         meas_series = meas_series.dt.tz_localize(None)
     return meas_series
+
+
+def load_eeg_data(
+    bids_root: Path,
+    use_derivatives: bool = False,
+    subjects: Optional[List[str]] = None,
+    task: str = "clinical",
+    session: str = "01",
+    segment_duration: float = 10.0,
+    overlap: float = 0.0,
+    metadata_df: Optional[pd.DataFrame] = None,
+    subject_col: str = "Study ID",
+    target_col: str = "Group",
+    desc: str = "base",
+    condition: Optional[str] = None,
+) -> DataContainer:
+    """Load raw BIDS data or saved epoch derivatives into a DataContainer."""
+    subjects = subjects or []
+    external_metadata_df = metadata_df.copy()
+    external_metadata_df[subject_col] = external_metadata_df[subject_col].astype(int).map(
+        lambda value: f"{value:04d}"
+    )
+
+    if use_derivatives:
+        epochs_root = bids_root / "derivatives" / "preproc"
+        logger.info(f"Loading saved epochs from {epochs_root}")
+        return load_data(
+            mode="bids",
+            path=epochs_root,
+            datatype="eeg",
+            suffix="epo",
+            loading_mode="load_existing",
+            subjects=subjects if subjects else None,
+            event_id=condition if condition else None,
+            target_col=target_col,
+            subject_metadata_df=external_metadata_df,
+            subject_key=subject_col if external_metadata_df is not None else None,
+        )
+
+    logger.info(f"Loading data for {len(subjects)} subjects. Task: {task}")
+    container = load_data(
+        mode="bids",
+        path=bids_root,
+        task=task,
+        session=session,
+        loading_mode="epochs",
+        window_length=segment_duration,
+        stride=segment_duration - overlap,
+        subjects=subjects if subjects else None,
+        datatype="eeg",
+        suffix="eeg",
+        target_col=target_col,
+        subject_metadata_df=external_metadata_df,
+        subject_key=subject_col if external_metadata_df is not None else None,
+    )
+    logger.info(f"Initial Container Shape: {container.X.shape}, Dims: {container.dims}")
+    return container

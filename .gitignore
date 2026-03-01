@@ -11,5 +11,5 @@ plots/
 *egg-info/
 results*/
 .old
-analysis*/
+analysis_*/
 /derivatives

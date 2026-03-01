@@ -12,41 +12,39 @@ Available Reducers:
 - pca, umap, phate, isomap
 
 Available Visualizations:
-- Embeddings (2D/3D), loss history, scree plots, Shepard diagrams
-- Feature importance
+- Embeddings (2D/3D), loss history
 """
 
 import argparse
 import logging
 import random
 from pathlib import Path
-from typing import List, Dict, Optional, Literal
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
-from mne_bids import get_entity_vals
 
 # Project imports
-from eeg_adhd_epilepsy.utils.config import results_dir, csv_dir
+from eeg_adhd_epilepsy.utils.config import results_dir
 
 # Coco-pipe imports
+from coco_pipe.decoding import Experiment, ExperimentConfig
+from coco_pipe.decoding.configs import CVConfig, LogisticRegressionConfig
 from coco_pipe.dim_reduction.core import DimReduction
-from coco_pipe.io.structures import DataContainer
-from coco_pipe.io import load_data
-from coco_pipe.report.core import Report, Section, PlotlyElement, ImageElement
+from coco_pipe.report.core import Report, Section, PlotlyElement, ImageElement, TableElement
 from coco_pipe.viz import dim_reduction as viz
 from eeg_adhd_epilepsy.analysis.utils import (
-    add_derived_metadata_columns,
     add_embedding_plot,
-    align_subject_metadata,
-    apply_stacking_mode,
+    apply_representation,
     build_meta_dict,
-    capture_obs_metadata,
     coerce_sample_vector,
-    norm_id,
-    resolve_labels,
-    subject_from_id,
-    subject_key,
+    REPRESENTATION_CONFIG,
+)
+from eeg_adhd_epilepsy.io.bids import load_eeg_data
+from eeg_adhd_epilepsy.io.patients import (
+    clean_patients_df,
+    load_raw_patients_df,
+    validate_bids_coverage,
 )
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -57,316 +55,21 @@ ALL_REDUCERS = [
     "PCA", "UMAP", "PHATE", "ISOMAP"
 ]
 
-def load_bids_data(
-    bids_root: Path,
-    subjects: Optional[List[str]] = None,
-    task: str = "clinical",
-    session: str = "01",
-    segment_duration: float = 10.0,
-    overlap: float = 0.0,
-    stacking_mode: Literal["flat", "time_as_sample", "epoch_scalar_mean"] = "flat",
-    metadata_df: Optional[pd.DataFrame] = None,
-    subject_col: str = "Study ID",
-    target_col: str = "Group"
-) -> DataContainer:
-    """
-    Load EEG data from BIDS and structure into a DataContainer.
-    """
-    subjects = subjects or []
-    logger.info(f"Loading data for {len(subjects)} subjects. Task: {task}, Stacking: {stacking_mode}")
-
-    logger.info("Using coco_pipe.io.load_data for raw mode...")
-    container = load_data(
-        mode="bids",
-        path=bids_root,
-        task=task,
-        session=session,
-        loading_mode="epochs",
-        window_length=segment_duration,
-        stride=segment_duration - overlap,
-        subjects=subjects if subjects else None,
-        datatype="eeg",
-        suffix="eeg"
-    )
-    logger.info(f"Initial Container Shape: {container.X.shape}, Dims: {container.dims}")
-    obs_meta = capture_obs_metadata(container)
-    container = apply_stacking_mode(container, stacking_mode)
-    logger.info(f"Final Data Shape: {container.X.shape}")
-    logger.info(f"Final Dims: {container.dims}")
-    container = align_subject_metadata(container, obs_meta)
-
-    if metadata_df is not None:
-        logger.info(f"Merging metadata using subject key: '{subject_col}'")
-        if subject_col not in metadata_df.columns:
-            logger.warning(f"Subject column '{subject_col}' not found in metadata.")
-        else:
-            ext_df = metadata_df.drop_duplicates(subset=[subject_col]).copy()
-            subject_values = coerce_sample_vector(container.coords.get("subject"), container.X.shape[0])
-            if subject_values is None:
-                subject_values = np.array([subject_from_id(i) for i in container.ids])
-            current_df = pd.DataFrame({"subject": subject_values})
-            current_df["match_key"] = current_df["subject"].apply(subject_key)
-            ext_df["match_key"] = ext_df[subject_col].apply(subject_key)
-            merged = pd.merge(
-                current_df, ext_df, on="match_key", how="left", suffixes=("", "_ext")
-            )
-            merged = merged.loc[:, ~merged.columns.str.contains("^Unnamed")]
-            for col in merged.columns:
-                if col != "match_key":
-                    container.coords[col] = merged[col].values
-
-    if target_col in container.coords:
-        container.y = np.array(container.coords[target_col]).astype(str)
-    if container.y is None and 'subject' in container.coords:
-        container.y = container.coords['subject']
-
-    return container
+DEFAULT_CONDITIONS = [
+    "EO_baseline",
+    "EC_baseline",
+    "HV_EO",
+    "HV_EC",
+    "PostHV_EO",
+    "PostHV_EC",
+    "PHOTO_EO",
+    "PHOTO_EC",
+]
 
 
-def load_derivatives_data(
-    bids_root: Path,
-    subjects: Optional[List[str]] = None,
-    segment_duration: float = 10.0,
-    overlap: float = 0.0,
-    stacking_mode: Literal["flat", "time_as_sample", "epoch_scalar_mean"] = "flat",
-    metadata_df: Optional[pd.DataFrame] = None,
-    subject_col: str = "Study ID",
-    target_col: str = "Group",
-    desc: str = "base",
-    condition: Optional[str] = None,
-    ignore_annotations: bool = True,
-    subject_average: bool = False
-) -> DataContainer:
-    """
-    Load preprocessed EEG data (desc-base) from derivatives/preproc using exhaustive search.
-    Manually constructs a DataContainer.
-    """
-    import mne
-    from tqdm import tqdm
-    
-    # 1. Extensive Search for Files
-    preproc_root = bids_root / "derivatives" / "preproc"
-    logger.info(f"Searching for *desc-{desc}_eeg.fif in {preproc_root}...")
-    
-    # Use discover_bids_files if possible, but it searches for .vhdr primarily in config
-    # Let's stick to Path.rglob for simplicity as we know the structure is derivatives/preproc
-    # Or use the exact pattern we know works.
-    files_to_load = sorted(list(preproc_root.rglob(f"*desc-{desc}_eeg.fif")))
-    
-    if not files_to_load:
-        raise FileNotFoundError(f"No preprocessed files found in {preproc_root}")
-        
-    # 2. Filter Subjects
-    if subjects:
-        filtered_files = []
-        normalized_subjects = [s if s.startswith('sub-') else f"sub-{s}" for s in subjects]
-        for f in files_to_load:
-             sid = f.name.split('_')[0]
-             if sid in normalized_subjects:
-                 filtered_files.append(f)
-        files_to_load = filtered_files
-        
-    logger.info(f"Selected {len(files_to_load)} files for loading.")
-    if not files_to_load:
-         raise ValueError("No files matching subject selection found.")
-
-    # 3. Load and Segment Data
-    all_epochs = []
-    all_ids = []
-    
-    # Metadata accumulator
-    # We will accumulate all subjects and then merge with DataFrame later
-    # to avoid repeated lookups.
-    epoch_subjects = [] 
-    
-    for fpath in tqdm(files_to_load, desc="Loading Subjects"):
-        # Load Raw
-        raw = mne.io.read_raw_fif(fpath, preload=True, verbose="ERROR")
-        sid = fpath.name.split('_')[0]
-        
-        # Find segments CSV for this subject in BIDS root
-        # Pattern: sub-sid/ses-??/eeg/sub-sid_ses-??_task-clinical_segments.csv
-        segments_files = list(bids_root.rglob(f"{sid}_*task-clinical_segments.csv"))
-        
-        if not segments_files:
-            logger.warning(f"No segments.csv found for {sid} in {bids_root}. Skipping.")
-            continue
-        
-        csv_path = segments_files[0]
-        try:
-            df_segments = pd.read_csv(csv_path)
-        except Exception as e:
-            logger.error(f"Failed to read segments CSV {csv_path}: {e}")
-            continue
-
-        # Condition Filtering logic strictly using CSV
-        if condition:
-            cond_lower = condition.lower()
-            target_types = []
-            
-            # Dynamic mapping of requested condition to CSV segment_type
-            if cond_lower == "baseline_eo" or cond_lower == "eo_baseline":
-                target_types = ["EO_baseline"]
-            elif cond_lower == "baseline_ec" or cond_lower == "ec_baseline":
-                target_types = ["EC_baseline"]
-            elif cond_lower == "hv":
-                target_types = [t for t in df_segments['segment_type'].unique() if str(t).startswith("HV")]
-            elif cond_lower == "photo":
-                target_types = [t for t in df_segments['segment_type'].unique() if str(t).startswith("PHOTO")]
-            elif cond_lower == "raw_baseline":
-                target_types = ["RAW_baseline"]
-            else:
-                # Direct match fallback
-                target_types = [condition]
-            
-            mask = df_segments['segment_type'].isin(target_types)
-            filtered = df_segments[mask]
-            
-            if filtered.empty:
-                logger.warning(f"Condition '{condition}' (targets: {target_types}) not found in segments for {sid}. Skipping.")
-                continue
-            
-            logger.info(f"Found {len(filtered)} segments for {sid} matching {condition}")
-            events_list = []
-            for _, seg in filtered.iterrows():
-                t_start = float(seg['t_start'])
-                t_stop = float(seg['t_stop'])
-                if t_stop - t_start < segment_duration:
-                    continue
-                try:
-                    # Make fixed length events WITHIN this block according to CSV timing
-                    chunk_events = mne.make_fixed_length_events(
-                        raw, id=1, start=t_start, stop=t_stop, duration=segment_duration, overlap=overlap
-                    )
-                    events_list.append(chunk_events)
-                except Exception as err:
-                    logger.warning(f"Failed to create events for {sid} [{t_start}, {t_stop}]: {err}")
-                    continue        
-            if not events_list:
-                logger.warning(f"No events created for condition {condition} in {sid} within CSV boundaries.")
-                continue
-            events = np.concatenate(events_list)
-            events = events[events[:, 0].argsort()]
-            logger.info(f"Total events for {sid}: {len(events)}")
-        else:
-            # Use whole file
-            events = mne.make_fixed_length_events(
-                raw, id=1, start=0, stop=None, duration=segment_duration, overlap=overlap
-            )
-        
-        if len(events) == 0:
-            logger.warning(f"No events found for {sid}")
-            continue
-            
-        epochs = mne.Epochs(
-            raw, events, tmin=0, tmax=segment_duration, baseline=None,
-            reject=None, verbose="ERROR", preload=True, proj=False,
-            reject_by_annotation=not ignore_annotations
-        )
-        
-        # Extract Data
-        if len(epochs) == 0:
-            logger.warning(f"Epochs object for {sid} is empty after creation. Events: {len(events)}")
-            continue
-            
-        data = epochs.get_data() # (n_epochs, n_channels, n_times)
-        logger.info(f"Successfully loaded {data.shape[0]} epochs for {sid}")
-        
-        if data.shape[0] > 0:
-            all_epochs.append(data)
-            
-            n_ep = data.shape[0]
-            # ID: subject_idx
-            start_idx = len(all_ids)
-            new_ids = [f"{sid}_{i}" for i in range(start_idx, start_idx+n_ep)]
-            all_ids.extend(new_ids)
-            epoch_subjects.extend([sid] * n_ep)
-            
-    if not all_epochs:
-        raise RuntimeError(f"No valid epochs loaded. Check if condition '{condition}' exists in the data.")
-        
-    X_all = np.concatenate(all_epochs, axis=0) # (N, C, T)
-    
-    # 4. Construct DataContainer
-    coords = {
-        'subject': np.array(epoch_subjects),
-        'channel': np.array(epochs.ch_names),
-        'time': epochs.times
-    }
-    if condition:
-        coords['condition'] = np.array([condition] * len(epoch_subjects))
-    
-    container = DataContainer(
-        X=X_all,
-        dims=('obs', 'channel', 'time'),
-        coords=coords,
-        ids=np.array(all_ids)
-    )
-
-    # 4.5 Optional: Subject-Level Averaging
-    if subject_average:
-        logger.info(f"Averaging data across segments per subject. Groups sample: {coords['subject'][:5]}")
-        logger.info(f"Unique subjects in coords: {pd.Series(coords['subject']).unique()}")
-        container = container.aggregate(by='subject', method='mean')
-        logger.info(f"Shape after averaging: {container.X.shape}")
-
-    obs_meta = capture_obs_metadata(container)
-    container = apply_stacking_mode(container, stacking_mode)
-    container = align_subject_metadata(container, obs_meta)
-
-    # -------------------------------------------------------------------------
-    # 6. Metadata Integration (ON FINAL FLATTENED CONTAINER)
-    # -------------------------------------------------------------------------
-    if metadata_df is not None:
-        logger.info(f"Merging external metadata from CSV onto {container.X.shape[0]} samples...")
-        csv_df = metadata_df.copy()
-        
-        if subject_col in csv_df.columns:
-            csv_df['match_id'] = csv_df[subject_col].apply(norm_id)
-            
-            sub_vals = container.coords.get('subject', container.ids)
-            if sub_vals is not None:
-                # Normalize container IDs too
-                sub_series = pd.Series(sub_vals, name='subject_key').astype(str).str.strip().apply(norm_id)
-                merged = pd.merge(sub_series, csv_df, left_on='subject_key', right_on='match_id', how='left')
-                merged = add_derived_metadata_columns(merged)
-
-                # Ensure normalized subject is back in coords
-                container.coords['subject'] = merged['subject_key'].values
-                cols_to_add = [
-                    'Age_Group', 'Diagnosis_Combined', 'ASM_Types', 
-                    'ASM_dichotomous', 'Meds', 'Psychostim_Category_Mapped',
-                    'TDAH', 'TSA', 'Epilepsy', 'Sex', 'Age', 'Group'
-                ]
-                for col in cols_to_add:
-                    if col in merged.columns:
-                         container.coords[col] = merged[col].values
-
-                if target_col in container.coords:
-                     container.y = np.array(container.coords[target_col]).astype(str)
-                else:
-                    for fb in ['Diagnosis_Combined', 'Meds', 'ASM_dichotomous', 'Age_Group', 'Sex']:
-                        if fb in container.coords:
-                             container.y = np.array(container.coords[fb]).astype(str)
-                             logger.info(f"Target col '{target_col}' missing. Using '{fb}'.")
-                             break
-
-    if container.y is None:
-        subject_y = coerce_sample_vector(container.coords.get('subject'), container.X.shape[0])
-        if subject_y is not None:
-            container.y = subject_y.astype(str)
-
-    if container.y is not None:
-        container.y = np.array(container.y).astype(str)
-    
-    return container
-
-
-def compute_all_embeddings(
+def compute_embeddings(
     X: np.ndarray,
     reducer_names: List[str],
-    n_components: int = 2,
-    n_components_3d: int = 3
 ) -> Dict[str, Dict]:
     """
     Compute embeddings for all reducers in both 2D and 3D.
@@ -375,59 +78,133 @@ def compute_all_embeddings(
 
     for name in reducer_names:
         logger.info(f"Computing embeddings for {name}...")
-        results[name] = {}
-        
+        results[name] = {
+            "embedding_2d": None,
+            "reducer_2d": None,
+            "embedding_3d": None,
+            "reducer_3d": None,
+        }
         try:
-            dr_2d = DimReduction(method=name, n_components=n_components)
-            X_emb_2d = dr_2d.fit_transform(X)
-            results[name]['embedding_2d'] = X_emb_2d
-            results[name]['reducer_2d'] = dr_2d
-        except Exception as e:
-            logger.error(f"Failed to compute 2D {name}: {e}")
-            results[name]['embedding_2d'] = None
-            results[name]['reducer_2d'] = None
-            
+            dr_2d = DimReduction(method=name, n_components=2)
+            results[name]["embedding_2d"] = dr_2d.fit_transform(X)
+            results[name]["reducer_2d"] = dr_2d
+        except Exception as err:
+            logger.warning(f"Failed to compute 2D {name}: {err}")
+
         try:
-            dr_3d = DimReduction(method=name, n_components=n_components_3d)
-            X_emb_3d = dr_3d.fit_transform(X)
-            results[name]['embedding_3d'] = X_emb_3d
-            results[name]['reducer_3d'] = dr_3d
-        except Exception as e:
-            logger.error(f"Failed to compute 3D {name}: {e}")
-            results[name]['embedding_3d'] = None
-            results[name]['reducer_3d'] = None
-            
+            dr_3d = DimReduction(method=name, n_components=3)
+            results[name]["embedding_3d"] = dr_3d.fit_transform(X)
+            results[name]["reducer_3d"] = dr_3d
+        except Exception as err:
+            logger.warning(f"Failed to compute 3D {name}: {err}")
     return results
 
 
-def create_reducer_section(
+def compute_embedding_separation_score(
+    embedding: Optional[np.ndarray],
+    labels: np.ndarray,
+    groups: np.ndarray,
+) -> float:
+    """Estimate class separation from an embedding using grouped CV balanced accuracy."""
+    if embedding is None:
+        return np.nan
+
+    y = np.asarray(labels).ravel().astype(str)
+    group_ids = np.asarray(groups).ravel().astype(str)
+    if embedding.shape[0] != y.shape[0] or embedding.shape[0] != group_ids.shape[0]:
+        return np.nan
+    if pd.Index(y).nunique() < 2:
+        return np.nan
+
+    subject_labels = pd.DataFrame({"group": group_ids, "label": y})
+    if subject_labels.groupby("group")["label"].nunique(dropna=False).max() > 1:
+        raise ValueError("Each Study ID must map to a single target label.")
+
+    grouped_y = subject_labels.groupby("group")["label"].first()
+    min_count = int(grouped_y.value_counts().min())
+    if min_count < 2:
+        return np.nan
+
+    n_splits = min(5, min_count)
+    experiment = Experiment(
+        ExperimentConfig(
+            task="classification",
+            tag="embedding-separation",
+            models={
+                "logreg": LogisticRegressionConfig(
+                    method="LogisticRegression",
+                    max_iter=1000,
+                    class_weight="balanced",
+                )
+            },
+            cv=CVConfig(
+                strategy="stratified_group_kfold",
+                n_splits=n_splits,
+                shuffle=True,
+                random_state=42,
+            ),
+            metrics=["balanced_accuracy"],
+            use_scaler=True,
+            verbose=False,
+            n_jobs=1,
+        )
+    )
+    result = experiment.run(np.asarray(embedding), y, groups=group_ids)
+    summary = result.summary()
+    return float(summary.loc["logreg", "balanced_accuracy_mean"])
+
+
+def build_condition_ranking_rows(
+    condition: str,
+    embeddings: Dict[str, Dict],
+    labels: np.ndarray,
+    groups: np.ndarray,
+    loaded_subjects: int,
+    loaded_epochs: int,
+    samples_used: int,
+) -> List[Dict[str, object]]:
+    """Build reducer ranking rows for one condition."""
+    rows: List[Dict[str, object]] = []
+    for reducer_name, reducer_results in embeddings.items():
+        for dimension, key in (("2D", "embedding_2d"), ("3D", "embedding_3d")):
+            score = compute_embedding_separation_score(
+                reducer_results.get(key),
+                labels,
+                groups,
+            )
+            rows.append(
+                {
+                    "condition": condition,
+                    "reducer": reducer_name,
+                    "dimension": dimension,
+                    "cv_balanced_accuracy": score,
+                    "loaded_subjects": loaded_subjects,
+                    "loaded_epochs": loaded_epochs,
+                    "samples_used": samples_used,
+                }
+            )
+    return rows
+
+
+def add_reducer_report_elements(
+    section: Section,
+    condition: str,
     name: str,
-    embedding_results: Dict,
+    embeddings: Dict,
     labels: Optional[np.ndarray],
-    X_orig: np.ndarray,
     meta_dict: Optional[Dict[str, np.ndarray]] = None,
     interactive: bool = True
-) -> Section:
-    """
-    Create a comprehensive report section for a single reducer.
-    
-    Parameters
-    ----------
-    meta_dict : dict, optional
-        Dictionary of metadata columns for interactive color dropdown.
-        Keys are column names, values are arrays of values per sample.
-    """
-    sec = Section(title=name.upper(), icon="📉")
-
-    emb_2d = embedding_results.get("embedding_2d")
-    emb_3d = embedding_results.get("embedding_3d")
-    reducer_2d = embedding_results.get("reducer_2d")
+) -> None:
+    """Add 2D/3D reducer plots and diagnostics to an existing section."""
+    emb_2d = embeddings.get("embedding_2d")
+    emb_3d = embeddings.get("embedding_3d")
+    reducer_2d = embeddings.get("reducer_2d")
 
     n_2d = emb_2d.shape[0] if emb_2d is not None else 0
     labels_2d = coerce_sample_vector(labels, n_2d) if n_2d else None
     if labels is not None and n_2d and labels_2d is None:
         logger.warning(
-            f"Skipping labels for {name} 2D plot due to size mismatch "
+            f"Skipping labels for {condition}/{name} 2D plot due to size mismatch "
             f"(labels={len(np.asarray(labels).ravel())}, samples={n_2d})."
         )
 
@@ -459,24 +236,26 @@ def create_reducer_section(
         try:
             reducer_diagnostics = reducer_2d.get_diagnostics() or {}
         except Exception as err:
-            logger.warning(f"Could not fetch diagnostics for {name}: {err}")
+            logger.warning(f"Could not fetch diagnostics for {condition}/{name}: {err}")
+
+    section.add_markdown(f"### {name.upper()}")
 
     add_embedding_plot(
-        section=sec,
+        section=section,
         embedding=emb_2d,
         labels=labels_2d,
         meta=meta_2d,
-        title=f"{name.upper()} - 2D Embedding",
+        title=f"{condition} - {name.upper()} - 2D",
         dimensions=2,
         interactive=interactive,
     )
 
     add_embedding_plot(
-        section=sec,
+        section=section,
         embedding=emb_3d,
         labels=labels_3d,
         meta=meta_3d,
-        title=f"{name.upper()} - 3D Embedding",
+        title=f"{condition} - {name.upper()} - 3D",
         dimensions=3,
         interactive=interactive,
     )
@@ -493,152 +272,58 @@ def create_reducer_section(
         if loss_array.size > 0:
             fig_loss = viz.plot_loss_history(
                 loss_history=loss_array,
-                title=f"{name.upper()} - Training Loss",
+                title=f"{condition} - {name.upper()} - Training Loss",
                 interactive=interactive,
             )
             if interactive:
-                sec.add_element(PlotlyElement(fig_loss))
+                section.add_element(PlotlyElement(fig_loss))
             else:
-                sec.add_element(ImageElement(fig_loss))
+                section.add_element(ImageElement(fig_loss))
 
-    # 4. Scree / Eigen diagnostics
-    variance_values = reducer_diagnostics.get("explained_variance_ratio_")
-    if variance_values is None and reducer_2d is not None:
-        reducer_obj = reducer_2d.reducer
-        if hasattr(reducer_obj, "explained_variance_ratio_"):
-            variance_values = reducer_obj.explained_variance_ratio_
 
-    if variance_values is not None:
-        variance_values = np.asarray(variance_values).ravel()
-        if variance_values.size > 0:
-            fig_scree = viz.plot_eigenvalues(
-                values=variance_values,
-                title=f"{name.upper()} - Explained Variance Ratio",
-                ylabel="Explained Variance Ratio",
-                interactive=interactive,
+def create_condition_section(
+    condition: str,
+    embeddings: Dict[str, Dict],
+    labels: np.ndarray,
+    meta_dict: Dict[str, np.ndarray],
+    ranking_rows: List[Dict[str, object]],
+    loaded_subjects: int,
+    loaded_epochs: int,
+    samples_used: int,
+    interactive: bool,
+) -> Section:
+    """Create one report section for a single condition."""
+    section = Section(title=condition, icon="🧠")
+    section.add_markdown(
+        f"Condition-specific embeddings for **{condition}**. "
+        f"Loaded subjects: **{loaded_subjects}**. "
+        f"Loaded epochs: **{loaded_epochs}**. "
+        f"Samples used after representation: **{samples_used}**."
+    )
+    ranking_df = pd.DataFrame(ranking_rows)
+    if not ranking_df.empty:
+        ranking_df = ranking_df.sort_values(
+            by=["dimension", "cv_balanced_accuracy"],
+            ascending=[True, False],
+        ).reset_index(drop=True)
+        section.add_element(
+            TableElement(
+                ranking_df[["reducer", "dimension", "cv_balanced_accuracy"]].round(4),
+                title="Reducer Ranking",
             )
-            if interactive:
-                sec.add_element(PlotlyElement(fig_scree))
-            else:
-                sec.add_element(ImageElement(fig_scree))
-    else:
-        eigenvalues = reducer_diagnostics.get("eigenvalues_")
-        if eigenvalues is None:
-            eigenvalues = reducer_diagnostics.get("eigs_")
-        if eigenvalues is None and reducer_2d is not None:
-            reducer_obj = reducer_2d.reducer
-            if hasattr(reducer_obj, "eigenvalues_"):
-                eigenvalues = reducer_obj.eigenvalues_
-            elif hasattr(reducer_obj, "eigs_"):
-                eigenvalues = reducer_obj.eigs_
-
-        if eigenvalues is not None:
-            eigenvalues = np.asarray(eigenvalues).ravel()
-            if np.iscomplexobj(eigenvalues):
-                eigenvalues = np.abs(eigenvalues)
-            if eigenvalues.size > 0:
-                fig_scree = viz.plot_eigenvalues(
-                    values=eigenvalues,
-                    title=f"{name.upper()} - Eigenvalues",
-                    ylabel="Eigenvalue",
-                    interactive=interactive,
-                )
-                if interactive:
-                    sec.add_element(PlotlyElement(fig_scree))
-                else:
-                    sec.add_element(ImageElement(fig_scree))
-
-    X_for_2d = None
-    if emb_2d is not None and X_orig is not None and X_orig.shape[0] == emb_2d.shape[0]:
-        X_for_2d = X_orig
-    elif emb_2d is not None and X_orig is not None:
-        logger.warning(
-            f"Skipping some {name} diagnostics: X/embedding size mismatch "
-            f"({X_orig.shape[0]} vs {emb_2d.shape[0]})."
         )
 
-    # 5. Shepard Diagram
-    if emb_2d is not None and X_for_2d is not None:
-        X_shepard = X_for_2d
-        emb_shepard = emb_2d
-        fig_shepard = None
-        if reducer_2d is not None:
-            try:
-                fig_shepard = reducer_2d.plot(
-                    mode="shepard",
-                    X=X_shepard,
-                    sample_size=min(500, X_shepard.shape[0]),
-                    title=f"{name.upper()} - Shepard Diagram",
-                    interactive=interactive,
-                )
-            except Exception as err:
-                logger.warning(f"Reducer Shepard plot failed for {name}: {err}")
-
-        if fig_shepard is None:
-            try:
-                fig_shepard = viz.plot_shepard_diagram(
-                    X_orig=X_shepard,
-                    X_emb=emb_shepard,
-                    sample_size=min(500, X_shepard.shape[0]),
-                    title=f"{name.upper()} - Shepard Diagram",
-                    interactive=interactive,
-                )
-            except Exception as err:
-                logger.warning(f"Could not create Shepard diagram for {name}: {err}")
-
-        if fig_shepard is not None:
-            if interactive:
-                sec.add_element(PlotlyElement(fig_shepard))
-            else:
-                sec.add_element(ImageElement(fig_shepard))
-
-    return sec
-
-
-def create_feature_importance_section(
-    embedding_results: Dict[str, Dict],
-    feature_names: Optional[List[str]] = None,
-    top_n: int = 20,
-    interactive: bool = True
-) -> Optional[Section]:
-    """
-    Create feature importance section for PCA-based methods.
-    """
-    sec = Section(title="Feature Importance", icon="🎯")
-    added_content = False
-    
-    for name in ['PCA']:
-        res = embedding_results.get(name, {})
-        reducer = res.get('reducer_2d')
-        
-        if reducer is not None:
-            reducer_obj = reducer.reducer
-            if hasattr(reducer_obj, 'components_'):
-                try:
-                    loadings = np.abs(reducer_obj.components_).sum(axis=0)
-                    
-                    if feature_names is None:
-                        feature_names_local = [f"Feature {i}" for i in range(len(loadings))]
-                    else:
-                        feature_names_local = feature_names[:len(loadings)]
-                    
-                    importance_scores = dict(zip(feature_names_local, loadings))
-                    
-                    fig = viz.plot_feature_importance(
-                        scores=importance_scores,
-                        title=f"{name.upper()} - Feature Importance",
-                        top_n=top_n,
-                        interactive=interactive
-                    )
-                    if interactive:
-                        sec.add_element(PlotlyElement(fig))
-                    else:
-                        sec.add_element(ImageElement(fig))
-                    added_content = True
-                except Exception as e:
-                    logger.warning(f"Could not create feature importance for {name}: {e}")
-    
-    return sec if added_content else None
+    for reducer_name, reducer_results in embeddings.items():
+        add_reducer_report_elements(
+            section=section,
+            condition=condition,
+            name=reducer_name,
+            embeddings=reducer_results,
+            labels=labels,
+            meta_dict=meta_dict,
+            interactive=interactive,
+        )
+    return section
 
 def main():
     parser = argparse.ArgumentParser(description="Run Comprehensive EEG DimReduction Pipeline")
@@ -649,19 +334,26 @@ def main():
     parser.add_argument("--output_dir", default=results_dir, help="Output directory")
     parser.add_argument("--dataset_name", required=True, help="Name for this analysis run")
     
-    parser.add_argument("--condition", default=None, help="Condition filter (used with --use_derivatives)")
+    parser.add_argument(
+        "--conditions",
+        nargs="+",
+        default=DEFAULT_CONDITIONS,
+        choices=DEFAULT_CONDITIONS,
+        help="Conditions to evaluate for separation ranking.",
+    )
     parser.add_argument("--segment_duration", type=float, default=60.0, help="Segment duration in seconds")
     parser.add_argument("--overlap", type=float, default=0.0, help="Window overlap in seconds")
     
     parser.add_argument(
-        "--stacking_mode",
-        choices=["flat", "time_as_sample", "epoch_scalar_mean"],
-        default="flat",
+        "--representation",
+        choices=list(REPRESENTATION_CONFIG.keys()),
+        default="epoch_flat",
         help=(
-            "Feature layout for reducers: "
-            "'flat' => columns=(channel x time), "
-            "'time_as_sample' => columns=channel, "
-            "'epoch_scalar_mean' => columns=1 (mean over channel x time per epoch)"
+            "Combined sample granularity + feature layout: "
+            "'epoch_flat' => one row per epoch, columns=(channel x time); "
+            "'epoch_time_as_sample' => one row per time-step, columns=channel; "
+            "'epoch_scalar_mean' => one row per epoch, columns=1 scalar mean; "
+            "'subject_*' variants first average epochs per subject then apply same layout."
         ),
     )
     
@@ -670,8 +362,6 @@ def main():
     parser.add_argument("--target_col", default="Group", help="Column to use as labels")
     
     parser.add_argument("--reducers", nargs="+", default=ALL_REDUCERS, help="List of reducers")
-    parser.add_argument("--n_components_2d", type=int, default=2, help="Components for 2D")
-    parser.add_argument("--n_components_3d", type=int, default=3, help="Components for 3D")
     parser.add_argument(
         "--interactive",
         action=argparse.BooleanOptionalAction,
@@ -684,7 +374,7 @@ def main():
         help="Save per-reducer static PNG embeddings in addition to the HTML report",
     )
     parser.add_argument("--save_embeddings", action="store_true", help="Save embeddings to disk")
-    parser.add_argument("--use_derivatives", action="store_true", help="Load from derivatives/preproc instead of raw BIDS")
+    parser.add_argument("--use_derivatives", action="store_true", help="Load saved epoch derivatives instead of raw BIDS")
     parser.add_argument("--desc", default="base", help="Desc to load from derivatives (default: base)")
     parser.add_argument("--subjects", nargs="+", default=None, help="Specific subjects to process")
     parser.add_argument(
@@ -693,7 +383,6 @@ def main():
         default=True,
         help="Ignore BAD_ annotations during epoching (use --no-ignore-annotations to enforce them)",
     )
-    parser.add_argument("--subject_average", action="store_true", help="Average all segments per subject into 1 point")
     
     args = parser.parse_args()
     
@@ -701,177 +390,271 @@ def main():
     logging.getLogger().setLevel(logging.INFO)
     
     interactive = args.interactive
+    logger.info(f"Using representation='{args.representation}'")
     
     # Setup Paths
     bids_root = Path(args.bids_root)
     out_path = Path(args.output_dir) / args.dataset_name
     out_path.mkdir(parents=True, exist_ok=True)
     
-    # Subject Selection
-    if args.subjects:
-        subjects = args.subjects
-        logger.info(f"Using provided subjects: {subjects}")
-    elif args.use_derivatives:
-        preproc_root = bids_root / "derivatives" / "preproc"
-        # Discover subjects from the derivatives directory
-        # Filenames look like sub-XXXX_desc-base_eeg.fif
-        derivatives_files = list(preproc_root.rglob(f"*desc-{args.desc}_eeg.fif"))
-        subjects = sorted(list(set([f.name.split('_')[0].replace('sub-', '') for f in derivatives_files])))
-        logger.info(f"Found {len(subjects)} subjects with {args.desc} preprocessed data.")
-    else:
-        subjects = get_entity_vals(bids_root, 'subject')
-        logger.info(f"Found {len(subjects)} subjects in BIDS root.")
+    coverage_root = (
+        bids_root / "derivatives" / "preproc"
+        if args.use_derivatives
+        else bids_root
+    )
+    coverage_desc = args.desc if args.use_derivatives else ""
+    coverage_suffix = "epo" if args.use_derivatives else None
 
-    # Load Metadata early for filtering
+    raw_meta_df = load_raw_patients_df(Path(args.metadata)) if args.metadata else None
+    metadata_path = Path(args.metadata) if args.metadata else None
+    coverage = validate_bids_coverage(
+        raw_meta_df,
+        coverage_root,
+        desc=coverage_desc,
+        suffix=coverage_suffix,
+        subject_col=args.subject_col,
+    )
+    available_subjects = coverage["present_subjects"]
+    subjects = [f"{int(subject):04d}" for subject in args.subjects] if args.subjects else available_subjects
+    subjects = [subject for subject in subjects if subject in set(available_subjects)]
+    logger.info(
+        f"Using {len(subjects)} available subjects from "
+        f"{'derivatives' if args.use_derivatives else 'BIDS'}."
+    )
+
     meta_df = None
-    if args.metadata:
-        try:
-            meta_df = pd.read_csv(args.metadata)
-            logger.info("Metadata loaded.")
-        except Exception as e:
-            logger.error(f"Failed to load metadata: {e}")
-    elif csv_dir:
-         default_csv = Path(csv_dir) / "demo_psychostim_vs_none.csv"
-         if default_csv.exists():
-             meta_df = pd.read_csv(default_csv)
-             logger.info(f"Loaded default metadata: {default_csv}")
-    
-    if meta_df is not None:
-        meta_df = meta_df.loc[:, ~meta_df.columns.str.contains('^Unnamed')]
-        
-        # Clinical Filtering: Exclude subjects with "0 (potentiel)" in diagnostic columns
-        diag_cols = ['TDAH', 'TSA', 'Epilepsy']
-        existing_diag_cols = [c for c in diag_cols if c in meta_df.columns]
-        if existing_diag_cols:
-            exclude_mask = meta_df[existing_diag_cols].astype(str).apply(
-                lambda x: x.str.lower().str.contains(r'0 \(potentiel\)')
-            ).any(axis=1)
-            
-            excluded_df = meta_df[exclude_mask]
-            if not excluded_df.empty:
-                excluded_ids = excluded_df[args.subject_col].apply(norm_id).tolist()
-                logger.info(f"Excluding {len(excluded_ids)} subjects due to 'Potential' status: {excluded_ids}")
-                
-                # Filter subjects list
-                subjects = [s for s in subjects if norm_id(s) not in excluded_ids]
-                logger.info(f"Remaining subjects after clinical filtering: {len(subjects)}")
+    meta_stats = None
+    if raw_meta_df is not None:
+        raw_meta_df = raw_meta_df[
+            raw_meta_df[args.subject_col].map(lambda value: f"{int(value):04d}").isin(available_subjects)
+        ].copy()
+        meta_df, meta_stats = clean_patients_df(raw_meta_df)
+        logger.info(f"Metadata loaded and cleaned from: {metadata_path}")
+        subjects = [
+            subject for subject in subjects
+            if subject in set(meta_df[args.subject_col].map(lambda value: f"{int(value):04d}"))
+        ]
+        logger.info(
+            "Metadata cleaning stats: "
+            f"potential_dropped={meta_stats.get('n_potential_dropped', 0)}, "
+            f"mismatches_dropped={meta_stats.get('n_mismatches_dropped', 0)}, "
+            f"duplicates_dropped={meta_stats.get('n_duplicates_dropped', 0)}"
+        )
 
     if args.subsample and args.subsample < len(subjects):
         random.seed(42)
         subjects = random.sample(subjects, args.subsample)
         logger.info(f"Subsampled to {len(subjects)} subjects.")
         
-    # Load Data (Already loaded metadata above)
-    if args.use_derivatives:
-        dc = load_derivatives_data(
-            bids_root=bids_root,
-            subjects=subjects if subjects else None,
-            segment_duration=args.segment_duration,
-            overlap=args.overlap,
-            stacking_mode=args.stacking_mode,
-            metadata_df=meta_df,
-            subject_col=args.subject_col,
-            target_col=args.target_col,
-            desc=args.desc,
-            condition=args.condition,
-            ignore_annotations=args.ignore_annotations,
-            subject_average=args.subject_average
-        )
-    else:
-        dc = load_bids_data(
-            bids_root=bids_root,
-            subjects=subjects if subjects else None,
-            task=args.task,
-            session=args.session,
-            segment_duration=args.segment_duration,
-            overlap=args.overlap,
-            stacking_mode=args.stacking_mode,
-            metadata_df=meta_df,
-            subject_col=args.subject_col,
-            target_col=args.target_col
-        )
-    
-    X = dc.X
-    labels = resolve_labels(dc, target_col=args.target_col)
+    logger.info("Generating condition-wise report...")
+    report = Report(title=f"DimReduction Condition Screening: {args.dataset_name}")
+    condition_summary_rows: List[Dict[str, object]] = []
+    ranking_rows: List[Dict[str, object]] = []
+    condition_sections: List[Section] = []
 
-    logger.info(
-        f"Data shape: {X.shape}, Labels: {labels.shape if labels is not None else 'None'}"
-    )
-    
-    # Compute All Embeddings (2D and 3D)
-    embedding_results = compute_all_embeddings(
-        X=X,
-        reducer_names=args.reducers,
-        n_components=args.n_components_2d,
-        n_components_3d=args.n_components_3d
-    )
-    
-    # Save embeddings if requested
-    if args.save_embeddings:
-        embeddings_dir = out_path / "embeddings"
-        embeddings_dir.mkdir(exist_ok=True)
-        for name, res in embedding_results.items():
-            if res['embedding_2d'] is not None:
-                np.save(embeddings_dir / f"{name}_2d.npy", res['embedding_2d'])
-            if res['embedding_3d'] is not None:
-                np.save(embeddings_dir / f"{name}_3d.npy", res['embedding_3d'])
-        logger.info(f"Embeddings saved to {embeddings_dir}")
-    
-    # Generate Report
-    logger.info("Generating Report...")
-    report = Report(title=f"Comprehensive DimReduction Analysis: {args.dataset_name}")
-    report.add_container(dc)
-    
-    meta_dict = build_meta_dict(dc)
-    logger.info(f"Available labels for color coding: {list(meta_dict.keys())}")
-    
-    # Section 1: Individual Reducer Sections
-    for name in args.reducers:
-        if name in embedding_results:
-            sec = create_reducer_section(
-                name=name,
-                embedding_results=embedding_results[name],
-                labels=labels,
-                X_orig=X,
-                meta_dict=meta_dict,
-                interactive=interactive
+    for condition in args.conditions:
+        logger.info(f"Loading condition '{condition}'")
+        try:
+            dc_loaded = load_eeg_data(
+                bids_root=bids_root,
+                use_derivatives=args.use_derivatives,
+                subjects=subjects if subjects else None,
+                task=args.task,
+                session=args.session,
+                segment_duration=args.segment_duration,
+                overlap=args.overlap,
+                metadata_df=meta_df,
+                subject_col=args.subject_col,
+                target_col=args.target_col,
+                desc=args.desc,
+                condition=condition,
             )
-            report.add_section(sec)
-    
-    # Section 2: Feature Importance (if applicable)
-    feat_section = create_feature_importance_section(
-        embedding_results=embedding_results,
-        top_n=20,
-        interactive=interactive
+        except Exception as err:
+            logger.warning(f"Skipping {condition}: {err}")
+            condition_summary_rows.append(
+                {
+                    "condition": condition,
+                    "status": "load_failed",
+                    "loaded_subjects": 0,
+                    "loaded_epochs": 0,
+                    "samples_used": 0,
+                    "best_2d_reducer": None,
+                    "best_2d_score": np.nan,
+                    "best_3d_reducer": None,
+                    "best_3d_score": np.nan,
+                }
+            )
+            continue
+
+        loaded_subjects = pd.Series(dc_loaded.coords[args.subject_col]).astype(str).unique().tolist()
+        missing_subjects = [subject for subject in subjects if subject not in set(loaded_subjects)]
+        loaded_epochs = int(dc_loaded.X.shape[0])
+        logger.info(f"{condition}: loaded data for {len(loaded_subjects)}/{len(subjects)} subjects.")
+        if missing_subjects:
+            logger.info(f"{condition}: skipped subjects during loading: {missing_subjects}")
+
+        logger.info(f"{condition}: applying representation '{args.representation}'")
+        dc = apply_representation(dc_loaded, args.representation, args.subject_col)
+        labels = np.asarray(dc.y).ravel().astype(str)
+        groups = np.asarray(dc.coords[args.subject_col]).ravel().astype(str)
+        logger.info(f"{condition}: final data shape {dc.X.shape}")
+
+        embeddings = compute_embeddings(X=dc.X, reducer_names=args.reducers)
+        meta_dict = build_meta_dict(dc)
+        logger.info(f"{condition}: color options {list(meta_dict.keys())}")
+
+        condition_ranking_rows = build_condition_ranking_rows(
+            condition=condition,
+            embeddings=embeddings,
+            labels=labels,
+            groups=groups,
+            loaded_subjects=len(loaded_subjects),
+            loaded_epochs=loaded_epochs,
+            samples_used=int(dc.X.shape[0]),
+        )
+        ranking_rows.extend(condition_ranking_rows)
+
+        condition_df = pd.DataFrame(condition_ranking_rows)
+        best_2d = condition_df[
+            (condition_df["dimension"] == "2D")
+            & condition_df["cv_balanced_accuracy"].notna()
+        ].sort_values(
+            "cv_balanced_accuracy", ascending=False, na_position="last"
+        )
+        best_3d = condition_df[
+            (condition_df["dimension"] == "3D")
+            & condition_df["cv_balanced_accuracy"].notna()
+        ].sort_values(
+            "cv_balanced_accuracy", ascending=False, na_position="last"
+        )
+        condition_summary_rows.append(
+            {
+                "condition": condition,
+                "status": "ok",
+                "loaded_subjects": len(loaded_subjects),
+                "loaded_epochs": loaded_epochs,
+                "samples_used": int(dc.X.shape[0]),
+                "best_2d_reducer": best_2d.iloc[0]["reducer"] if not best_2d.empty else None,
+                "best_2d_score": best_2d.iloc[0]["cv_balanced_accuracy"] if not best_2d.empty else np.nan,
+                "best_3d_reducer": best_3d.iloc[0]["reducer"] if not best_3d.empty else None,
+                "best_3d_score": best_3d.iloc[0]["cv_balanced_accuracy"] if not best_3d.empty else np.nan,
+            }
+        )
+
+        condition_sections.append(
+            create_condition_section(
+                condition=condition,
+                embeddings=embeddings,
+                labels=labels,
+                meta_dict=meta_dict,
+                ranking_rows=condition_ranking_rows,
+                loaded_subjects=len(loaded_subjects),
+                loaded_epochs=loaded_epochs,
+                samples_used=int(dc.X.shape[0]),
+                interactive=interactive,
+            )
+        )
+
+        if args.save_embeddings:
+            embeddings_dir = out_path / "embeddings" / condition
+            embeddings_dir.mkdir(parents=True, exist_ok=True)
+            for name, res in embeddings.items():
+                if res["embedding_2d"] is not None:
+                    np.save(embeddings_dir / f"{name}_2d.npy", res["embedding_2d"])
+                if res["embedding_3d"] is not None:
+                    np.save(embeddings_dir / f"{name}_3d.npy", res["embedding_3d"])
+
+        if args.save_static_figures:
+            figures_dir = out_path / "figures" / condition
+            figures_dir.mkdir(parents=True, exist_ok=True)
+            for name, res in embeddings.items():
+                emb_2d = res.get("embedding_2d")
+                if emb_2d is not None:
+                    fig = viz.plot_embedding(
+                        X_emb=emb_2d,
+                        labels=labels,
+                        dims=(0, 1),
+                        title=f"{condition} - {name.upper()}",
+                        interactive=False,
+                    )
+                    fig.savefig(figures_dir / f"{name}_embedding.png", dpi=150, bbox_inches="tight")
+                    import matplotlib.pyplot as plt
+                    plt.close(fig)
+
+    if not condition_sections:
+        raise RuntimeError("No conditions produced usable embeddings.")
+
+    overview_df = pd.DataFrame(
+        [
+            {
+                "dataset_name": args.dataset_name,
+                "representation": args.representation,
+                "target_col": args.target_col,
+                "reducers": ", ".join(args.reducers),
+                "requested_subjects": len(subjects),
+                "conditions_tested": ", ".join(args.conditions),
+            }
+        ]
     )
-    if feat_section:
-        report.add_section(feat_section)
-    
+    overview_sec = Section("Overview", icon="📋")
+    overview_sec.add_markdown(
+        "This report ranks **conditions** by how well each reducer separates the target labels "
+        "in 2D and 3D embeddings."
+    )
+    overview_sec.add_element(TableElement(overview_df, title="Run Configuration"))
+    report.add_section(overview_sec)
+
+    condition_summary_df = pd.DataFrame(condition_summary_rows)
+    summary_sec = Section("Condition Summary", icon="🧾")
+    summary_sec.add_markdown(
+        "Per-condition data availability and best reducer scores."
+    )
+    summary_sec.add_element(
+        TableElement(
+            condition_summary_df[
+                [
+                    "condition",
+                    "status",
+                    "loaded_subjects",
+                    "loaded_epochs",
+                    "samples_used",
+                    "best_2d_reducer",
+                    "best_2d_score",
+                    "best_3d_reducer",
+                    "best_3d_score",
+                ]
+            ].round(4),
+            title="Condition Summary",
+        )
+    )
+    report.add_section(summary_sec)
+
+    ranking_df = pd.DataFrame(ranking_rows)
+    if not ranking_df.empty:
+        ranking_sec = Section("Condition Ranking", icon="🏁")
+        ranking_sec.add_markdown(
+            "Cross-validated balanced accuracy on the low-dimensional embeddings. "
+            "Higher is better."
+        )
+        ranking_sec.add_element(
+            TableElement(
+                ranking_df.sort_values(
+                    by="cv_balanced_accuracy",
+                    ascending=False,
+                    na_position="last",
+                ).reset_index(drop=True).round(4),
+                title="Reducer x Condition Ranking",
+            )
+        )
+        report.add_section(ranking_sec)
+
+    for section in condition_sections:
+        report.add_section(section)
+
     # Save Report
     save_path = out_path / "report.html"
     report.save(save_path)
     logger.info(f"Report saved to: {save_path}")
-    
-    # Save static figures if requested
-    if args.save_static_figures:
-        figures_dir = out_path / "figures"
-        figures_dir.mkdir(exist_ok=True)
-        
-        for name, res in embedding_results.items():
-            emb_2d = res.get('embedding_2d')
-            if emb_2d is not None:
-                fig = viz.plot_embedding(
-                    X_emb=emb_2d,
-                    labels=labels,
-                    dims=(0, 1),
-                    title=f"{name.upper()} Embedding",
-                    interactive=False
-                )
-                fig.savefig(figures_dir / f"{name}_embedding.png", dpi=150, bbox_inches='tight')
-                import matplotlib.pyplot as plt
-                plt.close(fig)
-        
-        logger.info(f"Static figures saved to {figures_dir}")
 
 
 if __name__ == "__main__":
