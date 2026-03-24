@@ -496,6 +496,92 @@ aggregation:
     assert (combined_root / "pooled_subject_features_feature_columns.json").exists()
 
 
+def test_extract_descriptors_cli_skips_missing_subject_condition(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "descriptors.yaml"
+    config_path.write_text(
+        """
+precision: float32
+families:
+  bands:
+    enabled: true
+    outputs: [absolute_power]
+  parametric:
+    enabled: false
+  complexity:
+    enabled: false
+runtime:
+  execution_backend: sequential
+  n_jobs: 1
+  obs_chunk: 8
+  on_error: collect
+aggregation:
+  descriptors:
+    - name: mean_export
+      stats: mean
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        extract_descriptors,
+        "load_raw_patients_df",
+        lambda metadata_path: _demo_raw_metadata(),
+    )
+    monkeypatch.setattr(
+        extract_descriptors,
+        "clean_patients_df",
+        lambda df: (
+            df.copy(),
+            {
+                "n_potential_dropped": 0,
+                "n_mismatches_dropped": 0,
+                "n_duplicates_dropped": 0,
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        extract_descriptors,
+        "validate_bids_coverage",
+        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
+            "present_subjects": ["0001"]
+        },
+    )
+
+    def _load_demo_data(**kwargs):
+        condition = kwargs.get("condition")
+        if condition == "HV_EO":
+            raise RuntimeError("No valid data found in /tmp/mock_preproc")
+        return _demo_container_for_subjects(kwargs.get("subjects"))
+
+    monkeypatch.setattr(extract_descriptors, "load_eeg_data", _load_demo_data)
+
+    bids_root = tmp_path / "BIDS"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eeg-descriptors",
+            "--bids_root",
+            str(bids_root),
+            "--metadata",
+            str(tmp_path / "patients.csv"),
+            "--config",
+            str(config_path),
+            "--conditions",
+            "EO_baseline",
+            "HV_EO",
+        ],
+    )
+    extract_descriptors.main()
+
+    derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
+    assert (derivative_root / "sub-0001" / "eeg" / "EO_baseline" / "_SUCCESS").exists()
+    assert not (derivative_root / "sub-0001" / "eeg" / "HV_EO").exists()
+
+
 def test_extract_descriptors_cli_resumes_completed_shards(
     monkeypatch,
     tmp_path: Path,

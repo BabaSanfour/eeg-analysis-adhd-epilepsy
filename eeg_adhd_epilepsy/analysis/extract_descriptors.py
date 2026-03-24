@@ -431,16 +431,26 @@ def main() -> None:
             ].copy()
 
             LOGGER.info("Loading condition %s for subject %s", condition, subject)
-            dc_loaded = load_eeg_data(
-                bids_root=bids_root,
-                use_derivatives=True,
-                subjects=[subject],
-                metadata_df=subject_meta_df,
-                subject_col=args.subject_col,
-                target_col=args.target_col,
-                desc="base",
-                condition=condition,
-            )
+            try:
+                dc_loaded = load_eeg_data(
+                    bids_root=bids_root,
+                    use_derivatives=True,
+                    subjects=[subject],
+                    metadata_df=subject_meta_df,
+                    subject_col=args.subject_col,
+                    target_col=args.target_col,
+                    desc="base",
+                    condition=condition,
+                )
+            except RuntimeError as error:
+                if str(error).startswith("No valid data found in "):
+                    LOGGER.info(
+                        "Skipping %s / %s: no saved epochs found for this condition.",
+                        condition,
+                        subject,
+                    )
+                    continue
+                raise
             channel_names = [
                 str(name) for name in np.asarray(dc_loaded.coords["channel"], dtype=object)
             ]
