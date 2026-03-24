@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Shared helpers for analysis scripts."""
 
-import os
+from __future__ import annotations
+
+import json
 import logging
+import os
+from pathlib import Path
 from typing import Dict, Literal, Optional
 
 import numpy as np
@@ -43,6 +47,49 @@ REPRESENTATION_CONFIG = {
     "subject_time_as_sample": (True, "time_as_sample"),
     "subject_scalar_mean": (True, "epoch_scalar_mean"),
 }
+
+_SENSOR_DESCRIPTOR_FILES = (
+    "_SUCCESS",
+    "sensor_descriptor_bundle.npz",
+    "sensor_epoch_features.csv",
+    "sensor_epoch_features.parquet",
+    "sensor_epoch_features_feature_columns.json",
+    "sensor_subject_features.csv",
+    "sensor_subject_features.parquet",
+    "sensor_subject_features_feature_columns.json",
+    "failures.csv",
+)
+
+_POOLED_DESCRIPTOR_FILES = (
+    "pooled_epoch_features.csv",
+    "pooled_epoch_features.parquet",
+    "pooled_epoch_features_feature_columns.json",
+    "pooled_subject_features.csv",
+    "pooled_subject_features.parquet",
+    "pooled_subject_features_feature_columns.json",
+)
+
+
+def required_descriptor_files(include_pooled: bool) -> tuple[str, ...]:
+    """Return the expected shard file set for descriptor outputs."""
+    if include_pooled:
+        return _SENSOR_DESCRIPTOR_FILES + _POOLED_DESCRIPTOR_FILES
+    return _SENSOR_DESCRIPTOR_FILES
+
+
+def save_table(
+    df: pd.DataFrame,
+    base_path: Path,
+    feature_columns: list[str] | None = None,
+) -> None:
+    base_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(base_path.with_suffix(".parquet"), index=False)
+    df.to_csv(base_path.with_suffix(".csv"), index=False)
+    if feature_columns is not None:
+        (base_path.parent / f"{base_path.name}_feature_columns.json").write_text(
+            json.dumps(feature_columns, indent=2),
+            encoding="utf-8",
+        )
 
 
 def coerce_sample_vector(values, n_samples: int) -> Optional[np.ndarray]:
@@ -92,7 +139,9 @@ def to_epoch_scalar_mean(container: DataContainer) -> DataContainer:
     """Collapse each epoch to one scalar using stack + aggregate."""
     required_dims = {"obs", "channel", "time"}
     if not required_dims.issubset(set(container.dims)):
-        raise ValueError(f"epoch_scalar_mean requires dims {required_dims}, got {container.dims}")
+        raise ValueError(
+            f"epoch_scalar_mean requires dims {required_dims}, got {container.dims}"
+        )
 
     scalar_series = container.stack(dims=("obs", "channel", "time"), new_dim="obs")
     epoch_ids = np.array([str(i).rsplit("_", 2)[0] for i in scalar_series.ids])

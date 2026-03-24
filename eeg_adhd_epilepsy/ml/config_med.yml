@@ -4,7 +4,7 @@
 
 # Global parameters shared across analyses
 global_experiment_id: "meds__results_feature_selection_ofas2"
-data_path: "data/results/merged/features_patients.csv"
+data_path: "/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS/derivatives/signal_features/descriptors/combined/subject_features.csv"
 results_dir: "data/results/ml_meds"
 results_file: "meds_results_feature_selection_ofas2"
 

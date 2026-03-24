@@ -3,8 +3,8 @@
 # -----------------------------------------------------------------------------
 
 global_experiment_id: "epilepsy_merged_features"
-data_path: "/home/mat/EEG_psychostimulant/data/results/merged/features_patients.csv"
-results_dir: "/home/mat/EEG_psychostimulant/data/results/ml"
+data_path: "/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS/derivatives/signal_features/descriptors/combined/subject_features.csv"
+results_dir: "data/results/ml"
 results_file: "epilepsy_merged"
 
 defaults:

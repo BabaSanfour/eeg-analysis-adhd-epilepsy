@@ -3,7 +3,7 @@
 # -----------------------------------------------------------------------------
 
 global_experiment_id: "adhd_finetune_featureselection_nocomorbidities_onefeatureallsensors_results4"
-data_path: "data/results/merged/features_patients.csv"
+data_path: "/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS/derivatives/signal_features/descriptors/combined/subject_features.csv"
 results_dir: "data/results/ml"
 results_file: "adhd_finetune_nocomorbidities_onefeatureallsensors_featureselection4"
 

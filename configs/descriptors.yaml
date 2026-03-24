@@ -1,0 +1,100 @@
+input:
+  require_sfreq: true
+  require_channel_names: false
+
+precision: float32
+
+families:
+  bands:
+    enabled: true
+    psd_method: welch
+    fmin: 1.0
+    fmax: 45.0
+    bands:
+      delta: [1.0, 4.0]
+      theta: [4.0, 8.0]
+      alpha: [8.0, 13.0]
+      beta: [13.0, 30.0]
+      gamma: [30.0, 45.0]
+    outputs:
+      - absolute_power
+      - log_absolute_power
+      - relative_power
+      - corrected_absolute_power
+      - corrected_log_absolute_power
+      - corrected_relative_power
+    ratio_pairs:
+      - [delta, theta]
+      - [delta, alpha]
+      - [delta, beta]
+      - [delta, gamma]
+      - [theta, alpha]
+      - [theta, beta]
+      - [theta, gamma]
+      - [alpha, beta]
+      - [alpha, gamma]
+      - [beta, gamma]
+  parametric:
+    enabled: true
+    backend: specparam
+    psd_method: welch
+    freq_range: [1.0, 45.0]
+    peak_width_limits: [1.0, 12.0]
+    max_n_peaks: 6
+    aperiodic_mode: fixed
+    outputs:
+      - aperiodic
+      - fit_quality
+      - peak_summary
+  complexity:
+    enabled: true
+    backend: auto
+    measures:
+      - sample_entropy
+      - perm_entropy
+      - spectral_entropy
+      - hjorth_mobility
+      - hjorth_complexity
+      - lziv_complexity
+      - higuchi_fd
+      - petrosian_fd
+      - svd_entropy
+      - fuzzy_entropy
+      - hurst_exponent
+      - dispersion_entropy
+      - kurtosis
+      - zero_crossings
+
+pooling:
+  channel_groups:
+    front_left: [F7, F3]
+    front_midline: [Fz]
+    front_right: [F8, F4]
+    central_left: [T3, C3]
+    central_midline: [Cz]
+    central_right: [T4, C4]
+    posterior_left: [T5, P3, O1]
+    posterior_midline: [Pz]
+    posterior_right: [T6, P4, O2]
+
+runtime:
+  execution_backend: joblib
+  n_jobs: 16
+  obs_chunk: 16
+  on_error: collect
+
+aggregation:
+  descriptors:
+    - name: mean_export
+      stats: mean
+      exclude_prefixes: [band_abs_, band_corr_abs_]
+    - name: band_summaries
+      prefixes: [band_]
+      exclude_prefixes: [band_abs_, band_corr_abs_]
+      stats: [median, iqr]
+    - name: complexity_summaries
+      prefixes: [complexity_]
+      stats: [median, mad]
+    - name: param_summaries
+      prefixes: [param_]
+      stats: [median, iqr]
