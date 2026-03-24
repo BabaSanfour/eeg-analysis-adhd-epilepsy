@@ -2,7 +2,7 @@
 #SBATCH --job-name=eeg_desc
 #SBATCH --output=slurm-%x-%A_%a.out
 #SBATCH --error=slurm-%x-%A_%a.err
-#SBATCH --time=00:15:00
+#SBATCH --time=00:30:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --array=1-1000
