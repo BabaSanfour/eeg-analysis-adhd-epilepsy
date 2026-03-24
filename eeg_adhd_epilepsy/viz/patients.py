@@ -13,10 +13,7 @@ import pandas as pd
 import seaborn as sns
 import numpy as np
 
-EPILEPSY_MED_COLS = [
-    "LEV", "LTG", "LCS", "CLB", "CBZ", "VPA", "ETH", 
-    "TPM", "RUF", "BRV", "STP", "OXZ", "CBM"
-]
+from eeg_adhd_epilepsy.utils.metadata_schema import EPILEPSY_MED_COLS
 
 def _save_fig(fig: plt.Figure, out_path: Path):
     """Save figure to path with tight layout."""

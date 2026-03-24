@@ -11,7 +11,7 @@ import mne
 import pandas as pd
 from coco_pipe.io import load_data
 from coco_pipe.io.structures import DataContainer
-from mne_bids import BIDSPath, read_raw_bids
+from mne_bids import BIDSPath, get_entity_vals, read_raw_bids
 
 logger = logging.getLogger(__name__)
 
@@ -328,6 +328,67 @@ def load_meas_datetimes(bids_root: Path) -> pd.Series:
     return meas_series
 
 
+def validate_bids_coverage(
+    df: Optional[pd.DataFrame],
+    root: Path,
+    desc: Optional[str] = None,
+    suffix: Optional[str] = None,
+    subject_col: str = "study_id",
+) -> Dict[str, object]:
+    """Compare metadata subject ids against subjects present in a BIDS tree."""
+    root = Path(root)
+
+    ignore_descriptions = None
+    if desc is not None:
+        available_descs = set(get_entity_vals(root, "description"))
+        ignore_descriptions = sorted(item for item in available_descs if item != desc)
+
+    ignore_suffixes = None
+    if suffix == "epo":
+        ignore_suffixes = ["eeg"]
+    elif suffix == "eeg":
+        ignore_suffixes = ["epo"]
+
+    present = sorted(
+        set(
+            get_entity_vals(
+                root,
+                "subject",
+                ignore_descriptions=ignore_descriptions,
+                ignore_suffixes=ignore_suffixes,
+            )
+        )
+    )
+
+    results: Dict[str, object] = {
+        "present_subjects": present,
+        "present_count": len(present),
+    }
+
+    logger.info("Found %s subjects in %s", len(present), root)
+
+    if df is None or subject_col not in df.columns:
+        return results
+
+    expected = []
+    for subject in df[subject_col].dropna().unique():
+        subject_num = pd.to_numeric(subject, errors="coerce")
+        if pd.isna(subject_num):
+            continue
+        expected.append(f"{int(subject_num):04d}")
+
+    present_set = set(present)
+    missing = [subject for subject in expected if subject not in present_set]
+
+    results["expected_subjects"] = expected
+    results["expected_count"] = len(expected)
+    results["missing_subjects"] = missing
+    results["missing_study_ids"] = [int(subject) for subject in missing]
+    results["missing_count"] = len(missing)
+
+    return results
+
+
 def load_eeg_data(
     bids_root: Path,
     use_derivatives: bool = False,
@@ -337,17 +398,18 @@ def load_eeg_data(
     segment_duration: float = 10.0,
     overlap: float = 0.0,
     metadata_df: Optional[pd.DataFrame] = None,
-    subject_col: str = "Study ID",
+    subject_col: str = "study_id",
     target_col: str = "Group",
     desc: str = "base",
     condition: Optional[str] = None,
 ) -> DataContainer:
     """Load raw BIDS data or saved epoch derivatives into a DataContainer."""
     subjects = subjects or []
-    external_metadata_df = metadata_df.copy()
-    external_metadata_df[subject_col] = external_metadata_df[subject_col].astype(int).map(
-        lambda value: f"{value:04d}"
-    )
+    external_metadata_df = metadata_df.copy() if metadata_df is not None else None
+    if external_metadata_df is not None:
+        external_metadata_df[subject_col] = external_metadata_df[subject_col].astype(int).map(
+            lambda value: f"{value:04d}"
+        )
 
     if use_derivatives:
         epochs_root = bids_root / "derivatives" / "preproc"

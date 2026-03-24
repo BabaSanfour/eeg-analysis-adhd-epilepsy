@@ -40,12 +40,8 @@ from eeg_adhd_epilepsy.analysis.utils import (
     coerce_sample_vector,
     REPRESENTATION_CONFIG,
 )
-from eeg_adhd_epilepsy.io.bids import load_eeg_data
-from eeg_adhd_epilepsy.io.patients import (
-    clean_patients_df,
-    load_raw_patients_df,
-    validate_bids_coverage,
-)
+from eeg_adhd_epilepsy.io.bids import load_eeg_data, validate_bids_coverage
+from eeg_adhd_epilepsy.io.csv import load as load_csv
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -358,7 +354,7 @@ def main():
     )
     
     parser.add_argument("--subsample", type=int, default=None, help="Number of subjects to random sample")
-    parser.add_argument("--subject_col", default="Study ID", help="Column in metadata")
+    parser.add_argument("--subject_col", default="study_id", help="Column in cleaned metadata")
     parser.add_argument("--target_col", default="Group", help="Column to use as labels")
     
     parser.add_argument("--reducers", nargs="+", default=ALL_REDUCERS, help="List of reducers")
@@ -405,10 +401,10 @@ def main():
     coverage_desc = args.desc if args.use_derivatives else ""
     coverage_suffix = "epo" if args.use_derivatives else None
 
-    raw_meta_df = load_raw_patients_df(Path(args.metadata)) if args.metadata else None
+    meta_df = load_csv(str(Path(args.metadata)), sep=None) if args.metadata else None
     metadata_path = Path(args.metadata) if args.metadata else None
     coverage = validate_bids_coverage(
-        raw_meta_df,
+        meta_df,
         coverage_root,
         desc=coverage_desc,
         suffix=coverage_suffix,
@@ -422,24 +418,15 @@ def main():
         f"{'derivatives' if args.use_derivatives else 'BIDS'}."
     )
 
-    meta_df = None
-    meta_stats = None
-    if raw_meta_df is not None:
-        raw_meta_df = raw_meta_df[
-            raw_meta_df[args.subject_col].map(lambda value: f"{int(value):04d}").isin(available_subjects)
+    if meta_df is not None:
+        meta_df = meta_df[
+            meta_df[args.subject_col].map(lambda value: f"{int(value):04d}").isin(available_subjects)
         ].copy()
-        meta_df, meta_stats = clean_patients_df(raw_meta_df)
-        logger.info(f"Metadata loaded and cleaned from: {metadata_path}")
+        logger.info(f"Metadata loaded from: {metadata_path}")
         subjects = [
             subject for subject in subjects
             if subject in set(meta_df[args.subject_col].map(lambda value: f"{int(value):04d}"))
         ]
-        logger.info(
-            "Metadata cleaning stats: "
-            f"potential_dropped={meta_stats.get('n_potential_dropped', 0)}, "
-            f"mismatches_dropped={meta_stats.get('n_mismatches_dropped', 0)}, "
-            f"duplicates_dropped={meta_stats.get('n_duplicates_dropped', 0)}"
-        )
 
     if args.subsample and args.subsample < len(subjects):
         random.seed(42)

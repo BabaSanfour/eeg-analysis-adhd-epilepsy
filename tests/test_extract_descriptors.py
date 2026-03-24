@@ -265,8 +265,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_raw_patients_df",
-        lambda metadata_path: _demo_raw_metadata(),
+        "load_csv",
+        lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
         extract_descriptors,
@@ -406,8 +406,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_raw_patients_df",
-        lambda metadata_path: _demo_raw_metadata(),
+        "load_csv",
+        lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
         extract_descriptors,
@@ -527,8 +527,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_raw_patients_df",
-        lambda metadata_path: _demo_raw_metadata(),
+        "load_csv",
+        lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
         extract_descriptors,
@@ -616,8 +616,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_raw_patients_df",
-        lambda metadata_path: _demo_raw_metadata(),
+        "load_csv",
+        lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
         extract_descriptors,
@@ -723,8 +723,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_raw_patients_df",
-        lambda metadata_path: _demo_raw_metadata(),
+        "load_csv",
+        lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
         extract_descriptors,
@@ -820,8 +820,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_raw_patients_df",
-        lambda metadata_path: _demo_raw_metadata(),
+        "load_csv",
+        lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
         extract_descriptors,

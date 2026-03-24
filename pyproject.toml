@@ -38,18 +38,15 @@ dependencies = [
 Homepage = "https://github.com/"
 
 [project.scripts]
-eeg-embeddings = "eeg_analysis_adhd_epilepsy.dl.reve_model:main"
-eeg-dim-reduce = "eeg_analysis_adhd_epilepsy.viz.dim_reduction:main"
-eeg-analysis-explore = "eeg_analysis_adhd_epilepsy.explore.analysis_exploration:main"
-eeg-ml-run = "eeg_analysis_adhd_epilepsy.ml.run_ml_pipe:main"
-eeg-analysis = "eeg_psychostimulant.analysis.design:main"
-eeg-qc = "eeg_analysis_adhd_epilepsy.explore.eeg_qc:main"
+eeg-dim-reduce = "eeg_adhd_epilepsy.analysis.dimensionality_reduction:main"
+eeg-ml-run = "eeg_adhd_epilepsy.ml.run_ml_pipe:main"
 eeg-save-epochs = "eeg_adhd_epilepsy.preproc.epochs:main"
 eeg-descriptors = "eeg_adhd_epilepsy.analysis.extract_descriptors:main"
 eeg-merge-descriptors = "eeg_adhd_epilepsy.analysis.merge_descriptors:main"
+eeg-build-patients-metadata = "eeg_adhd_epilepsy.qc.metadata:main"
 
 [tool.setuptools]
-packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy*", "eeg_psychostimulant*"], exclude = ["tests*"] } }
+packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy*"], exclude = ["tests*"] } }
 
 [tool.ruff]
 line-length = 100

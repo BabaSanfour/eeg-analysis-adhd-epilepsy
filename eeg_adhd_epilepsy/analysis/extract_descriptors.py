@@ -39,12 +39,8 @@ from eeg_adhd_epilepsy.analysis.utils import (
     save_table,
 )
 
-from eeg_adhd_epilepsy.io.bids import load_eeg_data
-from eeg_adhd_epilepsy.io.patients import (
-    clean_patients_df,
-    load_raw_patients_df,
-    validate_bids_coverage,
-)
+from eeg_adhd_epilepsy.io.bids import load_eeg_data, validate_bids_coverage
+from eeg_adhd_epilepsy.io.csv import load as load_csv
 
 LOGGER = logging.getLogger(__name__)
 
@@ -290,8 +286,8 @@ def main() -> None:
     )
     parser.add_argument(
         "--subject_col",
-        default="Study ID",
-        help="Subject identifier column in metadata.",
+        default="study_id",
+        help="Subject identifier column in cleaned metadata.",
     )
     parser.add_argument(
         "--target_col",
@@ -359,27 +355,20 @@ def main() -> None:
         aggregated_ratio_floor = 0.0
 
     coverage_root = bids_root / "derivatives" / "preproc"
-    raw_meta_df = load_raw_patients_df(metadata_path)
+    meta_df = load_csv(str(metadata_path), sep=None)
     coverage = validate_bids_coverage(
-        raw_meta_df,
+        meta_df,
         coverage_root,
         desc=None,
         suffix="epo",
         subject_col=args.subject_col,
     )
     available_subjects = list(coverage["present_subjects"])
-    filtered_meta = raw_meta_df[
-        raw_meta_df[args.subject_col]
+    meta_df = meta_df[
+        meta_df[args.subject_col]
         .map(lambda value: f"{int(value):04d}")
         .isin(available_subjects)
     ].copy()
-    meta_df, meta_stats = clean_patients_df(filtered_meta)
-    LOGGER.info(
-        "Metadata cleaning stats: potential_dropped=%s, mismatches_dropped=%s, duplicates_dropped=%s",
-        meta_stats.get("n_potential_dropped", 0),
-        meta_stats.get("n_mismatches_dropped", 0),
-        meta_stats.get("n_duplicates_dropped", 0),
-    )
     valid_subjects = set(
         meta_df[args.subject_col].map(lambda value: f"{int(value):04d}")
     )

@@ -25,7 +25,8 @@ import seaborn as sns
 from io import BytesIO
 
 # Project imports
-from eeg_adhd_epilepsy.io.patients import load_raw_patients_df, clean_patients_df
+from eeg_adhd_epilepsy.io.csv import load as load_csv
+from eeg_adhd_epilepsy.io.patients import clean_patients_df
 from eeg_adhd_epilepsy.utils.config import bids_dir as default_bids_dir
 
 # --- CONFIGURATION ---
@@ -375,7 +376,7 @@ def main():
     
     # 1. Load Data
     logging.info("Loading data...")
-    df_raw = load_raw_patients_df(csv_path)
+    df_raw = load_csv(str(csv_path), sep=None)
     df_clean, stats = clean_patients_df(df_raw)
     
     # 2. Filter BIDS

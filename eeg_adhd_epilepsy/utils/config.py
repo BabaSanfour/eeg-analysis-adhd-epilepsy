@@ -43,19 +43,6 @@ derivatives_dir = _get_env_path("EEG_DERIVATIVES_DIR", os.path.join(data_dir, "d
 
 source_dirs = {"control": "Controls", "patients": "patients"}
 
-# Mapping to compute psychostimulant category based on description
-MAPPING_PSYCHOSTIMULANT = {
-    'no psychostimulants': 0,
-    'Lisdexamfetamine': 1,
-    'Lisdexamfetamine (d/c)': 1,
-    'Methylphenidate (d/c)': 2,
-    'Methylphenidate': 2,
-    'Methylphenidate, Methylphenidate': 2,
-    'Lisdexamfetamine, Methylphenidate': 3,
-    'Dextroamphetamine (Dexedrine)': 4,
-    'Amphetamine/dextroamphetamine salt (Adderall)': 5,
-}
-
 import re
 import yaml
 import logging
@@ -176,4 +163,3 @@ KNOWN_EVENT_LABELS = set(ANNOTATION_INTEREST_MAP.keys()) | set(CLINICAL_COMMENT_
 AGE_YEARS_PATTERN = re.compile(r"\b\d{1,2}\s*ans\b")
 DIGIT_PATTERN = re.compile(r"\d+")
 PHOTO_FREQ_PATTERN = re.compile(r"(\d+(?:\.\d+)?)\s*hz", flags=re.IGNORECASE)
-

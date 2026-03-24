@@ -13,12 +13,10 @@ from typing import Dict, List, Optional, Tuple, Any, Callable
 import numpy as np
 import pandas as pd
 
-from eeg_adhd_epilepsy.io.patients import (
-    load_raw_patients_df,
-    clean_patients_df,
-    validate_bids_coverage,
-    EPILEPSY_MED_COLS
-)
+from eeg_adhd_epilepsy.io.bids import validate_bids_coverage
+from eeg_adhd_epilepsy.io.csv import load as load_csv
+from eeg_adhd_epilepsy.io.patients import clean_patients_df
+from eeg_adhd_epilepsy.utils.metadata_schema import EPILEPSY_MED_COLS
 from eeg_adhd_epilepsy.viz.patients import (
     plot_diagnosis_prevalence,
     plot_medication_counts,
@@ -315,7 +313,7 @@ def main():
     
     # 1. Load & Clean
     logging.info(f"Loading {args.csv_file}...")
-    df_raw = load_raw_patients_df(args.csv_file)
+    df_raw = load_csv(str(args.csv_file), sep=None)
     df_clean, cleaning_stats = clean_patients_df(df_raw)
     
     # 2. Validate BIDS
