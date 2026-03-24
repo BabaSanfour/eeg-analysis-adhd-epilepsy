@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+module purge
+module load gcc arrow/23.0.1 python/3.11
+
 PROJECT_ROOT=${PROJECT_ROOT:-/home/h/hamza97/links/eeg-analysis-adhd-epilepsy}
 BIDS_ROOT=${BIDS_ROOT:-/home/h/hamza97/links/projects/aip-kjerbi/shared/eeg-epilepsy-adhd/BIDS}
 METADATA_PATH=${METADATA_PATH:-/home/h/hamza97/links/projects/aip-kjerbi/shared/eeg-epilepsy-adhd/csv/EEG_Psychostimulants_PatientList_08-2025.csv}
