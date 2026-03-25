@@ -332,7 +332,7 @@ def build_patients_metadata(
         removed_frames,
         working,
         potential_mask.reindex(working.index, fill_value=False),
-        "potential_diagnosis",
+        "non_confirmed_diagnosis",
     )
     working = _append_removed(
         removed_frames,
@@ -343,13 +343,13 @@ def build_patients_metadata(
         .str.strip()
         .str.upper()
         .isin({"NO EEG", "SEEG"}),
-        "invalid_eeg_date",
+        "no_eeg_files",
     )
     working = _append_removed(
         removed_frames,
         working,
         working["adhd"].isna() | working["autism"].isna(),
-        "missing_adhd_or_autism",
+        "missing_diagnosis",
     )
     working = _append_removed(
         removed_frames,

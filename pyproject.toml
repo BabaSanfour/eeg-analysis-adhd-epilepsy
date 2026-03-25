@@ -44,6 +44,7 @@ eeg-save-epochs = "eeg_adhd_epilepsy.preproc.epochs:main"
 eeg-descriptors = "eeg_adhd_epilepsy.analysis.extract_descriptors:main"
 eeg-merge-descriptors = "eeg_adhd_epilepsy.analysis.merge_descriptors:main"
 eeg-build-patients-metadata = "eeg_adhd_epilepsy.qc.metadata:main"
+eeg-cohort-report = "eeg_adhd_epilepsy.qc.cohort_report:main"
 
 [tool.setuptools]
 packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy*"], exclude = ["tests*"] } }
