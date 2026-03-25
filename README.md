@@ -32,6 +32,22 @@ eeg-build-patients-metadata
 
 The intended downstream entry point is `patients_metadata_clean.csv`.
 
+## Cohort Report Workflow
+
+The cohort report starts from `patients_metadata_clean.csv` and optionally reads `patients_metadata_removed.json` for provenance. The builder in [eeg_adhd_epilepsy/qc/cohort_report.py](/Users/hamzaabdelhedi/Projects/research/EEG_psychostim/eeg_analysis_adhd_epilepsy/eeg_adhd_epilepsy/qc/cohort_report.py) can:
+
+- build the full clean-cohort report directly
+- apply a cohort filter from a YAML file
+- optionally add recruitment milestones with `--with_recruitment`
+
+Run with:
+
+```bash
+eeg-cohort-report --metadata_csv /path/to/patients_metadata_clean.csv --output_dir /path/to/output
+```
+
+The main output is `cohort_report.html`, plus opportunity and recruitment CSVs when enabled.
+
 ## Installation
 
 Python `3.10+` is required.
