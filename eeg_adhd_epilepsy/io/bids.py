@@ -399,7 +399,7 @@ def load_eeg_data(
     overlap: float = 0.0,
     metadata_df: Optional[pd.DataFrame] = None,
     subject_col: str = "study_id",
-    target_col: str = "Group",
+    target_col: str | None = None,
     desc: str = "base",
     condition: Optional[str] = None,
 ) -> DataContainer:

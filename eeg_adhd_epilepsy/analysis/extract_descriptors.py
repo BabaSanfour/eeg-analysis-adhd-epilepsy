@@ -264,7 +264,7 @@ def main() -> None:
     parser.add_argument(
         "--metadata",
         required=True,
-        help="Path to the patient metadata CSV.",
+        help="Path to the canonical metadata CSV.",
     )
     parser.add_argument(
         "--config",
@@ -292,7 +292,7 @@ def main() -> None:
     parser.add_argument(
         "--target_col",
         default=None,
-        help="Optional label column to also expose as container y during aggregation.",
+        help="Optional canonical metadata column to also expose as container y during aggregation.",
     )
     args = parser.parse_args()
 

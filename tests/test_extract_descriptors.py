@@ -20,17 +20,19 @@ def _demo_container() -> DataContainer:
     X[:, 1, :] += np.sin(2 * np.pi * 6 * time)
     return DataContainer(
         X=X,
-        y=np.array(["CTRL", "CTRL", "ADHD", "ADHD"], dtype=object),
+        y=np.array(["Control", "Control", "ADHD", "ADHD"], dtype=object),
         ids=np.array(["0001_ep0", "0001_ep1", "0002_ep0", "0002_ep1"], dtype=object),
         dims=("obs", "channel", "time"),
         coords={
             "obs": np.array(["0001_ep0", "0001_ep1", "0002_ep0", "0002_ep1"], dtype=object),
             "channel": np.array(["Fz", "Cz"], dtype=object),
             "time": time,
-            "Study ID": np.array(["0001", "0001", "0002", "0002"], dtype=object),
-            "Group": np.array(["CTRL", "CTRL", "ADHD", "ADHD"], dtype=object),
-            "Age": np.array([10, 10, 13, 13], dtype=object),
-            "Sex": np.array(["F", "F", "M", "M"], dtype=object),
+            "study_id": np.array(["0001", "0001", "0002", "0002"], dtype=object),
+            "combined_diagnosis": np.array(
+                ["Control", "Control", "ADHD", "ADHD"], dtype=object
+            ),
+            "age": np.array([10, 10, 13, 13], dtype=object),
+            "sex": np.array(["F", "F", "M", "M"], dtype=object),
         },
         meta={"sfreq": 64.0},
     )
@@ -43,7 +45,7 @@ def _demo_container_for_subjects(subjects: list[str] | None = None) -> DataConta
     requested = {str(subject) for subject in subjects}
     obs_indices = [
         idx
-        for idx, subject in enumerate(np.asarray(container.coords["Study ID"], dtype=object))
+        for idx, subject in enumerate(np.asarray(container.coords["study_id"], dtype=object))
         if str(subject) in requested
     ]
     return container.isel(obs=obs_indices)
@@ -52,10 +54,10 @@ def _demo_container_for_subjects(subjects: list[str] | None = None) -> DataConta
 def _demo_raw_metadata() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "Study ID": ["0001", "0002"],
-            "Group": ["CTRL", "ADHD"],
-            "Age": [10, 13],
-            "Sex": ["F", "M"],
+            "study_id": ["0001", "0002"],
+            "combined_diagnosis": ["Control", "ADHD"],
+            "age": [10, 13],
+            "sex": ["F", "M"],
         }
     )
 
@@ -65,11 +67,11 @@ def test_table_helpers_preserve_metadata_and_feature_names() -> None:
     metadata_df = container.obs_table(
         include_ids=True,
         include_y=True,
-        y_col="Group",
+        y_col="combined_diagnosis",
     )
     metadata_df["obs_id"] = metadata_df["obs_id"].astype(str)
     metadata_df.insert(1, "condition", "EO_baseline")
-    metadata_df["subject"] = metadata_df["Study ID"].astype(str)
+    metadata_df["subject"] = metadata_df["study_id"].astype(str)
     ordered_columns = ["obs_id", "subject", "condition"]
     ordered_columns.extend(
         column for column in metadata_df.columns if column not in ordered_columns
@@ -115,7 +117,7 @@ def test_table_helpers_preserve_metadata_and_feature_names() -> None:
         coords[column] = metadata_df[column].to_numpy(dtype=object)
     feature_container = DataContainer(
         X=result["X"],
-        y=metadata_df["Group"].to_numpy(dtype=object),
+        y=metadata_df["combined_diagnosis"].to_numpy(dtype=object),
         ids=metadata_df["obs_id"].to_numpy(dtype=object),
         dims=("obs", "feature"),
         coords=coords,
@@ -127,7 +129,10 @@ def test_table_helpers_preserve_metadata_and_feature_names() -> None:
         min_count=1,
         on_insufficient="raise",
     )
-    agg_metadata_df = grouped_mean.obs_table(include_y=True, y_col="Group")
+    agg_metadata_df = grouped_mean.obs_table(
+        include_y=True,
+        y_col="combined_diagnosis",
+    )
     agg_metadata_df["condition"] = "EO_baseline"
     ordered_columns = ["subject", "condition", "epoch_count"]
     ordered_columns.extend(
@@ -215,7 +220,7 @@ def test_epoch_metadata_frame_requires_container_ids() -> None:
         container.obs_table(
             include_ids=True,
             include_y=True,
-            y_col="Group",
+            y_col="combined_diagnosis",
         )
 
 
@@ -267,18 +272,6 @@ aggregation:
         extract_descriptors,
         "load_csv",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
-    )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "clean_patients_df",
-        lambda df: (
-            df.copy(),
-            {
-                "n_potential_dropped": 0,
-                "n_mismatches_dropped": 0,
-                "n_duplicates_dropped": 0,
-            },
-        ),
     )
     monkeypatch.setattr(
         extract_descriptors,
@@ -411,18 +404,6 @@ aggregation:
     )
     monkeypatch.setattr(
         extract_descriptors,
-        "clean_patients_df",
-        lambda df: (
-            df.copy(),
-            {
-                "n_potential_dropped": 0,
-                "n_mismatches_dropped": 0,
-                "n_duplicates_dropped": 0,
-            },
-        ),
-    )
-    monkeypatch.setattr(
-        extract_descriptors,
         "validate_bids_coverage",
         lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
             "present_subjects": ["0001", "0002"]
@@ -532,18 +513,6 @@ aggregation:
     )
     monkeypatch.setattr(
         extract_descriptors,
-        "clean_patients_df",
-        lambda df: (
-            df.copy(),
-            {
-                "n_potential_dropped": 0,
-                "n_mismatches_dropped": 0,
-                "n_duplicates_dropped": 0,
-            },
-        ),
-    )
-    monkeypatch.setattr(
-        extract_descriptors,
         "validate_bids_coverage",
         lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
             "present_subjects": ["0001"]
@@ -618,18 +587,6 @@ aggregation:
         extract_descriptors,
         "load_csv",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
-    )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "clean_patients_df",
-        lambda df: (
-            df.copy(),
-            {
-                "n_potential_dropped": 0,
-                "n_mismatches_dropped": 0,
-                "n_duplicates_dropped": 0,
-            },
-        ),
     )
     monkeypatch.setattr(
         extract_descriptors,
@@ -728,18 +685,6 @@ aggregation:
     )
     monkeypatch.setattr(
         extract_descriptors,
-        "clean_patients_df",
-        lambda df: (
-            df.copy(),
-            {
-                "n_potential_dropped": 0,
-                "n_mismatches_dropped": 0,
-                "n_duplicates_dropped": 0,
-            },
-        ),
-    )
-    monkeypatch.setattr(
-        extract_descriptors,
         "validate_bids_coverage",
         lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
             "present_subjects": ["0001", "0002"]
@@ -822,18 +767,6 @@ aggregation:
         extract_descriptors,
         "load_csv",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
-    )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "clean_patients_df",
-        lambda df: (
-            df.copy(),
-            {
-                "n_potential_dropped": 0,
-                "n_mismatches_dropped": 0,
-                "n_duplicates_dropped": 0,
-            },
-        ),
     )
     monkeypatch.setattr(
         extract_descriptors,

@@ -18,6 +18,7 @@ from coco_pipe.io.structures import DataContainer
 from coco_pipe.report.core import ImageElement, PlotlyElement, Section
 from coco_pipe.viz import dim_reduction as viz
 from coco_pipe.viz.plotly_utils import plot_embedding_interactive
+from eeg_adhd_epilepsy.utils.metadata_schema import EPILEPSY_MED_COLS
 
 logger = logging.getLogger(__name__)
 
@@ -25,18 +26,10 @@ PLOT_META_EXCLUDED_COLUMNS = {
     "obs",
     "channel",
     "time",
-    "Study ID",
-    "Pt ID",
-    "LEV",
-    "LTG",
-    "CLB",
-    "CBZ",
-    "VPA",
-    "ETH",
-    "n_epilepsy_meds",
-    "has_epilepsy",
-    "TSA",
-    "Age",
+    "study_id",
+    "patient_id",
+    "eeg_date",
+    *EPILEPSY_MED_COLS,
 }
 
 REPRESENTATION_CONFIG = {
@@ -181,7 +174,7 @@ def apply_representation(
         "subject_time_as_sample",
         "subject_scalar_mean",
     ],
-    study_id_col: str = "Study ID",
+    study_id_col: str = "study_id",
 ) -> DataContainer:
     """Apply subject averaging and feature layout for the selected representation."""
     subject_average, stacking_mode = REPRESENTATION_CONFIG[representation]

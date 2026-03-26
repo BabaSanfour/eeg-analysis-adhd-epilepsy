@@ -98,11 +98,11 @@ def compute_embeddings(
 
 def compute_embedding_separation_score(
     embedding: Optional[np.ndarray],
-    labels: np.ndarray,
+    labels: Optional[np.ndarray],
     groups: np.ndarray,
 ) -> float:
     """Estimate class separation from an embedding using grouped CV balanced accuracy."""
-    if embedding is None:
+    if embedding is None or labels is None:
         return np.nan
 
     y = np.asarray(labels).ravel().astype(str)
@@ -114,7 +114,7 @@ def compute_embedding_separation_score(
 
     subject_labels = pd.DataFrame({"group": group_ids, "label": y})
     if subject_labels.groupby("group")["label"].nunique(dropna=False).max() > 1:
-        raise ValueError("Each Study ID must map to a single target label.")
+        raise ValueError("Each subject must map to a single target label.")
 
     grouped_y = subject_labels.groupby("group")["label"].first()
     min_count = int(grouped_y.value_counts().min())
@@ -153,7 +153,7 @@ def compute_embedding_separation_score(
 def build_condition_ranking_rows(
     condition: str,
     embeddings: Dict[str, Dict],
-    labels: np.ndarray,
+    labels: Optional[np.ndarray],
     groups: np.ndarray,
     loaded_subjects: int,
     loaded_epochs: int,
@@ -280,7 +280,7 @@ def add_reducer_report_elements(
 def create_condition_section(
     condition: str,
     embeddings: Dict[str, Dict],
-    labels: np.ndarray,
+    labels: Optional[np.ndarray],
     meta_dict: Dict[str, np.ndarray],
     ranking_rows: List[Dict[str, object]],
     loaded_subjects: int,
@@ -326,7 +326,7 @@ def main():
     parser.add_argument("--bids_root", default="/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS", help="Path to BIDS dataset")
     parser.add_argument("--task", default="clinical", help="Task name (default: clinical)")
     parser.add_argument("--session", default="01", help="Session ID (default: 01)")
-    parser.add_argument("--metadata", default=None, help="Path to metadata CSV")
+    parser.add_argument("--metadata", default=None, help="Path to canonical metadata CSV")
     parser.add_argument("--output_dir", default=results_dir, help="Output directory")
     parser.add_argument("--dataset_name", required=True, help="Name for this analysis run")
     
@@ -354,8 +354,12 @@ def main():
     )
     
     parser.add_argument("--subsample", type=int, default=None, help="Number of subjects to random sample")
-    parser.add_argument("--subject_col", default="study_id", help="Column in cleaned metadata")
-    parser.add_argument("--target_col", default="Group", help="Column to use as labels")
+    parser.add_argument("--subject_col", default="study_id", help="Subject identifier column in canonical metadata")
+    parser.add_argument(
+        "--target_col",
+        default=None,
+        help="Optional metadata column to use as labels for separation ranking.",
+    )
     
     parser.add_argument("--reducers", nargs="+", default=ALL_REDUCERS, help="List of reducers")
     parser.add_argument(
@@ -482,7 +486,7 @@ def main():
 
         logger.info(f"{condition}: applying representation '{args.representation}'")
         dc = apply_representation(dc_loaded, args.representation, args.subject_col)
-        labels = np.asarray(dc.y).ravel().astype(str)
+        labels = None if dc.y is None else np.asarray(dc.y).ravel().astype(str)
         groups = np.asarray(dc.coords[args.subject_col]).ravel().astype(str)
         logger.info(f"{condition}: final data shape {dc.X.shape}")
 
