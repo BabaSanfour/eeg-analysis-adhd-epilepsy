@@ -21,6 +21,8 @@ annotations:
     - photo
   movement:
     - bouge
+    - bpouge +++
+    - boug
     - movement
     - mouvement
     - mouv
@@ -46,6 +48,8 @@ annotations:
     - couche sur le dos
     - couche cote
     - couche cote d
+    - couchee cote d
+    - 0couchee cote d
     - couchee cote g
     - remet sur le dos
     - s'assoit
@@ -53,6 +57,8 @@ annotations:
     - ne veut pas rester coucher
     - pt s'assoit
     - gratte
+    - se gratte
+    - segratte
     - gratte l'epaule
     - se gratte les yeux
     - relache bras
@@ -66,6 +72,37 @@ annotations:
     - debranche le lit
     - baisse le masque
     - sursaut
+    - secoue la tete
+    - se balance
+    - se tortille
+    - mv t machoire inf
+    - serre des dents
+    - mis dans bras de maman
+    - dans les bras de maman
+    - dans les bras de papa
+    - dans le bras de la mere
+    - met dans bras de mere
+    - pere remplace mere
+    - pere berce l'enfant
+    - papa brasse
+    - papa brasse bb
+    - papa aspire
+    - papa berce
+    - main g
+    - jambe d
+    - mouvements de la langue
+    - mouvement de la langue
+    - force avec son visage
+    - mais mains sur sa bouche
+    - essaye de mettre bb dans bras maman
+    - pt dans les bras papa
+    - assis dans sa chaise
+    - demand epas bouger
+    - demande de ne pas bouger la tete
+    - ne souffle pas
+    - pt grelotte
+    - pte sur le cote droit
+    - semi-assis pour aider sa respiration
   artefact:
     - artefact
     - artefacts
@@ -77,14 +114,51 @@ annotations:
     - bruit
     - bruit exterieur
   effort:
+    - effortmoyen
+    - boneffort
     - effort
+    - bon efort
     - Bon effot
     - bbonn effforrt
     - bon rffort
     - bon effrt
     - bonne efforr
-  pat_montage:
+  ignore_system:
+    - pat
     - pat montage
+    - check
+    - outils camera
+    - imp check on
+    - imp check off
+    - reset on
+    - reset off
+    - installe sli
+    - fin
+    - reprise
+    - mark on
+    - mark off
+    - pat average eeg
+    - pat   eeg
+    - pat eeg
+    - pas ecg
+    - pas de manif
+    - pas de manifestation claire
+    - regard fixe
+    - a recu ativan avant eeg
+    - retour clonie
+    - pat dig cal eeg
+    - bad boundary
+    - edge boundary
+    - rec start
+    - rec start montage 1 eeg
+    - rec start montage 1 cal
+    - rec start montage 2 eeg
+    - rec start montage 3 eeg
+    - rec start neonate eeg
+    - rec start #1 neonate eeg
+    - rec start neonatal eeg
+    - rec start zygo eeg
+    - rec start icm bp eeg
   yawn_cough:
     - baille
     - baile
@@ -128,10 +202,13 @@ annotations:
     - sleep
     - asleep
     - no sleep
+    - presque endormi
+    - preesque endormi
     - reste pour dormir
     - prepare pour dormir
     - patiente enleve ses bottes pour dormir
     - REM
+    - endort le patient
   collaboration:
     - peu de collaboration
     - faible collaboration
@@ -159,6 +236,8 @@ annotations:
     - collabore peu tsa
     - collabore peu adhd
     - collabore un peu
+    - difficile decouter les consignes
+    - demande a la pte si elle va bien
   jaw_face_tension:
     - relaxe machoire
     - relacher machoire
@@ -181,6 +260,7 @@ annotations:
   sensor_electrode_verbs:
     - place
     - ouche
+    - ouche p3
     - touche
     - toucher
     - retouche
@@ -220,9 +300,17 @@ annotations:
     - touhe
     - arrange
     - hange
+    - retoche
+    - tuoche
+    - tpiche
+    - rechange
+    - refroote
   emotion_behavior:
     - pleure
+    - pleures
     - pleur
+    - sanglot
+    - sanglots
     - cri
     - crie
     - parle
@@ -233,11 +321,14 @@ annotations:
     - rie
     - la pte rit
     - la pte arret pas de rire
+    - hallucinations
     - bof
     - tete qui tourne
     - pte mal au ventre
     - pt mal au ventre
     - pt a tres mal au ventre pas d'hyper
+    - patiente nauseeuse
+    - patient nauseuse
   oral_activity:
     - machonne
     - machonnement
@@ -253,9 +344,22 @@ annotations:
     - avale
     - boit de l'eau
     - boit de leau
+    - boit bouteille
+    - biberon
+    - boit biberon
+    - bb boit
+    - biberon ;
     - pte a le push button
+    - pte a sa suce
     - gavage en cours
     - demande au patient de jeter sa gomme
+    - boit sa bouteille
+    - essaye de donner la bouteille
+    - bb suce sa suce
+    - succion
+    - mlk
+    - maman allaite
+    - mere allaite
   eye_movement:
     - cligne des yeux
     - revulsion des yeux
@@ -274,12 +378,51 @@ annotations:
     - yeux semi ouvert
     - yeux semi ouverts
     - yeux semi
+    - inossible d,ouvirir
+    - yeux entrouvert
+    - mi-ouverts
+    - yeux entre ouvert
+    - yeux entre ouverts
+    - yeux mi ouverts
+    - yeux mi-ouverts
+    - yeux mi-fermer
+    - yeux a peine ouvert
+    - yeux g
+    - yeux haut g
+    - oeil d
+    - ouvre oeil g
+    - ouvre oiel g
+    - regard gauche
+    - regard vers le bas
+    - pause regards dans le vide
+    - demande d'ouvrir les yeux
+    - demande de fermer les yeux
+    - je lui demande d ouvrir les yeux
+    - mal aux yeux
+    - mvmts des yeux
+    - regard vers haut
+    - suivi regard vers haut
+    - yeux vers le haut
     - les yeux sont fermes par maman
     - tres difficile de fermer les yeux
     - incapable de fermer les yeux
     - essaye douvrir les yeux
+    - demande douvrir les yeux
+    - ouvre 2 yeux
+    - yeux ferment et ouvrent
+    - clignotement des yeux
+    - deviation des yeux a gauche
+    - mere met mains devant yeux
     - yeux vers la d
   wakefulness:
+    - eveil
+    - reagit a peine
+    - ne repond pas
+    - ne repond as
+    - reveiens a elle
+    - reveille pte
+    - sommeil?
+    - wnl awake
     - se reveille
     - se revelle
     - reveille la pte
@@ -306,11 +449,13 @@ annotations:
     - arret des respirations
     - arret respiration
     - arrete de respirer
+    - ne souffle plus
     - reprise des respirations
     - reprise des repirations
     - reprise respiration
     - reprend respiration
-  
+    - battements des narines
+    - hoquet
   clinical_spikes:
     - pointe-lente
     - pointe?
@@ -334,6 +479,10 @@ annotations:
     - spindle
     - posts?
     - vertex
+    - pointe
+    - spikeburst
+    - rr f3
+    - rr f3?
   clinical_slowing:
     - delta
     - delta frontal
@@ -352,12 +501,28 @@ annotations:
     - lent d
     - gene-frontal
     - lent un peu asym
+    - p lentes o1
+    - p lentes t3
+    - po theta fp1
+    - dl frontal d
+    - 4hz, g but frontal predo
+    - ?slow
+    - bi-temporal
+    - bifrontal lead g?
+    - df frontal d > g
+    - frontal d
+    - lent, mais diffus
+    - max d frontal
+    - slow
   clinical_seizure:
     - crise
     - absence
     - absemce
     - absence?
     - pte absence
+    - seizuredetected
+    - sz
+    - saspme
     - episode
     - episode clinique
     - spasme
@@ -371,6 +536,8 @@ annotations:
     - possiblement clinique
     - pte crise
     - dissociation
+    - convulse
+    - td avec iib ad 2 mn
   clinical_background:
     - pdr
     - pdr 10
@@ -380,7 +547,16 @@ annotations:
     - mu?
     - pswy
     - background
+    - interictal
+    - interital
     - pdr 10
+    - wnl
+    - nil clinic
+
+  hyper_state:
+    - bon hyper
+    - pas d'hyper
+    - hyper impossible
 
   demographics:
     - "13"
@@ -428,23 +604,68 @@ annotations:
     - 17 ans
     - 15 ans
     - 12 ans
+    - gacon de 9 ans
+    - gacon de 8 ans
+    - filette 10 mois
+    - bb a terme
+    - bb de 1 jour
+    - bb de 4 jours
+    - bb de 21 jours
+    - bb de 28 jours
+    - bb de 29 jours
+    - bb de 1 mois
+    - bb de 2 mois
+    - rille de 2 mois
+    - bb de 3 mois
+    - bb de 4 mois
+    - bb de 5 mois
+    - bb de 6 mois
+    - bb de 6 semaines
+    - bb de 9mois
+    - 14 mois
+    - bb de 39 sem
+    - ne a 37 semaines
+    - f
+    - filled e 14 ans
+    - garcon14 ans
+    - garconde 6 ans
+    - garcons de 8ans
     
   recording_start:
     - a1+a2 off
 
+  ignore_patterns:
+    - x
+    - xx
+    - xxx
+    - xxxx
+    - ml
+    - x *
+    - recording gap*
+    - "*storage ring buffer overflow*"
+
+  sensor_artefact_keywords:
+    - manquantes
+
   sensor_action_keywords:
     - touche
     - toucher
+    - lace
+    - tuoche
+    - tpiche
     - retouche
     - retoucher
+    - retoche
     - frotte
     - frotter
     - refrotte
     - refrotter
+    - refroote
     - replace
     - replacer
     - change
     - changer
+    - rechange
     - pont
     - bridge
     - pontage
@@ -467,7 +688,10 @@ annotations:
     - ajuste rythme de l'HV
     - arret HV pt a mal au coeur
     - arret hv
+    - arret de hyper elle ne veut plus
     - beaucoup de spasmes durant HV
+    - hyper impossbile le pt n'est pas en form
+    - hyper moyen
     - lent, mais hv + sym
     - ne veut pas faire hv
     - ne veut plus faire hv
@@ -476,3 +700,154 @@ annotations:
     - recommence hv
     - reprise hv
     - slow with HV
+    - tente de faire hv
+    - tres bon hv
+  ignore_misc:
+    - j
+    - "*"
+    - "?"
+    - "???"
+    - al
+    - "? temp g"
+    - fp1
+    - ? temp g
+    - act card a o1
+    - cicatrice temp droit
+    - f4
+    - fp1 fp2 fpz sont plus haut
+    - fp2
+    - gauche lead
+    - lead?
+    - p3/o1 at times field cl
+    - p3?
+    - p3o1
+    - p4
+    - temp d
+    - "|"
+    - encouragements
+    - "!!!"
+    - p_comment
+    - ah
+    - debut
+    - p-o?
+    - "|"
+    - "!!!"
+    - " pte"
+    - "#"
+    - "........................................"
+    - "?post"
+    - bpouge +++
+    - k?
+    - lead?
+    - p3?
+    - pod?
+    - pompes
+    - tsa
+    - " pte"
+    - "#"
+    - "........................................"
+    - 0collabore pas
+    - "1"
+    - 10 hz
+    - 11 hz
+    - 12 sec
+    - 2 mg ativan
+    - 60 bpm
+    - 80-90 bpm
+    - 90 bpm
+    - ?post
+    - a recu ativan
+    - a recu medic avant eeg
+    - arret
+    - arret dbs
+    - ativan
+    - aucune manifestation
+    - aucune modification
+    - brut
+    - d
+    - dbs off
+    - debranche la pompe
+    - debut lecture
+    - demande de relahcer visage
+    - diaphorese
+    - dl
+    - driving
+    - ecg replacee
+    - eeg en deux enregirstrements
+    - erreur
+    - filtre mis sur ecg
+    - installation difficile
+    - installe ecg
+    - k?
+    - limite normal voltage juste above 20
+    - maman demande d'enlever
+    - p c d ?
+    - p c d?
+    - p o g
+    - pas installe les ecg
+    - pod?
+    - ppo
+    - pt se sent bien
+    - pte ne sent pas capable de continuer
+    - pte ok
+    - reprend lecture
+    - rteplace pt
+    - rv ep
+    - se calme
+    - seul
+    - tech ajoute ecg
+    - tech au chevet
+    - tech demande deserrer dents
+    - tech demande relacher le front
+    - tech donne couverture
+    - tech pres de pte
+    - tete vraiment mouillee
+    - tiens son toute
+    - un peu mal a la tete
+    - w
+    - xx
+    - ?x
+    - x ct g
+    - x t d ?
+    - x fp1
+    - xxxx
+    - ml
+    - t g
+    - t6
+    - c4
+    - patiente ok
+    - t3
+    - pog
+    - bi ft
+    - c3
+    - cicatrice temporal droit
+    - diffusion vers d
+    - distance f7-t3 ok
+    - f d
+    - f g
+    - f3
+    - f4-c4
+    - f7-t3
+    - f8
+    - fct g
+    - foyer fct g + actif
+    - fp2-f4
+    - jg<
+    - membre sup g
+    - o1 et t3 independant, inter
+    - o2
+    - outils de camera ne fonctionne pas
+    - p o1
+    - p o2 puis t3 inde
+    - p-o d>g
+    - p-o occipital g>d
+    - p-o t-o bilat synchrone
+    - pas d'ecg
+    - po
+    - qui diffuse aux 2 hemi
+    - sli
+    - t3 et t5
+    - t3 se rajoute
+    - t4
+    - t5
+    - xxx

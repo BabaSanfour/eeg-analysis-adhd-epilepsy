@@ -1,25 +1,26 @@
 """
-Convert raw EEG + metadata → BIDS with standardized annotations.
+Convert raw EEG + canonical metadata to BIDS with standardized annotations.
 """
 
+from __future__ import annotations
+
 import argparse
+import fnmatch
 import logging
 import re
 import shutil
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional
 
 import mne
 import pandas as pd
-from mne_bids import write_raw_bids, BIDSPath
+from mne_bids import BIDSPath, write_raw_bids
 from tqdm import tqdm
 
 from eeg_adhd_epilepsy.io import ingest
+from eeg_adhd_epilepsy.io import bids as bids_io
 from eeg_adhd_epilepsy.utils import config
 
-# -----------------------------------------------------------------------------
-# CONFIGURE LOGGER
-# -----------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -28,231 +29,161 @@ logging.basicConfig(
 LOGGER = logging.getLogger(__name__)
 
 
-# -----------------------------------------------------------------------------
-# ANNOTATION STANDARDIZATION
-# -----------------------------------------------------------------------------
-def normalize_label(label: str) -> str:
-    """Normalize label string for matching (lowercase, strip)."""
-    if not isinstance(label, str):
-        return ""
-    return re.sub(r"\s+", " ", label.lower().strip())
-
-
 def map_annotation_to_category(desc: str) -> Optional[str]:
     """
     Map a raw annotation description to a standardized trial_type category.
     Uses patterns defined in utils.qc_config (loaded from annotations.yaml).
-    Returns None if no match found (which will become 'other').
+    Returns None if no match is found.
     Returns 'BAD_IGNORE' if it should be dropped.
     """
-    normalized = normalize_label(desc)
+    normalized = re.sub(r"\s+", " ", desc.lower().strip()) if isinstance(desc, str) else ""
     if not normalized:
         return "BAD_IGNORE"
 
-    # 1. Check for Ignored Demographics -> Drop
-    for pat in config.IGNORED_LABELS:
-        if re.search(r'\b' + re.escape(pat.lower()) + r'\b', normalized):
-            return "BAD_IGNORE"
-            
-    # 2. Check Reference Event -> recording_start
-    for pat in config.REFERENCE_EVENT_KEYWORDS:
-        if re.search(r'\b' + re.escape(pat.lower()) + r'\b', normalized):
-            return "recording_start"
+    def _matches_pattern(pattern: str) -> bool:
+        pattern = str(pattern).lower().strip()
+        if not pattern:
+            return False
+        if "*" in pattern:
+            return fnmatch.fnmatch(normalized, pattern)
+        return normalized == pattern or bool(
+            re.search(r"\b" + re.escape(pattern) + r"\b", normalized)
+        )
 
-    # 3. Sensor Artifact Logic
-    # Check for presence of any sensor action verb
-    has_verb = False
-    for verb in config.SENSOR_ACTION_KEYWORDS:
-        if re.search(r'\b' + re.escape(verb.lower()) + r'\b', normalized):
-            has_verb = True
-            break
-            
-    if has_verb:
-        # Check if any ADDITIONAL (non-10-20) channel is mentioned -> Drop
-        for ch in config.ADDITIONAL_SENSOR_CHANNELS:
-            # Word boundary check for channel names (e.g. "Oz")
-            if re.search(r'\b' + re.escape(ch.lower()) + r'\b', normalized):
-                return "BAD_IGNORE"
-        
-        return "sensor_artefact"
+    has_additional_channel = any(
+        _matches_pattern(ch) for ch in config.ADDITIONAL_SENSOR_CHANNELS
+    )
+    has_channel = has_additional_channel or any(
+        _matches_pattern(ch) for ch in config.BASIC_1020_CHANNELS
+    )
+    if any(_matches_pattern(pattern) for pattern in config.IGNORE_PATTERNS + config.IGNORED_LABELS):
+        return "BAD_IGNORE"
+    if any(_matches_pattern(pattern) for pattern in config.REFERENCE_EVENT_KEYWORDS):
+        return "recording_start"
+    if has_channel and any(
+        _matches_pattern(pattern)
+        for pattern in config.SENSOR_ARTEFACT_KEYWORDS + config.SENSOR_ACTION_KEYWORDS
+    ):
+        return "BAD_IGNORE" if has_additional_channel else "sensor_artefact"
 
-    # 4. Standard Interest Map
     for category, patterns in config.ANNOTATION_INTEREST_MAP.items():
-        # Clean category string for BIDS trial_type (e.g. "Eyes Open" -> "eyes_open")
         cat_slug = category.lower().replace(" ", "_").replace("/", "_")
-        
         for pat in patterns:
-            if not pat:
-                continue
-            if re.search(r'\b' + re.escape(pat.lower()) + r'\b', normalized):
+            if pat and _matches_pattern(pat):
                 return cat_slug
-                
-    # 4. Clinical Comments -> specific categories
+
     for category, patterns in config.CLINICAL_COMMENT_LABELS.items():
-        # "Clinical - Spikes" -> "clinical_spikes"
         cat_slug = category.lower().replace(" - ", "_").replace(" ", "_").replace("-", "_")
         for pat in patterns:
-            if re.search(r'\b' + re.escape(pat.lower()) + r'\b', normalized):
+            if _matches_pattern(pat):
                 return cat_slug
-                
+
     return None
 
 
 def standardize_annotations(raw: mne.io.BaseRaw) -> mne.io.BaseRaw:
-    """
-    In-place update of raw.annotations to use standardized descriptions.
-    
-    Rules:
-    1. 'hv', 'photo', 'post_hv': Keep original description.
-    2. 'eyes_open', 'eyes_closed', 'recording_start': Keep standardized category name.
-    3. Clinical categories (starting with 'clinical_'): Keep standardized name.
-    4. 'BAD_IGNORE': Drop these annotations entirely.
-    5. Everything else: Prefix with 'bad_' (e.g. 'bad_movement').
-    """
+    """Update annotations in place to a cleaner BIDS-facing vocabulary."""
     new_onset = []
     new_duration = []
     new_descs = []
-    
-    PRESERVE_ORIGINAL = {"hv", "photo", "post_hv"}
-    ALLOW_CLEAN = {"eyes_open", "eyes_closed", "recording_start"}
-    
-    for annot in raw.annotations:
-        orig = annot['description']
-        cat = map_annotation_to_category(orig)
-        
-        # If ignore, skip adding to new list (effectively dropping it)
-        if cat == "BAD_IGNORE":
-            continue
-            
-        # Add to new lists
-        new_onset.append(annot['onset'])
-        new_duration.append(annot['duration'])
-        
-        if not cat:
-            new_descs.append("other") 
-            continue
-        
-        if cat in PRESERVE_ORIGINAL:
-            new_descs.append(orig)
-        elif cat in ALLOW_CLEAN or cat.startswith("clinical_"):
-            new_descs.append(cat)
-        else:
-            new_descs.append(f"BAD_{cat}")
 
-    # Rebuild annotations
-    raw.set_annotations(mne.Annotations(
-        onset=new_onset,
-        duration=new_duration,
-        description=new_descs,
-        orig_time=raw.annotations.orig_time
-    ))
+    preserve_original = {"hv", "photo", "post_hv"}
+    allow_clean = {"eyes_open", "eyes_closed", "recording_start"}
+
+    for annot in raw.annotations:
+        original = annot["description"]
+        category = map_annotation_to_category(original)
+
+        if category in {None, "BAD_IGNORE"}:
+            continue
+
+        new_onset.append(annot["onset"])
+        new_duration.append(annot["duration"])
+
+        if category in preserve_original:
+            new_descs.append(original)
+        elif category in allow_clean or category.startswith("clinical_"):
+            new_descs.append(category)
+        else:
+            new_descs.append(f"BAD_{category}")
+
+    raw.set_annotations(
+        mne.Annotations(
+            onset=new_onset,
+            duration=new_duration,
+            description=new_descs,
+            orig_time=raw.annotations.orig_time,
+        )
+    )
     return raw
 
 
-# -----------------------------------------------------------------------------
-# CORE LOGIC
-# -----------------------------------------------------------------------------
-def process_subject(
-    subject_id: str,
-    raw_dir: Path,
+def update_participants_tsv(
+    bids_dir: Path,
+    metadata_df: pd.DataFrame,
+) -> None:
+    """Rewrite participants.tsv to one row per participant with canonical demographics."""
+    tsv_path = bids_dir / "participants.tsv"
+
+    participants_df = metadata_df[["study_id", "age", "sex"]].dropna(subset=["study_id"]).copy()
+    participants_df["participant_id"] = participants_df["study_id"].apply(
+        lambda value: bids_io.normalize_subject_id(f"{int(value):04d}")
+    )
+    participants_df = (
+        participants_df[["participant_id", "age", "sex"]]
+        .drop_duplicates("participant_id")
+        .sort_values("participant_id")
+        .reset_index(drop=True)
+    )
+    participants_df.to_csv(tsv_path, sep="\t", index=False)
+
+
+def process_record(
+    record,
     bids_root: Path,
-    mapping_df: pd.DataFrame,
-    duplicates_df: pd.DataFrame,
     overwrite: bool = False,
-) -> Optional[Dict]:
-    """
-    Read files for one subject, standardize, convert to BIDS.
-    """
-    # 1. Parse metadata (pnt)
-    pnt_file = raw_dir / f"{subject_id}.pnt"
-    meta = ingest.parse_pnt_metadata(pnt_file)
-    
-    # 2. Map ID
-    # Use the ID found in .pnt if available, else use filename subject_id
-    raw_id_for_mapping = meta['original_id'] if meta['original_id'] else subject_id
-    
-    raw_id_str = str(raw_id_for_mapping)
-    dup_row = duplicates_df[duplicates_df['Study_ID'].astype(str) == raw_id_str]
-    if raw_id_str in ['232', '961', '494', '662', '958', '791', '674', '792', '767', "492"]:
-        print("here")
-    if not dup_row.empty:
-        # Found in duplicates mapping -> Use specific ID and Session
-        new_id = str(dup_row['Actual_ID'].values[0])
-        session = f"{int(dup_row['Session'].values[0]):02d}"
-    else:
-        # Not in duplicates -> Use general mapping, default session 01
-        new_id = ingest.map_subject_id(raw_id_for_mapping, mapping_df)
-        session = "01"
-    
-    if new_id is None:
-        LOGGER.warning("Skipping subject %s (ID mapping exclusion)", subject_id)
-        return None
-    
-    # zero-pad if numeric (standardize subject ID format: sub-0123)
-    if new_id.isdigit():
-        new_id = f"{int(new_id):04d}"
-    
-    participant_id = f"sub-{new_id}"
-    meas_iso = meta['meas_date'].isoformat().replace("+00:00", "Z") if meta['meas_date'] else None
+) -> bool:
+    """Read, standardize, and export one selected recording to BIDS."""
+    eeg_path = Path(record.eeg_path)
+    study_id = int(record.study_id)
+    run = str(record.run)
+    subject_id = bids_io.normalize_subject_id(f"{study_id:04d}")
 
-    # -- detect existing BIDS output
-    sub_dir = bids_root / participant_id
-    if sub_dir.exists():
-        if not overwrite:
-            LOGGER.info("Skipping %s -> %s (already exists)", subject_id, participant_id)
-            return {"participant_id": participant_id, "meas": meas_iso}
-        LOGGER.info("Overwriting %s -> %s", subject_id, participant_id)
-        shutil.rmtree(sub_dir)
-
-    # -- locate EEG file
-    eeg_path = ingest.find_eeg_file(raw_dir, subject_id)
-    if not eeg_path:
-        LOGGER.error("No EEG file for %s", subject_id)
-        return None
-        
-    # -- read EEG
     try:
         raw = mne.io.read_raw_nihon(str(eeg_path), preload=False)
-    except Exception as e:
-        LOGGER.error("Failed to read EEG %s: %s", eeg_path, e)
-        return None
-        
-    raw.info["line_freq"] = 60
-    if meta['meas_date']:
-        raw.set_meas_date(meta['meas_date'])
+    except Exception as exc:
+        LOGGER.error("Failed to read EEG %s: %s", eeg_path, exc)
+        return False
 
-    # -- Standardize Annotations (NEW)
+    raw.info["line_freq"] = 60
+    meas_datetime = pd.to_datetime(record.meas_datetime, errors="coerce")
+    if pd.notna(meas_datetime):
+        raw.set_meas_date(meas_datetime.to_pydatetime())
+
     raw = standardize_annotations(raw)
-    
-    # -- Filter Channels & Set Types
-    # Keep only 10-20 channels
-    targets = list(config.BASIC_1020_CHANNELS)
-    
-    available_targets = [ch for ch in targets if ch in raw.ch_names]
-    
+
+    available_targets = [channel for channel in config.BASIC_1020_CHANNELS if channel in raw.ch_names]
     if available_targets:
         raw.pick(available_targets)
-        
-    # Set types for A1/A2 if present
+
     ch_types = {}
     if "A1" in raw.ch_names:
         ch_types["A1"] = "misc"
     if "A2" in raw.ch_names:
         ch_types["A2"] = "misc"
-        
     if ch_types:
         raw.set_channel_types(ch_types)
 
-    # -- write BIDS
     bids_path = BIDSPath(
         root=str(bids_root),
-        subject=new_id,
-        session=session,
+        subject=subject_id[4:],
+        session="01",
         task="clinical",
+        run=run,
         suffix="eeg",
         extension=".vhdr",
     )
-    
+
     try:
         write_raw_bids(
             raw,
@@ -262,131 +193,97 @@ def process_subject(
             allow_preload=False,
             verbose=False,
         )
-    except Exception as e:
-        msg = str(e).lower()
-        if not overwrite and ("already exists" in msg or "file exists" in msg):
-            LOGGER.info("Skipping write for %s -> %s (exists)", subject_id, participant_id)
-            return {"participant_id": participant_id, "meas": meas_iso}
-        raise
+    except Exception as exc:
+        message = str(exc).lower()
+        if not overwrite and ("already exists" in message or "file exists" in message):
+            LOGGER.info("Skipping write for %s run-%s (exists)", subject_id, run)
+            return True
+        LOGGER.error("Failed writing %s run-%s: %s", subject_id, run, exc)
+        return False
 
-    LOGGER.info("Converted %s -> %s", subject_id, participant_id)
-    return {"participant_id": participant_id, "meas": meas_iso}
-
-
-def update_participants_tsv(
-    bids_dir: Path,
-    subjects_df: pd.DataFrame,
-    meas_df: pd.DataFrame,
-):
-    """
-    Merge age, sex, and meas into participants.tsv.
-    """
-    tsv_path = bids_dir / "participants.tsv"
-    if not tsv_path.exists():
-        return
-        
-    participants_df = pd.read_csv(tsv_path, sep="\t")
-
-    # Age/Sex from subjects_df
-    # Expects columns "Study ID", "Age", "Sex"
-    subjects_meta = (
-        subjects_df.rename(columns={"Study ID": "ID"})[["ID", "Age", "Sex"]]
-        .copy()
-    )
-    # create participant_id col to match BIDS
-    subjects_meta["participant_id"] = subjects_meta["ID"].apply(
-        lambda i: f"sub-{int(i):04d}"
-    )
-    subjects_meta = subjects_meta[["participant_id", "Age", "Sex"]]
-
-    merged = participants_df.merge(subjects_meta, on="participant_id", how="left")
-    merged = merged.rename(columns={"Age": "age", "Sex": "sex"})
-
-    # merge meas (measurement datetime)
-    if meas_df is not None and not meas_df.empty:
-        # ensure columns match
-        if "participant_id" in meas_df.columns:
-            overlap_cols = [c for c in meas_df.columns if c in merged.columns and c != "participant_id"]
-            if overlap_cols:
-                merged = merged.drop(columns=overlap_cols)
-            merged = merged.merge(meas_df, on="participant_id", how="left")
-
-    # Write back TSV
-    merged.to_csv(tsv_path, sep="\t", index=False)
-    
-def check_missing(subjects_ids: list, bids_dir: Path):
-    missing = []
-    for sid in subjects_ids:
-        sub_label = f"sub-{int(sid):04d}"
-        sub_dir = bids_dir / sub_label
-        if not sub_dir.exists():
-            missing.append(sub_label)
-    if missing:
-        LOGGER.warning("Missing BIDS directories for %d subjects: %s", len(missing), missing)
-    else:
-        LOGGER.info("No missing BIDS directories.")
-
-
-# ----------------------------------------------------------------------------
-# MAIN
-# ----------------------------------------------------------------------------
-def main():
+    LOGGER.info("Converted %s run-%s", subject_id, run)
+    return True
+def main() -> None:
     parser = argparse.ArgumentParser(description="EEG -> BIDS converter")
-    parser.add_argument("--raw", type=Path, required=True, help="raw data directory")
-    parser.add_argument("--bids", type=Path, required=True, help="BIDS root directory")
-    parser.add_argument("--map", type=Path, required=True, help="mapping CSV file")
-    parser.add_argument("--duplicates", type=Path, required=True, help="duplicates CSV file")
-    parser.add_argument("--subs", type=Path, required=True, help="subjects CSV file")
-    parser.add_argument("--overwrite", action="store_true", help="overwrite existing BIDS")
+    parser.add_argument("--raw_root", type=Path, required=True, help="Root directory containing raw_data")
+    parser.add_argument("--bids_root", type=Path, required=True, help="BIDS root directory")
+    parser.add_argument("--metadata_csv", type=Path, required=True, help="Canonical metadata CSV")
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing BIDS subject folders")
     args = parser.parse_args()
 
-    # Load metadata tables
-    mapping_df = pd.read_csv(args.map, header=None, names=["patient", "ID"], sep=";")
-    subjects_df = pd.read_csv(args.subs, encoding="utf-8", low_memory=False, on_bad_lines="warn")
-    # removed unnamed columns if they exist
-    subjects_df = subjects_df.loc[:, ~subjects_df.columns.str.contains("unnamed", case=False)]
-    LOGGER.info("Loaded subjects CSV with columns: %s", subjects_df.columns.tolist())
-    duplicates_df = pd.read_csv(args.duplicates, encoding="utf-8", low_memory=False)
+    metadata_df = pd.read_csv(args.metadata_csv)
+    LOGGER.info("Loaded metadata CSV with %d rows", len(metadata_df))
 
-    subject_ids = ingest.get_subject_ids(args.raw)
-    LOGGER.info("Found %d raw subjects in %s", len(subject_ids), args.raw)
+    records = ingest.discover_raw_records(args.raw_root, metadata_df)
+    inventory_df = pd.DataFrame(records)
+    if inventory_df.empty:
+        inventory_df = pd.DataFrame(
+            columns=[
+                "source_dataset",
+                "study_id",
+                "patient_id",
+                "resolved_by",
+                "record_stem",
+                "pnt_path",
+                "eeg_path",
+                "meas_datetime",
+                "record_date",
+                "run",
+            ]
+        )
+    inventory_df["run"] = pd.Series([None] * len(inventory_df), dtype=object)
+    if "study_id" in inventory_df.columns:
+        inventory_df["study_id"] = pd.to_numeric(inventory_df["study_id"], errors="coerce").astype("Int64")
 
-    meas_records = []
+    run_rows = inventory_df.loc[
+        inventory_df["study_id"].isin(metadata_df["study_id"]) & inventory_df["eeg_path"].notna()
+    ].copy()
+    if not run_rows.empty:
+        run_rows["record_date_dt"] = pd.to_datetime(run_rows["record_date"], errors="coerce").dt.date
+        run_rows["meas_datetime_dt"] = pd.to_datetime(run_rows["meas_datetime"], errors="coerce")
+        run_rows = run_rows.sort_values(
+            ["study_id", "record_date_dt", "meas_datetime_dt", "record_stem"],
+            ascending=[True, True, True, True],
+            na_position="last",
+        )
+        run_rows["run"] = run_rows.groupby("study_id").cumcount().add(1).map(lambda value: f"{value:02d}")
+        inventory_df.loc[run_rows.index, "run"] = run_rows["run"].values
+    inventory_df = inventory_df.drop(
+        columns=["record_date_dt", "meas_datetime_dt", "status"], errors="ignore"
+    )
+
+    args.bids_root.mkdir(parents=True, exist_ok=True)
+    inventory_path = args.bids_root / "raw_record_inventory.csv"
+    inventory_df.to_csv(inventory_path, index=False)
+    LOGGER.info("Wrote inventory to %s", inventory_path)
+
+    if args.overwrite:
+        for study_id in sorted(inventory_df.loc[inventory_df["run"].notna(), "study_id"].dropna().astype(int).unique()):
+            subject_id = bids_io.normalize_subject_id(f"{int(study_id):04d}")
+            sub_dir = args.bids_root / subject_id
+            if sub_dir.exists():
+                LOGGER.info("Overwriting %s", subject_id)
+                shutil.rmtree(sub_dir)
+
     failed = []
-
-    results = []
-    for sid in tqdm(subject_ids, desc="Converting subjects"):
-        results.append(process_subject(
-            sid, args.raw, args.bids, mapping_df, 
-            duplicates_df=duplicates_df,
-            overwrite=args.overwrite
-        ))
-
-    for res in results:
-        if not res:
-            continue
-        if "error" in res:
-            LOGGER.error("Failed processing subject %s: %s", res["sid"], res["error"])
-            failed.append(res["sid"])
+    successful_ids: list[int] = []
+    run_rows = inventory_df.loc[inventory_df["run"].notna()]
+    for row in tqdm(run_rows.itertuples(index=False), total=len(run_rows), desc="Converting records"):
+        if not process_record(row, args.bids_root, overwrite=args.overwrite):
+            failed.append(int(row.study_id))
         else:
-            meas_records.append(res)
+            successful_ids.append(int(row.study_id))
 
     if failed:
-        LOGGER.warning("Failed subjects: %s", failed)
+        LOGGER.warning("Failed study_ids: %s", sorted(set(failed)))
     else:
-        LOGGER.info("All subjects processed successfully.")
+        LOGGER.info("All selected recordings converted successfully.")
 
-    # Update participants.tsv
-    meas_df = pd.DataFrame(meas_records) if meas_records else pd.DataFrame()
-    update_participants_tsv(args.bids, subjects_df, meas_df)
+    converted_ids = sorted(set(successful_ids))
+    if converted_ids:
+        converted_meta = metadata_df[metadata_df["study_id"].isin(converted_ids)].copy()
+        update_participants_tsv(args.bids_root, converted_meta)
 
-    # Check completeness
-    studied_ids = subjects_df["Study ID"].dropna().astype(int).astype(str).tolist()
-    check_missing(studied_ids, args.bids)
-    
-    if failed:
-        if args.overwrite: # Only hard exit if we expected everything to work
-             pass 
 
 if __name__ == "__main__":
     main()

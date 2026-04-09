@@ -90,7 +90,7 @@ def main() -> None:
     preproc_root = bids_io.get_preproc_root(bids_root)
 
     subject_ids = (
-        [f"sub-{int(subject):04d}" for subject in args.subjects]
+        [bids_io.normalize_subject_id(f"{int(subject):04d}") for subject in args.subjects]
         if args.subjects
         else sorted(path.name for path in preproc_root.glob("sub-*") if path.is_dir())
     )

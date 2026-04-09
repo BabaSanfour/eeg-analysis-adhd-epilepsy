@@ -1,39 +1,18 @@
 """
-Raw data ingestion logic for EEGADHD dataset.
-Handles scanning directories, parsing .pnt metadata files, and basic ID mapping.
+Raw EEG recording discovery and `.pnt` parsing utilities.
 """
+
+from __future__ import annotations
 
 import logging
 import re
-from pathlib import Path
 from datetime import datetime, timezone
-from typing import List, Set, Optional, Dict, Union
+from pathlib import Path
+from typing import Dict, Union
 
 import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
-
-
-def get_subject_ids(source_dir: Path) -> List[str]:
-    """
-    Scan source_dir and return sorted unique subject IDs.
-    Assumes files/folders start with ID plus a dot.
-    """
-    ids: Set[str] = set()
-    for item in source_dir.iterdir():
-        if item.name.startswith('.'):
-            continue
-        # Pattern matches "XX12345." or similar
-        m = re.match(r"^([A-Z]{2}\d{5,6}[A-Z]?)\.", item.name)
-        if m:
-            ids.add(m.group(1))
-        else:
-            # Fallback for folder names that might be just the ID
-            prefix = item.stem
-            if prefix and not prefix.startswith("."):
-                ids.add(prefix)
-    ids.discard("DskUUID")
-    return sorted(list(ids))
 
 
 def parse_pnt_metadata(pnt_path: Path) -> Dict[str, Union[str, datetime, None]]:
@@ -70,40 +49,108 @@ def parse_pnt_metadata(pnt_path: Path) -> Dict[str, Union[str, datetime, None]]:
         except ValueError:
             pass
 
-    return {
-        "original_id": original_id,
-        "meas_date": meas_dt
-    }
+    return {"original_id": original_id, "meas_date": meas_dt}
 
 
-def map_subject_id(raw_id: str, mapping_df: pd.DataFrame) -> Optional[str]:
+def _build_lookup(
+    metadata_df: pd.DataFrame,
+) -> dict[str, tuple[dict[int, tuple[int, int | None]], dict[int, tuple[int, int | None]]]]:
+    lookups: dict[str, tuple[dict[int, tuple[int, int | None]], dict[int, tuple[int, int | None]]]] = {}
+    for source_dataset, group in metadata_df.groupby("source_dataset", dropna=False):
+        study_lookup: dict[int, tuple[int, int | None]] = {}
+        patient_lookup: dict[int, tuple[int, int | None]] = {}
+        for row in group.itertuples(index=False):
+            study_id = pd.to_numeric(getattr(row, "study_id", None), errors="coerce")
+            patient_id = pd.to_numeric(getattr(row, "patient_id", None), errors="coerce")
+            study_id = None if pd.isna(study_id) else int(study_id)
+            patient_id = None if pd.isna(patient_id) else int(patient_id)
+            if study_id is not None:
+                study_lookup[study_id] = (study_id, patient_id)
+            if patient_id is not None:
+                patient_lookup[patient_id] = (study_id, patient_id)
+        lookups[str(source_dataset)] = (study_lookup, patient_lookup)
+    return lookups
+
+
+def discover_raw_records(raw_root: Path, metadata_df: pd.DataFrame) -> list[dict[str, object]]:
     """
-    Map a raw ID (e.g., '2.2', '1234') to the study patient ID using the mapping DataFrame.
-    Returns None if the subject should be skipped.
+    Discover raw recordings under `raw_root` and resolve them to canonical metadata.
+
+    Resolution order:
+    - cohort 1: `.pnt original_id -> study_id`, then `.pnt original_id -> patient_id`
+    - cohort 2: `.pnt original_id -> study_id`, then `.pnt original_id -> patient_id`,
+      then subject folder name
     """
-    if raw_id == "2.2":
-        # Specific exclusion rule
-        return None
-    
-    # If ID corresponds to 'ID' column in mapping, return 'patient' column
-    if raw_id and raw_id.isdigit():
-        try:
-            rid_int = int(raw_id)
-            mapped = mapping_df[mapping_df["ID"] == rid_int]
-            if not mapped.empty:
-                return str(int(mapped["patient"].iat[0]))
-        except ValueError:
-            pass
-            
-    if raw_id and raw_id.isdigit():
-        return raw_id
-        
-    return None
+    raw_root = Path(raw_root)
+    lookups = _build_lookup(metadata_df)
+    records: list[dict[str, object]] = []
 
+    for pnt_path in sorted(raw_root.rglob("*.pnt")):
+        meta = parse_pnt_metadata(pnt_path)
+        folder_id = None
+        if raw_root.name == "cohort2":
+            try:
+                relative = pnt_path.relative_to(raw_root)
+                if relative.parts and relative.parts[0].isdigit():
+                    folder_id = int(relative.parts[0])
+            except ValueError:
+                pass
+        if folder_id is None and "cohort2" in pnt_path.parts:
+            idx = pnt_path.parts.index("cohort2")
+            if idx + 1 < len(pnt_path.parts) and pnt_path.parts[idx + 1].isdigit():
+                folder_id = int(pnt_path.parts[idx + 1])
+        if folder_id is None and len(pnt_path.parents) >= 3:
+            candidate = pnt_path.parents[2].name
+            if candidate.isdigit():
+                folder_id = int(candidate)
 
-def find_eeg_file(raw_dir: Path, subject_id: str) -> Optional[Path]:
-    """Locate the .EEG file for a given subject prefix."""
-    candidates = list(raw_dir.glob(f"{subject_id}.EEG"))
-    if not candidates:
-        return None
-    return candidates[0]
+        source_dataset = "drug_resistant" if folder_id is not None else "adhd"
+        study_lookup, patient_lookup = lookups.get(source_dataset, ({}, {}))
+
+        eeg_path = pnt_path.with_suffix(".EEG")
+        meas_datetime = meta["meas_date"]
+        record_date = None if meas_datetime is None else meas_datetime.date()
+
+        study_id = None
+        patient_id = None
+        resolved_by = None
+        status = "ready"
+
+        raw_id = pd.to_numeric(meta["original_id"], errors="coerce")
+        raw_id = None if pd.isna(raw_id) else int(raw_id)
+        if raw_id is not None and raw_id in study_lookup:
+            study_id, patient_id = study_lookup[raw_id]
+            resolved_by = "study_id"
+        elif raw_id is not None and raw_id in patient_lookup:
+            study_id, patient_id = patient_lookup[raw_id]
+            resolved_by = "patient_id"
+        elif source_dataset == "drug_resistant":
+            if folder_id is not None and folder_id in study_lookup:
+                study_id, patient_id = study_lookup[folder_id]
+                resolved_by = "folder_name"
+
+        if study_id is None:
+            status = "unresolved_subject"
+        elif not eeg_path.exists():
+            status = "missing_eeg"
+
+        records.append(
+            {
+                "source_dataset": source_dataset,
+                "study_id": study_id,
+                "patient_id": patient_id,
+                "resolved_by": resolved_by,
+                "record_stem": pnt_path.stem,
+                "pnt_path": str(pnt_path),
+                "eeg_path": None if not eeg_path.exists() else str(eeg_path),
+                "meas_datetime": (
+                    None
+                    if meas_datetime is None
+                    else meas_datetime.isoformat().replace("+00:00", "Z")
+                ),
+                "record_date": None if record_date is None else record_date.isoformat(),
+                "status": status,
+            }
+        )
+
+    return records

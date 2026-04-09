@@ -541,7 +541,7 @@ def save_figures(
         ("Eyes Closed", "eyes_closed_event_count"),
         ("Movement", "movement_event_count"),
         ("Artefact", "artefact_event_count"),
-        ("PAT Montage", "pat_montage_event_count"),
+        ("Ignore System", "ignore_system_event_count"),
         ("HV", "hv_event_count"),
         ("PHOTO", "photo_event_count"),
         ("Yawning/Coughing", "yawning_coughing_event_count"),

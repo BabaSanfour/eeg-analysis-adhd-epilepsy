@@ -83,6 +83,7 @@ ORAL_ACTIVITY_LABELS = tuple(_annot_config.get("oral_activity", ()))
 EYE_MOVEMENT_LABELS = tuple(_annot_config.get("eye_movement", ()))
 WAKEFULNESS_LABELS = tuple(_annot_config.get("wakefulness", ()))
 RESPIRATION_LABELS = tuple(_annot_config.get("respiration", ()))
+HYPER_STATE_LABELS = tuple(_annot_config.get("hyper_state", ()))
 CLINICAL_COMMENT_LABELS = {
     "Clinical - Spikes": tuple(_annot_config.get("clinical_spikes", ())),
     "Clinical - Slowing": tuple(_annot_config.get("clinical_slowing", ())),
@@ -90,12 +91,32 @@ CLINICAL_COMMENT_LABELS = {
     "Clinical - Background": tuple(_annot_config.get("clinical_background", ())),
 }
 DEMOGRAPHIC_LABELS = tuple(_annot_config.get("demographics", ()))
-PAT_MONTAGE_LABELS = tuple(_annot_config.get("pat_montage", ("pat montage",)))
+IGNORE_SYSTEM_LABELS = tuple(
+    _annot_config.get("ignore_system", _annot_config.get("pat_montage", ("pat montage",)))
+)
 COLLABORATION_LABELS = tuple(_annot_config.get("collaboration", ()))
 EFFORT_LABELS = tuple(_annot_config.get("effort", ()))
 HV_IGNORE = tuple(_annot_config.get("HV_ignore", ()))
+IGNORE_MISC_LABELS = tuple(_annot_config.get("ignore_misc", ()))
+IGNORE_PATTERNS = tuple(
+    _annot_config.get(
+        "ignore_patterns",
+        ("x", "xx", "xxx", "xxxx", "ml", "x *", "recording gap*", "*storage ring buffer overflow*"),
+    )
+)
+SENSOR_ARTEFACT_KEYWORDS = tuple(
+    _annot_config.get("sensor_artefact_keywords", _annot_config.get("sensor_missing_keywords", ("manquantes",)))
+)
 
-IGNORED_LABELS = DEMOGRAPHIC_LABELS + PAT_MONTAGE_LABELS + COLLABORATION_LABELS + EFFORT_LABELS + HV_IGNORE
+IGNORED_LABELS = (
+    DEMOGRAPHIC_LABELS
+    + IGNORE_SYSTEM_LABELS
+    + COLLABORATION_LABELS
+    + EFFORT_LABELS
+    + HYPER_STATE_LABELS
+    + HV_IGNORE
+    + IGNORE_MISC_LABELS
+)
 REFERENCE_EVENT_KEYWORDS = tuple(_annot_config.get("recording_start", ("a1+a2 off",)))
 SENSOR_ACTION_KEYWORDS = tuple(_annot_config.get("sensor_action_keywords", ()))
 
