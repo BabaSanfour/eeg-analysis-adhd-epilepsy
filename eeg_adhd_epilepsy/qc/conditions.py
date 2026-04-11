@@ -15,7 +15,7 @@ import eeg_adhd_epilepsy.io.bids as io_bids
 import eeg_adhd_epilepsy.reports.conditions as report_cond
 import eeg_adhd_epilepsy.viz.conditions as viz_cond
 import eeg_adhd_epilepsy.utils.events as utils_events
-import eeg_adhd_epilepsy.qc.segmentation as qc_segmentation
+from eeg_adhd_epilepsy.preproc.utils import load_segments_for_raw
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 
 
@@ -61,16 +61,10 @@ def _process_subject(
             session=session, 
             task=task
         )
-        
-        # 1. Extract Condition Segments
-        df_segments = qc_segmentation.extract_condition_segments(raw)
-        
-        seg_filename = filepath.stem.replace("_eeg", "") + "_segments.csv"
-        bids_out_path = filepath.parent / seg_filename
-        df_segments.to_csv(bids_out_path, index=False)
-        
+        df_segments = load_segments_for_raw(raw)
+
         # 2. Compute Segment Stats
-        summary = qc_segmentation.summarize_condition_segments(df_segments)
+        summary = report_cond.summarize_condition_segments(df_segments)
         
         # 3. Compute Event Counts
         # Use raw counts for Bad/Clinical events
@@ -88,8 +82,9 @@ def _process_subject(
         # 2. Populate Eye States from Segments DataFrame
         # Count number of segments where EO/EC is active
         if not df_segments.empty:
-            n_eo = len(df_segments[pd.to_numeric(df_segments["eyes_open_duration"], errors='coerce') > 0])
-            n_ec = len(df_segments[pd.to_numeric(df_segments["eyes_closed_duration"], errors='coerce') > 0])
+            eye_states = df_segments["eye_state"].fillna("unknown").astype(str).str.lower()
+            n_eo = int(eye_states.eq("eo").sum())
+            n_ec = int(eye_states.eq("ec").sum())
             event_counts["Eyes Open"] = n_eo
             event_counts["Eyes Closed"] = n_ec
         else:
@@ -99,18 +94,15 @@ def _process_subject(
         # 3. Add Clinical/Other events from Raw Counts
         # Filter out the condition events we just populated from segmentation
         for desc, count in raw_counts.items():
-            clean_desc = qc_segmentation.normalize_label(desc)
+            clean_desc = str(desc).strip().lower()
             
             # Skip if it refers to a condition we already handled
-            if clean_desc == "eyes_open" or clean_desc == "eyes_closed":
-                continue
-            if qc_segmentation.is_hv_start(clean_desc):
-                continue
-            if qc_segmentation.is_hv_end(clean_desc):
-                continue
-            if qc_segmentation.is_photo(clean_desc):
-                continue
-            if qc_segmentation.is_post_hv(clean_desc):
+            if (
+                clean_desc in {"eyes_open", "eyes_closed", "hv_start", "hv_end", "post_hv", "recording_start"}
+                or clean_desc == "photo"
+                or clean_desc.startswith("photo_")
+                or str(desc).startswith("BLOCK_")
+            ):
                 continue
                 
             # It is likely a Clinical, Bad, or other event -> Add it
@@ -148,20 +140,26 @@ def _process_subject(
         return None
 
 
-def main() -> None:
-    args = parse_args()
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    
-    setup_log = args.output_dir / "logs" / "conditions_qc.log"
+def generate_condition_reports(
+    input_dir: Path,
+    output_dir: Path,
+    bids_task: str | None = None,
+    subjects_list: Path | None = None,
+    n_jobs: int = -1,
+    log_level: str = "INFO",
+) -> None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    setup_log = output_dir / "logs" / "conditions_qc.log"
     setup_log.parent.mkdir(exist_ok=True)
-    logger = setup_logging(setup_log, args.log_level)
+    logger = setup_logging(setup_log, log_level)
     
-    subjects_filter = io_bids.read_subjects_list(args.subjects_list)
+    subjects_filter = io_bids.read_subjects_list(subjects_list)
     
     logger.info("Discovering files...")
     files = io_bids.discover_bids_files(
-        bids_root=args.input_dir,
-        task=args.bids_task,
+        bids_root=input_dir,
+        task=bids_task,
         subjects_filter=subjects_filter,
     )
     
@@ -170,15 +168,15 @@ def main() -> None:
         return
 
     logger.info(f"files found: {len(files)}")
-    logger.info(f"Processing in {args.n_jobs} parallel jobs...")
+    logger.info(f"Processing in {n_jobs} parallel jobs...")
     
     with tqdm_joblib(tqdm(total=len(files), desc="Conditions QC")):
-        results = joblib.Parallel(n_jobs=args.n_jobs)(
+        results = joblib.Parallel(n_jobs=n_jobs)(
             joblib.delayed(_process_subject)(
                 filepath=f,
-                bids_root=args.input_dir,
-                output_dir=args.output_dir,
-                task=args.bids_task,
+                bids_root=input_dir,
+                output_dir=output_dir,
+                task=bids_task,
             ) 
             for f in files
         )
@@ -190,22 +188,22 @@ def main() -> None:
         event_counts_list = [r["event_counts"] for r in valid_results]
         
         logger.info("Generating dataset-level figures...")
-        figure_paths = viz_cond.plot_dataset_durations(summaries_df, args.output_dir)
+        figure_paths = viz_cond.plot_dataset_durations(summaries_df, output_dir)
         
-        event_dist_path = viz_cond.save_dataset_events_distribution(event_counts_list, args.output_dir)
+        event_dist_path = viz_cond.save_dataset_events_distribution(event_counts_list, output_dir)
         
-        p_cond = args.output_dir / "dataset_event_distributions_conditions.png"
+        p_cond = output_dir / "dataset_event_distributions_conditions.png"
         if p_cond.exists():
              figure_paths["dataset_event_distributions_conditions.png"] = p_cond
         
-        p_clin = args.output_dir / "dataset_event_distributions_clinical.png"
+        p_clin = output_dir / "dataset_event_distributions_clinical.png"
         if p_clin.exists():
              figure_paths["dataset_event_distributions_clinical.png"] = p_clin
              
         if event_dist_path and event_dist_path not in figure_paths.values():
              figure_paths["dataset_event_distributions.png"] = event_dist_path
             
-        global_report_path = args.output_dir / "dataset_conditions_summary.html"
+        global_report_path = output_dir / "dataset_conditions_summary.html"
         logger.info(f"Generating global report at {global_report_path}")
         report_cond.create_dataset_conditions_report(
             subjects_data=valid_results,
@@ -248,7 +246,7 @@ def main() -> None:
                 missing_export["no_photo"].append(sid)
                 
         # Save to BIDS root or Output dir? User said "BIDS folder".
-        json_path = args.input_dir / "missing_conditions.json"
+        json_path = input_dir / "missing_conditions.json"
         try:
             with open(json_path, "w") as f:
                 json.dump(missing_export, f, indent=2)
@@ -258,6 +256,18 @@ def main() -> None:
             
     else:
         logger.error("No valid results produced.")
+
+
+def main() -> None:
+    args = parse_args()
+    generate_condition_reports(
+        input_dir=args.input_dir,
+        output_dir=args.output_dir,
+        bids_task=args.bids_task,
+        subjects_list=args.subjects_list,
+        n_jobs=args.n_jobs,
+        log_level=args.log_level,
+    )
 
 
 if __name__ == "__main__":

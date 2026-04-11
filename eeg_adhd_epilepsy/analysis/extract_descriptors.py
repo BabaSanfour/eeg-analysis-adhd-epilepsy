@@ -41,19 +41,10 @@ from eeg_adhd_epilepsy.analysis.utils import (
 
 from eeg_adhd_epilepsy.io.bids import load_eeg_data, validate_bids_coverage
 from eeg_adhd_epilepsy.io.csv import load as load_csv
+from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS
 
 LOGGER = logging.getLogger(__name__)
-
-DEFAULT_CONDITIONS = [
-    "EO_baseline",
-    "EC_baseline",
-    "HV_EO",
-    "HV_EC",
-    "PostHV_EO",
-    "PostHV_EC",
-    "PHOTO_EO",
-    "PHOTO_EC",
-]
+DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
 def _build_feature_outputs(
     result: dict[str, Any],
     metadata_df: pd.DataFrame,

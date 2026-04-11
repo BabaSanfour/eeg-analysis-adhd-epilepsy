@@ -117,7 +117,10 @@ IGNORED_LABELS = (
     + HV_IGNORE
     + IGNORE_MISC_LABELS
 )
-REFERENCE_EVENT_KEYWORDS = tuple(_annot_config.get("recording_start", ("a1+a2 off",)))
+_recording_start_labels = tuple(_annot_config.get("recording_start", ("a1+a2 off",)))
+RECORDING_START_LABEL = (
+    str(_recording_start_labels[0]).lower().strip() if _recording_start_labels else "a1+a2 off"
+)
 SENSOR_ACTION_KEYWORDS = tuple(_annot_config.get("sensor_action_keywords", ()))
 
 # ---------------------------------------------------------------------------
@@ -137,14 +140,6 @@ BASIC_1020_CHANNELS = [
     "Fp1", "Fp2", "F7", "F3", "Fz", "F4", "F8", "T3", "C3", "Cz",
     "C4", "T4", "T5", "P3", "Pz", "P4", "T6", "O1", "O2", "A1", "A2",
 ]
-ADDITIONAL_SENSOR_CHANNELS = [
-    "Fpz", "Oz", "Fp3", "Fp4", "F1", "F2", "AF3", "AF4", "AFz",
-    "FT7", "FT8", "FC3", "FC4", "FCz", "C1", "C2", "CP3", "CP4",
-    "CPz", "TP7", "TP8", "P1", "P2", "PO3", "PO4", "POz", "PO7",
-    "PO8", "P5", "P6", "T7", "T8", "T9", "T10", "FT9", "FT10",
-    "O9", "O10", "M1", "M2",
-]
-
 
 ANNOTATION_INTEREST_MAP = {
     "Eyes Open": EYES_OPEN_LABELS,
@@ -169,15 +164,39 @@ ANNOTATION_INTEREST_MAP = {
 
 SEGMENT_COLUMNS = [
     "segment_type",
+    "block_family",
+    "eye_state",
     "t_start",
     "t_stop",
     "duration",
     "freq_hz",
-    "hv_index",
-    "post_hv_index",
-    "eyes_open_duration",
-    "eyes_closed_duration",
 ]
+
+CANONICAL_SEGMENT_TYPES = (
+    "RAW_baseline",
+    "EO_baseline",
+    "EC_baseline",
+    "HV_EO",
+    "HV_EC",
+    "HV_UNKNOWN",
+    "PostHV_EO",
+    "PostHV_EC",
+    "PostHV_UNKNOWN",
+    "PHOTO_EO",
+    "PHOTO_EC",
+    "PHOTO_UNKNOWN",
+)
+
+DEFAULT_ANALYSIS_CONDITIONS = (
+    "EO_baseline",
+    "EC_baseline",
+    "HV_EO",
+    "HV_EC",
+    "PostHV_EO",
+    "PostHV_EC",
+    "PHOTO_EO",
+    "PHOTO_EC",
+)
 
 KNOWN_EVENT_LABELS = set(ANNOTATION_INTEREST_MAP.keys()) | set(CLINICAL_COMMENT_LABELS.keys())
 

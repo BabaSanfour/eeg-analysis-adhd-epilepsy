@@ -48,13 +48,17 @@ def plot_total_duration_by_segment(df: pd.DataFrame, fig_dir: Path) -> Path | No
 
 
 def plot_eye_state_breakdown(df: pd.DataFrame, fig_dir: Path) -> Path | None:
-    group = df.groupby("segment_type")[["eyes_open_duration", "eyes_closed_duration"]].sum()
+    group = (
+        df.groupby(["segment_type", "eye_state"], dropna=False)["duration"]
+        .sum()
+        .unstack(fill_value=0.0)
+    )
     if group.empty:
         return None
-    group = group.sort_values(by="eyes_open_duration", ascending=False)
+    group = group.sort_values(by="eo", ascending=False) if "eo" in group.columns else group
     labels = group.index.astype(str)
-    open_vals = group["eyes_open_duration"].to_numpy(dtype=float)
-    closed_vals = group["eyes_closed_duration"].to_numpy(dtype=float)
+    open_vals = group.get("eo", pd.Series(0.0, index=group.index)).to_numpy(dtype=float)
+    closed_vals = group.get("ec", pd.Series(0.0, index=group.index)).to_numpy(dtype=float)
     fig, ax = plt.subplots(figsize=(7, max(3, len(group) * 0.35)))
     positions = np.arange(len(labels))
     ax.barh(positions, open_vals, label="Eyes Open", color="#55A868")
@@ -70,8 +74,7 @@ def plot_eye_state_breakdown(df: pd.DataFrame, fig_dir: Path) -> Path | None:
 
 
 def plot_photo_frequency_durations(df: pd.DataFrame, fig_dir: Path) -> Path | None:
-    segment_types = df["segment_type"].fillna("").astype(str)
-    photo = df[segment_types.str.startswith("PHOTO_") | (segment_types == "PHOTO_block")]
+    photo = df[df["block_family"].fillna("").astype(str).eq("photo")]
     if photo.empty or "freq_hz" not in photo:
         return None
     group = (
@@ -96,35 +99,37 @@ def plot_photo_frequency_durations(df: pd.DataFrame, fig_dir: Path) -> Path | No
 def plot_block_eye_states(df: pd.DataFrame, block_type: str, fig_dir: Path) -> Path | None:
     if block_type not in {"HV", "PostHV"}:
         raise ValueError("block_type must be 'HV' or 'PostHV'")
-    column = "hv_index" if block_type == "HV" else "post_hv_index"
-    segment_types = df["segment_type"].fillna("").astype(str)
-    legacy_label = f"{block_type}_block"
-    mask = segment_types.str.startswith(f"{block_type}_") | (segment_types == legacy_label)
+    family = "hv" if block_type == "HV" else "post_hv"
+    mask = df["block_family"].fillna("").astype(str).eq(family)
     block_df = df.loc[mask].copy()
-    if block_df.empty or column not in block_df:
+    if block_df.empty:
         return None
 
-    block_df[column] = pd.to_numeric(block_df[column], errors="coerce")
-    fallback = pd.Series(np.arange(1, len(block_df) + 1, dtype=int), index=block_df.index)
-    block_df[column] = block_df[column].fillna(fallback).astype(int)
+    block_df["t_start"] = pd.to_numeric(block_df["t_start"], errors="coerce")
+    block_df["t_stop"] = pd.to_numeric(block_df["t_stop"], errors="coerce")
+    intervals = (
+        block_df[["t_start", "t_stop"]]
+        .dropna()
+        .drop_duplicates()
+        .sort_values(["t_start", "t_stop"])
+        .reset_index(drop=True)
+    )
+    if intervals.empty:
+        return None
+    block_ids = {
+        (float(row.t_start), float(row.t_stop)): idx + 1
+        for idx, row in intervals.itertuples(index=False)
+    }
+    block_df["block_id"] = [
+        block_ids.get((float(start), float(stop)))
+        for start, stop in zip(block_df["t_start"], block_df["t_stop"])
+    ]
+    block_df = block_df.dropna(subset=["block_id"]).copy()
+    block_df["block_id"] = block_df["block_id"].astype(int)
 
-    def _label_eye_state(seg_type: str) -> str:
-        if "_EO" in seg_type:
-            return "EO"
-        if "_EC" in seg_type:
-            return "EC"
-        return "Unknown"
+    block_df["eye_state"] = block_df["eye_state"].fillna("unknown").astype(str).str.upper()
 
-    block_df["eye_state"] = [_label_eye_state(val) for val in block_df["segment_type"]]
-
-    grouped = block_df.groupby([column, "eye_state"])["duration"].sum().unstack(fill_value=0.0)
-
-    legacy_mask = segment_types[mask] == legacy_label
-    if legacy_mask.any():
-        legacy_df = block_df[legacy_mask]
-        legacy_grouped = legacy_df.groupby(column)[["eyes_open_duration", "eyes_closed_duration"]].sum()
-        grouped["EO"] = grouped.get("EO", 0.0) + legacy_grouped.get("eyes_open_duration", 0.0)
-        grouped["EC"] = grouped.get("EC", 0.0) + legacy_grouped.get("eyes_closed_duration", 0.0)
+    grouped = block_df.groupby(["block_id", "eye_state"])["duration"].sum().unstack(fill_value=0.0)
 
     if grouped.empty:
         return None

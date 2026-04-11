@@ -23,8 +23,7 @@ import matplotlib.pyplot as plt
 
 from eeg_adhd_epilepsy.viz import qc as viz_qc
 
-from .utils import benchmark_step, NumpyEncoder
-from .base import _collect_block_windows
+from .utils import benchmark_step, NumpyEncoder, _collect_block_windows
 from .dss_utils import _get_dss_profile, _run_dss_artifact
 from .ica_utils import fit_ica_context, apply_ica_artifact
 from eeg_adhd_epilepsy.reports.correct import create_correction_report, create_correction_dataset_report

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from pathlib import Path
 from typing import Dict, List, Mapping, Any
@@ -9,7 +10,7 @@ from typing import Dict, List, Mapping, Any
 import mne
 import pandas as pd
 
-from eeg_adhd_epilepsy.qc.segmentation import format_duration_hms
+from eeg_adhd_epilepsy.utils.config import SEGMENT_COLUMNS
 
 
 # Regex patterns to filter out overlapping/granular events from summary tables
@@ -25,6 +26,113 @@ IGNORE_EVENT_PATTERNS = [
 def _is_ignored_event(label: str) -> bool:
     """Check if event label should be excluded from summary reports."""
     return any(pat.search(label) for pat in IGNORE_EVENT_PATTERNS)
+
+
+def format_duration_hms(seconds: float | None) -> str:
+    try:
+        value = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        return "0s"
+    if not math.isfinite(value):
+        return "0s"
+    hours, value = divmod(value, 3600)
+    minutes, value = divmod(value, 60)
+    sec_component = f"{f'{value:.2f}'.rstrip('0').rstrip('.') or '0'}s"
+    if hours >= 1:
+        return f"{int(hours)}h {int(minutes)}m {sec_component}"
+    if minutes >= 1:
+        return f"{int(minutes)}m {sec_component}"
+    return sec_component
+
+
+def _merge_intervals(intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    if not intervals:
+        return []
+    merged = [intervals[0]]
+    for start, stop in intervals[1:]:
+        cur_start, cur_stop = merged[-1]
+        if start <= cur_stop:
+            merged[-1] = (cur_start, max(cur_stop, stop))
+        else:
+            merged.append((start, stop))
+    return merged
+
+
+def summarize_condition_segments(df: pd.DataFrame) -> dict[str, object]:
+    if df is None or df.empty:
+        return {
+            "total_duration": 0.0,
+            "n_segments": 0,
+            "segment_type_counts": {},
+            "total_eyes_open_duration": 0.0,
+            "total_eyes_closed_duration": 0.0,
+            "total_baseline_eyes_open_duration": 0.0,
+            "total_baseline_eyes_closed_duration": 0.0,
+            "hv_block_count": 0,
+            "post_hv_block_count": 0,
+            "photo_block_count": 0,
+            "photo_frequency_durations": {},
+            "total_duration_readable": "0s",
+            "total_eyes_open_duration_readable": "0s",
+            "total_eyes_closed_duration_readable": "0s",
+            "total_baseline_eyes_open_duration_readable": "0s",
+            "total_baseline_eyes_closed_duration_readable": "0s",
+        }
+
+    summary_df = df.reindex(columns=SEGMENT_COLUMNS).copy()
+    summary_df["t_start"] = pd.to_numeric(summary_df["t_start"], errors="coerce")
+    summary_df["t_stop"] = pd.to_numeric(summary_df["t_stop"], errors="coerce")
+    summary_df["duration"] = pd.to_numeric(summary_df["duration"], errors="coerce").fillna(0.0)
+    summary_df["segment_type"] = summary_df["segment_type"].fillna("Unknown").astype(str)
+    summary_df["block_family"] = summary_df["block_family"].fillna("unknown").astype(str)
+    summary_df["eye_state"] = summary_df["eye_state"].fillna("unknown").astype(str).str.lower()
+    valid = summary_df.loc[summary_df["t_stop"].gt(summary_df["t_start"])].copy()
+
+    def merged_duration(frame: pd.DataFrame) -> float:
+        intervals = sorted(frame[["t_start", "t_stop"]].itertuples(index=False, name=None))
+        return sum(stop - start for start, stop in _merge_intervals(intervals))
+
+    summary = {
+        "total_duration": merged_duration(valid),
+        "n_segments": int(len(df)),
+        "segment_type_counts": {
+            str(key): int(value) for key, value in summary_df["segment_type"].value_counts().items()
+        },
+        "total_eyes_open_duration": merged_duration(valid.loc[valid["eye_state"].eq("eo")]),
+        "total_eyes_closed_duration": merged_duration(valid.loc[valid["eye_state"].eq("ec")]),
+        "total_baseline_eyes_open_duration": merged_duration(
+            valid.loc[valid["segment_type"].eq("EO_baseline")]
+        ),
+        "total_baseline_eyes_closed_duration": merged_duration(
+            valid.loc[valid["segment_type"].eq("EC_baseline")]
+        ),
+    }
+    hv_mask = valid["block_family"].eq("hv")
+    post_hv_mask = valid["block_family"].eq("post_hv")
+    photo_mask = valid["block_family"].eq("photo")
+    summary["hv_block_count"] = int(valid.loc[hv_mask, ["t_start", "t_stop"]].drop_duplicates().shape[0])
+    summary["post_hv_block_count"] = int(
+        valid.loc[post_hv_mask, ["t_start", "t_stop"]].drop_duplicates().shape[0]
+    )
+    summary["photo_block_count"] = int(valid.loc[photo_mask, ["t_start", "t_stop"]].drop_duplicates().shape[0])
+    photo = valid.loc[photo_mask].assign(freq_hz=pd.to_numeric(valid.loc[photo_mask, "freq_hz"], errors="coerce"))
+    if not photo.empty:
+        freq_summary = photo.dropna(subset=["freq_hz"]).groupby("freq_hz")["duration"].sum().sort_index()
+        summary["photo_frequency_durations"] = {
+            float(freq): float(duration) for freq, duration in freq_summary.items()
+        }
+    else:
+        summary["photo_frequency_durations"] = {}
+    summary["total_duration_readable"] = format_duration_hms(summary["total_duration"])
+    summary["total_eyes_open_duration_readable"] = format_duration_hms(summary["total_eyes_open_duration"])
+    summary["total_eyes_closed_duration_readable"] = format_duration_hms(summary["total_eyes_closed_duration"])
+    summary["total_baseline_eyes_open_duration_readable"] = format_duration_hms(
+        summary["total_baseline_eyes_open_duration"]
+    )
+    summary["total_baseline_eyes_closed_duration_readable"] = format_duration_hms(
+        summary["total_baseline_eyes_closed_duration"]
+    )
+    return summary
 
 
 def create_condition_segments_report(

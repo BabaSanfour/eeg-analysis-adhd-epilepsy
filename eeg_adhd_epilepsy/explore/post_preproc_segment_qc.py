@@ -14,7 +14,7 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 
 from eeg_adhd_epilepsy.explore import eeg_qc
-from eeg_adhd_epilepsy.explore.condition_segments_summary import extract_condition_segments
+from eeg_adhd_epilepsy.preproc.utils import load_segments_for_raw
 from eeg_adhd_epilepsy.utils.qc_config import BASIC_1020_CHANNELS
 
 
@@ -111,7 +111,7 @@ def process_file(
             raw.filter(args.highpass, None, fir_design="firwin", verbose="ERROR")
         analysis_raw, basic_picks, montage_info = eeg_qc.prepare_channel_selection(raw, standard_names, logger)
         expected_len = len(basic_picks)
-        segments_df = extract_condition_segments(raw)
+        segments_df = load_segments_for_raw(raw)
         if segments_df is None or segments_df.empty or analysis_raw is None:
             return {"subject_id": subject_id, "records": records, "error": error}
 
@@ -155,10 +155,8 @@ def process_file(
                 "t_stop": float(row.get("t_stop", np.nan)),
                 "duration": duration,
                 "freq_hz": float(row.get("freq_hz", np.nan)),
-                "hv_index": float(row.get("hv_index", np.nan)),
-                "post_hv_index": float(row.get("post_hv_index", np.nan)),
-                "eyes_open_duration": float(row.get("eyes_open_duration", np.nan)),
-                "eyes_closed_duration": float(row.get("eyes_closed_duration", np.nan)),
+                "block_family": row.get("block_family", ""),
+                "eye_state": row.get("eye_state", ""),
                 "n_channels_1020_match": montage_info.get("n_channels_1020_match", 0),
                 "pct_missing_1020": montage_info.get("pct_missing_1020", float("nan")),
             }

@@ -19,8 +19,8 @@ import eeg_adhd_epilepsy.reports.qc as qc_reports
 import eeg_adhd_epilepsy.viz.qc as qc_viz
 import eeg_adhd_epilepsy.features.spectral as feat_spectral
 import eeg_adhd_epilepsy.features.time as feat_time
+from eeg_adhd_epilepsy.preproc.utils import load_segments_for_raw
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
-from eeg_adhd_epilepsy.explore.condition_segments_summary import extract_condition_segments
 from eeg_adhd_epilepsy.utils.config import ANNOTATION_INTEREST_MAP
 
 KNOWN_EVENT_LABELS = set(ANNOTATION_INTEREST_MAP.keys())
@@ -115,7 +115,7 @@ def _process_file(
         
         # --- Segment Analysis (Optional) ---
         if args.analyze_segments:
-             segments_df = extract_condition_segments(raw)
+             segments_df = load_segments_for_raw(raw)
              if segments_df is not None and not segments_df.empty:
                  for _, row in segments_df.iterrows():
                      dur = float(row.get("duration", 0))

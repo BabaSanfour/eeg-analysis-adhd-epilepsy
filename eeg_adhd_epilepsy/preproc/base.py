@@ -3,7 +3,7 @@
 This module provides the core pipeline for preprocessing EEG data using MNE-Python,
 PyPREP, and AutoReject. The pipeline includes:
 
-1.  Block Annotation: Loads segment definitions from CSV.
+1.  Block Awareness: Uses embedded `BLOCK_*` annotations already present in BIDS.
 2.  Resampling: Adjusts sampling rate.
 3.  Filtering: Applies high-pass and low-pass filters.
 4.  Line Noise Removal: Detects and removes power line noise (ZapLine).
@@ -132,15 +132,16 @@ def run_base_pipeline(
     )
     psd_before = (freqs_pre, psd_pre_data)
 
-    # 1. Annotate Blocks
-    segments_file = config.get("processing", {}).get("segments_file", None)
-    raw = annotate_blocks_from_csv(raw, segments_file=segments_file)
+    # 1. Embedded block annotations
+    n_blocks = len(_collect_block_windows(raw))
+    if n_blocks == 0:
+        LOGGER.warning("No embedded BLOCK_* annotations found; block-aware steps will have limited context.")
     
     # 1b. Inflate Manual Annotations (Major -> 5s, Common -> 3s)
     raw = inflate_bad_annotations(raw)
     LOGGER.info(f"Inflated manual annotations: {len(raw.annotations)}")
     
-    provenance["steps_completed"].append("annotate_blocks")
+    provenance["steps_completed"].append("embedded_blocks")
 
     # 2. Resample
     target_sfreq = config.get("processing", {}).get("resample_hz", None)

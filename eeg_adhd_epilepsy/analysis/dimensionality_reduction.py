@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 
 # Project imports
-from eeg_adhd_epilepsy.utils.config import results_dir
+from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS, results_dir
 
 # Coco-pipe imports
 from coco_pipe.decoding import Experiment, ExperimentConfig
@@ -51,16 +51,7 @@ ALL_REDUCERS = [
     "PCA", "UMAP", "PHATE", "ISOMAP"
 ]
 
-DEFAULT_CONDITIONS = [
-    "EO_baseline",
-    "EC_baseline",
-    "HV_EO",
-    "HV_EC",
-    "PostHV_EO",
-    "PostHV_EC",
-    "PHOTO_EO",
-    "PHOTO_EC",
-]
+DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
 
 
 def compute_embeddings(

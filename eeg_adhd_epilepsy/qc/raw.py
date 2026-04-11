@@ -21,6 +21,7 @@ import eeg_adhd_epilepsy.viz.qc as qc_viz
 
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 from eeg_adhd_epilepsy.utils.events import crop_raw_to_recording_start
+from eeg_adhd_epilepsy.preproc.utils import load_segments_for_raw
 import numpy as np
 from collections import defaultdict
 
@@ -151,42 +152,32 @@ def _process_file(
 
         # --- Analysis Level: SEGMENTS ---
         if args.analysis_level in ["segments", "both"]:
-             base_name = filepath.stem # e.g. sub-01_ses-01_task-rest_run-01_eeg
-             if base_name.endswith("_eeg"):
-                 base_name = base_name[:-4]
-             seg_csv_path = filepath.parent / f"{base_name}_segments.csv"
+             segments_df = load_segments_for_raw(raw)
+             if args.segment_types:
+                 allowed = [t.strip() for t in args.segment_types.split(",")]
+                 segments_df = segments_df[segments_df["segment_type"].isin(allowed)]
              
-             if seg_csv_path.exists():
-                 segments_df = pd.read_csv(seg_csv_path)
+             for _, row in segments_df.iterrows():
+                 dur = float(row.get("duration", 0))
+                 if dur < args.min_segment_duration:
+                     continue
+                 seg_start = float(row.get("t_start", 0))
+                 seg_stop = float(row.get("t_stop", 0))
                  
-                 # Filter types if requested
-                 if args.segment_types:
-                     allowed = [t.strip() for t in args.segment_types.split(",")]
-                     segments_df = segments_df[segments_df["segment_type"].isin(allowed)]
-                 
-                 for _, row in segments_df.iterrows():
-                     dur = float(row.get("duration", 0))
-                     if dur < args.min_segment_duration:
-                         continue
-                     seg_start = float(row.get("t_start", 0))
-                     seg_stop = float(row.get("t_stop", 0))
-                     
-                     segment = qc_metrics.crop_segment(cropped_raw, seg_start, seg_stop, picks=picks)
-                     if segment:
-                         seg_metrics = qc_metrics.compute_segment_qc(
-                             segment, picks=picks, line_freq=args.line_freq,
-                             include_channel_metrics=not args.skip_reports
-                         )
-                         seg_rec = {
-                             "subject_id": subject_id,
-                             "segment_type": row.get("segment_type"),
-                             "t_start": seg_start,
-                             "duration": dur,
-                         }
-                         seg_rec.update(seg_metrics)
-                         result["segment_metrics"].append(seg_rec)
-             else:
-                 logger.warning(f"No segment definitions found at {seg_csv_path} (run qc/conditions.py first).")
+                 segment = qc_metrics.crop_segment(cropped_raw, seg_start, seg_stop, picks=picks)
+                 if segment:
+                     seg_metrics = qc_metrics.compute_segment_qc(
+                         segment, picks=picks, line_freq=args.line_freq,
+                         include_channel_metrics=not args.skip_reports
+                     )
+                     seg_rec = {
+                         "subject_id": subject_id,
+                         "segment_type": row.get("segment_type"),
+                         "t_start": seg_start,
+                         "duration": dur,
+                     }
+                     seg_rec.update(seg_metrics)
+                     result["segment_metrics"].append(seg_rec)
 
     except Exception as e:
         logger.error(f"Error processing {subject_id}: {e}\n{traceback.format_exc()}")
