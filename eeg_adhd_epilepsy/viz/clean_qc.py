@@ -1,4 +1,4 @@
-"""Quality Control Visualization Utilities."""
+"""Visualization helpers for post-preprocessing EEG QC."""
 
 from __future__ import annotations
 

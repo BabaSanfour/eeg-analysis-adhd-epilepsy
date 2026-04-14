@@ -4,14 +4,11 @@ import time
 import logging
 from contextlib import contextmanager
 import json
-from dataclasses import dataclass
 from pathlib import Path
 import numpy as np
-import pandas as pd
 import mne
 from typing import Any, Dict, List, Literal, TypedDict, Optional, Sequence, Tuple, Union
 from eeg_adhd_epilepsy.io import bids
-from eeg_adhd_epilepsy.utils import config
 
 
 def load_stage_artifacts(
@@ -166,157 +163,10 @@ def benchmark_step(name: str, provenance: Dict):
 
 
 DEFAULT_ARTIFACT_N_INTERPOLATE = (0,)
-@dataclass
-class BlockWindow:
-    """Represents a continuous block of time defined by an annotation."""
-
-    onset: float
-    duration: float
-    description: str
-
-    @property
-    def stop(self) -> float:
-        """Return end time of the block in seconds."""
-        return self.onset + self.duration
-
-    @property
-    def name(self) -> str:
-        """Return block name stripped of the 'BLOCK_' prefix."""
-        if self.description.startswith("BLOCK_"):
-            return self.description[6:]
-        return self.description
-
-    @property
-    def family(self) -> str:
-        return parse_block_segment_type(self.name)[0]
-
-    @property
-    def eye_state(self) -> str:
-        return parse_block_segment_type(self.name)[1]
-
-
-def parse_block_segment_type(segment_type: str) -> Tuple[str, str]:
-    segment_type = str(segment_type or "")
-    if segment_type == "RAW_baseline":
-        return "raw_baseline", "unknown"
-    if segment_type == "EO_baseline":
-        return "baseline", "eo"
-    if segment_type == "EC_baseline":
-        return "baseline", "ec"
-    if segment_type == "HV_block":
-        return "hv", "unknown"
-    if segment_type == "PostHV_block":
-        return "post_hv", "unknown"
-    if segment_type == "PHOTO_block":
-        return "photo", "unknown"
-    if segment_type.startswith("HV_"):
-        return "hv", segment_type.split("_", 1)[1].lower()
-    if segment_type.startswith("PostHV_"):
-        return "post_hv", segment_type.split("_", 1)[1].lower()
-    if segment_type.startswith("PHOTO_"):
-        return "photo", segment_type.split("_", 1)[1].lower()
-    return "unknown", "unknown"
-
-
-def _resolve_segments_csv(
-    raw: mne.io.BaseRaw, segments_file: Optional[str]
-) -> Optional[Path]:
-    """Resolve the path to the segments CSV file."""
-    if segments_file:
-        segments_path = Path(segments_file).expanduser()
-        if segments_path.exists():
-            return segments_path
-        if raw.filenames and raw.filenames[0]:
-            candidate = Path(raw.filenames[0]).parent / segments_path
-            if candidate.exists():
-                return candidate
-        return segments_path  # Return even if not exists, let caller fail
-
-    if not raw.filenames or not raw.filenames[0]:
-        return None
-
-    raw_path = Path(raw.filenames[0])
-    stem = raw_path.stem
-    # Handle common BIDS-like suffixes
-    for suffix in ("_eeg", "_meg", "_ieeg"):
-        if stem.endswith(suffix):
-            stem = stem[: -len(suffix)]
-            break
-    return raw_path.parent / f"{stem}_segments.csv"
-
-
-def segments_from_block_annotations(raw: mne.io.BaseRaw) -> pd.DataFrame:
-    records: List[Dict[str, Any]] = []
-    for block in _collect_block_windows(raw):
-        family, eye_state = parse_block_segment_type(block.name)
-        records.append(
-            {
-                "segment_type": block.name,
-                "block_family": family,
-                "eye_state": eye_state,
-                "t_start": block.onset,
-                "t_stop": block.stop,
-                "duration": block.duration,
-                "freq_hz": np.nan,
-            }
-        )
-    return pd.DataFrame.from_records(records, columns=config.SEGMENT_COLUMNS)
-
-
-def load_segments_for_raw(
-    raw: mne.io.BaseRaw, segments_file: Optional[str] = None
-) -> pd.DataFrame:
-    csv_path = _resolve_segments_csv(raw, segments_file)
-    if csv_path is not None and csv_path.exists():
-        df = pd.read_csv(csv_path)
-    else:
-        df = segments_from_block_annotations(raw)
-
-    if "block_family" not in df.columns or "eye_state" not in df.columns:
-        parsed = df.get("segment_type", pd.Series(dtype=str)).fillna("").astype(str).map(parse_block_segment_type)
-        df["block_family"] = [item[0] for item in parsed]
-        df["eye_state"] = [item[1] for item in parsed]
-
-    for column in config.SEGMENT_COLUMNS:
-        if column not in df.columns:
-            df[column] = np.nan
-    return df[config.SEGMENT_COLUMNS].copy()
-
-
-def _collect_block_windows(raw: mne.io.BaseRaw) -> List[BlockWindow]:
-    """Parse annotations to collect all BLOCK_* segments."""
-    if raw.n_times == 0:
-        return []
-
-    max_t = float(raw.times[-1])
-    windows: List[BlockWindow] = []
-    for annot in raw.annotations:
-        desc = str(annot["description"])
-        if not desc.startswith("BLOCK_"):
-            continue
-
-        onset = float(annot["onset"])
-        duration = float(annot["duration"])
-        if not np.isfinite(onset) or not np.isfinite(duration) or duration <= 0:
-            continue
-
-        start = max(0.0, onset)
-        stop = min(max_t, onset + duration)
-        if stop <= start:
-            continue
-
-        windows.append(
-            BlockWindow(onset=start, duration=stop - start, description=desc)
-        )
-
-    windows.sort(key=lambda block: block.onset)
-    return windows
-
-
 def _get_rest_windows(raw: mne.io.BaseRaw) -> List[Tuple[float, float]]:
     """Identify windows belonging to resting state (baseline) blocks."""
     rest_windows: List[Tuple[float, float]] = []
-    for block in _collect_block_windows(raw):
+    for block in bids._collect_block_windows(raw):
         if block.family in {"raw_baseline", "baseline"}:
             rest_windows.append((block.onset, block.stop))
     return rest_windows

@@ -1,4 +1,4 @@
-"""Quality Control HTML Report Generation."""
+"""Post-preprocessing EEG QC report generation."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import pandas as pd
 import mne
 
 from eeg_adhd_epilepsy.utils.config import BAND_LIMITS
-from eeg_adhd_epilepsy.viz import qc as viz_qc
+import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
 
 
 SEGMENT_REPORT_METRICS = (
@@ -89,14 +89,16 @@ def _compute_flagged_percentages_by_segment(
 
 
 def create_subject_report(
-    raw: mne.io.BaseRaw | mne.Epochs,
+    raw: mne.io.BaseRaw | mne.Epochs | None,
     metrics: Dict[str, object],
     subject_id: str,
     output_path: Path,
     fig_paths: Mapping[str, Path | str],
+    segment_df: pd.DataFrame | None = None,
+    segment_fig_paths: Mapping[str, Path | str] | None = None,
 ) -> None:
     """Reusable subject HTML report using saved figure paths."""
-    report = mne.Report(title=f"EEG QC Report - {subject_id}")
+    report = mne.Report(title=f"Post-Preprocessing EEG QC Report - {subject_id}")
     
     # --- QC Summary (First) ---
     duration_min = metrics.get("duration_min", float("nan"))
@@ -149,7 +151,7 @@ def create_subject_report(
     if metrics.get("event_counts"):
         qc_summary_html += f"<li>Events: {metrics.get('event_counts')}</li>"
     qc_summary_html += "</ul>"
-    report.add_html(qc_summary_html, title="QC Summary", section="Quality Control")
+    report.add_html(qc_summary_html, title="Residual Artifact Summary", section="Quality Control")
     
     # --- Signal Quality Figures ---
     if "amplitude_hist" in fig_paths:
@@ -179,11 +181,55 @@ def create_subject_report(
     if "events" in fig_paths:
         report.add_image(fig_paths["events"], title="Annotation Counts", section="Events")
         
+    if segment_df is not None and not segment_df.empty:
+        n_segments = len(segment_df)
+        flagged = segment_df.get("segment_flag_bad")
+        n_flagged = (
+            int(pd.to_numeric(flagged, errors="coerce").fillna(0).astype(bool).sum())
+            if flagged is not None
+            else 0
+        )
+        segment_html = f"""
+        <h3>Segment QC Summary</h3>
+        <ul>
+            <li>Total segments extracted: {n_segments}</li>
+            <li>Flagged segments: {n_flagged}</li>
+        </ul>
+        """
+        cols_to_show = [
+            col
+            for col in [
+                "segment_type",
+                "t_start",
+                "duration",
+                "segment_flag_bad",
+                "segment_amplitude_mean_uv",
+                "segment_pct_bad_channels",
+                "segment_hf_lf_ratio",
+                "segment_line_noise_ratio",
+            ]
+            if col in segment_df.columns
+        ]
+        if cols_to_show:
+            segment_html += "<h4>Segment Details</h4>"
+            segment_html += segment_df[cols_to_show].to_html(
+                classes="table table-striped",
+                index=False,
+                float_format="%.2f",
+            )
+        report.add_html(segment_html, title="Segment QC", section="Segment Quality")
+        if segment_fig_paths:
+            for key, path in sorted(segment_fig_paths.items()):
+                if "topomap" in key.lower() and Path(path).exists():
+                    title = key.replace("_topomaps", "").replace("_", " ").title()
+                    report.add_image(path, title=title, section="Segment Quality")
+
     # --- Raw Data (Last) ---
-    try:
-        report.add_raw(raw, title="Raw Data (with PSD)", psd=True, duration=30.0, start=0.0)
-    except Exception:
-        pass
+    if raw is not None:
+        try:
+            report.add_raw(raw, title="Raw Data (with PSD)", psd=True, duration=30.0, start=0.0)
+        except Exception:
+            pass
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report.save(output_path, overwrite=True, open_browser=False)
@@ -325,7 +371,7 @@ def create_segment_dataset_report(
     """Dataset-level HTML report for segment QC."""
     if segments_df is None or segments_df.empty:
         return
-    report = mne.Report(title="Segment QC Dataset Summary")
+    report = mne.Report(title="Post-Preprocessing Segment QC Dataset Summary")
     subject_count = int(segments_df.get("subject_id", pd.Series(dtype=str)).nunique())
     flagged = segments_df.get("segment_flag_bad")
     flagged_count = int(pd.to_numeric(flagged, errors="coerce").fillna(0).astype(bool).sum()) if flagged is not None else 0
@@ -512,12 +558,18 @@ def save_figures(
         plt.close(fig)
         paths[column] = out_path
 
-    _save_hist("duration_min", "Duration Distribution (min)", "dataset_duration_distribution.png")
-    _save_hist("segment_amplitude_mean_uv", "Mean Amplitude Distribution (uV)", "dataset_amplitude_distribution.png")
-    _save_hist("segment_alpha_peak_hz", "Alpha Peak Distribution (Hz)", "dataset_alpha_peak_distribution.png")
-    _save_hist("segment_hf_lf_ratio", "HF/LF Ratio Distribution", "dataset_hf_ratio_distribution.png")
-    _save_hist("segment_aperiodic_slope", "Aperiodic Slope Distribution", "dataset_slope_distribution.png")
-    _save_hist("segment_line_noise_ratio", "Line Noise Ratio Distribution", "dataset_line_noise_distribution.png")
+    _save_hist("duration_min", "Cleaned Duration Distribution (min)", "dataset_duration_distribution.png")
+    _save_hist("amplitude_mean_uv", "Cleaned Mean Amplitude Distribution (uV)", "dataset_amplitude_distribution.png")
+    _save_hist("alpha_peak_hz", "Cleaned Alpha Peak Distribution (Hz)", "dataset_alpha_peak_distribution.png")
+    _save_hist("hf_lf_ratio", "Residual HF/LF Ratio Distribution", "dataset_hf_ratio_distribution.png")
+    _save_hist("aperiodic_slope", "Cleaned Aperiodic Slope Distribution", "dataset_slope_distribution.png")
+    _save_hist("line_noise_ratio", "Residual Line Noise Distribution", "dataset_line_noise_distribution.png")
+    _save_hist("duration_retention_pct", "Recording Duration Retention (%)", "dataset_duration_retention.png")
+    _save_hist("coverage_retention_pct", "Condition Coverage Retention (%)", "dataset_coverage_retention.png")
+    _save_hist("amplitude_mean_delta_uv", "Mean Amplitude Change (post - pre)", "dataset_amplitude_delta.png")
+    _save_hist("line_noise_ratio_delta", "Line Noise Change (post - pre)", "dataset_line_noise_delta.png")
+    _save_hist("hf_lf_ratio_delta", "HF/LF Ratio Change (post - pre)", "dataset_hf_ratio_delta.png")
+    _save_hist("aperiodic_slope_delta", "Aperiodic Slope Change (post - pre)", "dataset_slope_delta.png")
 
     fig, ax = plt.subplots(figsize=(7, 4))
     if flags_counter:
@@ -535,46 +587,6 @@ def save_figures(
     fig.savefig(flag_path, dpi=150)
     plt.close(fig)
     paths["flag_reasons"] = flag_path
-
-    event_specs = [
-        ("Eyes Open", "eyes_open_event_count"),
-        ("Eyes Closed", "eyes_closed_event_count"),
-        ("Movement", "movement_event_count"),
-        ("Artefact", "artefact_event_count"),
-        ("Ignore System", "ignore_system_event_count"),
-        ("HV", "hv_event_count"),
-        ("PHOTO", "photo_event_count"),
-        ("Yawning/Coughing", "yawning_coughing_event_count"),
-        ("Jaw/Face Tension", "jaw_face_tension_event_count"),
-        ("Sleepy", "sleepy_event_count"),
-        ("Sleep", "sleep_event_count"),
-        ("Collaboration", "collaboration_event_count"),
-        ("Emotion/Behavior", "emotion_behavior_event_count"),
-        ("Oral Activity", "oral_activity_event_count"),
-        ("Eye Movement", "eye_movement_event_count"),
-        ("Wakefulness", "wakefulness_event_count"),
-        ("Respiration", "respiration_event_count"),
-        ("Sensor Actions", "sensor_action_keyword_event_count"),
-        ("Eye Movement Keywords", "eye_movement_keyword_event_count"),
-        ("Clinical Comments", "clinical_comment_event_count"),
-    ]
-    events_distribution: Dict[str, np.ndarray] = {}
-    for label, count_col in event_specs:
-        if count_col not in df:
-            continue
-        series = pd.to_numeric(df[count_col], errors="coerce").dropna()
-        if label not in {"Eyes Open", "Eyes Closed", "HV", "PHOTO"}:
-            series = series[series > 0]
-        if series.empty:
-            continue
-        events_distribution[label] = series.to_numpy(dtype=float)
-    if events_distribution:
-        fig = viz_qc.plot_events_distribution(events_distribution)
-        if fig is not None:
-            event_path = fig_dir / "event_count_distributions.png"
-            fig.savefig(event_path, dpi=150)
-            plt.close(fig)
-            paths["event_stats"] = event_path
 
     if meas_datetimes is not None and not meas_datetimes.empty:
         meas_paths = save_meas_distribution_figures(meas_datetimes, fig_dir)
@@ -622,16 +634,29 @@ def create_summary_report(
     total_files: int,
     flags_counter: Mapping[str, int],
     unknown_events: Dict[str, Dict[str, int]] | None = None,
+    report_title: str = "Post-Preprocessing EEG QC Dataset Summary",
+    summary_heading: str = "Post-Preprocessing QC Summary",
+    total_label: str = "Total files processed",
+    segment_df: pd.DataFrame | None = None,
+    segment_fig_paths: Mapping[str, Path] | None = None,
 ) -> None:
-    report = mne.Report(title="EEG QC Dataset Summary")
+    report = mne.Report(title=report_title)
     valid_records = int((df["error"] == "").sum()) if "error" in df else len(df)
     flagged_count = int(df["flag_bad"].sum()) if "flag_bad" in df else 0
+    duration_retention = pd.to_numeric(df.get("duration_retention_pct"), errors="coerce")
+    coverage_retention = pd.to_numeric(df.get("coverage_retention_pct"), errors="coerce")
+    line_noise_delta = pd.to_numeric(df.get("line_noise_ratio_delta"), errors="coerce")
+    hf_lf_delta = pd.to_numeric(df.get("hf_lf_ratio_delta"), errors="coerce")
     summary_html = f"""
-    <h3>Dataset Summary</h3>
+    <h3>{summary_heading}</h3>
     <ul>
-        <li>Total files processed: {total_files}</li>
+        <li>{total_label}: {total_files}</li>
         <li>Valid records: {valid_records}</li>
         <li>Flagged bad: {flagged_count}</li>
+        <li>Mean recording retention: {duration_retention.mean():.1f}%</li>
+        <li>Mean condition retention: {coverage_retention.mean():.1f}%</li>
+        <li>Mean line-noise change (post - pre): {line_noise_delta.mean():.2f}</li>
+        <li>Mean HF/LF change (post - pre): {hf_lf_delta.mean():.2f}</li>
     </ul>
     """
     if flags_counter:
@@ -651,13 +676,18 @@ def create_summary_report(
 
     for title, path in [
         ("Duration Distribution", fig_paths.get("duration_min")),
-        ("Mean Amplitude Distribution", fig_paths.get("segment_amplitude_mean_uv")),
-        ("Alpha Peak Distribution", fig_paths.get("segment_alpha_peak_hz")),
-        ("HF Ratio Distribution", fig_paths.get("segment_hf_lf_ratio")),
-        ("Aperiodic Slope Distribution", fig_paths.get("segment_aperiodic_slope")),
-        ("Line Noise Distribution", fig_paths.get("segment_line_noise_ratio")),
+        ("Cleaned Mean Amplitude Distribution", fig_paths.get("amplitude_mean_uv")),
+        ("Cleaned Alpha Peak Distribution", fig_paths.get("alpha_peak_hz")),
+        ("Residual HF/LF Ratio Distribution", fig_paths.get("hf_lf_ratio")),
+        ("Cleaned Aperiodic Slope Distribution", fig_paths.get("aperiodic_slope")),
+        ("Residual Line Noise Distribution", fig_paths.get("line_noise_ratio")),
+        ("Recording Duration Retention", fig_paths.get("duration_retention_pct")),
+        ("Condition Coverage Retention", fig_paths.get("coverage_retention_pct")),
+        ("Mean Amplitude Change", fig_paths.get("amplitude_mean_delta_uv")),
+        ("Line Noise Change", fig_paths.get("line_noise_ratio_delta")),
+        ("HF/LF Ratio Change", fig_paths.get("hf_lf_ratio_delta")),
+        ("Aperiodic Slope Change", fig_paths.get("aperiodic_slope_delta")),
         ("Flag Reasons", fig_paths.get("flag_reasons")),
-        ("Event Count Distributions", fig_paths.get("event_stats")),
         ("Recording Start Hour", fig_paths.get("meas_hour_distribution")),
         ("Recording Day of Month", fig_paths.get("meas_day_distribution")),
         ("Recording Day of Week", fig_paths.get("meas_dayofweek_distribution")),
@@ -687,6 +717,50 @@ def create_summary_report(
         unknown_html += "</ul>"
         report.add_html(unknown_html, title="Unrecognized Annotation Labels", section="Unrecognized Annotations")
 
+    if segment_df is not None and not segment_df.empty:
+        flagged = segment_df.get("segment_flag_bad")
+        flagged_count = (
+            int(pd.to_numeric(flagged, errors="coerce").fillna(0).astype(bool).sum())
+            if flagged is not None
+            else 0
+        )
+        total_duration = float(pd.to_numeric(segment_df.get("duration"), errors="coerce").dropna().sum())
+        segment_summary_html = f"""
+        <h3>Segment QC Summary</h3>
+        <ul>
+            <li>Total segments: {len(segment_df)}</li>
+            <li>Total segment duration: {total_duration:.1f} s ({format_seconds_hms(total_duration)})</li>
+            <li>Flagged segments: {flagged_count}</li>
+        </ul>
+        """
+        report.add_html(segment_summary_html, title="Segment QC", section="Segment Quality")
+        if segment_fig_paths:
+            for title, key in [
+                ("Segment Duration by Type", "segment_duration_sec"),
+                ("Mean Segment Amplitude", "segment_amplitude_mean_uv"),
+                ("Percent Bad Channels", "segment_pct_bad_channels"),
+                ("Line Noise Ratio", "segment_line_noise_ratio"),
+                ("HF/LF Ratio", "segment_hf_lf_ratio"),
+                ("Aperiodic Slope", "segment_aperiodic_slope"),
+                ("Alpha Band Power", "segment_band_power_alpha"),
+                ("Flagged Segments by Type (%)", "flagged_segments_pct"),
+                ("Flagged Subjects by Type (%)", "flagged_subjects_pct"),
+                ("Flagged Segments per Subject Distribution", "flagged_subjects_distribution"),
+            ]:
+                path = segment_fig_paths.get(key)
+                if path and path.exists():
+                    report.add_image(path, title=title, section="Segment Quality")
+            topo_items = sorted(
+                [item for item in segment_fig_paths.items() if item[0].endswith("_topomap")]
+            )
+            if topo_items:
+                gallery_images = []
+                for key, path in topo_items:
+                    figure_title = key.replace("_topomap", "").replace("_", " ").title()
+                    gallery_images.append((figure_title, path))
+                gallery_html = _make_gallery_html(gallery_images, title="Segment Topomaps")
+                report.add_html(gallery_html, title="Segment Topomaps", section="Segment Quality")
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report.save(output_path, overwrite=True, open_browser=False)
 
@@ -700,7 +774,7 @@ def create_segment_subject_report(
     if segments_df is None or segments_df.empty:
         return
 
-    report = mne.Report(title=f"Segment QC Report - {subject_id}")
+    report = mne.Report(title=f"Post-Preprocessing Segment QC Report - {subject_id}")
     
     # Summary of segments
     n_segments = len(segments_df)

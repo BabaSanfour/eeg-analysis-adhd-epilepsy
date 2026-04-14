@@ -29,11 +29,8 @@ from pyprep.find_noisy_channels import NoisyChannels
 from autoreject import AutoReject 
 
 from eeg_adhd_epilepsy.preproc.utils import (
-    _resolve_segments_csv,
     PreprocConfig,
     benchmark_step,
-    BlockWindow,
-    _collect_block_windows,
     _get_rest_windows,
     _compute_artifact_overlap,
     _sanitize_n_interpolate,
@@ -50,7 +47,7 @@ from eeg_adhd_epilepsy.reports.base import (
     create_preprocessing_report,
     create_dataset_report,
 )
-from eeg_adhd_epilepsy.features.spectral import (
+from eeg_adhd_epilepsy.signal_quality.spectral import (
     compute_spectral_metrics,
     compute_aperiodic_slope,
     compute_lsd
@@ -133,7 +130,7 @@ def run_base_pipeline(
     psd_before = (freqs_pre, psd_pre_data)
 
     # 1. Embedded block annotations
-    n_blocks = len(_collect_block_windows(raw))
+    n_blocks = len(bids._collect_block_windows(raw))
     if n_blocks == 0:
         LOGGER.warning("No embedded BLOCK_* annotations found; block-aware steps will have limited context.")
     
@@ -354,7 +351,7 @@ def annotate_blocks_from_csv(
     Returns:
         The annotated raw object.
     """
-    csv_path = _resolve_segments_csv(raw, segments_file)
+    csv_path = bids._resolve_segments_csv(raw, segments_file)
 
     LOGGER.info(f"Loading block definitions from {csv_path}")
     df = io_csv.load(str(csv_path))
@@ -462,7 +459,7 @@ def annotate_artifacts_blockwise(
     Returns:
         A tuple containing the annotated raw object and a statistics dictionary.
     """
-    block_windows = _collect_block_windows(raw)
+    block_windows = bids._collect_block_windows(raw)
     stats: Dict[str, Any] = {
         "blocks_total": len(block_windows),
         "blocks_processed": 0,
@@ -502,7 +499,7 @@ def annotate_artifacts_blockwise(
     chunk_duration_s = chunk_minutes * 60.0
 
     # Group blocks by condition name
-    grouped_blocks: Dict[str, List[BlockWindow]] = {}
+    grouped_blocks: Dict[str, List[bids.BlockWindow]] = {}
     for block in block_windows:
         block_name = block.name
         if block_name not in grouped_blocks:

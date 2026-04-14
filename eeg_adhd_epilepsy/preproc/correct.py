@@ -21,13 +21,13 @@ import json
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-from eeg_adhd_epilepsy.viz import qc as viz_qc
+import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
 
-from .utils import benchmark_step, NumpyEncoder, _collect_block_windows
+from .utils import benchmark_step, NumpyEncoder
 from .dss_utils import _get_dss_profile, _run_dss_artifact
 from .ica_utils import fit_ica_context, apply_ica_artifact
 from eeg_adhd_epilepsy.reports.correct import create_correction_report, create_correction_dataset_report
-from eeg_adhd_epilepsy.features.spectral import compute_spectral_metrics, compute_lsd, compute_aperiodic_slope
+from eeg_adhd_epilepsy.signal_quality.spectral import compute_spectral_metrics, compute_lsd, compute_aperiodic_slope
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 from eeg_adhd_epilepsy.io import bids
 
@@ -139,7 +139,7 @@ def run_source_correction(
     # 1. Determine Target Data (Data to be Corrected)
     if condition_name:
         LOGGER.info(f" Selecting data for condition: {condition_name}")
-        all_blocks = _collect_block_windows(raw)
+        all_blocks = bids._collect_block_windows(raw)
         cond_blocks = [b for b in all_blocks if b.name == condition_name]
         
         if not cond_blocks:
@@ -474,7 +474,7 @@ def run_correction_pipeline(
         fit_segments = None
         if train_condition:
             LOGGER.info(f"Extracting training segments from condition: {train_condition}")
-            windows = _collect_block_windows(raw)
+            windows = bids._collect_block_windows(raw)
             train_blocks = [b for b in windows if b.name == train_condition]
             if train_blocks:
                 fit_segments = [(b.onset, b.duration) for b in train_blocks]

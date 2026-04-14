@@ -17,7 +17,7 @@ from mne_denoise.dss import (
     QuasiPeriodicDenoiser,
 )
 
-from eeg_adhd_epilepsy.viz import qc as viz_qc
+import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
 from . import thresholds
 
 
@@ -492,4 +492,3 @@ def _run_dss_artifact(
     }
     
     return (raw_out if not remove_stats.get("skipped") else raw), stats
-

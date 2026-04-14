@@ -8,7 +8,7 @@ import numpy as np
 import mne
 from mne.time_frequency import Spectrum
 
-from fooof import FOOOF, FOOOFGroup
+from specparam import SpectralGroupModel
 
 from eeg_adhd_epilepsy.utils.config import BAND_LIMITS
 
@@ -146,43 +146,34 @@ def compute_aperiodic_slope(
     fmin: float = 1.0,
     fmax: float = 30.0,
 ) -> Tuple[float, float, float, np.ndarray]:
-    """Fit 1/f slope using FOOOF."""
+    """Fit 1/f slope using specparam."""
     if psd.size == 0 or freqs.size == 0:
         return float("nan"), float("nan"), float("nan"), np.array([])
     mask = (freqs >= fmin) & (freqs <= fmax)
     if not mask.any():
         return float("nan"), float("nan"), float("nan"), np.array([])
-    
-    try:
-        fg = FOOOFGroup(
-            peak_width_limits=(1.0, 12.0),
-            max_n_peaks=6,
-            min_peak_height=0.1,
-            verbose=False,
-            aperiodic_mode="fixed",
-        )
-        # Let's simple check:
-        valid_ch = ~np.isnan(psd[:, mask]).any(axis=1)
 
-        fg.fit(freqs[mask], psd[valid_ch][:, mask], n_jobs=1)
-        
-        res = fg.get_params("aperiodic_params")
-        intercepts_valid = res[:, 0]
-        slopes_valid = res[:, 1]
-        
-        # Map back to full array
-        n_ch = psd.shape[0]
-        slopes_arr = np.full(n_ch, np.nan)
-        intercepts_arr = np.full(n_ch, np.nan)
-        
-        slopes_arr[valid_ch] = slopes_valid
-        intercepts_arr[valid_ch] = intercepts_valid
-        
-    except Exception:
-        # Fallback to empty/nan if group fit fails completely
-        n_ch = psd.shape[0]
-        slopes_arr = np.full(n_ch, np.nan)
-        intercepts_arr = np.full(n_ch, np.nan)
+    fg = SpectralGroupModel(
+        peak_width_limits=(1.0, 12.0),
+        max_n_peaks=6,
+        min_peak_height=0.1,
+        verbose=False,
+        aperiodic_mode="fixed",
+    )
+    valid_ch = ~np.isnan(psd[:, mask]).any(axis=1)
+    if not np.any(valid_ch):
+        return float("nan"), float("nan"), float("nan"), np.array([])
+    fg.fit(freqs[mask], psd[valid_ch][:, mask], n_jobs=1)
+    results_df = fg.to_df(0)
+    intercepts_valid = results_df["offset"].to_numpy(dtype=float)
+    slopes_valid = results_df["exponent"].to_numpy(dtype=float)
+
+    n_ch = psd.shape[0]
+    slopes_arr = np.full(n_ch, np.nan)
+    intercepts_arr = np.full(n_ch, np.nan)
+
+    slopes_arr[valid_ch] = slopes_valid
+    intercepts_arr[valid_ch] = intercepts_valid
 
     return (
         float(np.nanmean(slopes_arr)),

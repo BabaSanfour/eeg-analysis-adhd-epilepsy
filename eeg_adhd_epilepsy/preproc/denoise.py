@@ -18,8 +18,8 @@ from meegkit import asr
 from mne_denoise.dss import IterativeDSS, WienerMaskDenoiser
 from mne_denoise.viz import plot_component_summary, plot_score_curve
 
-from eeg_adhd_epilepsy.features.spectral import compute_spectral_metrics
-from eeg_adhd_epilepsy.features.spectral import compute_lsd
+from eeg_adhd_epilepsy.signal_quality.spectral import compute_spectral_metrics
+from eeg_adhd_epilepsy.signal_quality.spectral import compute_lsd
 from eeg_adhd_epilepsy.io import bids
 from eeg_adhd_epilepsy.reports.denoise import (
     create_denoising_dataset_report,

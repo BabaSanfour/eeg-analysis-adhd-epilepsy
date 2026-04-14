@@ -6,7 +6,7 @@ from typing import Any, Dict, Sequence, Tuple, Optional
 from pathlib import Path
 
 import mne
-from eeg_adhd_epilepsy.viz import qc as viz_qc
+import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
 
 
 def fit_ica_context(train_raw: mne.io.BaseRaw, config: Any) -> Dict[str, Any]:
@@ -94,4 +94,3 @@ def apply_ica_artifact(
         "total_components": len(labels["labels"]),
         "plot_paths": plot_paths,
     }
-

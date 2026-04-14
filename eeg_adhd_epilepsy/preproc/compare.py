@@ -35,8 +35,8 @@ from .utils import (
 
 from .correct import ArtifactCorrectionConfig, run_correction_pipeline
 from .denoise import ArtifactDenoisingConfig, run_denoising_pipeline
-from eeg_adhd_epilepsy.viz import qc as viz_qc
-from eeg_adhd_epilepsy.features import spectral
+import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
+import eeg_adhd_epilepsy.signal_quality.spectral as spectral
 
 LOGGER = logging.getLogger(__name__)
 

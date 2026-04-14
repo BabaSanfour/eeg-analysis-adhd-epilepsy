@@ -13,7 +13,7 @@ import mne
 import numpy as np
 import pandas as pd
 
-from eeg_adhd_epilepsy.viz import qc as viz_qc
+import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
 
 LOGGER = logging.getLogger("denoise_reports")
 matplotlib.use("Agg")

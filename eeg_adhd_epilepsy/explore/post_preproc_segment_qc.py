@@ -14,7 +14,7 @@ from joblib import Parallel, delayed
 from tqdm import tqdm
 
 from eeg_adhd_epilepsy.explore import eeg_qc
-from eeg_adhd_epilepsy.preproc.utils import load_segments_for_raw
+from eeg_adhd_epilepsy.io import bids as bids_io
 from eeg_adhd_epilepsy.utils.qc_config import BASIC_1020_CHANNELS
 
 
@@ -111,7 +111,7 @@ def process_file(
             raw.filter(args.highpass, None, fir_design="firwin", verbose="ERROR")
         analysis_raw, basic_picks, montage_info = eeg_qc.prepare_channel_selection(raw, standard_names, logger)
         expected_len = len(basic_picks)
-        segments_df = load_segments_for_raw(raw)
+        segments_df = bids_io.load_segments_for_raw(raw)
         if segments_df is None or segments_df.empty or analysis_raw is None:
             return {"subject_id": subject_id, "records": records, "error": error}
 
@@ -127,14 +127,13 @@ def process_file(
             )
             if segment is None:
                 continue
-            qc_metrics = eeg_qc.compute_segment_qc(
+            seg_metrics = eeg_qc.compute_signal_qc_metrics(
                 segment,
                 picks=basic_picks,
-                logger=logger,
                 line_freq=getattr(args, "line_freq", 60.0),
                 include_channel_metrics=not args.skip_reports,
             )
-            channel_metrics = qc_metrics.pop("per_channel_metrics", None)
+            channel_metrics = seg_metrics.pop("per_channel_metrics", None)
             if channel_metrics:
                 seg_type = str(row.get("segment_type", "Unknown"))
                 for name, arr in channel_metrics.items():
@@ -160,7 +159,28 @@ def process_file(
                 "n_channels_1020_match": montage_info.get("n_channels_1020_match", 0),
                 "pct_missing_1020": montage_info.get("pct_missing_1020", float("nan")),
             }
-            record.update(qc_metrics)
+            record.update(
+                {
+                    "segment_duration_sec": seg_metrics.get("duration_sec"),
+                    "segment_n_channels": seg_metrics.get("n_channels"),
+                    "segment_amplitude_mean_uv": seg_metrics.get("amplitude_mean_uv"),
+                    "segment_amplitude_median_uv": seg_metrics.get("amplitude_median_uv"),
+                    "segment_amplitude_std_uv": seg_metrics.get("amplitude_std_uv"),
+                    "segment_amplitude_min_uv": seg_metrics.get("amplitude_min_uv"),
+                    "segment_amplitude_max_uv": seg_metrics.get("amplitude_max_uv"),
+                    "segment_flat_channels": seg_metrics.get("flat_channels"),
+                    "segment_noisy_channels": seg_metrics.get("noisy_channels"),
+                    "segment_n_flat_channels": seg_metrics.get("n_flat_channels"),
+                    "segment_n_noisy_channels": seg_metrics.get("n_noisy_channels"),
+                    "segment_pct_bad_channels": seg_metrics.get("pct_bad_channels"),
+                    "segment_alpha_peak_hz": seg_metrics.get("alpha_peak_hz"),
+                    "segment_hf_lf_ratio": seg_metrics.get("hf_lf_ratio"),
+                    "segment_line_noise_ratio": seg_metrics.get("line_noise_ratio"),
+                    "segment_aperiodic_slope": seg_metrics.get("aperiodic_slope"),
+                    "segment_flag_bad": seg_metrics.get("flag_bad"),
+                    "segment_flag_reasons": seg_metrics.get("flag_reasons"),
+                }
+            )
             records.append(record)
         if records:
             subject_dir = subjects_dir / subject_id

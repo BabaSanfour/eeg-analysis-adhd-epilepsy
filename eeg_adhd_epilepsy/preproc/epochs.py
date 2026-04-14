@@ -12,7 +12,6 @@ import numpy as np
 from tqdm import tqdm
 
 from eeg_adhd_epilepsy.io import bids as bids_io
-from eeg_adhd_epilepsy.preproc.utils import _collect_block_windows
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +25,7 @@ def make_epochs_from_preproc_raw(
     overwrite: bool = False,
 ) -> mne.Epochs:
     """Create fixed-length epochs from all annotated blocks in a preprocessed raw."""
-    blocks = [block for block in _collect_block_windows(raw) if block.duration >= segment_duration]
+    blocks = [block for block in bids_io._collect_block_windows(raw) if block.duration >= segment_duration]
     event_id = {
         block_name: idx
         for idx, block_name in enumerate(

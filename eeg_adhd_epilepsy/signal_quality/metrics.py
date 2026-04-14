@@ -1,18 +1,18 @@
-"""Segment-level quality control orchestration."""
+"""Signal quality control metrics."""
 
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Mapping, Tuple, Optional
+from typing import Dict, List, Tuple
 
 import numpy as np
 import mne
 
-from eeg_adhd_epilepsy.features.time import (
+from eeg_adhd_epilepsy.signal_quality.time import (
     compute_channel_amplitude_stats,
     detect_flat_and_noisy_channels
 )
-from eeg_adhd_epilepsy.features.spectral import (
+from eeg_adhd_epilepsy.signal_quality.spectral import (
     compute_spectral_metrics,
     compute_line_noise_index,
     compute_hf_lf_ratio,
@@ -21,21 +21,6 @@ from eeg_adhd_epilepsy.features.spectral import (
 )
 
 LOGGER = logging.getLogger("qc_metrics")
-
-
-def extract_metadata(raw: mne.io.BaseRaw) -> Dict[str, object]:
-    """Basic metadata shared by pre- and post-preproc QC."""
-    duration_sec = raw.n_times / float(raw.info["sfreq"])
-    meas_date = raw.info.get("meas_date")
-    meas_date_iso = meas_date.isoformat() if meas_date else ""
-    ch_names = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True)).ch_names
-    return {
-        "duration_min": duration_sec / 60.0,
-        "meas_date": meas_date_iso,
-        "sfreq": float(raw.info["sfreq"]),
-        "n_channels": len(ch_names),
-        "channel_names": ch_names,
-    }
 
 
 def crop_segment(
@@ -63,48 +48,28 @@ def crop_segment(
     return segment
 
 
-def _evaluate_segment_flags(metrics: Mapping[str, object]) -> Tuple[bool, str]:
-    reasons: List[str] = []
-    HF_RATIO_FLAG = 0.50
-    APERIODIC_SLOPE_MIN = 0.50
-    APERIODIC_SLOPE_MAX = 3.0
-    MAX_BAD_CHANNEL_PCT = 30.0
-    
-    hf_ratio = metrics.get("segment_hf_lf_ratio", float("nan"))
-    if np.isfinite(hf_ratio) and hf_ratio > HF_RATIO_FLAG:
-        reasons.append("high_hf_lf_ratio")
-    slope = metrics.get("segment_aperiodic_slope", float("nan"))
-    if np.isfinite(slope) and (slope < APERIODIC_SLOPE_MIN or slope > APERIODIC_SLOPE_MAX):
-        reasons.append("aperiodic_slope_out_of_range")
-    bad_pct = metrics.get("segment_pct_bad_channels", float("nan"))
-    if np.isfinite(bad_pct) and bad_pct > MAX_BAD_CHANNEL_PCT:
-        reasons.append("too_many_bad_channels")
-    return bool(reasons), ";".join(reasons)
-
-
-def compute_segment_qc(
-    raw_segment: mne.io.BaseRaw | None,
+def compute_signal_qc_metrics(
+    signal: mne.io.BaseRaw | None,
     picks: List[str] | None = None,
     line_freq: float = 60.0,
     include_channel_metrics: bool = False,
 ) -> Dict[str, object]:
-    """Compute QC metrics for a single raw segment."""
-    if raw_segment is None:
+    """Compute broad signal QC metrics for a raw recording or segment."""
+    if signal is None:
         return {}
-    available = raw_segment.ch_names
+    available = signal.ch_names
     if picks is None or len(picks) == 0:
         picks = available
     elif hasattr(picks[0], "lower"):
         lower_map = {ch.lower(): ch for ch in available}
         picks = [lower_map[p.lower()] for p in picks if p.lower() in lower_map]
 
-    amp_stats = compute_channel_amplitude_stats(raw_segment, picks)
-    noise_info = detect_flat_and_noisy_channels(raw_segment, picks)
-    duration_sec = float(raw_segment.times[-1]) if raw_segment.times.size else float("nan")
+    amp_stats = compute_channel_amplitude_stats(signal, picks)
+    noise_info = detect_flat_and_noisy_channels(signal, picks)
+    duration_sec = float(signal.times[-1]) if signal.times.size else float("nan")
 
-    # Compute spectral metrics in one go
-    spec, psd, freqs, alpha_peak, band_powers, band_powers_per_channel = compute_spectral_metrics(
-        raw_segment, picks, fmin=0.5, fmax=99.5
+    _spec, psd, freqs, alpha_peak, _band_powers, _band_powers_per_channel = compute_spectral_metrics(
+        signal, picks, fmin=0.5, fmax=99.5
     )
     
     line_noise_mean, line_noise_ratios = compute_line_noise_index(psd, freqs, line_freq=line_freq)
@@ -112,42 +77,45 @@ def compute_segment_qc(
     slope_mean, _, _, slope_per_channel = compute_aperiodic_slope(psd, freqs, fmin=1.0, fmax=30.0)
 
     metrics: Dict[str, object] = {
-        "segment_duration_sec": duration_sec,
-        "segment_n_channels": len(picks),
-        "segment_amplitude_mean_uv": amp_stats["mean"],
-        "segment_amplitude_median_uv": amp_stats["median"],
-        "segment_amplitude_std_uv": amp_stats["std"],
-        "segment_amplitude_min_uv": amp_stats["min"],
-        "segment_amplitude_max_uv": amp_stats["max"],
-        "segment_n_flat_channels": noise_info["n_flat_channels"],
-        "segment_n_noisy_channels": noise_info["n_noisy_channels"],
-        "segment_pct_bad_channels": noise_info["pct_bad_channels"],
-        "segment_band_power_delta": band_powers.get("delta", float("nan")),
-        "segment_band_power_theta": band_powers.get("theta", float("nan")),
-        "segment_band_power_alpha": band_powers.get("alpha", float("nan")),
-        "segment_band_power_beta": band_powers.get("beta", float("nan")),
-        "segment_band_power_gamma": band_powers.get("gamma", float("nan")),
-        "segment_alpha_peak_hz": alpha_peak,
-        "segment_hf_lf_ratio": hf_ratio_mean,
-        "segment_line_noise_ratio": line_noise_mean,
-        "segment_aperiodic_slope": slope_mean,
+        "duration_sec": duration_sec,
+        "n_channels": len(picks),
+        "amplitude_mean_uv": amp_stats["mean"],
+        "amplitude_median_uv": amp_stats["median"],
+        "amplitude_std_uv": amp_stats["std"],
+        "amplitude_min_uv": amp_stats["min"],
+        "amplitude_max_uv": amp_stats["max"],
+        "flat_channels": noise_info["flat_channels"],
+        "noisy_channels": noise_info["noisy_channels"],
+        "n_flat_channels": noise_info["n_flat_channels"],
+        "n_noisy_channels": noise_info["n_noisy_channels"],
+        "pct_bad_channels": noise_info["pct_bad_channels"],
+        "alpha_peak_hz": alpha_peak,
+        "hf_lf_ratio": hf_ratio_mean,
+        "line_noise_ratio": line_noise_mean,
+        "aperiodic_slope": slope_mean,
     }
 
     if include_channel_metrics:
         channel_metrics: Dict[str, np.ndarray] = {
             "amplitude_ptp_uv": amp_stats["per_channel"],
-            "variance": noise_info.get("variances", np.array([])),
             "line_noise_ratio": line_noise_ratios,
             "hf_lf_ratio": hf_ratios,
             "aperiodic_slope": slope_per_channel,
         }
-        for band, values in band_powers_per_channel.items():
-            channel_metrics[f"band_power_{band}"] = values
         metrics["per_channel_metrics"] = channel_metrics
 
-    flag_bad, reasons = _evaluate_segment_flags(metrics)
-    metrics["segment_flag_bad"] = flag_bad
-    metrics["segment_flag_reasons"] = reasons
+    reasons: List[str] = []
+    hf_ratio = metrics.get("hf_lf_ratio", float("nan"))
+    if np.isfinite(hf_ratio) and hf_ratio > 0.50:
+        reasons.append("high_hf_lf_ratio")
+    slope = metrics.get("aperiodic_slope", float("nan"))
+    if np.isfinite(slope) and (slope < 0.50 or slope > 3.0):
+        reasons.append("aperiodic_slope_out_of_range")
+    bad_pct = metrics.get("pct_bad_channels", float("nan"))
+    if np.isfinite(bad_pct) and bad_pct > 30.0:
+        reasons.append("too_many_bad_channels")
+    metrics["flag_bad"] = bool(reasons)
+    metrics["flag_reasons"] = ";".join(reasons)
     return metrics
 
 

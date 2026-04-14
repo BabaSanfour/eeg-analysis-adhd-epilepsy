@@ -17,7 +17,7 @@ import mne
 import matplotlib
 import matplotlib.pyplot as plt
 
-from eeg_adhd_epilepsy.viz import qc as viz_qc
+import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
 from eeg_adhd_epilepsy.viz.topo import plot_bad_channels_topo
 
 LOGGER = logging.getLogger("preproc_reports")
