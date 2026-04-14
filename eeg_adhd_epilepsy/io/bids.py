@@ -175,6 +175,25 @@ def get_subject_session_stage_dir(
     return stage_dir
 
 
+def get_subject_session_stage_report_path(
+    reports_root: Path,
+    subject_id: str,
+    session_id: str | None,
+    stage: str,
+    report_stem: str,
+    create_dir: bool = False,
+) -> Path:
+    """Return a subject/session report file path for a stage under the shared reports root."""
+    stage_dir = get_subject_session_stage_dir(
+        reports_root=reports_root,
+        subject_id=subject_id,
+        session_id=session_id,
+        stage=stage,
+        create_dir=create_dir,
+    )
+    return stage_dir / f"{report_stem}_{normalize_stage_name(stage)}_report.html"
+
+
 def get_stage_summary_dir(
     reports_root: Path,
     stage: str,

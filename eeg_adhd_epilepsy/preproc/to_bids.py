@@ -19,7 +19,7 @@ import mne
 import numpy as np
 import pandas as pd
 from mne_bids import BIDSPath, write_raw_bids
-from joblib import Parallel, delayed
+from joblib import Parallel, cpu_count, delayed
 from tqdm import tqdm
 
 from eeg_adhd_epilepsy.io import ingest
@@ -591,7 +591,14 @@ def _write_subject_eeg_report(
     event_counts = dict(event_counter)
     raw_duration = float(sum(float(record["raw_duration"]) for record in records))
     figure_paths = viz_eeg.save_eeg_report_figures(segments_df, fig_dir)
-    report_path = subject_dir / f"{subject_prefix}_eeg_pre_base_report.html"
+    report_path = bids_io.get_subject_session_stage_report_path(
+        reports_root=reports_root,
+        subject_id=str(ids["subject_id"]),
+        session_id=str(ids["session_id"]),
+        stage="eeg_pre_base",
+        report_stem=subject_prefix,
+        create_dir=True,
+    )
     subject_record = {
         "subject_id": str(ids["subject_id"]),
         "session_id": str(ids["session_id"]),
@@ -844,15 +851,10 @@ def _consume_record_result(
     record: dict[str, object],
     record_result: dict[str, object],
     *,
-    args: argparse.Namespace,
     failed_ids: set[int],
     successful_ids: set[int],
     eeg_run_records: list[dict[str, object]],
-    eeg_subject_groups: dict[tuple[str, str], list[dict[str, object]]],
     raw_qc_run_records: list[dict[str, object]],
-    raw_qc_subject_groups: dict[tuple[str, str], list[dict[str, object]]],
-    eeg_reports_dir: Path | None,
-    raw_qc_reports_dir: Path | None,
 ) -> None:
     study_id = int(record["study_id"])
     if not record_result["success"]:
@@ -861,20 +863,18 @@ def _consume_record_result(
 
     successful_ids.add(study_id)
     if record_result["eeg_report_record"] is not None:
-        eeg_record = record_result["eeg_report_record"]
-        eeg_run_records.append(eeg_record)
-        if args.with_eeg_reports:
-            eeg_subject_groups[eeg_record["subject_session_key"]].append(eeg_record)
-            _write_subject_eeg_report(eeg_reports_dir, eeg_subject_groups[eeg_record["subject_session_key"]])
+        eeg_run_records.append(record_result["eeg_report_record"])
     if record_result["raw_qc_record"] is not None:
-        raw_qc_record = record_result["raw_qc_record"]
-        raw_qc_run_records.append(raw_qc_record)
-        if args.with_raw_qc:
-            raw_qc_subject_groups[raw_qc_record["subject_session_key"]].append(raw_qc_record)
-            qc_raw.write_subject_raw_qc_report(
-                raw_qc_reports_dir,
-                raw_qc_subject_groups[raw_qc_record["subject_session_key"]],
-            )
+        raw_qc_run_records.append(record_result["raw_qc_record"])
+
+
+def _resolve_n_jobs(n_jobs: int) -> int:
+    """Normalize CLI worker count while preserving joblib's ``-1`` semantics."""
+    if n_jobs == -1:
+        return cpu_count()
+    if n_jobs == 0 or n_jobs < -1:
+        raise ValueError("--n_jobs must be -1 or a positive integer")
+    return max(1, int(n_jobs))
 
 
 def main() -> None:
@@ -969,11 +969,11 @@ def main() -> None:
     failed_ids: set[int] = set()
     successful_ids: set[int] = set()
     eeg_run_records: list[dict[str, object]] = []
-    eeg_subject_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     raw_qc_run_records: list[dict[str, object]] = []
-    raw_qc_subject_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     selected_records = inventory_df.loc[inventory_df["run"].notna()].to_dict("records")
-    if args.n_jobs <= 1:
+    n_jobs = _resolve_n_jobs(args.n_jobs)
+    LOGGER.info("Using %d worker(s) for BIDS conversion", n_jobs)
+    if n_jobs == 1:
         for record in tqdm(selected_records, total=len(selected_records), desc="Converting records"):
             record_result = process_record(
                 record,
@@ -987,19 +987,19 @@ def main() -> None:
             _consume_record_result(
                 record,
                 record_result,
-                args=args,
                 failed_ids=failed_ids,
                 successful_ids=successful_ids,
                 eeg_run_records=eeg_run_records,
-                eeg_subject_groups=eeg_subject_groups,
                 raw_qc_run_records=raw_qc_run_records,
-                raw_qc_subject_groups=raw_qc_subject_groups,
-                eeg_reports_dir=eeg_reports_dir,
-                raw_qc_reports_dir=raw_qc_reports_dir,
             )
     else:
         with tqdm_joblib(tqdm(total=len(selected_records), desc="Converting records")):
-            record_results = Parallel(n_jobs=args.n_jobs)(
+            record_results = Parallel(
+                n_jobs=n_jobs,
+                backend="loky",
+                batch_size=1,
+                pre_dispatch=n_jobs,
+            )(
                 delayed(process_record)(
                     record,
                     args.bids_root,
@@ -1020,15 +1020,10 @@ def main() -> None:
                 _consume_record_result(
                     record,
                     record_result,
-                    args=args,
                     failed_ids=failed_ids,
                     successful_ids=successful_ids,
                     eeg_run_records=eeg_run_records,
-                    eeg_subject_groups=eeg_subject_groups,
                     raw_qc_run_records=raw_qc_run_records,
-                    raw_qc_subject_groups=raw_qc_subject_groups,
-                    eeg_reports_dir=eeg_reports_dir,
-                    raw_qc_reports_dir=raw_qc_reports_dir,
                 )
             except Exception as exc:
                 LOGGER.error("Failed consuming result for study_id %s: %s", record["study_id"], exc)

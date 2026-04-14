@@ -549,7 +549,14 @@ def write_subject_raw_qc_report(
         run_summary_df=run_summary_df,
         channel_diagnostics=channel_diagnostics,
         figure_paths=figure_paths,
-        output_path=subject_dir / f"{subject_prefix}_raw_qc_pre_base_report.html",
+        output_path=bids_io.get_subject_session_stage_report_path(
+            reports_root=reports_root,
+            subject_id=str(ids["subject_id"]),
+            session_id=str(ids["session_id"]),
+            stage="raw_qc_pre_base",
+            report_stem=subject_prefix,
+            create_dir=True,
+        ),
     )
     return subject_record
 
