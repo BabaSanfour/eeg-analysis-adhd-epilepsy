@@ -73,10 +73,8 @@ def normalize_stage_name(stage: str) -> str:
     return stage_name
 
 
-def get_preproc_root(bids_root: Path, preproc_root: Path | None = None) -> Path:
-    """Return derivatives/preproc root (or caller-provided override)."""
-    if preproc_root is not None:
-        return Path(preproc_root).expanduser()
+def get_preproc_root(bids_root: Path) -> Path:
+    """Return the canonical derivatives/preproc root for a BIDS dataset."""
     return Path(bids_root).expanduser() / "derivatives" / "preproc"
 
 
@@ -95,18 +93,27 @@ def get_stage_output_path(
     subject_id: str,
     preproc_root: Path,
     desc: str,
+    session: str | None = None,
     task: str | None = None,
+    run: str | None = None,
     create_dir: bool = False,
 ) -> Path:
     """Return stage output FIF path using unified naming."""
     sid = normalize_subject_id(subject_id)
     desc_token = validate_stage_desc(desc)
     eeg_dir = get_subject_eeg_dir(preproc_root, sid, create=create_dir)
+    parts = [sid]
+    if session:
+        parts.append(normalize_session_id(session))
     if task:
         task_token = _normalize_bids_token(task, "task")
-        fname = f"{sid}_task-{task_token}_desc-{desc_token}_eeg.fif"
-    else:
-        fname = f"{sid}_desc-{desc_token}_eeg.fif"
+        parts.append(f"task-{task_token}")
+    if run:
+        run_token = _normalize_bids_token(run, "run")
+        parts.append(f"run-{run_token}")
+    parts.append(f"desc-{desc_token}")
+    parts.append("eeg")
+    fname = "_".join(parts) + ".fif"
     return eeg_dir / fname
 
 
@@ -114,7 +121,9 @@ def get_stage_provenance_path(
     subject_id: str,
     preproc_root: Path,
     desc: str,
+    session: str | None = None,
     task: str | None = None,
+    run: str | None = None,
     create_dir: bool = False,
 ) -> Path:
     """Return stage provenance JSON path using unified naming."""
@@ -122,25 +131,17 @@ def get_stage_provenance_path(
         subject_id=subject_id,
         preproc_root=preproc_root,
         desc=desc,
+        session=session,
         task=task,
+        run=run,
         create_dir=create_dir,
     )
     return out_path.with_name(out_path.name.replace("_eeg.fif", "_provenance.json"))
 
 
-def get_reports_root(
-    bids_root: Path | None = None,
-    reports_root: Path | None = None,
-    project_root: Path | None = None,
-) -> Path:
-    """Return unified reports root (outside BIDS by default)."""
-    if reports_root is not None:
-        return Path(reports_root).expanduser()
-    if bids_root is not None:
-        # User preference: same level as BIDS
-        return Path(bids_root).expanduser().parent / "reports"
-    base = Path(project_root).expanduser() if project_root is not None else Path.cwd()
-    return base / "results" / "reports" / "preproc"
+def get_reports_root(bids_root: Path) -> Path:
+    """Return the canonical shared reports root (sibling to BIDS)."""
+    return Path(bids_root).expanduser().parent / "reports"
 
 
 def get_subject_report_path(
@@ -443,6 +444,15 @@ def _collect_block_windows(raw: mne.io.BaseRaw) -> List[BlockWindow]:
     return windows
 
 
+def collect_baseline_windows(raw: mne.io.BaseRaw) -> List[Tuple[float, float]]:
+    """Return block windows whose segment name contains 'baseline'."""
+    windows: List[Tuple[float, float]] = []
+    for block in _collect_block_windows(raw):
+        if "baseline" in block.name.lower():
+            windows.append((block.onset, block.stop))
+    return windows
+
+
 def segments_from_block_annotations(raw: mne.io.BaseRaw) -> pd.DataFrame:
     records: List[Dict[str, Any]] = []
     for block in _collect_block_windows(raw):
@@ -513,6 +523,12 @@ def load_bids_raw(
         session = comps.get("session")
     if not task:
         task = comps.get("task")
+    if not run:
+        run = comps.get("run")
+    if not acquisition:
+        acquisition = comps.get("acquisition") or comps.get("acq")
+    if not processing:
+        processing = comps.get("processing") or comps.get("proc")
     
     # If parse_bids_components is limited, we might need a quick check for run/acq etc.
     if not run and "run" not in comps:

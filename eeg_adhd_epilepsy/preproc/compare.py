@@ -263,7 +263,7 @@ def run_comparison(
             elif compare_mode == "stage1":
                 cfg = PIPELINE_CONFIGS[method_name][1]
                 t_start = time.time()
-                success = run_correction_pipeline(
+                corr_result = run_correction_pipeline(
                     subject_id=subject_id,
                     bids_root=bids_root,
                     config=cfg,
@@ -274,7 +274,7 @@ def run_comparison(
                     output_desc=corr_desc,
                 )
                 method_durations[method_name] = time.time() - t_start
-                if not success:
+                if not corr_result.get("success"):
                     subject_issues.append(f"run_failed:{method_name}")
                     continue
 
@@ -296,7 +296,7 @@ def run_comparison(
                 den_cfg = denoise_config if denoise_config is not None else ArtifactDenoisingConfig()
 
                 t_start = time.time()
-                ok_corr = run_correction_pipeline(
+                corr_result = run_correction_pipeline(
                     subject_id=subject_id,
                     bids_root=bids_root,
                     config=cfg,
@@ -306,11 +306,11 @@ def run_comparison(
                     train_condition=train_condition,
                     output_desc=corr_desc,
                 )
-                if not ok_corr:
+                if not corr_result.get("success"):
                     subject_issues.append(f"run_failed:correct:{method_name}")
                     continue
 
-                ok_den = run_denoising_pipeline(
+                den_result = run_denoising_pipeline(
                     subject_id=subject_id,
                     bids_root=bids_root,
                     config=den_cfg,
@@ -321,7 +321,7 @@ def run_comparison(
                     output_desc=compare_desc,
                 )
                 method_durations[method_name] = time.time() - t_start
-                if not ok_den:
+                if not den_result.get("success"):
                     subject_issues.append(f"run_failed:denoise:{method_name}")
                     continue
 
@@ -368,12 +368,16 @@ def run_comparison(
         spectral_metrics = {}
         for name, raw in [("orig", raw_orig), ("dss", raw_dss), ("ica", raw_ica)]:
             try:
-                psd = raw.compute_psd(fmin=0.5, fmax=50, verbose=False)
-                # Alpha Peak
-                alpha_peak = spectral.compute_spectral_metrics(psd, bands={"alpha": (8, 13)}).get("alpha_peak_freq", float("nan"))
-                # 1/f Slope
-                slope = spectral.compute_aperiodic_slope(psd, freq_range=(2, 40))
-                spectral_metrics[name] = {"alpha_peak": alpha_peak, "slope": slope}
+                summary = spectral.compute_stage_spectral_summary(
+                    raw,
+                    picks=None,
+                    fmin=0.5,
+                    fmax=50.0,
+                )
+                spectral_metrics[name] = {
+                    "alpha_peak": float(summary["alpha_peak"]),
+                    "slope": float(summary["aperiodic_slope"]),
+                }
             except Exception as exc:
                 LOGGER.warning("Spectral metrics failed for %s (%s): %s", subject_id, name, exc)
                 spectral_metrics[name] = {"alpha_peak": float("nan"), "slope": float("nan")}
@@ -671,14 +675,8 @@ def main() -> None:
     compare_mode = "reuse" if args.reuse_existing_correct else args.compare_mode
 
     bids_root = Path(args.bids_root).expanduser()
-    preproc_root = bids.get_preproc_root(
-        bids_root=bids_root,
-        preproc_root=Path(args.preproc_root).expanduser() if args.preproc_root else None,
-    )
-    reports_root = bids.get_reports_root(
-        bids_root=bids_root,
-        reports_root=Path(args.reports_root).expanduser() if args.reports_root else None,
-    )
+    preproc_root = bids.get_preproc_root(bids_root)
+    reports_root = bids.get_reports_root(bids_root)
     preproc_root.mkdir(parents=True, exist_ok=True)
     reports_root.mkdir(parents=True, exist_ok=True)
 

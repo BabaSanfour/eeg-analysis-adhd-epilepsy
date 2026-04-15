@@ -84,11 +84,7 @@ class AdaptiveParams(TypedDict, total=False):
     qa_params: Dict[str, float]
 
 class LineNoiseConfig(TypedDict):
-    method: Literal["zapline", "spectrum_fit", "notch"]
     line_freq: float
-    zapline_n_remove: int
-    spectrum_fit_bandwidth: float
-    notch_width: float
     adaptive: bool
     adaptive_params: AdaptiveParams
 
@@ -162,24 +158,15 @@ def benchmark_step(name: str, provenance: Dict):
         logging.getLogger(__name__).info("Step '%s' finished in %.2f sec", name, duration)
 
 
-DEFAULT_ARTIFACT_N_INTERPOLATE = (0,)
-def _get_rest_windows(raw: mne.io.BaseRaw) -> List[Tuple[float, float]]:
-    """Identify windows belonging to resting state (baseline) blocks."""
-    rest_windows: List[Tuple[float, float]] = []
-    for block in bids._collect_block_windows(raw):
-        if block.family in {"raw_baseline", "baseline"}:
-            rest_windows.append((block.onset, block.stop))
-    return rest_windows
-
-
 def _compute_artifact_overlap(
     raw: mne.io.BaseRaw,
     new_annots: List[Tuple[float, float, str, Tuple[str, ...]]],
 ) -> float:
     """Calculate percentage of existing manual BAD segments covered by detected artifacts.
 
-    Assumes any pre-existing annotation starting with 'BAD_' is a ground truth
-    manual annotation. Treats zero-duration Point annotations as 5.0s segments.
+    Assumes any pre-existing annotation starting with 'BAD_' is a manual
+    reference annotation and that BAD annotations have already been inflated
+    into positive-duration segments earlier in the pipeline.
     """
     existing_bads = []
     for annot in raw.annotations:
@@ -187,8 +174,6 @@ def _compute_artifact_overlap(
         if desc.startswith("BAD_"):
             start = float(annot["onset"])
             duration = float(annot.get("duration", 0))
-            if duration <= 0:
-                duration = 5.0
             existing_bads.append((start, start + duration))
 
     if not existing_bads:
@@ -253,50 +238,6 @@ def _save_outputs(
 
     logging.getLogger(__name__).info(f"Saved base output: {out_file}")
     logging.getLogger(__name__).info(f"Saved provenance: {prov_fname}")
-
-
-def _sanitize_n_interpolate(raw_value: Any) -> List[int]:
-    """Ensure n_interpolate is a valid list of integers."""
-    if isinstance(raw_value, (list, tuple)):
-        clean = set()
-        for value in raw_value:
-            try:
-                parsed = int(value)
-            except (TypeError, ValueError):
-                continue
-            if parsed >= 0:
-                clean.add(parsed)
-        clean = sorted(clean)
-        if clean:
-            return list(clean)
-    return list(DEFAULT_ARTIFACT_N_INTERPOLATE)
-
-
-def _group_consecutive_indices(indices: Sequence[int]) -> List[Tuple[int, int]]:
-    """Group consecutive integers into (start, end) tuples."""
-    if len(indices) == 0:
-        return []
-
-    groups: List[Tuple[int, int]] = []
-    start = int(indices[0])
-    prev = start
-    for idx in indices[1:]:
-        idx = int(idx)
-        if idx == prev + 1:
-            prev = idx
-            continue
-        groups.append((start, prev))
-        start = idx
-        prev = idx
-    groups.append((start, prev))
-    return groups
-
-
-def _event_sample_to_onset(raw: mne.io.BaseRaw, event_sample: int) -> float:
-    """Convert a sample index (considering file offset) to onset time in seconds."""
-    return max(0.0, (event_sample - raw.first_samp) / raw.info["sfreq"])
-
-
 def inflate_bad_annotations(
     raw: mne.io.BaseRaw, 
     default_duration: float = 3.0, 
@@ -325,7 +266,7 @@ def inflate_bad_annotations(
     for annot in raw.annotations:
         desc = str(annot['description'])
         onset = float(annot['onset'])
-        duration = float(annot['duration'])
+        duration = float(annot["duration"])
         desc_lower = desc.lower()
 
         # Only process if it starts with "bad"
@@ -335,13 +276,11 @@ def inflate_bad_annotations(
             new_descs.append(desc)
             continue
         
-        # Determine intended duration
-        target_duration = duration
-        if target_duration <= 0:
-            if any(slug in desc_lower for slug in major_slugs):
-                target_duration = major_duration
-            else:
-                target_duration = default_duration
+        # Treat manual BAD marks as point annotations and assign durations by label family.
+        if any(slug in desc_lower for slug in major_slugs):
+            target_duration = major_duration
+        else:
+            target_duration = default_duration
 
         # Ensure BAD_ prefix (MNE standard for rejection)
         if not desc.startswith("BAD_"):

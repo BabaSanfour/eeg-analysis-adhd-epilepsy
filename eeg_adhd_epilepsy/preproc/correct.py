@@ -9,6 +9,7 @@ annotations from `base.py` to exclude bad segments during model fitting.
 """
 
 import logging
+from collections import defaultdict
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -26,8 +27,7 @@ import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
 from .utils import benchmark_step, NumpyEncoder
 from .dss_utils import _get_dss_profile, _run_dss_artifact
 from .ica_utils import fit_ica_context, apply_ica_artifact
-from eeg_adhd_epilepsy.reports.correct import create_correction_report, create_correction_dataset_report
-from eeg_adhd_epilepsy.signal_quality.spectral import compute_spectral_metrics, compute_lsd, compute_aperiodic_slope
+from eeg_adhd_epilepsy.qc import preproc_qc
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 from eeg_adhd_epilepsy.io import bids
 
@@ -355,9 +355,9 @@ def _remove_emg_mwf(
             'plot_paths': plot_paths
         }
         
-    except Exception as e:
-        LOGGER.warning(f"MWF failed: {e}")
-        return None, {'error': str(e)}
+    except (ValueError, np.linalg.LinAlgError) as e:
+        LOGGER.warning("MWF failed: %s", e)
+        return None, {"error": str(e)}
 
 
 def _remove_emg_wica(
@@ -394,10 +394,13 @@ def run_correction_pipeline(
     config: ArtifactCorrectionConfig,
     preproc_root: Optional[Path] = None,
     reports_root: Optional[Path] = None,
+    input_path: Optional[Path] = None,
     condition_name: Optional[str] = None,
     train_condition: Optional[str] = None,
-    output_desc: str = "correct"
-) -> bool:
+    output_desc: str = "correct",
+    raw_lookup: Optional[Dict[str, Dict[str, object]]] = None,
+    previous_lookup: Optional[Dict[str, Dict[str, object]]] = None,
+) -> dict[str, object]:
     """Run the artifact correction pipeline on a subject.
     
     Args:
@@ -412,60 +415,58 @@ def run_correction_pipeline(
         output_desc: BIDS desc- entity for output filename (default: 'correct').
                      Use e.g. 'correctDss' or 'correctIca' for comparison runs.
     """
+    result: dict[str, object] = {
+        "success": False,
+        "subject_id": bids.normalize_subject_id(subject_id),
+        "qc_record": None,
+        "error": "",
+    }
     try:
         subject_id = bids.normalize_subject_id(subject_id)
         output_desc = bids.validate_stage_desc(output_desc)
         bids_root = Path(bids_root).expanduser()
 
-        preproc_root = bids.get_preproc_root(
-            bids_root=bids_root,
-            preproc_root=Path(preproc_root).expanduser() if preproc_root is not None else None,
-        )
-        reports_root = bids.get_reports_root(
-            bids_root=bids_root,
-            reports_root=Path(reports_root).expanduser() if reports_root is not None else None,
-        )
+        preproc_root = bids.get_preproc_root(bids_root)
+        reports_root = bids.get_reports_root(bids_root)
 
-        # Stage 0 -> Stage 1 handoff
-        input_path = bids.get_stage_output_path(
-            subject_id=subject_id,
-            preproc_root=preproc_root,
-            desc="base",
-        )
+        if input_path is None:
+            input_path = bids.get_stage_output_path(
+                subject_id=subject_id,
+                preproc_root=preproc_root,
+                desc="base",
+                task=condition_name if condition_name else None,
+            )
+        input_path = Path(input_path)
+        input_ids = bids.build_bids_report_ids(input_path)
+        input_comps = bids.parse_bids_components(input_path)
+        session_id = input_comps.get("session")
+        input_task = input_comps.get("task")
+        run_id = input_comps.get("run")
+        record_label = str(input_ids["run_prefix"])
         
         if not input_path.exists():
             LOGGER.error(f"Input file not found: {input_path}")
-            return False
+            result["error"] = f"Input file not found: {input_path}"
+            return result
             
         LOGGER.info(f"Loading base pipeline output: {input_path}")
         raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
 
-        subject_report_path = bids.get_subject_report_path(
+        stage_name = preproc_qc.get_preproc_qc_stage_name("correct", output_desc)
+        subject_report_path = bids.get_subject_session_stage_report_path(
             reports_root=reports_root,
-            stage="correct",
             subject_id=subject_id,
+            session_id=session_id,
+            stage=stage_name,
+            report_stem=str(input_ids["subject_session_prefix"]),
             create_dir=True,
         )
-        figures_dir = subject_report_path.parent / "figures"
+        figures_dir = subject_report_path.parent / "figures" / record_label
         figures_dir.mkdir(parents=True, exist_ok=True)
-
-        report_path = subject_report_path
-        if output_desc != "correct":
-            report_path = subject_report_path.with_name(
-                f"{subject_id}_correct_{output_desc}_report.html"
-            )
-
-        # 0. Pre-Correction PSD
-        LOGGER.info("Computing pre-correction spectral metrics...")
-        psd_before = (np.array([]), np.array([]))
-        _, psd_pre_data, freqs_pre, _, _, _ = compute_spectral_metrics(
-             raw, picks=None, fmin=0.5, fmax=60.0
-        )
-        psd_before = (freqs_pre, psd_pre_data)
 
         # Signal Snapshot (Before)
         snapshot_pre_path = viz_qc.save_eeg_snapshot(
-            raw, figures_dir, subject_id, "before_correction"
+            raw, figures_dir, record_label, "before_correction"
         )
         eeg_snapshots = {"before_correction": str(snapshot_pre_path)}
         artifact_comparisons = {}
@@ -483,11 +484,11 @@ def run_correction_pipeline(
                 LOGGER.warning(f"Train condition '{train_condition}' not found. Fitting on target data.")
 
         # 1b. Load Base Artifact Profile for Auto-Tuning
-        base_prov = _load_base_provenance(subject_id, preproc_root)
+        base_prov = _load_base_provenance(input_path, preproc_root)
         artifact_profile = {}
         if base_prov:
             artifact_profile = base_prov.get("integrity_stats", {})
-            LOGGER.info(f"Loaded Base stage artifact profile for {subject_id}")
+            LOGGER.info(f"Loaded Base stage artifact profile for {record_label}")
 
         # 2. Run Correction
         LOGGER.info("Starting artifact correction orchestration...")
@@ -497,7 +498,7 @@ def run_correction_pipeline(
             condition_name=condition_name,
             fit_segments=fit_segments,
             output_dir=subject_report_path.parent,
-            subject_id=subject_id,
+            subject_id=record_label,
             artifact_profile=artifact_profile,
         )
         
@@ -505,19 +506,23 @@ def run_correction_pipeline(
         provenance.setdefault("eeg_snapshots", {}).update(eeg_snapshots)
         provenance.setdefault("artifact_comparisons", {}).update(artifact_comparisons)
         
-        task_token = condition_name if condition_name else None
+        task_token = condition_name if condition_name else input_task
         out_path = bids.get_stage_output_path(
             subject_id=subject_id,
             preproc_root=preproc_root,
             desc=output_desc,
+            session=session_id,
             task=task_token,
+            run=run_id,
             create_dir=True,
         )
         prov_path = bids.get_stage_provenance_path(
             subject_id=subject_id,
             preproc_root=preproc_root,
             desc=output_desc,
+            session=session_id,
             task=task_token,
+            run=run_id,
             create_dir=True,
         )
 
@@ -533,33 +538,16 @@ def run_correction_pipeline(
         provenance["condition_name"] = condition_name
         provenance["train_condition"] = train_condition
 
-        # 3. Post-Correction PSD
-        LOGGER.info("Computing post-correction spectral metrics...")
-        _, psd_post_data, freqs_post, alpha_peak_post, _, _ = compute_spectral_metrics(
-             corrected_raw, picks=None, fmin=0.5, fmax=60.0
-        )
-        psd_after = (freqs_post, psd_post_data)
-        
-        # Spectral Comparison Metrics
-        lsd_val = compute_lsd(psd_post_data, psd_pre_data)
-        slope_val, _, _, _ = compute_aperiodic_slope(psd_post_data, freqs_post)
-        
-        provenance["spectral_stats"] = {
-            "alpha_peak": float(alpha_peak_post),
-            "aperiodic_slope": float(slope_val),
-            "lsd": float(lsd_val),
-        }
-
-        # 4. Diagnostic Plots
+        # 3. Diagnostic Plots
         # Signal Snapshot (Butterfly)
         snapshot_path = viz_qc.save_eeg_snapshot(
-            corrected_raw, figures_dir, subject_id, "after_correction"
+            corrected_raw, figures_dir, record_label, "after_correction"
         )
         provenance.setdefault("eeg_snapshots", {})["after_correction"] = str(snapshot_path)
 
         # Variance Comparison
         fig_var = viz_qc.plot_channel_variance_comparison(raw, corrected_raw, subject_id)
-        var_path = figures_dir / f"{subject_id}_variance_comparison.png"
+        var_path = figures_dir / f"{record_label}_variance_comparison.png"
         fig_var.savefig(var_path, dpi=150, bbox_inches="tight")
         plt.close(fig_var)
         provenance.setdefault("artifact_comparisons", {})["variance_comparison"] = str(var_path)
@@ -571,37 +559,37 @@ def run_correction_pipeline(
         with open(prov_path, "w", encoding="utf-8") as f:
             json.dump(provenance, f, cls=NumpyEncoder, indent=2)
             
-        # 5. Generate Report
-        create_correction_report(
-            subject_id=subject_id,
-            raw=corrected_raw,
-            psd_before=psd_before,
-            psd_after=psd_after,
-            provenance=provenance,
-            subject_report_path=report_path,
-            figures_dir=figures_dir,
+        result["qc_record"] = preproc_qc.build_preproc_qc_run_record(
+            profile=preproc_qc.get_preproc_qc_profile("correct"),
+            reports_root=reports_root,
+            current_raw=corrected_raw,
+            current_filepath=out_path,
+            output_desc=output_desc,
+            raw_lookup=raw_lookup,
+            previous_output_desc="base",
+            previous_lookup=previous_lookup,
         )
-        
-        LOGGER.info("Correction pipeline completed for %s. Output: %s", subject_id, out_path)
-        return True
+        result["success"] = True
+        LOGGER.info("Correction pipeline completed for %s. Output: %s", record_label, out_path)
+        return result
 
     except Exception as e:
         LOGGER.error(f"Failed correction for {subject_id}: {e}", exc_info=True)
-        return False
+        result["error"] = str(e)
+        return result
 
 
-def _load_base_provenance(subject_id: str, preproc_root: Path) -> Optional[Dict]:
-    """Helper: Load provenance from the base stage if available."""
-    # Pattern: sub-XXX_desc-base_provenance.json (rglob to handle task/no-task subdirs)
-    prov_files = list(preproc_root.rglob(f"{subject_id}_*desc-base_provenance.json"))
-    if not prov_files:
-        LOGGER.debug(f"No base provenance found for {subject_id}")
+def _load_base_provenance(input_path: Path, preproc_root: Path) -> Optional[Dict]:
+    """Load provenance matching a specific base-stage input file."""
+    prov_path = input_path.with_name(input_path.name.replace("_eeg.fif", "_provenance.json"))
+    if not prov_path.exists():
+        LOGGER.debug("No base provenance found for %s", input_path.name)
         return None
     try:
-        with open(prov_files[0], "r") as f:
+        with open(prov_path, "r") as f:
             return json.load(f)
     except Exception as e:
-        LOGGER.warning(f"Failed to load base provenance for {subject_id}: {e}")
+        LOGGER.warning("Failed to load base provenance for %s: %s", input_path.name, e)
         return None
 
 
@@ -674,15 +662,8 @@ def main():
     args = parser.parse_args()
     
     bids_root = Path(args.bids_root).expanduser()
-    preproc_root_arg = Path(args.preproc_root).expanduser() if args.preproc_root else None
-    preproc_root = bids.get_preproc_root(
-        bids_root=bids_root,
-        preproc_root=preproc_root_arg,
-    )
-    reports_root = bids.get_reports_root(
-        bids_root=bids_root,
-        reports_root=Path(args.reports_root).expanduser() if args.reports_root else None,
-    )
+    preproc_root = bids.get_preproc_root(bids_root)
+    reports_root = bids.get_reports_root(bids_root)
     preproc_root.mkdir(parents=True, exist_ok=True)
     reports_root.mkdir(parents=True, exist_ok=True)
     
@@ -728,13 +709,8 @@ def main():
         LOGGER.error(f"No Stage 0 FIF files found in {preproc_dir} (pattern: *_desc-base_eeg.fif).")
         sys.exit(1)
         
-    file_map = {}
-    for f in files:
-        sid = bids.parse_subject_id(f)
-        file_map[f] = sid
-        
-    subjects_found = sorted(list(set(file_map.values())))
-    LOGGER.info(f"Found {len(subjects_found)} unique subjects in BIDS directory.")
+    subjects_found = sorted({bids.parse_subject_id(f) for f in files})
+    LOGGER.info(f"Found {len(files)} base-stage runs across {len(subjects_found)} subjects.")
     
     # Filter Logic
     subjects_to_process = set()
@@ -771,87 +747,153 @@ def main():
         parser.print_help()
         sys.exit(0)
         
+    profile = preproc_qc.get_preproc_qc_profile("correct")
+    raw_lookup = preproc_qc.load_raw_pre_base_lookup(reports_root)
+    previous_lookup = preproc_qc.load_stage_run_lookup(
+        reports_root,
+        preproc_qc.get_preproc_qc_stage_name("base", "base"),
+    )
+    existing_results: list[dict[str, object]] = []
+
     # Apply --skip-existing filter
     if args.skip_existing:
         LOGGER.info("Checking for existing correction output to skip...")
         
-        subjects_to_skip = set()
-        for sid in subjects_to_process:
+        existing_runs = 0
+        for input_file in files:
+            sid = bids.parse_subject_id(input_file)
+            if sid not in subjects_to_process:
+                continue
+            comps = bids.parse_bids_components(input_file)
             out_file = bids.get_stage_output_path(
                 subject_id=sid,
                 preproc_root=preproc_root,
                 desc=bids.validate_stage_desc(args.output_desc),
-                task=args.condition if args.condition else None,
+                session=comps.get("session"),
+                task=args.condition if args.condition else comps.get("task"),
+                run=comps.get("run"),
             )
-            if out_file.exists():
-                subjects_to_skip.add(sid)
-        
-        if subjects_to_skip:
-            LOGGER.info(f"Skipping {len(subjects_to_skip)} already processed subjects.")
-            subjects_to_process = subjects_to_process - subjects_to_skip
-    
-    subjects_sorted = sorted(list(subjects_to_process))
-    
-    if not subjects_sorted:
+            if not out_file.exists():
+                continue
+            existing_runs += 1
+            try:
+                existing_results.append(
+                    {
+                        "success": True,
+                        "subject_id": sid,
+                        "qc_record": preproc_qc.collect_existing_preproc_qc_record(
+                            profile=profile,
+                            reports_root=reports_root,
+                            filepath=out_file,
+                            output_desc=bids.validate_stage_desc(args.output_desc),
+                            previous_output_desc="base",
+                            raw_lookup=raw_lookup,
+                            previous_lookup=previous_lookup,
+                        ),
+                        "error": "",
+                    }
+                )
+            except Exception as exc:
+                LOGGER.error("Failed rebuilding existing correction QC record for %s (%s): %s", sid, input_file.name, exc, exc_info=True)
+                existing_results.append({"success": False, "subject_id": sid, "qc_record": None, "error": str(exc)})
+        if existing_runs:
+            LOGGER.info("Skipping %d existing correction outputs.", existing_runs)
+
+    files_to_process = []
+    existing_run_keys = set()
+    for result in existing_results:
+        record = result.get("qc_record")
+        if isinstance(record, dict):
+            existing_run_keys.add(record.get("run_key"))
+    for input_file in files:
+        sid = bids.parse_subject_id(input_file)
+        if sid not in subjects_to_process:
+            continue
+        ids = bids.build_bids_report_ids(input_file)
+        if ids["run_key"] in existing_run_keys:
+            continue
+        files_to_process.append(input_file)
+
+    if not files_to_process and not existing_results:
         LOGGER.warning("No subjects left to process.")
         sys.exit(0)
         
-    LOGGER.info(f"Starting processing for {len(subjects_sorted)} subjects...")
+    LOGGER.info(f"Starting processing for {len(files_to_process)} runs...")
     
     # Processing Loop
     success_count = 0
     fail_count = 0
     success_ids: List[str] = []
     failed_ids: List[str] = []
-    
-    for sub in subjects_sorted:
-        LOGGER.info(f"Processing {sub}...")
+    qc_run_records: list[dict[str, object]] = []
+    qc_subject_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
+
+    for result in existing_results:
+        if result.get("success") and result.get("qc_record") is not None:
+            record = result["qc_record"]
+            qc_run_records.append(record)
+            qc_subject_groups[record["subject_session_key"]].append(record)
+            preproc_qc.write_subject_preproc_qc_report(
+                reports_root,
+                qc_subject_groups[record["subject_session_key"]],
+                profile=profile,
+                output_desc=args.output_desc,
+            )
+            success_count += 1
+            success_ids.append(str(record["run_prefix"]))
+        else:
+            fail_count += 1
+            failed_ids.append(str(result["subject_id"]))
+
+    for input_file in files_to_process:
+        sid = bids.parse_subject_id(input_file)
+        run_label = str(bids.build_bids_report_ids(input_file)["run_prefix"])
+        LOGGER.info(f"Processing {run_label}...")
         try:
-            success = run_correction_pipeline(
-                subject_id=sub,
+            result = run_correction_pipeline(
+                subject_id=sid,
                 bids_root=bids_root,
                 config=config,
                 preproc_root=preproc_root,
                 reports_root=reports_root,
+                input_path=input_file,
                 condition_name=args.condition,
                 train_condition=args.train_condition,
-                output_desc=args.output_desc
+                output_desc=args.output_desc,
+                raw_lookup=raw_lookup,
+                previous_lookup=previous_lookup,
             )
-            if success:
+            if result.get("success") and result.get("qc_record") is not None:
                 success_count += 1
-                success_ids.append(sub)
+                record = result["qc_record"]
+                success_ids.append(str(record["run_prefix"]))
+                qc_run_records.append(record)
+                qc_subject_groups[record["subject_session_key"]].append(record)
+                preproc_qc.write_subject_preproc_qc_report(
+                    reports_root,
+                    qc_subject_groups[record["subject_session_key"]],
+                    profile=profile,
+                    output_desc=args.output_desc,
+                )
             else:
                 fail_count += 1
-                failed_ids.append(sub)
-                LOGGER.error(f"Failed processing {sub}")
+                failed_ids.append(run_label)
+                LOGGER.error(f"Failed processing {run_label}")
         except Exception as e:
-            LOGGER.error(f"Exception processing {sub}: {e}")
+            LOGGER.error(f"Exception processing {run_label}: {e}")
             fail_count += 1
-            failed_ids.append(sub)
+            failed_ids.append(run_label)
             
     LOGGER.info(f"Batch processing complete. Success: {success_count}, Failed: {fail_count}")
     LOGGER.info("Succeeded subjects: %s", sorted(success_ids))
     LOGGER.info("Failed subjects: %s", sorted(failed_ids))
     
-    # Generate Dataset-Level Summary Report
-    summary_path = bids.get_stage_summary_report_path(
-        reports_root=reports_root,
-        stage="correct",
-        create_dir=True,
-    )
-    output_desc_token = bids.validate_stage_desc(args.output_desc)
-    if output_desc_token != "correct":
-        summary_path = summary_path.with_name(
-            f"correct_{output_desc_token}_dataset_summary.html"
-        )
-    
-    LOGGER.info("Generating dataset-level correction report...")
-    create_correction_dataset_report(
-        search_dir=preproc_root,
-        summary_report_path=summary_path,
-        output_desc=output_desc_token,
-        success_subjects=success_ids,
-        failed_subjects=failed_ids,
+    LOGGER.info("Generating shared correction QC dataset report...")
+    preproc_qc.write_preproc_qc_aggregate_reports(
+        reports_root,
+        qc_run_records,
+        profile=profile,
+        output_desc=args.output_desc,
     )
 
 if __name__ == "__main__":

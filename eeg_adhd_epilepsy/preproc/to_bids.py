@@ -496,7 +496,7 @@ def _build_eeg_report_record(
         "meas_datetime": _clean_scalar(_record_value(record, "meas_datetime")),
         "filepath": str(ids.get("filepath") or ""),
         "raw_duration": float(raw_duration),
-        "n_channels": int(sum(channel not in {"A1", "A2"} for channel in raw.ch_names)),
+        "n_channels": len(raw.ch_names),
         "age_group": _clean_scalar(metadata.get("age_group")),
         "sex": _clean_scalar(metadata.get("sex")),
         "combined_diagnosis": _clean_scalar(metadata.get("combined_diagnosis")),
@@ -514,27 +514,23 @@ def _collect_existing_eeg_report_record(
     record,
     metadata: dict[str, object] | None,
 ) -> dict[str, object] | None:
-    try:
-        raw = bids_io.load_bids_raw(filepath=bids_path.fpath, bids_root=bids_root)
-        segments_df = bids_io.load_segments_for_raw(raw)
-        ids = bids_io.build_bids_report_ids(bids_path.fpath)
-        ids["filepath"] = str(bids_path.fpath)
-        summary = report_eeg.summarize_condition_segments(segments_df)
-        event_counts = _eeg_event_counts(raw, segments_df, summary)
-        raw_duration = raw.times[-1] if raw.n_times > 0 else 0.0
-        return _build_eeg_report_record(
-            ids=ids,
-            record=record,
-            metadata=metadata,
-            raw=raw,
-            segments_df=segments_df,
-            summary=summary,
-            event_counts=event_counts,
-            raw_duration=raw_duration,
-        )
-    except Exception as exc:
-        LOGGER.error("Failed collecting existing EEG report payload for %s: %s", bids_path.fpath, exc)
-        return None
+    raw = bids_io.load_bids_raw(filepath=bids_path.fpath, bids_root=bids_root)
+    segments_df = bids_io.load_segments_for_raw(raw)
+    ids = bids_io.build_bids_report_ids(bids_path.fpath)
+    ids["filepath"] = str(bids_path.fpath)
+    summary = report_eeg.summarize_condition_segments(segments_df)
+    event_counts = _eeg_event_counts(raw, segments_df, summary)
+    raw_duration = raw.times[-1] if raw.n_times > 0 else 0.0
+    return _build_eeg_report_record(
+        ids=ids,
+        record=record,
+        metadata=metadata,
+        raw=raw,
+        segments_df=segments_df,
+        summary=summary,
+        event_counts=event_counts,
+        raw_duration=raw_duration,
+    )
 
 
 def _missingness_payload(records: list[dict[str, object]], label_key: str) -> dict[str, list[str]]:
@@ -748,16 +744,12 @@ def process_record(
             if result["eeg_report_record"] is None:
                 return result
         if raw_qc_reports_dir is not None:
-            try:
-                result["raw_qc_record"] = qc_raw.collect_existing_raw_qc_record(
-                    bids_path=bids_path,
-                    bids_root=bids_root,
-                    metadata=metadata,
-                    analysis_level=raw_qc_analysis_level,
-                )
-            except Exception as exc:
-                LOGGER.error("Failed collecting existing raw QC payload for %s: %s", bids_path.fpath, exc)
-                return result
+            result["raw_qc_record"] = qc_raw.collect_existing_raw_qc_record(
+                bids_path=bids_path,
+                bids_root=bids_root,
+                metadata=metadata,
+                analysis_level=raw_qc_analysis_level,
+            )
         result["success"] = True
         return result
 
@@ -791,6 +783,9 @@ def process_record(
     available_targets = [channel for channel in config.BASIC_1020_CHANNELS if channel in raw.ch_names]
     if available_targets:
         raw.pick(available_targets)
+    if raw.ch_names:
+        montage = mne.channels.make_standard_montage("standard_1020")
+        raw.set_montage(montage, match_case=False, on_missing="raise")
     try:
         write_raw_bids(
             raw,
@@ -809,39 +804,31 @@ def process_record(
     segments_df.to_csv(segments_path, index=False)
     LOGGER.info("Wrote condition segments for %s run-%s to %s", subject_id, run, segments_path)
     if eeg_reports_dir is not None:
-        try:
-            ids = bids_io.build_bids_report_ids(bids_path.fpath)
-            ids["filepath"] = str(bids_path.fpath)
-            summary = report_eeg.summarize_condition_segments(segments_df)
-            event_counts = _eeg_event_counts(raw, segments_df, summary)
-            raw_duration = raw.times[-1] if raw.n_times > 0 else 0.0
-            result["eeg_report_record"] = _build_eeg_report_record(
-                ids=ids,
-                record=record,
-                metadata=metadata,
-                raw=raw,
-                segments_df=segments_df,
-                summary=summary,
-                event_counts=event_counts,
-                raw_duration=raw_duration,
-            )
-        except Exception as exc:
-            LOGGER.error("Failed generating EEG report for %s run-%s: %s", subject_id, run, exc)
-            return result
+        ids = bids_io.build_bids_report_ids(bids_path.fpath)
+        ids["filepath"] = str(bids_path.fpath)
+        summary = report_eeg.summarize_condition_segments(segments_df)
+        event_counts = _eeg_event_counts(raw, segments_df, summary)
+        raw_duration = raw.times[-1] if raw.n_times > 0 else 0.0
+        result["eeg_report_record"] = _build_eeg_report_record(
+            ids=ids,
+            record=record,
+            metadata=metadata,
+            raw=raw,
+            segments_df=segments_df,
+            summary=summary,
+            event_counts=event_counts,
+            raw_duration=raw_duration,
+        )
     if raw_qc_reports_dir is not None:
-        try:
-            summary = report_eeg.summarize_condition_segments(segments_df)
-            result["raw_qc_record"] = qc_raw.build_raw_qc_run_record(
-                raw=raw,
-                bids_path=bids_path,
-                condition_segments_df=segments_df,
-                condition_summary=summary,
-                metadata=metadata,
-                analysis_level=raw_qc_analysis_level,
-            )
-        except Exception as exc:
-            LOGGER.error("Failed generating raw QC payload for %s run-%s: %s", subject_id, run, exc)
-            return result
+        summary = report_eeg.summarize_condition_segments(segments_df)
+        result["raw_qc_record"] = qc_raw.build_raw_qc_run_record(
+            raw=raw,
+            bids_path=bids_path,
+            condition_segments_df=segments_df,
+            condition_summary=summary,
+            metadata=metadata,
+            analysis_level=raw_qc_analysis_level,
+        )
     result["success"] = True
     LOGGER.info("Converted %s run-%s", subject_id, run)
     return result
@@ -882,6 +869,11 @@ def main() -> None:
     parser.add_argument("--raw_root", type=Path, required=True, help="Root directory containing raw_data")
     parser.add_argument("--bids_root", type=Path, required=True, help="BIDS root directory")
     parser.add_argument("--metadata_csv", type=Path, required=True, help="Canonical metadata CSV")
+    parser.add_argument(
+        "--subjects",
+        nargs="+",
+        help="Optional subject IDs to process (e.g. 0002 0027 or sub-0002 sub-0027)",
+    )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing BIDS subject folders")
     parser.add_argument("--n_jobs", type=int, default=1, help="Parallel jobs for bidsification.")
     parser.add_argument(
@@ -901,7 +893,7 @@ def main() -> None:
         help="Raw QC analysis level when --with_raw_qc is used.",
     )
     args = parser.parse_args()
-    reports_root = bids_io.get_reports_root(bids_root=args.bids_root)
+    reports_root = bids_io.get_reports_root(Path(args.bids_root))
     eeg_reports_dir = reports_root if args.with_eeg_reports else None
     raw_qc_reports_dir = reports_root if args.with_raw_qc else None
 
@@ -937,6 +929,14 @@ def main() -> None:
     inventory_df["study_id"] = pd.to_numeric(inventory_df["study_id"], errors="coerce").astype("Int64")
     inventory_df["run"] = pd.Series([None] * len(inventory_df), dtype=object)
 
+    selected_study_ids: set[int] | None = None
+    if args.subjects:
+        selected_study_ids = {
+            int(bids_io.normalize_subject_id(subject).replace("sub-", ""))
+            for subject in args.subjects
+        }
+        LOGGER.info("Filtering to %d selected subject(s): %s", len(selected_study_ids), sorted(selected_study_ids))
+
     selected_rows = inventory_df.loc[
         inventory_df["study_id"].isin(metadata_df["study_id"]) & inventory_df["eeg_path"].notna()
     ].copy()
@@ -952,6 +952,9 @@ def main() -> None:
         inventory_df.loc[selected_rows.index, "run"] = (
             selected_rows.groupby("study_id").cumcount().add(1).map(lambda value: f"{value:02d}")
         )
+
+    if selected_study_ids is not None:
+        inventory_df = inventory_df.loc[inventory_df["study_id"].isin(selected_study_ids)].copy()
 
     args.bids_root.mkdir(parents=True, exist_ok=True)
     inventory_path = args.bids_root / "raw_record_inventory.csv"
@@ -1016,18 +1019,14 @@ def main() -> None:
                 LOGGER.error("Failed processing study_id %s: no result returned", record["study_id"])
                 failed_ids.add(int(record["study_id"]))
                 continue
-            try:
-                _consume_record_result(
-                    record,
-                    record_result,
-                    failed_ids=failed_ids,
-                    successful_ids=successful_ids,
-                    eeg_run_records=eeg_run_records,
-                    raw_qc_run_records=raw_qc_run_records,
-                )
-            except Exception as exc:
-                LOGGER.error("Failed consuming result for study_id %s: %s", record["study_id"], exc)
-                failed_ids.add(int(record["study_id"]))
+            _consume_record_result(
+                record,
+                record_result,
+                failed_ids=failed_ids,
+                successful_ids=successful_ids,
+                eeg_run_records=eeg_run_records,
+                raw_qc_run_records=raw_qc_run_records,
+            )
 
     if failed_ids:
         LOGGER.warning("Failed study_ids: %s", sorted(failed_ids))

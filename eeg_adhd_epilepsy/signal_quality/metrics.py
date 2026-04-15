@@ -68,7 +68,7 @@ def compute_signal_qc_metrics(
     noise_info = detect_flat_and_noisy_channels(signal, picks)
     duration_sec = float(signal.times[-1]) if signal.times.size else float("nan")
 
-    _spec, psd, freqs, alpha_peak, _band_powers, _band_powers_per_channel = compute_spectral_metrics(
+    psd, freqs, alpha_peak, _band_powers = compute_spectral_metrics(
         signal, picks, fmin=0.5, fmax=99.5
     )
     
@@ -141,7 +141,7 @@ def compute_spectral_fidelity(
     # Compute PSDs (Welch) - quick check on up to 60s for speed
     tmax = min(raw_clean.times[-1], 60.0) 
     
-    # Compute PSD for both (returns Spectrum)
+    # Compute PSD-derived summaries for both signals
     spec_clean = raw_clean.compute_psd(tmax=tmax, fmax=120, n_jobs=1, verbose="ERROR")
     spec_orig = raw_orig.compute_psd(tmax=tmax, fmax=120, n_jobs=1, verbose="ERROR")
     

@@ -100,6 +100,44 @@ Dataset summary outputs:
 
 - `to_bids.py` handles conversion, canonical annotations, `_segments.csv`, and orchestration. It calls [eeg_adhd_epilepsy/reports/eeg_report.py](eeg_adhd_epilepsy/reports/eeg_report.py) to generate the descriptive EEG report, [eeg_adhd_epilepsy/qc/raw_metrics.py](eeg_adhd_epilepsy/qc/raw_metrics.py) to compute and aggregate broad raw-QC metrics, and [eeg_adhd_epilepsy/reports/raw_qc.py](eeg_adhd_epilepsy/reports/raw_qc.py) to render the raw-QC report.
 
+## Preprocessing and Post-Clean QC Workflow
+
+Once the BIDS conversion and raw QC are completed, you can run the primary preprocessing pipeline using `base.py`. This stage reads the raw BIDS files, applies automated cleaning, and outputs analysis-ready BIDS derivatives alongside post-preprocessing quality control (QC) reports.
+
+The pipeline performs:
+- Bandpass filtering (0.1–99.5 Hz default) and Line Noise removal using Adaptive ZapLine (`mne-denoise`)
+- Bad channel detection using RANSAC (`pyprep`)
+- Robust re-referencing (Common Average Reference)
+- Condition-wise bad segment/epoch detection and annotation using `AutoReject`
+- Comprehensive post-clean QC metric extraction and HTML report generation
+
+Run with:
+
+```bash
+.venv/bin/python -m eeg_adhd_epilepsy.preproc.base \
+  --bids_root /path/to/BIDS \
+  --n_jobs 4
+```
+
+Like `to_bids.py`, use `--overwrite` to force reprocessing of files that have already been cleaned. Otherwise, the script acts incrementally and resumes work. To target specific subjects you can use the `--subjects` flag.
+
+### Outputs
+
+`base.py` writes:
+
+- Preprocessed continuous EEG files (`_desc-base_eeg.fif`) under `BIDS/derivatives/eeg_adhd_epilepsy/`
+- Subject-level post-clean QC reports:
+  - `reports/sub-XXXX/ses-01/base_qc/sub-XXXX_ses-01_base_qc_report.html`
+- Dataset-level summary outputs:
+  - `reports/summary/base_qc/` containing aggregate CSVs, JSON records, and a master `base_qc_dataset_summary.html` report.
+
+### Split of Responsibilities
+
+- `base.py` handles the pipeline orchestration, BIDS loading/saving, and mapping the core denoising algorithms.
+- `eeg_adhd_epilepsy/qc/preproc_qc.py` orchestrates the post-preprocessing QC validation. It explicitly delegates condition-level signal quality computation back to `qc/raw_metrics.py`, guaranteeing direct comparability between the "Raw" and "Clean" stages.
+- `eeg_adhd_epilepsy/reports/preproc_qc.py` is responsible for building the semantic blocks of the post-clean HTML reports, defining tables that compare retention metrics, residual artifact burdens, and Raw vs Cleaned signal quality summaries.
+- `eeg_adhd_epilepsy/viz/preproc_qc.py` composites the comparative visual artifacts (grouped histograms, distribution tables, side-by-side Topomaps) that populate the HTML reports.
+
 ## Installation
 
 Python `3.10+` is required.

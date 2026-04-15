@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 import mne
 import numpy as np
@@ -14,6 +14,42 @@ from tqdm import tqdm
 from eeg_adhd_epilepsy.io import bids as bids_io
 
 logger = logging.getLogger(__name__)
+
+
+def build_block_events_by_condition(
+    raw: mne.io.BaseRaw,
+    segment_duration: float,
+    overlap: float = 0.0,
+ ) -> dict[str, np.ndarray]:
+    """Build fixed-length events grouped by block condition."""
+    blocks = [
+        block
+        for block in bids_io._collect_block_windows(raw)
+        if block.duration >= segment_duration
+    ]
+    events_by_condition: dict[str, np.ndarray] = {}
+    for block in blocks:
+        block_events = mne.make_fixed_length_events(
+            raw,
+            id=1,
+            start=block.onset,
+            stop=block.stop,
+            duration=segment_duration,
+            overlap=overlap,
+            first_samp=True,
+        )
+        if len(block_events) == 0:
+            continue
+        if block.name in events_by_condition:
+            events_by_condition[block.name] = np.concatenate(
+                [events_by_condition[block.name], block_events]
+            )
+        else:
+            events_by_condition[block.name] = block_events
+
+    for condition_name, events in list(events_by_condition.items()):
+        events_by_condition[condition_name] = events[events[:, 0].argsort()]
+    return events_by_condition
 
 
 def make_epochs_from_preproc_raw(
@@ -25,33 +61,30 @@ def make_epochs_from_preproc_raw(
     overwrite: bool = False,
 ) -> mne.Epochs:
     """Create fixed-length epochs from all annotated blocks in a preprocessed raw."""
-    blocks = [block for block in bids_io._collect_block_windows(raw) if block.duration >= segment_duration]
+    events_by_condition = build_block_events_by_condition(
+        raw,
+        segment_duration=segment_duration,
+        overlap=overlap,
+    )
+    if not events_by_condition:
+        raise ValueError("No block events could be constructed from the annotated raw.")
     event_id = {
-        block_name: idx
-        for idx, block_name in enumerate(
-            dict.fromkeys(block.name for block in blocks),
-            start=1,
-        )
+        condition_name: idx
+        for idx, condition_name in enumerate(events_by_condition, start=1)
     }
-    events_list = []
-    for block in blocks:
-        block_events = mne.make_fixed_length_events(
-            raw,
-            id=event_id[block.name],
-            start=block.onset,
-            stop=block.stop,
-            duration=segment_duration,
-            overlap=overlap,
-        )
-        if len(block_events) > 0:
-            events_list.append(block_events)
-    events = np.concatenate(events_list)
+    remapped = []
+    for condition_name, condition_events in events_by_condition.items():
+        condition_copy = condition_events.copy()
+        condition_copy[:, 2] = event_id[condition_name]
+        remapped.append(condition_copy)
+    events = np.concatenate(remapped)
+    events = events[events[:, 0].argsort()]
 
     epochs = mne.Epochs(
         raw,
-        events,
+        events=events,
         event_id=event_id,
-        tmin=0,
+        tmin=0.0,
         tmax=segment_duration,
         baseline=None,
         reject=None,

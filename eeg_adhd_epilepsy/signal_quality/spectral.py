@@ -6,7 +6,6 @@ from typing import Dict, List, Mapping, Tuple
 
 import numpy as np
 import mne
-from mne.time_frequency import Spectrum
 
 from specparam import SpectralGroupModel
 
@@ -38,29 +37,27 @@ def compute_spectral_metrics(
     fmin: float = 1.0,
     fmax: float = 60.0,
     band_limits: Mapping[str, Tuple[float, float]] | None = None,
-) -> Tuple[Spectrum | None, np.ndarray, np.ndarray, float, Dict[str, float], Dict[str, np.ndarray]]:
+) -> Tuple[np.ndarray, np.ndarray, float, Dict[str, float]]:
     """
-    Compute comprehensive spectral metrics.
-    
+    Compute PSD-derived summary metrics for the maintained QC/preproc path.
+
     Returns:
-        spec: MNE Spectrum object
         psd: PSD array (n_channels, n_freqs)
         freqs: Frequency array
         alpha_peak: Alpha peak frequency (Hz)
         band_powers_mean: Dictionary of mean band powers (across channels)
-        band_powers_per_channel: Dictionary of band powers per channel
     """
     band_limits = band_limits or BAND_LIMITS
     if data is None:
         empty = np.array([])
-        return None, empty, empty, float("nan"), {k: float("nan") for k in band_limits}, {k: empty for k in band_limits}
+        return empty, empty, float("nan"), {k: float("nan") for k in band_limits}
 
     # Auto-pick EEG channels if picks is None or empty
     if picks is None or len(picks) == 0:
         picks = mne.pick_types(data.info, eeg=True, meg=False, exclude='bads')
         if len(picks) == 0:
             empty = np.array([])
-            return None, empty, empty, float("nan"), {k: float("nan") for k in band_limits}, {k: empty for k in band_limits}
+            return empty, empty, float("nan"), {k: float("nan") for k in band_limits}
 
     spec = data.compute_psd(picks=picks, fmin=fmin, fmax=fmax, verbose="ERROR")
     psd, freqs = spec.get_data(return_freqs=True)
@@ -77,24 +74,49 @@ def compute_spectral_metrics(
     else:
         alpha_peak = float("nan")
 
-    per_channel_powers = _integrate_power(psd, freqs, band_limits)
+    band_powers_by_channel = _integrate_power(psd, freqs, band_limits)
     band_powers_mean: Dict[str, float] = {
-        band: float(np.nanmean(values)) for band, values in per_channel_powers.items()
+        band: float(np.nanmean(values)) for band, values in band_powers_by_channel.items()
     }
 
-    return spec, psd, freqs, alpha_peak, band_powers_mean, per_channel_powers
+    return psd, freqs, alpha_peak, band_powers_mean
 
-def get_spectral_metrics_per_channel(
-    psd: np.ndarray,
-    freqs: np.ndarray,
+
+def compute_stage_spectral_summary(
+    data: mne.io.BaseRaw | mne.Epochs | None,
+    picks: List[str] | None = None,
+    *,
+    fmin: float = 0.5,
+    fmax: float = 60.0,
     band_limits: Mapping[str, Tuple[float, float]] | None = None,
-) -> Dict[str, np.ndarray]:
-    """Return band power per channel for each band (in uV^2)."""
-    if psd.size == 0 or freqs.size == 0:
-        band_limits = band_limits or BAND_LIMITS
-        return {band: np.array([]) for band in band_limits}
-    
-    return _integrate_power(psd, freqs, band_limits or BAND_LIMITS)
+    reference_psd: np.ndarray | None = None,
+) -> Dict[str, object]:
+    """Compute the stage spectral summary used in provenance and stage QC."""
+    psd, freqs, alpha_peak, band_powers_mean = compute_spectral_metrics(
+        data=data,
+        picks=picks,
+        fmin=fmin,
+        fmax=fmax,
+        band_limits=band_limits,
+    )
+    slope_mean, _slope_std, intercept_mean, _slope_per_channel = compute_aperiodic_slope(
+        psd,
+        freqs,
+        fmin=1.0,
+        fmax=30.0,
+    )
+    lsd = float("nan")
+    if reference_psd is not None and psd.size > 0 and reference_psd.size > 0 and psd.shape == reference_psd.shape:
+        lsd = compute_lsd(psd, reference_psd)
+    return {
+        "psd": psd,
+        "freqs": freqs,
+        "alpha_peak": alpha_peak,
+        "band_powers_mean": band_powers_mean,
+        "aperiodic_slope": slope_mean,
+        "aperiodic_intercept": intercept_mean,
+        "lsd": lsd,
+    }
 
 
 def compute_line_noise_index(

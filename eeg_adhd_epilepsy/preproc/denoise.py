@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import defaultdict
 import json
 import logging
 import re
@@ -18,13 +19,8 @@ from meegkit import asr
 from mne_denoise.dss import IterativeDSS, WienerMaskDenoiser
 from mne_denoise.viz import plot_component_summary, plot_score_curve
 
-from eeg_adhd_epilepsy.signal_quality.spectral import compute_spectral_metrics
-from eeg_adhd_epilepsy.signal_quality.spectral import compute_lsd
 from eeg_adhd_epilepsy.io import bids
-from eeg_adhd_epilepsy.reports.denoise import (
-    create_denoising_dataset_report,
-    create_denoising_report,
-)
+from eeg_adhd_epilepsy.qc import preproc_qc
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 
 from .base import annotate_artifacts_blockwise
@@ -180,7 +176,7 @@ def _remove_transients_asr(
             "cutoff": config.asr_cutoff,
             "calibration_start": best_start / sfreq,
         }
-    except Exception as exc:
+    except RuntimeError as exc:
         LOGGER.error("ASR failed: %s", exc)
         return raw, {"error": str(exc)}
 
@@ -376,80 +372,87 @@ def run_denoising_pipeline(
     config: ArtifactDenoisingConfig,
     preproc_root: Optional[Path] = None,
     reports_root: Optional[Path] = None,
+    input_path: Optional[Path] = None,
     condition_name: Optional[str] = None,
     input_desc: str = "correct",
     output_desc: str = "denoise",
-) -> bool:
+    raw_lookup: Optional[Dict[str, Dict[str, object]]] = None,
+    previous_lookup: Optional[Dict[str, Dict[str, object]]] = None,
+) -> dict[str, object]:
     """Run Stage 2 on one subject (Stage 1 -> Stage 2 handoff)."""
+    result: dict[str, object] = {
+        "success": False,
+        "subject_id": bids.normalize_subject_id(subject_id),
+        "qc_record": None,
+        "error": "",
+    }
     try:
         subject_id = bids.normalize_subject_id(subject_id)
         input_desc = bids.validate_stage_desc(input_desc)
         output_desc = bids.validate_stage_desc(output_desc)
         bids_root = Path(bids_root).expanduser()
 
-        preproc_root = bids.get_preproc_root(
-            bids_root=bids_root,
-            preproc_root=Path(preproc_root).expanduser() if preproc_root is not None else None,
-        )
-        reports_root = bids.get_reports_root(
-            bids_root=bids_root,
-            reports_root=Path(reports_root).expanduser() if reports_root is not None else None,
-        )
+        preproc_root = bids.get_preproc_root(bids_root)
+        reports_root = bids.get_reports_root(bids_root)
 
-        task_token = condition_name if condition_name else None
-        input_path = bids.get_stage_output_path(
-            subject_id=subject_id,
-            preproc_root=preproc_root,
-            desc=input_desc,
-            task=task_token,
-        )
+        if input_path is None:
+            input_path = bids.get_stage_output_path(
+                subject_id=subject_id,
+                preproc_root=preproc_root,
+                desc=input_desc,
+                task=condition_name if condition_name else None,
+            )
+        input_path = Path(input_path)
+        input_ids = bids.build_bids_report_ids(input_path)
+        input_comps = bids.parse_bids_components(input_path)
+        session_id = input_comps.get("session")
+        input_task = input_comps.get("task")
+        run_id = input_comps.get("run")
+        record_label = str(input_ids["run_prefix"])
         if not input_path.exists():
             LOGGER.error("Input file not found: %s", input_path)
-            return False
+            result["error"] = f"Input file not found: {input_path}"
+            return result
 
         LOGGER.info("Loading Stage 1 output: %s", input_path)
         raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
 
-        subject_report_path = bids.get_subject_report_path(
+        stage_name = preproc_qc.get_preproc_qc_stage_name("denoise", output_desc)
+        subject_report_path = bids.get_subject_session_stage_report_path(
             reports_root=reports_root,
-            stage="denoise",
             subject_id=subject_id,
+            session_id=session_id,
+            stage=stage_name,
+            report_stem=str(input_ids["subject_session_prefix"]),
             create_dir=True,
         )
-        report_path = subject_report_path
-        if output_desc != "denoise":
-            report_path = subject_report_path.with_name(
-                f"{subject_id}_denoise_{output_desc}_report.html"
-            )
-
-        figures_dir = report_path.parent / "figures"
+        figures_dir = subject_report_path.parent / "figures" / record_label
         figures_dir.mkdir(parents=True, exist_ok=True)
-
-        LOGGER.info("Computing pre-denoise spectral metrics...")
-        _, psd_pre_data, freqs_pre, alpha_pre, band_pre, _ = compute_spectral_metrics(
-            raw, picks=None, fmin=0.5, fmax=60.0
-        )
-        psd_before = (freqs_pre, psd_pre_data)
 
         denoised_raw, provenance = run_residual_denoising(
             raw,
             config,
             figures_dir=figures_dir,
-            subject_id=subject_id,
+            subject_id=record_label,
         )
 
+        task_token = condition_name if condition_name else input_task
         out_path = bids.get_stage_output_path(
             subject_id=subject_id,
             preproc_root=preproc_root,
             desc=output_desc,
+            session=session_id,
             task=task_token,
+            run=run_id,
             create_dir=True,
         )
         prov_path = bids.get_stage_provenance_path(
             subject_id=subject_id,
             preproc_root=preproc_root,
             desc=output_desc,
+            session=session_id,
             task=task_token,
+            run=run_id,
             create_dir=True,
         )
 
@@ -464,65 +467,30 @@ def run_denoising_pipeline(
         provenance["condition_name"] = condition_name
         provenance["data_duration_s"] = raw.times[-1]
 
-        LOGGER.info("Computing post-denoise spectral metrics...")
-        _, psd_post_data, freqs_post, alpha_post, band_post, _ = compute_spectral_metrics(
-            denoised_raw, picks=None, fmin=0.5, fmax=60.0
-        )
-        psd_after = (freqs_post, psd_post_data)
-
-        lsd = float("nan")
-        if (
-            psd_pre_data.size > 0
-            and psd_post_data.size > 0
-            and psd_pre_data.shape == psd_post_data.shape
-        ):
-            lsd = compute_lsd(psd_clean=psd_post_data, psd_raw=psd_pre_data)
-
-        band_delta_abs: Dict[str, float] = {}
-        band_delta_pct: Dict[str, float] = {}
-        for band_name, pre_val in band_pre.items():
-            post_val = float(band_post.get(band_name, float("nan")))
-            pre_val_f = float(pre_val)
-            delta_abs = post_val - pre_val_f
-            band_delta_abs[band_name] = delta_abs
-            if np.isfinite(pre_val_f) and pre_val_f != 0:
-                band_delta_pct[band_name] = (delta_abs / pre_val_f) * 100.0
-            else:
-                band_delta_pct[band_name] = float("nan")
-
-        provenance["spectral_stats"] = {
-            "alpha_peak_pre": float(alpha_pre),
-            "alpha_peak_post": float(alpha_post),
-            "alpha_peak_delta": float(alpha_post) - float(alpha_pre),
-            "lsd_db": float(lsd),
-            "band_power_pre": {k: float(v) for k, v in band_pre.items()},
-            "band_power_post": {k: float(v) for k, v in band_post.items()},
-            "band_power_delta_abs": band_delta_abs,
-            "band_power_delta_pct": band_delta_pct,
-        }
-
         LOGGER.info("Saving denoised raw to %s", out_path)
         denoised_raw.save(out_path, overwrite=True, verbose="ERROR")
 
         with open(prov_path, "w", encoding="utf-8") as f:
             json.dump(provenance, f, cls=NumpyEncoder, indent=2)
 
-        create_denoising_report(
-            subject_id=subject_id,
-            raw=denoised_raw,
-            psd_before=psd_before,
-            psd_after=psd_after,
-            provenance=provenance,
-            subject_report_path=report_path,
-            figures_dir=figures_dir,
+        result["qc_record"] = preproc_qc.build_preproc_qc_run_record(
+            profile=preproc_qc.get_preproc_qc_profile("denoise"),
+            reports_root=reports_root,
+            current_raw=denoised_raw,
+            current_filepath=out_path,
+            output_desc=output_desc,
+            raw_lookup=raw_lookup,
+            previous_output_desc=input_desc,
+            previous_lookup=previous_lookup,
         )
-
-        LOGGER.info("Denoising pipeline completed for %s. Output: %s", subject_id, out_path)
-        return True
+        result["success"] = True
+        LOGGER.info("Denoising pipeline completed for %s. Output: %s", record_label, out_path)
+        return result
 
     except Exception as exc:
         LOGGER.error("Failed denoising for %s: %s", subject_id, exc, exc_info=True)
-        return False
+        result["error"] = str(exc)
+        return result
 
 
 def main() -> None:
@@ -574,14 +542,8 @@ def main() -> None:
     args = parser.parse_args()
 
     bids_root = Path(args.bids_root).expanduser()
-    preproc_root = bids.get_preproc_root(
-        bids_root=bids_root,
-        preproc_root=Path(args.preproc_root).expanduser() if args.preproc_root else None,
-    )
-    reports_root = bids.get_reports_root(
-        bids_root=bids_root,
-        reports_root=Path(args.reports_root).expanduser() if args.reports_root else None,
-    )
+    preproc_root = bids.get_preproc_root(bids_root)
+    reports_root = bids.get_reports_root(bids_root)
     preproc_root.mkdir(parents=True, exist_ok=True)
     reports_root.mkdir(parents=True, exist_ok=True)
 
@@ -616,7 +578,7 @@ def main() -> None:
         sys.exit(1)
 
     subjects_found = sorted({bids.parse_subject_id(f) for f in files})
-    LOGGER.info("Found %d subjects with Stage 1 inputs.", len(subjects_found))
+    LOGGER.info("Found %d stage-1 runs across %d subjects.", len(files), len(subjects_found))
 
     if args.subjects:
         subjects_to_process = {bids.normalize_subject_id(s) for s in args.subjects}
@@ -641,48 +603,127 @@ def main() -> None:
         parser.print_help()
         sys.exit(0)
 
-    if args.skip_existing:
-        subjects_to_skip = set()
-        for sid in subjects_to_process:
+    profile = preproc_qc.get_preproc_qc_profile("denoise")
+    raw_lookup = preproc_qc.load_raw_pre_base_lookup(reports_root)
+    previous_lookup = preproc_qc.load_stage_run_lookup(
+        reports_root,
+        preproc_qc.get_preproc_qc_stage_name("correct", output_desc=input_desc),
+    )
+    existing_results: list[dict[str, object]] = []
+
+    if args.skip_existing or args.reports_only:
+        existing_runs = 0
+        for input_file in files:
+            sid = bids.parse_subject_id(input_file)
+            if sid not in subjects_to_process:
+                continue
+            comps = bids.parse_bids_components(input_file)
             out_file = bids.get_stage_output_path(
                 subject_id=sid,
                 preproc_root=preproc_root,
                 desc=output_desc,
-                task=args.condition if args.condition else None,
+                session=comps.get("session"),
+                task=args.condition if args.condition else comps.get("task"),
+                run=comps.get("run"),
             )
-            if out_file.exists():
-                subjects_to_skip.add(sid)
-        if subjects_to_skip:
-            LOGGER.info("Skipping %d already processed subjects.", len(subjects_to_skip))
-            subjects_to_process = subjects_to_process - subjects_to_skip
+            if not out_file.exists():
+                continue
+            existing_runs += 1
+            try:
+                existing_results.append(
+                    {
+                        "success": True,
+                        "subject_id": sid,
+                        "qc_record": preproc_qc.collect_existing_preproc_qc_record(
+                            profile=profile,
+                            reports_root=reports_root,
+                            filepath=out_file,
+                            output_desc=output_desc,
+                            previous_output_desc=input_desc,
+                            raw_lookup=raw_lookup,
+                            previous_lookup=previous_lookup,
+                        ),
+                        "error": "",
+                    }
+                )
+            except Exception as exc:
+                LOGGER.error("Failed rebuilding existing denoise QC record for %s (%s): %s", sid, input_file.name, exc, exc_info=True)
+                existing_results.append({"success": False, "subject_id": sid, "qc_record": None, "error": str(exc)})
+        if existing_runs:
+            LOGGER.info("Skipping %d existing denoise outputs.", existing_runs)
 
-    subjects_sorted = sorted(subjects_to_process)
-    if not subjects_sorted:
+    files_to_process = []
+    existing_run_keys = set()
+    for result in existing_results:
+        record = result.get("qc_record")
+        if isinstance(record, dict):
+            existing_run_keys.add(record.get("run_key"))
+    for input_file in files:
+        sid = bids.parse_subject_id(input_file)
+        if sid not in subjects_to_process:
+            continue
+        ids = bids.build_bids_report_ids(input_file)
+        if ids["run_key"] in existing_run_keys:
+            continue
+        files_to_process.append(input_file)
+
+    if args.reports_only:
+        files_to_process = []
+
+    if not files_to_process and not existing_results:
         LOGGER.warning("No subjects left to process.")
         sys.exit(0)
 
     success_ids: List[str] = []
     failed_ids: List[str] = []
+    qc_run_records: List[dict[str, object]] = []
+    qc_subject_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
 
-    for sub in subjects_sorted:
-        if args.reports_only:
-            continue
+    for result in existing_results:
+        if result.get("success") and result.get("qc_record") is not None:
+            record = result["qc_record"]
+            qc_run_records.append(record)
+            qc_subject_groups[record["subject_session_key"]].append(record)
+            preproc_qc.write_subject_preproc_qc_report(
+                reports_root,
+                qc_subject_groups[record["subject_session_key"]],
+                profile=profile,
+                output_desc=output_desc,
+            )
+            success_ids.append(str(record["run_prefix"]))
+        else:
+            failed_ids.append(str(result["subject_id"]))
 
-        LOGGER.info("Processing %s...", sub)
-        success = run_denoising_pipeline(
-            subject_id=sub,
+    for input_file in files_to_process:
+        sid = bids.parse_subject_id(input_file)
+        run_label = str(bids.build_bids_report_ids(input_file)["run_prefix"])
+        LOGGER.info("Processing %s...", run_label)
+        result = run_denoising_pipeline(
+            subject_id=sid,
             bids_root=bids_root,
             config=config,
             preproc_root=preproc_root,
             reports_root=reports_root,
+            input_path=input_file,
             condition_name=args.condition,
             input_desc=input_desc,
             output_desc=output_desc,
+            raw_lookup=raw_lookup,
+            previous_lookup=previous_lookup,
         )
-        if success:
-            success_ids.append(sub)
+        if result.get("success") and result.get("qc_record") is not None:
+            record = result["qc_record"]
+            success_ids.append(str(record["run_prefix"]))
+            qc_run_records.append(record)
+            qc_subject_groups[record["subject_session_key"]].append(record)
+            preproc_qc.write_subject_preproc_qc_report(
+                reports_root,
+                qc_subject_groups[record["subject_session_key"]],
+                profile=profile,
+                output_desc=output_desc,
+            )
         else:
-            failed_ids.append(sub)
+            failed_ids.append(run_label)
 
     if not args.reports_only:
         LOGGER.info("Batch processing complete. Success: %d, Failed: %d", len(success_ids), len(failed_ids))
@@ -691,20 +732,11 @@ def main() -> None:
     else:
         LOGGER.info("Skipping processing (--reports-only). Generating summary from existing files.")
 
-    summary_path = bids.get_stage_summary_report_path(
-        reports_root=reports_root,
-        stage="denoise",
-        create_dir=True,
-    )
-    if output_desc != "denoise":
-        summary_path = summary_path.with_name(f"denoise_{output_desc}_dataset_summary.html")
-
-    create_denoising_dataset_report(
-        search_dir=preproc_root,
-        summary_report_path=summary_path,
+    preproc_qc.write_preproc_qc_aggregate_reports(
+        reports_root,
+        qc_run_records,
+        profile=profile,
         output_desc=output_desc,
-        success_subjects=success_ids if not args.reports_only else None,
-        failed_subjects=failed_ids if not args.reports_only else None,
     )
 
 
