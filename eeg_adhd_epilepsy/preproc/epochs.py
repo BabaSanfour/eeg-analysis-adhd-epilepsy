@@ -40,12 +40,13 @@ def build_block_events_by_condition(
         )
         if len(block_events) == 0:
             continue
-        if block.name in events_by_condition:
-            events_by_condition[block.name] = np.concatenate(
-                [events_by_condition[block.name], block_events]
+        condition_name = block.name.replace("BLOCK_", "") if str(block.name).startswith("BLOCK_") else block.name
+        if condition_name in events_by_condition:
+            events_by_condition[condition_name] = np.concatenate(
+                [events_by_condition[condition_name], block_events]
             )
         else:
-            events_by_condition[block.name] = block_events
+            events_by_condition[condition_name] = block_events
 
     for condition_name, events in list(events_by_condition.items()):
         events_by_condition[condition_name] = events[events[:, 0].argsort()]

@@ -79,11 +79,14 @@ def get_preproc_root(bids_root: Path) -> Path:
 
 
 def get_subject_eeg_dir(
-    preproc_root: Path, subject_id: str, create: bool = False
+    preproc_root: Path, subject_id: str, session: str | None = None, create: bool = False
 ) -> Path:
-    """Return '<preproc_root>/<subject>/eeg'."""
+    """Return '<preproc_root>/<subject>[/ses-<session>]/eeg'."""
     sid = normalize_subject_id(subject_id)
-    eeg_dir = Path(preproc_root).expanduser() / sid / "eeg"
+    parts = [sid]
+    if session:
+        parts.append(normalize_session_id(session))
+    eeg_dir = Path(preproc_root).expanduser().joinpath(*parts) / "eeg"
     if create:
         eeg_dir.mkdir(parents=True, exist_ok=True)
     return eeg_dir
@@ -101,7 +104,7 @@ def get_stage_output_path(
     """Return stage output FIF path using unified naming."""
     sid = normalize_subject_id(subject_id)
     desc_token = validate_stage_desc(desc)
-    eeg_dir = get_subject_eeg_dir(preproc_root, sid, create=create_dir)
+    eeg_dir = get_subject_eeg_dir(preproc_root, sid, session=session, create=create_dir)
     parts = [sid]
     if session:
         parts.append(normalize_session_id(session))

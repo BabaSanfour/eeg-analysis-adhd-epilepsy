@@ -39,7 +39,7 @@ from eeg_adhd_epilepsy.analysis.utils import (
     save_table,
 )
 
-from eeg_adhd_epilepsy.io.bids import load_eeg_data, validate_bids_coverage
+from eeg_adhd_epilepsy.io.bids import load_eeg_data, validate_bids_coverage, normalize_subject_id
 from eeg_adhd_epilepsy.io.csv import load as load_csv
 from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS
 
@@ -266,7 +266,6 @@ def main() -> None:
         "--conditions",
         nargs="+",
         default=DEFAULT_CONDITIONS,
-        choices=DEFAULT_CONDITIONS,
         help="Conditions to extract.",
     )
     parser.add_argument(
@@ -369,7 +368,10 @@ def main() -> None:
 
     available_subject_set = set(available_subjects)
     if args.subjects:
-        requested_subjects = [f"{int(subject):04d}" for subject in args.subjects]
+        requested_subjects = [
+            normalize_subject_id(subject).replace("sub-", "")
+            for subject in args.subjects
+        ]
         subjects = [
             subject for subject in requested_subjects if subject in available_subject_set
         ]
@@ -392,7 +394,24 @@ def main() -> None:
     LOGGER.info("Using %d subjects from saved derivatives.", len(subjects))
 
     for subject in subjects:
-        for condition in args.conditions:
+        if args.conditions == ["all"]:
+            import mne
+            epochs_root = bids_root / "derivatives" / "preproc"
+            files = list(epochs_root.rglob(f"sub-{subject}*_desc-base_epo.fif"))
+            subject_conditions = set()
+            for f in files:
+                try:
+                    subject_conditions.update(mne.read_epochs(f, verbose="ERROR").event_id.keys())
+                except Exception:
+                    pass
+            subject_conditions = sorted(list(subject_conditions))
+            if not subject_conditions:
+                LOGGER.warning("No saved conditions found for subject %s", subject)
+                continue
+        else:
+            subject_conditions = args.conditions
+
+        for condition in subject_conditions:
             shard_root = derivative_root / f"sub-{subject}" / "eeg" / condition
             if all(
                 (shard_root / filename).exists()
