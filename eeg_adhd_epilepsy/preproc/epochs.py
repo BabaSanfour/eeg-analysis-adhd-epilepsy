@@ -92,6 +92,7 @@ def make_epochs_from_preproc_raw(
         preload=True,
         proj=False,
         reject_by_annotation=not ignore_annotations,
+        event_repeated="drop",
     )
     if save_path is not None:
         epochs.save(save_path, overwrite=overwrite)
@@ -121,32 +122,42 @@ def main() -> None:
     bids_root = Path(args.bids_root)
     preproc_root = bids_io.get_preproc_root(bids_root)
 
-    subject_ids = (
-        [bids_io.normalize_subject_id(f"{int(subject):04d}") for subject in args.subjects]
-        if args.subjects
-        else sorted(path.name for path in preproc_root.glob("sub-*") if path.is_dir())
-    )
+    logger.info(f"Discovering preprocessed files in {preproc_root}")
+    found_files = list(preproc_root.rglob(f"*desc-{args.desc}_eeg.fif"))
 
-    logger.info(f"Saving epochs for {len(subject_ids)} subjects in {preproc_root}")
+    if args.subjects:
+        valid_sids = set()
+        for s in args.subjects:
+            if s.startswith("sub-"):
+                valid_sids.add(bids_io.normalize_subject_id(s))
+            else:
+                valid_sids.add(bids_io.normalize_subject_id(f"{int(s):04d}"))
+        files_to_process = [f for f in found_files if bids_io.parse_subject_id(f) in valid_sids]
+    else:
+        files_to_process = found_files
 
-    for subject_id in tqdm(subject_ids, desc="Saving Epochs"):
-        input_path = bids_io.get_stage_output_path(
-            subject_id=subject_id,
-            preproc_root=preproc_root,
-            desc=args.desc,
-        )
+    logger.info(f"Found {len(files_to_process)} matching _eeg.fif files to epoch.")
+
+    for input_path in tqdm(files_to_process, desc="Saving Epochs"):
         output_path = input_path.with_name(input_path.name.replace("_eeg.fif", "_epo.fif"))
 
-        raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
-        epochs = make_epochs_from_preproc_raw(
-            raw,
-            segment_duration=args.segment_duration,
-            overlap=args.overlap,
-            ignore_annotations=args.ignore_annotations,
-            save_path=output_path,
-            overwrite=args.overwrite,
-        )
-        logger.info(f"Saved {len(epochs)} epochs to {output_path}")
+        if not args.overwrite and output_path.exists():
+            logger.info(f"Skipping {input_path.name}: epoch file already exists. Use --overwrite to overwrite.")
+            continue
+
+        try:
+            raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
+            epochs = make_epochs_from_preproc_raw(
+                raw,
+                segment_duration=args.segment_duration,
+                overlap=args.overlap,
+                ignore_annotations=args.ignore_annotations,
+                save_path=output_path,
+                overwrite=args.overwrite,
+            )
+            logger.info(f"Saved {len(epochs)} epochs to {output_path.name}")
+        except Exception as exc:
+            logger.error(f"Failed to epoch {input_path.name}: {exc}", exc_info=True)
 
 
 if __name__ == "__main__":
