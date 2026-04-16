@@ -22,12 +22,14 @@ Combined outputs are built separately by ``merge_descriptors.py``.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import logging
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import mne
 import numpy as np
 import pandas as pd
 import yaml
@@ -38,8 +40,12 @@ from eeg_adhd_epilepsy.analysis.utils import (
     required_descriptor_files,
     save_table,
 )
-
-from eeg_adhd_epilepsy.io.bids import load_eeg_data, validate_bids_coverage, normalize_subject_id
+from eeg_adhd_epilepsy.io.bids import (
+    load_eeg_data,
+    normalize_subject_id,
+    parse_bids_components,
+    validate_bids_coverage,
+)
 from eeg_adhd_epilepsy.io.csv import load as load_csv
 from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS
 
@@ -54,108 +60,64 @@ def _build_feature_outputs(
     aggregated_ratio_pairs: list[tuple[str, str]],
     aggregated_ratio_floor: float,
 ) -> dict[str, Any]:
+    # Extract feature columns and merge with metadata for epoch-level DF
     epoch_feature_df = pd.DataFrame(result["X"], columns=result["descriptor_names"])
-    epoch_df = pd.concat(
-        [metadata_df.reset_index(drop=True), epoch_feature_df.reset_index(drop=True)],
-        axis=1,
-    )
+    epoch_df = pd.concat([metadata_df.reset_index(drop=True), epoch_feature_df], axis=1)
 
-    coords: dict[str, Any] = {
-        "obs": metadata_df["obs_id"].to_numpy(dtype=object),
-        "feature": np.asarray(result["descriptor_names"], dtype=object),
+    # Wrap in DataContainer for aggregation utilities
+    coords = {
+        col: metadata_df[col].to_numpy(dtype=object)
+        for col in metadata_df.columns if col != "obs_id"
     }
-    for column in metadata_df.columns:
-        if column != "obs_id":
-            coords[column] = metadata_df[column].to_numpy(dtype=object)
-    y = (
-        metadata_df[target_col].to_numpy(dtype=object)
-        if target_col and target_col in metadata_df.columns
-        else None
-    )
-    feature_container = DataContainer(
+    coords["feature"] = np.asarray(result["descriptor_names"], dtype=object)
+    
+    y = metadata_df[target_col].to_numpy() if target_col and target_col in metadata_df.columns else None
+    
+    container = DataContainer(
         X=result["X"],
         y=y,
         ids=metadata_df["obs_id"].to_numpy(dtype=object),
         dims=("obs", "feature"),
         coords=coords,
-        meta={},
     )
 
-    grouped_mean = feature_container.aggregate(
-        by="subject",
-        stats="mean",
-        min_count=1,
-        on_insufficient="raise",
-    )
-    agg_metadata_df = grouped_mean.obs_table(
-        include_y=bool(target_col),
-        y_col=target_col or "y",
-    )
-    if "subject" not in agg_metadata_df.columns:
-        raise ValueError(
-            "Aggregated feature container must expose a 'subject' coordinate."
-        )
-    agg_metadata_df["condition"] = condition
-    agg_front = ["subject", "condition", "epoch_count"]
-    agg_metadata_df = agg_metadata_df[
-        agg_front + [column for column in agg_metadata_df.columns if column not in agg_front]
-    ]
+    # Calculate subject-level means
+    grouped_mean = container.aggregate(by="subject", stats="mean")
+    agg_df = grouped_mean.obs_table(include_y=bool(target_col), y_col=target_col or "y")
+    agg_df["condition"] = condition
+    
+    # Calculate additional grouped descriptors (e.g., medians)
+    grouped_features = container.aggregate_groups(by="subject", groups=aggregation_descriptors)
+    base_agg_features = pd.DataFrame(grouped_mean.X, columns=grouped_mean.coords["feature"])
+    agg_features = pd.DataFrame(grouped_features.X, columns=grouped_features.coords["feature"])
 
-    base_agg_feature_df = pd.DataFrame(
-        grouped_mean.X,
-        columns=list(np.asarray(grouped_mean.coords["feature"], dtype=object)),
-    )
-    grouped_features = feature_container.aggregate_groups(
-        by="subject",
-        groups=aggregation_descriptors,
-        min_count=1,
-        on_insufficient="raise",
-    )
-    agg_feature_frames = [
-        pd.DataFrame(
-            grouped_features.X,
-            columns=list(np.asarray(grouped_features.coords["feature"], dtype=object)),
-        )
-    ]
-    agg_ratio_columns: dict[str, np.ndarray] = {}
-    for numerator, denominator in aggregated_ratio_pairs:
-        raw_numerator_prefix = f"band_abs_{numerator}_"
-        corr_numerator_prefix = f"band_corr_abs_{numerator}_"
-        for numerator_column in base_agg_feature_df.columns:
-            if numerator_column.startswith(raw_numerator_prefix):
-                suffix = numerator_column.removeprefix(raw_numerator_prefix)
-                denominator_column = f"band_abs_{denominator}_{suffix}"
-                output_name = f"agg_band_ratio_{numerator}_{denominator}_{suffix}"
-            elif numerator_column.startswith(corr_numerator_prefix):
-                suffix = numerator_column.removeprefix(corr_numerator_prefix)
-                denominator_column = f"band_corr_abs_{denominator}_{suffix}"
-                output_name = f"agg_band_corr_ratio_{numerator}_{denominator}_{suffix}"
-            else:
-                continue
-            if denominator_column not in base_agg_feature_df.columns:
-                continue
-            numerator_values = base_agg_feature_df[numerator_column].to_numpy(dtype=float)
-            denominator_values = base_agg_feature_df[denominator_column].to_numpy(dtype=float)
-            agg_ratio_columns[output_name] = np.divide(
-                numerator_values,
-                denominator_values,
-                out=np.full_like(numerator_values, np.nan, dtype=float),
-                where=denominator_values > aggregated_ratio_floor,
-            )
+    # Calculate ratios on the aggregated features
+    agg_ratio_columns = {}
+    for num, den in aggregated_ratio_pairs:
+        for p in ["band_abs_", "band_corr_abs_"]:
+            out_p = "agg_band_ratio_" if p == "band_abs_" else "agg_band_corr_ratio_"
+            for col in base_agg_features.columns:
+                if col.startswith(f"{p}{num}_"):
+                    suffix = col.removeprefix(f"{p}{num}_")
+                    den_col = f"{p}{den}_{suffix}"
+                    if den_col in base_agg_features.columns:
+                        n_vals = base_agg_features[col].to_numpy(dtype=float)
+                        d_vals = base_agg_features[den_col].to_numpy(dtype=float)
+                        agg_ratio_columns[f"{out_p}{num}_{den}_{suffix}"] = np.divide(
+                            n_vals, d_vals, out=np.full_like(n_vals, np.nan), where=d_vals > aggregated_ratio_floor
+                        )
+
     if agg_ratio_columns:
-        agg_feature_frames.append(
-            pd.DataFrame(agg_ratio_columns, index=base_agg_feature_df.index)
-        )
-    agg_feature_df = pd.concat(agg_feature_frames, axis=1)
-    agg_df = pd.concat(
-        [agg_metadata_df.reset_index(drop=True), agg_feature_df.reset_index(drop=True)],
-        axis=1,
-    )
+        agg_features = pd.concat([agg_features, pd.DataFrame(agg_ratio_columns)], axis=1)
+
+    # Final subject DF assembly
+    subject_df = pd.concat([agg_df.reset_index(drop=True), agg_features], axis=1)
+    
     return {
         "epoch_df": epoch_df,
-        "subject_df": agg_df,
+        "subject_df": subject_df,
         "epoch_feature_columns": list(result["descriptor_names"]),
-        "subject_feature_columns": list(agg_feature_df.columns),
+        "subject_feature_columns": list(agg_features.columns),
     }
 
 
@@ -394,16 +356,20 @@ def main() -> None:
     LOGGER.info("Using %d subjects from saved derivatives.", len(subjects))
 
     for subject in subjects:
+        epochs_root = bids_root / "derivatives" / "preproc"
+        files = list(epochs_root.rglob(f"sub-{subject}*_desc-base_epo.fif"))
+        
+        sessions = sorted(list({parse_bids_components(f).get("session", "01") for f in files}))
+        if not sessions:
+            sessions = ["01"]
+
         if args.conditions == ["all"]:
-            import mne
-            epochs_root = bids_root / "derivatives" / "preproc"
-            files = list(epochs_root.rglob(f"sub-{subject}*_desc-base_epo.fif"))
             subject_conditions = set()
             for f in files:
                 try:
                     subject_conditions.update(mne.read_epochs(f, verbose="ERROR").event_id.keys())
-                except Exception:
-                    pass
+                except Exception as e:
+                    LOGGER.debug("Failed to read conditions from %s: %s", f.name, e)
             subject_conditions = sorted(list(subject_conditions))
             if not subject_conditions:
                 LOGGER.warning("No saved conditions found for subject %s", subject)
@@ -411,25 +377,17 @@ def main() -> None:
         else:
             subject_conditions = args.conditions
 
-        for condition in subject_conditions:
-            shard_root = derivative_root / f"sub-{subject}" / "eeg" / condition
-            if all(
-                (shard_root / filename).exists()
-                for filename in required_descriptor_files(include_pooled)
-            ):
-                LOGGER.info(
-                    "Skipping %s / %s: checkpoint shard already complete.",
-                    condition,
-                    subject,
-                )
+        for session, condition in itertools.product(sessions, subject_conditions):
+            shard_root = derivative_root / f"sub-{subject}" / f"ses-{session}" / "eeg" / condition
+            if (shard_root / "_SUCCESS").exists():
+                LOGGER.info("Skipping %s / %s (ses %s): already complete.", condition, subject, session)
                 continue
 
             subject_meta_df = meta_df[
-                meta_df[args.subject_col].map(lambda value: f"{int(value):04d}")
-                == subject
+                meta_df[args.subject_col].map(lambda v: f"{int(v):04d}") == subject
             ].copy()
 
-            LOGGER.info("Loading condition %s for subject %s", condition, subject)
+            LOGGER.info("Loading %s for %s (ses %s)", condition, subject, session)
             try:
                 dc_loaded = load_eeg_data(
                     bids_root=bids_root,
@@ -440,6 +398,7 @@ def main() -> None:
                     target_col=args.target_col,
                     desc="base",
                     condition=condition,
+                    session=session,
                 )
             except RuntimeError as error:
                 if str(error).startswith("No valid data found in "):
