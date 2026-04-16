@@ -22,7 +22,7 @@ import json
 from pathlib import Path
 import matplotlib.pyplot as plt
 
-import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
+import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
 
 from .utils import benchmark_step, NumpyEncoder
 from .dss_utils import _get_dss_profile, _run_dss_artifact

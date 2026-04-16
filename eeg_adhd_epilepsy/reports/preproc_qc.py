@@ -339,6 +339,19 @@ def generate_subject_report(
         _add_optional_table(runs, run_summary_df, "Per-Run Summary")
         report.add_section(runs)
 
+    temporal = Section("Temporal Signal Quality", icon="⏲️")
+    temporal.add_markdown(
+        "Time-aligned signal quality diagnostics. Horizontal blocks represent the mean metric "
+        "value for each experimental segment. Red 'x' markers and shaded backgrounds "
+        "indicate segments flagged as bad by the automated diagnostics."
+    )
+    _add_images(
+        temporal,
+        figures,
+        ("temporal_amplitude", "temporal_line_noise", "temporal_hf_lf_ratio")
+    )
+    report.add_section(temporal)
+
     figures_section = Section("Figures", icon="📈")
     # Only topomaps are shown per-subject (single-value histograms moved to dataset report)
     _add_images(

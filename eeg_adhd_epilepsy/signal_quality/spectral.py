@@ -182,10 +182,19 @@ def compute_aperiodic_slope(
         verbose=False,
         aperiodic_mode="fixed",
     )
-    valid_ch = ~np.isnan(psd[:, mask]).any(axis=1)
+    # Only include channels that are entirely finite and strictly positive in the fitting range.
+    # specparam internally logs power, so zeros/negatives/NaNs will cause errors.
+    is_positive = (psd[:, mask] > EPS).all(axis=1)
+    is_finite = np.isfinite(psd[:, mask]).all(axis=1)
+    valid_ch = is_positive & is_finite
+
     if not np.any(valid_ch):
-        return float("nan"), float("nan"), float("nan"), np.array([])
-    fg.fit(freqs[mask], psd[valid_ch][:, mask], n_jobs=1)
+        return float("nan"), float("nan"), float("nan"), np.full(psd.shape[0], np.nan)
+
+    try:
+        fg.fit(freqs[mask], psd[valid_ch][:, mask], n_jobs=1)
+    except Exception:
+        return float("nan"), float("nan"), float("nan"), np.full(psd.shape[0], np.nan)
     results_df = fg.to_df(0)
     intercepts_valid = results_df["offset"].to_numpy(dtype=float)
     slopes_valid = results_df["exponent"].to_numpy(dtype=float)

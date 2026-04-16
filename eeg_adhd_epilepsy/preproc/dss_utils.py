@@ -17,7 +17,7 @@ from mne_denoise.dss import (
     QuasiPeriodicDenoiser,
 )
 
-import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
+import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
 from . import thresholds
 
 

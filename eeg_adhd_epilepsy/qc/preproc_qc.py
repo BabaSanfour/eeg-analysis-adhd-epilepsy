@@ -432,7 +432,7 @@ def build_preproc_qc_run_record(
     run_metrics["qc_flag"] = qc_flag
     run_metrics["qc_flag_reasons"] = ";".join(qc_reasons)
 
-    segment_comparison = _compute_post_clean_segment_metrics(
+    segment_comparison, segments_df = _compute_post_clean_segment_metrics(
         prepared_raw,
         picks=picks,
         reports_root=reports_root,
@@ -443,6 +443,7 @@ def build_preproc_qc_run_record(
         "channel_diagnostics": _build_channel_diagnostics(metrics, channel_names=picks),
         "topomap_aggregates": _build_topomap_aggregates(metrics, channel_names=picks, weight=max(retained_duration_sec, 1.0)),
         "segment_comparison": segment_comparison,
+        "segments_df": segments_df,
     }
 
 
@@ -461,10 +462,10 @@ def _compute_post_clean_segment_metrics(
     function used for the pre-base stage — so pre vs post values are on the same basis
     (full segment window, no BAD sub-interval splitting).
 
-    Returns a DataFrame with one row per segment_type and columns:
-        segment_type, n_segments_pre, n_segments_post, total_duration_post_sec,
-        mean_amplitude_{pre,post}, mean_line_noise_{pre,post}, mean_hf_lf_{pre,post},
-        mean_pct_bad_channels_{pre,post}, mean_aperiodic_slope_{pre,post}.
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: 
+            1. Aggregated Summary: one row per segment_type with mean stats.
+            2. Raw Segments: one row per individual segment with timing and metrics.
     """
     segments_df = bids_io.load_segments_for_raw(raw)
     if segments_df is None or segments_df.empty:
@@ -493,6 +494,8 @@ def _compute_post_clean_segment_metrics(
             continue
         post_rows.append({
             "segment_type": seg_type,
+            "t_start": t_start,
+            "t_stop": t_stop,
             "duration": duration,
             "segment_amplitude_mean_uv": m.get("amplitude_mean_uv"),
             "segment_amplitude_max_uv": m.get("amplitude_max_uv"),
@@ -504,7 +507,7 @@ def _compute_post_clean_segment_metrics(
     post_rows_df = pd.DataFrame(post_rows)
 
     if post_rows_df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
     # Load pre-base segment rows from the raw_qc_segments CSV (written by raw_metrics stage).
     raw_qc_csv = bids_io.get_stage_summary_dir(reports_root, "raw_qc_pre_base", create_dir=False) / "raw_qc_segments.csv"
@@ -560,7 +563,8 @@ def _compute_post_clean_segment_metrics(
         "mean_pct_bad_channels_pre", "mean_pct_bad_channels_post",
         "mean_aperiodic_slope_pre", "mean_aperiodic_slope_post",
     ]
-    return result[[c for c in cols if c in result.columns]].sort_values("segment_type").reset_index(drop=True)
+    summary_df = result[[c for c in cols if c in result.columns]].sort_values("segment_type").reset_index(drop=True)
+    return summary_df, post_rows_df
 
 
 
@@ -597,7 +601,7 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
     ).fillna(0.0)
     total_weight = float(weights.sum())
 
-    aggregate = {key: value for key, value in first.items() if key not in {"topomap_aggregates", "channel_diagnostics", "segment_comparison"}}
+    aggregate = {key: value for key, value in first.items() if key not in {"topomap_aggregates", "channel_diagnostics", "segment_comparison", "segments_df"}}
     aggregate["n_runs"] = len(records)
     aggregate["retained_duration_sec"] = float(sum(float(record.get("retained_duration_sec", 0.0) or 0.0) for record in records))
     aggregate["usable_condition_coverage_sec"] = float(sum(float(record.get("usable_condition_coverage_sec", 0.0) or 0.0) for record in records))
@@ -641,6 +645,11 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
         )
     else:
         aggregate["segment_comparison"] = pd.DataFrame()
+
+    # Combine individual segments for temporal plotting (concatenation is fine here)
+    seg_dfs = [r.get("segments_df") for r in records if isinstance(r.get("segments_df"), pd.DataFrame) and not r["segments_df"].empty]
+    aggregate["segments_df"] = pd.concat(seg_dfs, ignore_index=True) if seg_dfs else pd.DataFrame()
+
     return aggregate
 
 
@@ -667,6 +676,7 @@ def write_subject_preproc_qc_report(
     figure_paths = viz_preproc_qc.save_subject_preproc_qc_figures(
         record=aggregate,
         topomap_aggregates=aggregate.get("topomap_aggregates"),
+        segments_df=aggregate.get("segments_df"),
         output_dir=figures_dir,
     )
 

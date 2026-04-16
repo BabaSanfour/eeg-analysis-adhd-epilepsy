@@ -138,6 +138,52 @@ Like `to_bids.py`, use `--overwrite` to force reprocessing of files that have al
 - `eeg_adhd_epilepsy/reports/preproc_qc.py` is responsible for building the semantic blocks of the post-clean HTML reports, defining tables that compare retention metrics, residual artifact burdens, and Raw vs Cleaned signal quality summaries.
 - `eeg_adhd_epilepsy/viz/preproc_qc.py` composites the comparative visual artifacts (grouped histograms, distribution tables, side-by-side Topomaps) that populate the HTML reports.
 
+## Epoch Generation Workflow
+
+Once continuous files are cleaned, the signals must be chunked into uniform epochs bounded to specific functional blocks (conditions). This is dynamically orchestrated by `epochs.py`. 
+
+The script slices the `_desc-base_eeg.fif` files according to embedded condition annotations (e.g., `PHOTO_EC`, `EC_baseline`) and seamlessly outputs separated BIDS-nested derivative components.
+
+Run with:
+
+```bash
+.venv/bin/python -m eeg_adhd_epilepsy.preproc.epochs \
+  --bids_root /path/to/BIDS \
+  --segment_duration 10.0 \
+  --ignore_annotations
+```
+
+### Outputs
+- Condition-specific chunked subsets organically placed alongside continuous parents:
+  - `BIDS/derivatives/preproc/sub-XXXX/ses-XX/eeg/sub-XXXX_ses-XX_task-<condition>_run-XX_desc-base_epo.fif`
+
+## Descriptor Extraction Workflow
+
+With data epoched, `extract_descriptors.py` internally tracks the hierarchical `sub-XXXX/ses-XX/eeg` structure natively mapped by `coco-pipe`, computing high-dimensional feature banks with `coco-pipe.descriptors`. 
+
+This pipeline strictly reads the configuration matrix from `configs/descriptors.yaml`, calculating three comprehensive families of signal characteristics:
+1. **Spectral Bands:** Broad/narrowband absolute, relative, and log power distributions via Welch's PSD.
+2. **Parametric Modeling:** Aperiodic and periodic isolation via SpecParam (formerly FOOOF).
+3. **Complexity & Entropy:** Multi-dimensional non-linear dynamics including Permutation Entropy, Lempel-Ziv complexity, and Petrosian/Higuchi fractal dimensions.
+
+Additionally, the pipeline aggregates spatial dimensions using region-based channel pooling mapped in the configuration. The extracted features are then robustly joined with clinical targets from `patients_metadata_clean.csv`.
+
+Run with:
+
+```bash
+.venv/bin/python -m eeg_adhd_epilepsy.analysis.extract_descriptors \
+  --bids_root /path/to/BIDS \
+  --metadata /path/to/patients_metadata_clean.csv \
+  --config configs/descriptors.yaml \
+  --subject_col study_id \
+  --target_col adhd \
+  --conditions all
+```
+
+### Outputs
+- Compiled descriptor shards strictly deposited in:
+  - `BIDS/derivatives/signal_features/descriptors/sub-XXXX/ses-XX/eeg/*_desc-descriptors_eeg.parquet`
+
 ## Installation
 
 Python `3.10+` is required.

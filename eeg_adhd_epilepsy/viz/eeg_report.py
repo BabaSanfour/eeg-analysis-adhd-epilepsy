@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
+from eeg_adhd_epilepsy.viz import utils
 
 matplotlib.use("Agg")
 
@@ -37,13 +38,6 @@ FIGURE_FILENAMES = {
 CONDITION_EVENT_LABELS = ("Eyes Open", "Eyes Closed", "HV Start", "HV End", "Post-HV", "Photo")
 
 
-def _save_fig(fig: plt.Figure, out_path: Path) -> Path:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
-
-
 def plot_total_duration_by_segment(df: pd.DataFrame, fig_dir: Path) -> Path | None:
     group = df.groupby("segment_type", dropna=False)["duration"].sum().sort_values(ascending=True)
     if group.empty:
@@ -58,7 +52,7 @@ def plot_total_duration_by_segment(df: pd.DataFrame, fig_dir: Path) -> Path | No
     ax.set_title("Total Duration by Segment Type")
     ax.grid(True, axis="x", alpha=0.2)
     plt.tight_layout()
-    return _save_fig(fig, fig_dir / FIGURE_FILENAMES["segment_duration"])
+    return utils.save_fig(fig, fig_dir / FIGURE_FILENAMES["segment_duration"])
 
 
 def plot_eye_state_breakdown(df: pd.DataFrame, fig_dir: Path) -> Path | None:
@@ -81,7 +75,7 @@ def plot_eye_state_breakdown(df: pd.DataFrame, fig_dir: Path) -> Path | None:
     ax.legend()
     ax.grid(True, axis="x", alpha=0.2)
     plt.tight_layout()
-    return _save_fig(fig, fig_dir / FIGURE_FILENAMES["eye_state_breakdown"])
+    return utils.save_fig(fig, fig_dir / FIGURE_FILENAMES["eye_state_breakdown"])
 
 
 def plot_photo_frequency_durations(df: pd.DataFrame, fig_dir: Path) -> Path | None:
@@ -100,7 +94,7 @@ def plot_photo_frequency_durations(df: pd.DataFrame, fig_dir: Path) -> Path | No
     ax.set_xticks(freqs)
     ax.grid(True, axis="y", alpha=0.2)
     plt.tight_layout()
-    return _save_fig(fig, fig_dir / FIGURE_FILENAMES["photo_frequency"])
+    return utils.save_fig(fig, fig_dir / FIGURE_FILENAMES["photo_frequency"])
 
 
 def plot_block_eye_states(df: pd.DataFrame, block_type: str, fig_dir: Path) -> Path | None:
@@ -150,7 +144,7 @@ def plot_block_eye_states(df: pd.DataFrame, block_type: str, fig_dir: Path) -> P
     ax.grid(True, axis="x", alpha=0.2)
     plt.tight_layout()
     key = "hv_blocks" if block_type == "HV" else "post_hv_blocks"
-    return _save_fig(fig, fig_dir / FIGURE_FILENAMES[key])
+    return utils.save_fig(fig, fig_dir / FIGURE_FILENAMES[key])
 
 
 def plot_segment_timeline(df: pd.DataFrame, fig_dir: Path) -> Path | None:
@@ -185,7 +179,7 @@ def plot_segment_timeline(df: pd.DataFrame, fig_dir: Path) -> Path | None:
         ax.set_title("Condition Timeline")
         ax.grid(True, axis="x", alpha=0.2)
         plt.tight_layout()
-        return _save_fig(fig, fig_dir / FIGURE_FILENAMES["timeline"])
+        return utils.save_fig(fig, fig_dir / FIGURE_FILENAMES["timeline"])
 
     fig, axes = plt.subplots(
         len(run_ids),
@@ -212,7 +206,7 @@ def plot_segment_timeline(df: pd.DataFrame, fig_dir: Path) -> Path | None:
     axes[0].set_yticks(list(type_to_y.values()))
     axes[0].set_yticklabels(segment_types)
     plt.tight_layout()
-    return _save_fig(fig, fig_dir / FIGURE_FILENAMES["timeline"])
+    return utils.save_fig(fig, fig_dir / FIGURE_FILENAMES["timeline"])
 
 
 def save_eeg_report_figures(df: pd.DataFrame, fig_dir: Path) -> Dict[str, Path]:
@@ -251,7 +245,7 @@ def _plot_bar(values: pd.Series, title: str, xlabel: str, ylabel: str, out_path:
     ax.set_ylabel(ylabel)
     ax.grid(True, axis="x", alpha=0.2)
     plt.tight_layout()
-    return _save_fig(fig, out_path)
+    return utils.save_fig(fig, out_path)
 
 
 def plot_runs_per_subject(runs_df: pd.DataFrame, output_dir: Path) -> Path | None:
@@ -284,7 +278,7 @@ def plot_recording_start_hour_distribution(runs_df: pd.DataFrame, output_dir: Pa
     ax.set_xticks(positions)
     ax.grid(True, axis="y", alpha=0.2)
     plt.tight_layout()
-    return _save_fig(fig, output_dir / FIGURE_FILENAMES["recording_start_hour_distribution"])
+    return utils.save_fig(fig, output_dir / FIGURE_FILENAMES["recording_start_hour_distribution"])
 
 
 def plot_run_duration_distribution(runs_df: pd.DataFrame, output_dir: Path) -> Path | None:
@@ -306,7 +300,7 @@ def plot_run_duration_distribution(runs_df: pd.DataFrame, output_dir: Path) -> P
     ax.set_xticks(positions)
     ax.set_xticklabels(labels, rotation=35, ha="right")
     plt.tight_layout()
-    return _save_fig(fig, output_dir / FIGURE_FILENAMES["run_duration_distribution"])
+    return utils.save_fig(fig, output_dir / FIGURE_FILENAMES["run_duration_distribution"])
 
 
 def _plot_condition_availability_by_group(runs_df: pd.DataFrame, group_col: str, output_dir: Path, out_key: str) -> Path | None:
@@ -330,7 +324,7 @@ def _plot_condition_availability_by_group(runs_df: pd.DataFrame, group_col: str,
     ax.legend(loc="lower right")
     ax.grid(True, axis="x", alpha=0.2)
     plt.tight_layout()
-    return _save_fig(fig, output_dir / FIGURE_FILENAMES[out_key])
+    return utils.save_fig(fig, output_dir / FIGURE_FILENAMES[out_key])
 
 
 def _plot_duration_by_group(runs_df: pd.DataFrame, group_col: str, output_dir: Path, out_key: str) -> Path | None:
@@ -352,7 +346,7 @@ def _plot_duration_by_group(runs_df: pd.DataFrame, group_col: str, output_dir: P
     ax.legend(["Mean Raw Duration", "Mean Analysis Duration"], loc="lower right")
     ax.grid(True, axis="x", alpha=0.2)
     plt.tight_layout()
-    return _save_fig(fig, output_dir / FIGURE_FILENAMES[out_key])
+    return utils.save_fig(fig, output_dir / FIGURE_FILENAMES[out_key])
 
 
 def _plot_event_distribution_matrix(event_counts_map: Mapping[str, np.ndarray], title: str, xlabel: str, out_path: Path) -> Path | None:
@@ -379,7 +373,7 @@ def _plot_event_distribution_matrix(event_counts_map: Mapping[str, np.ndarray], 
         extra_ax.axis("off")
     fig.suptitle(title, fontsize=14)
     fig.tight_layout(rect=[0, 0, 1, 0.97])
-    return _save_fig(fig, out_path)
+    return utils.save_fig(fig, out_path)
 
 
 def save_dataset_event_distributions(event_counts_list: List[Dict[str, int]], output_dir: Path) -> Dict[str, Path]:

@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-import eeg_adhd_epilepsy.viz.clean_qc as viz_qc
+from eeg_adhd_epilepsy.viz import topo, utils, qc_plots
 
 matplotlib.use("Agg")
 
@@ -57,11 +57,7 @@ TOPOMAP_SPECS = (
 )
 
 
-def _save_fig(fig: plt.Figure, out_path: Path) -> Path:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
-    return out_path
+
 
 
 def _plot_histogram(
@@ -81,7 +77,7 @@ def _plot_histogram(
     ax.set_ylabel("Runs")
     ax.grid(True, axis="y", alpha=0.2)
     plt.tight_layout()
-    return _save_fig(fig, out_path)
+    return utils.save_fig(fig, out_path)
 
 
 def _plot_flag_status_distribution(runs_df: pd.DataFrame, output_dir: Path) -> Path | None:
@@ -102,7 +98,7 @@ def _plot_flag_status_distribution(runs_df: pd.DataFrame, output_dir: Path) -> P
     ax.set_ylabel("Runs")
     ax.grid(True, axis="y", alpha=0.2)
     plt.tight_layout()
-    return _save_fig(fig, output_dir / FIGURE_FILENAMES["flag_status"])
+    return utils.save_fig(fig, output_dir / FIGURE_FILENAMES["flag_status"])
 
 
 def _plot_flag_reason_counts(runs_df: pd.DataFrame, output_dir: Path) -> Path | None:
@@ -126,7 +122,7 @@ def _plot_flag_reason_counts(runs_df: pd.DataFrame, output_dir: Path) -> Path | 
     ax.set_xlabel("Runs")
     ax.grid(True, axis="x", alpha=0.2)
     plt.tight_layout()
-    return _save_fig(fig, output_dir / FIGURE_FILENAMES["flag_reasons"])
+    return utils.save_fig(fig, output_dir / FIGURE_FILENAMES["flag_reasons"])
 
 
 def _save_topomap_figures(
@@ -141,7 +137,7 @@ def _save_topomap_figures(
         if not payload:
             continue
         channels, values = payload
-        fig = viz_qc.plot_topomap_from_channel_values(
+        fig = topo.plot_topomap_from_channel_values(
             channels,
             values,
             title=title,
@@ -151,7 +147,7 @@ def _save_topomap_figures(
         if fig is None:
             continue
         out_path = output_dir / FIGURE_FILENAMES[f"{metric_key}_topomap"]
-        paths[f"{metric_key}_topomap"] = _save_fig(fig, out_path)
+        paths[f"{metric_key}_topomap"] = utils.save_fig(fig, out_path)
     return paths
 
 
@@ -160,7 +156,7 @@ def _save_segment_figures(segment_df: pd.DataFrame, output_dir: Path) -> Dict[st
         return {}
     paths: Dict[str, Path] = {}
     for column, title, xlabel in SEGMENT_METRIC_SPECS:
-        path = viz_qc.plot_segment_metric_distribution_by_type(
+        path = qc_plots.plot_segment_metric_distribution_by_type(
             segment_df,
             column=column,
             title=title,

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from eeg_adhd_epilepsy.viz import utils
 import seaborn as sns
 
 from eeg_adhd_epilepsy.utils.metadata_schema import (
@@ -16,14 +17,6 @@ from eeg_adhd_epilepsy.utils.metadata_schema import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _save_fig(fig: plt.Figure, out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=300, bbox_inches="tight")
-    plt.close(fig)
-    logger.info("Saved figure: %s", out_path)
 
 
 def _sorted_age_groups(series: pd.Series) -> list[str]:
@@ -61,7 +54,7 @@ def plot_eeg_date_distribution(df: pd.DataFrame, out_path: Path) -> None:
     ax.set_ylabel("Recordings")
     ax.legend(title="Source Dataset")
     sns.despine()
-    _save_fig(fig, out_path)
+    utils.save_fig(fig, out_path, dpi=300)
 
 
 def plot_source_dataset_counts(df: pd.DataFrame, out_path: Path) -> None:
@@ -89,7 +82,7 @@ def plot_source_dataset_counts(df: pd.DataFrame, out_path: Path) -> None:
             textcoords="offset points",
         )
     sns.despine()
-    _save_fig(fig, out_path)
+    utils.save_fig(fig, out_path, dpi=300)
 
 
 def plot_diagnosis_prevalence(df: pd.DataFrame, out_path: Path) -> None:
@@ -134,7 +127,7 @@ def plot_diagnosis_prevalence(df: pd.DataFrame, out_path: Path) -> None:
             textcoords="offset points",
         )
     sns.despine()
-    _save_fig(fig, out_path)
+    utils.save_fig(fig, out_path, dpi=300)
 
 
 def plot_combined_diagnosis_counts(df: pd.DataFrame, out_path: Path) -> None:
@@ -160,7 +153,7 @@ def plot_combined_diagnosis_counts(df: pd.DataFrame, out_path: Path) -> None:
     ax.set_ylabel("Rows")
     ax.tick_params(axis="x", rotation=35)
     sns.despine()
-    _save_fig(fig, out_path)
+    utils.save_fig(fig, out_path, dpi=300)
 
 
 def plot_sex_age_heatmap(df: pd.DataFrame, out_path: Path) -> None:
@@ -184,7 +177,7 @@ def plot_sex_age_heatmap(df: pd.DataFrame, out_path: Path) -> None:
     ax.set_title("Sex by Age Group")
     ax.set_xlabel("Age Group")
     ax.set_ylabel("Sex")
-    _save_fig(fig, out_path)
+    utils.save_fig(fig, out_path, dpi=300)
 
 
 def plot_age_by_diagnosis(df: pd.DataFrame, out_path: Path) -> None:
@@ -207,7 +200,7 @@ def plot_age_by_diagnosis(df: pd.DataFrame, out_path: Path) -> None:
     ax.set_ylabel("Age (Years)")
     ax.tick_params(axis="x", rotation=35)
     sns.despine()
-    _save_fig(fig, out_path)
+    utils.save_fig(fig, out_path, dpi=300)
 
 
 def plot_psychostimulant_category_counts(df: pd.DataFrame, out_path: Path) -> None:
@@ -234,7 +227,7 @@ def plot_psychostimulant_category_counts(df: pd.DataFrame, out_path: Path) -> No
     ax.set_ylabel("Rows")
     ax.tick_params(axis="x", rotation=35)
     sns.despine()
-    _save_fig(fig, out_path)
+    utils.save_fig(fig, out_path, dpi=300)
 
 
 def plot_asm_exposure_counts(df: pd.DataFrame, out_path: Path) -> None:
@@ -258,7 +251,7 @@ def plot_asm_exposure_counts(df: pd.DataFrame, out_path: Path) -> None:
     ax.set_ylabel("Rows")
     ax.tick_params(axis="x", rotation=35)
     sns.despine()
-    _save_fig(fig, out_path)
+    utils.save_fig(fig, out_path, dpi=300)
 
 
 def plot_medication_overlap(df: pd.DataFrame, out_path: Path) -> None:
@@ -272,7 +265,7 @@ def plot_medication_overlap(df: pd.DataFrame, out_path: Path) -> None:
     ax.set_ylabel("ASM")
     ax.set_xticklabels(["0", "1"])
     ax.set_yticklabels(["0", "1"], rotation=0)
-    _save_fig(fig, out_path)
+    utils.save_fig(fig, out_path, dpi=300)
 
 
 def plot_drug_resistance_summary(df: pd.DataFrame, out_path: Path) -> None:
@@ -305,4 +298,4 @@ def plot_drug_resistance_summary(df: pd.DataFrame, out_path: Path) -> None:
     axes[1].set_ylabel("Rows")
     axes[1].legend(title="ASM Resistant")
     sns.despine()
-    _save_fig(fig, out_path)
+    utils.save_fig(fig, out_path, dpi=300)
