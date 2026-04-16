@@ -299,6 +299,18 @@ def generate_subject_report(
     )
     report.add_section(overview)
 
+    # 1b. Pipeline Warnings
+    warnings_raw = str(record.get("pipeline_warnings", "")).strip()
+    if warnings_raw:
+        formatted_warnings = "- " + warnings_raw.replace("; ", "\n- ")
+        warn_section = Section("Pipeline Warnings", icon="⚠️")
+        warn_section.add_markdown(
+            "The following non-fatal issues were encountered during processing. Specific pipeline steps "
+            "may have been skipped to ensure the rest of the subject run could complete:\n\n"
+            f"{formatted_warnings}"
+        )
+        report.add_section(warn_section)
+
     if previous_stage_label != raw_reference_label:
         effect_prev = Section("Effect Vs Previous Stage", icon="↔️")
         _add_optional_table(effect_prev, build_delta_table(record, suffix="prev", reference_label=previous_stage_label), "Primary Deltas")

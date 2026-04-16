@@ -309,6 +309,7 @@ def run_base_pipeline(
         "subject_id": subject_id,
         "config": config,
         "steps_completed": [],
+        "pipeline_warnings": [],
         "bad_channels_global": [],
         "artifact_stats": {},
         "block_stats": [],
@@ -376,7 +377,10 @@ def run_base_pipeline(
 
     # 5. Global Bad Channel Detection
     with benchmark_step("detect_global_bads", provenance):
-        provenance["bad_channels_global"] = detect_global_bads_ransac(raw, config)
+        bads, ransac_warning = detect_global_bads_ransac(raw, config, record_label=record_label)
+        provenance["bad_channels_global"] = bads
+        if ransac_warning:
+            provenance["pipeline_warnings"].append(ransac_warning)
         provenance["steps_completed"].append("detect_global_bads")
 
     LOGGER.info(f"Global bad channels ({len(raw.info['bads'])}): {raw.info['bads']}")
@@ -485,24 +489,29 @@ def run_base_pipeline(
 
 
 def detect_global_bads_ransac(
-    raw: mne.io.BaseRaw, config: PreprocConfig
-) -> List[str]:
+    raw: mne.io.BaseRaw, 
+    config: PreprocConfig,
+    record_label: str = "run"
+) -> Tuple[List[str], Optional[str]]:
     """Detect global bad EEG channels with RANSAC, biased toward rest blocks.
 
     Uses a subset of data (rest blocks) to speed up RANSAC and focus on
     intrinsic channel quality rather than task-related artifacts.
 
     Args:
-        raw: The raw data object (will be modified in-place to update info['bads']).
+        raw: Input raw data.
         config: Preprocessing configuration.
+        record_label: Label for logging.
 
     Returns:
-        List of newly detected bad channel names.
+        tuple[List[str], str | None]: 
+            1. List of newly detected bad channel names.
+            2. Warning message if RANSAC was skipped/failed.
     """
     eeg_picks = mne.pick_types(raw.info, eeg=True, exclude=[])
     if len(eeg_picks) == 0:
         LOGGER.warning("No EEG channels available for RANSAC bad channel detection.")
-        return []
+        return [], "No EEG channels available for RANSAC bad channel detection."
 
     eeg_ch_names = [raw.ch_names[idx] for idx in eeg_picks]
     eeg_raw = raw.copy().pick(eeg_ch_names)
@@ -530,8 +539,14 @@ def detect_global_bads_ransac(
     LOGGER.info(f"Running RANSAC on {duration_s:.1f}s of EEG data...")
 
     nc = NoisyChannels(raw_for_ransac, random_state=42)
-    nc.find_bad_by_ransac()
-    bads = nc.get_bads(verbose=False) or []
+    try:
+        nc.find_bad_by_ransac()
+        bads = nc.get_bads(verbose=False) or []
+    except (ValueError, OSError) as exc:
+        msg = f"RANSAC bad channel detection skipped: {exc}"
+        LOGGER.warning(msg)
+        return [], msg
+
     bads = sorted(ch for ch in bads if ch in raw.ch_names)
 
     # Update raw.info['bads']
@@ -539,7 +554,7 @@ def detect_global_bads_ransac(
     new_bads = current_bads.union(bads)
     raw.info["bads"] = sorted(new_bads)
 
-    return bads
+    return bads, None
 
 
 def annotate_artifacts_blockwise(
@@ -703,6 +718,7 @@ def run_base_record(
     """Process one BIDS run through the base stage and build the shared QC record."""
     result: dict[str, object] = {
         "success": False,
+        "skipped": False,
         "subject_id": bids.normalize_subject_id(subject_id),
         "qc_record": None,
         "error": "",
@@ -746,6 +762,7 @@ def run_base_record(
             current_filepath=output_path,
             output_desc="base",
             raw_lookup=raw_lookup,
+            pipeline_warnings=_provenance.get("pipeline_warnings", []),
         )
         result["success"] = True
         return result
@@ -803,10 +820,15 @@ def main():
     qc_run_records: list[dict[str, object]] = []
     qc_subject_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     subject_status: Dict[str, bool] = {}
+    subject_skipped: Dict[str, bool] = {} # Tracks if ALL runs for a subject were skipped
 
     def consume_result(result: dict[str, object], *, subject_id: str) -> None:
         ok = bool(result.get("success"))
+        skipped = bool(result.get("skipped", False))
+        
         subject_status[subject_id] = subject_status.get(subject_id, True) and ok
+        # Subject is considered skipped only if ALL its runs consumed so far are skipped
+        subject_skipped[subject_id] = subject_skipped.get(subject_id, True) and skipped
         if not ok:
             return
         record = result.get("qc_record")
@@ -848,6 +870,7 @@ def main():
                 existing_results.append(
                     {
                         "success": True,
+                        "skipped": True,
                         "subject_id": sid,
                         "qc_record": preproc_qc.collect_existing_preproc_qc_record(
                             profile=preproc_qc.get_preproc_qc_profile("base"),
@@ -863,7 +886,7 @@ def main():
             except Exception as exc:
                 LOGGER.error("Failed rebuilding existing base QC record for %s (%s): %s", sid, fpath.name, exc, exc_info=True)
                 existing_results.append(
-                    {"success": False, "subject_id": sid, "qc_record": None, "error": str(exc)}
+                    {"success": False, "skipped": False, "subject_id": sid, "qc_record": None, "error": str(exc)}
                 )
                 consume_result(existing_results[-1], subject_id=sid)
         if existing_runs:
@@ -983,14 +1006,21 @@ def main():
             )
             consume_result(res, subject_id=bids.parse_subject_id(f))
 
-    success_ids = sorted([sid for sid, ok in subject_status.items() if ok])
+    success_ids = sorted([sid for sid, ok in subject_status.items() if ok and not subject_skipped.get(sid, False)])
+    skipped_ids = sorted([sid for sid, ok in subject_status.items() if ok and subject_skipped.get(sid, False)])
     failed_ids = sorted([sid for sid, ok in subject_status.items() if not ok])
+    
     success_count = len(success_ids)
+    skipped_count = len(skipped_ids)
     fail_count = len(failed_ids)
-            
-    LOGGER.info(f"Batch processing complete. Success: {success_count}, Failed: {fail_count}")
-    LOGGER.info(f"Succeeded subjects: {success_ids}")
-    LOGGER.info(f"Failed subjects: {failed_ids}")
+
+    LOGGER.info(f"Batch processing complete. Success: {success_count}, Skipped: {skipped_count}, Failed: {fail_count}")
+    if success_ids:
+        LOGGER.info(f"Succeeded subjects: {success_ids}")
+    if skipped_ids:
+        LOGGER.info(f"Skipped (already processed) subjects: {skipped_ids}")
+    if failed_ids:
+        LOGGER.info(f"Failed subjects: {failed_ids}")
     
     LOGGER.info("Generating shared base QC dataset report...")
     preproc_qc.write_preproc_qc_aggregate_reports(

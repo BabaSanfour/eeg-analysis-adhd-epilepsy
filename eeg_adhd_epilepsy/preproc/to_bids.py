@@ -722,35 +722,42 @@ def process_record(
         session="01",
         task="clinical",
         run=run,
+        datatype="eeg",
         suffix="eeg",
         extension=".vhdr",
     )
     result = {
         "study_id": study_id,
         "success": False,
+        "skipped": False,
         "eeg_report_record": None,
         "raw_qc_record": None,
     }
 
     if not overwrite and bids_path.fpath.exists():
         LOGGER.info("Skipping %s run-%s (exists)", subject_id, run)
-        if eeg_reports_dir is not None:
-            result["eeg_report_record"] = _collect_existing_eeg_report_record(
-                bids_path=bids_path,
-                bids_root=bids_root,
-                record=record,
-                metadata=metadata,
-            )
-            if result["eeg_report_record"] is None:
-                return result
-        if raw_qc_reports_dir is not None:
-            result["raw_qc_record"] = qc_raw.collect_existing_raw_qc_record(
-                bids_path=bids_path,
-                bids_root=bids_root,
-                metadata=metadata,
-                analysis_level=raw_qc_analysis_level,
-            )
+        result["skipped"] = True
         result["success"] = True
+        if eeg_reports_dir is not None:
+            try:
+                result["eeg_report_record"] = _collect_existing_eeg_report_record(
+                    bids_path=bids_path,
+                    bids_root=bids_root,
+                    record=record,
+                    metadata=metadata,
+                )
+            except Exception as exc:
+                LOGGER.warning("Could not gather existing EEG report record for %s: %s", subject_id, exc)
+        if raw_qc_reports_dir is not None:
+            try:
+                result["raw_qc_record"] = qc_raw.collect_existing_raw_qc_record(
+                    bids_path=bids_path,
+                    bids_root=bids_root,
+                    metadata=metadata,
+                    analysis_level=raw_qc_analysis_level,
+                )
+            except Exception as exc:
+                LOGGER.warning("Could not gather existing raw QC record for %s: %s", subject_id, exc)
         return result
 
     try:
@@ -837,9 +844,9 @@ def process_record(
 def _consume_record_result(
     record: dict[str, object],
     record_result: dict[str, object],
-    *,
     failed_ids: set[int],
     successful_ids: set[int],
+    skipped_ids: set[int],
     eeg_run_records: list[dict[str, object]],
     raw_qc_run_records: list[dict[str, object]],
 ) -> None:
@@ -848,7 +855,10 @@ def _consume_record_result(
         failed_ids.add(study_id)
         return
 
-    successful_ids.add(study_id)
+    if record_result.get("skipped"):
+        skipped_ids.add(study_id)
+    else:
+        successful_ids.add(study_id)
     if record_result["eeg_report_record"] is not None:
         eeg_run_records.append(record_result["eeg_report_record"])
     if record_result["raw_qc_record"] is not None:
@@ -971,6 +981,7 @@ def main() -> None:
 
     failed_ids: set[int] = set()
     successful_ids: set[int] = set()
+    skipped_ids: set[int] = set()
     eeg_run_records: list[dict[str, object]] = []
     raw_qc_run_records: list[dict[str, object]] = []
     selected_records = inventory_df.loc[inventory_df["run"].notna()].to_dict("records")
@@ -992,6 +1003,7 @@ def main() -> None:
                 record_result,
                 failed_ids=failed_ids,
                 successful_ids=successful_ids,
+                skipped_ids=skipped_ids,
                 eeg_run_records=eeg_run_records,
                 raw_qc_run_records=raw_qc_run_records,
             )
@@ -1030,8 +1042,13 @@ def main() -> None:
 
     if failed_ids:
         LOGGER.warning("Failed study_ids: %s", sorted(failed_ids))
-    else:
-        LOGGER.info("All selected recordings converted successfully.")
+    if skipped_ids:
+        LOGGER.info("Skipped (already converted) study_ids: %s", sorted(skipped_ids))
+    
+    if successful_ids:
+        LOGGER.info("Successfully converted study_ids: %s", sorted(successful_ids))
+    elif not failed_ids:
+        LOGGER.info("No new recordings needed conversion.")
 
     if successful_ids:
         converted_meta = metadata_df[metadata_df["study_id"].isin(sorted(successful_ids))].copy()

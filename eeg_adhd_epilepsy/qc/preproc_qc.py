@@ -342,6 +342,7 @@ def build_preproc_qc_run_record(
     previous_output_desc: str | None = None,
     raw_lookup: Mapping[str, Mapping[str, object]] | None = None,
     previous_lookup: Mapping[str, Mapping[str, object]] | None = None,
+    pipeline_warnings: Sequence[str] | None = None,
 ) -> dict[str, object]:
     ids = bids_io.build_bids_report_ids(current_filepath)
     prepared_raw, picks = _prepare_signal(current_raw)
@@ -431,6 +432,11 @@ def build_preproc_qc_run_record(
     qc_flag, qc_reasons = _evaluate_preproc_qc_flag(run_metrics)
     run_metrics["qc_flag"] = qc_flag
     run_metrics["qc_flag_reasons"] = ";".join(qc_reasons)
+    
+    warnings = list(pipeline_warnings or [])
+    if pd.isna(metrics.get("aperiodic_slope")):
+        warnings.append("Spectral slope fitting skipped (insufficient clean/finite data).")
+    run_metrics["pipeline_warnings"] = "; ".join(warnings)
 
     segment_comparison, segments_df = _compute_post_clean_segment_metrics(
         prepared_raw,
@@ -588,6 +594,7 @@ def collect_existing_preproc_qc_record(
         previous_output_desc=previous_output_desc,
         raw_lookup=raw_lookup,
         previous_lookup=previous_lookup,
+        pipeline_warnings=None,
     )
 
 
