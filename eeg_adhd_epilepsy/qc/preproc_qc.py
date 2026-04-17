@@ -475,7 +475,7 @@ def _compute_post_clean_segment_metrics(
     """
     segments_df = bids_io.load_segments_for_raw(raw)
     if segments_df is None or segments_df.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
 
     post_rows: list[dict[str, object]] = []
     for row in segments_df.itertuples(index=False):
