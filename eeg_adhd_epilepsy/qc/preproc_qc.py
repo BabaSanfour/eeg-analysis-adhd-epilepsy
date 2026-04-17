@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import warnings
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -527,21 +528,21 @@ def _compute_post_clean_segment_metrics(
     else:
         pre_df = pd.DataFrame()
 
-    def _grp_mean(df: pd.DataFrame, col: str) -> pd.Series:
-        if col not in df.columns:
-            return pd.Series(float("nan"), index=df.index if not df.empty else [])
-        return pd.to_numeric(df[col], errors="coerce").groupby(df["segment_type"]).mean()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            return pd.to_numeric(df[col], errors="coerce").groupby(df["segment_type"]).mean()
 
-    # Aggregate post metrics per segment_type
-    post_agg = post_rows_df.groupby("segment_type").agg(
-        n_segments_post=("segment_type", "count"),
-        total_duration_post_sec=("duration", "sum"),
-        mean_amplitude_post=("segment_amplitude_mean_uv", "mean"),
-        mean_line_noise_post=("segment_line_noise_ratio", "mean"),
-        mean_hf_lf_post=("segment_hf_lf_ratio", "mean"),
-        mean_pct_bad_channels_post=("segment_pct_bad_channels", "mean"),
-        mean_aperiodic_slope_post=("segment_aperiodic_slope", "mean"),
-    ).reset_index()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        post_agg = post_rows_df.groupby("segment_type").agg(
+            n_segments_post=("segment_type", "count"),
+            total_duration_post_sec=("duration", "sum"),
+            mean_amplitude_post=("segment_amplitude_mean_uv", "mean"),
+            mean_line_noise_post=("segment_line_noise_ratio", "mean"),
+            mean_hf_lf_post=("segment_hf_lf_ratio", "mean"),
+            mean_pct_bad_channels_post=("segment_pct_bad_channels", "mean"),
+            mean_aperiodic_slope_post=("segment_aperiodic_slope", "mean"),
+        ).reset_index()
 
     if not pre_df.empty and "segment_type" in pre_df.columns:
         pre_agg = pre_df.groupby("segment_type").agg(
@@ -644,12 +645,14 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
     if seg_frames:
         combined = pd.concat(seg_frames, ignore_index=True)
         numeric_cols = [c for c in combined.columns if c != "segment_type"]
-        aggregate["segment_comparison"] = (
-            combined.groupby("segment_type", as_index=False)[numeric_cols]
-            .mean(numeric_only=True)
-            .sort_values("segment_type")
-            .reset_index(drop=True)
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            aggregate["segment_comparison"] = (
+                combined.groupby("segment_type", as_index=False)[numeric_cols]
+                .mean(numeric_only=True)
+                .sort_values("segment_type")
+                .reset_index(drop=True)
+            )
     else:
         aggregate["segment_comparison"] = pd.DataFrame()
 
@@ -766,13 +769,15 @@ def write_preproc_qc_aggregate_reports(
         
         counts = combined_segs.groupby("segment_type").size().reset_index(name="n_usable_runs")
         
-        condition_summary_df = (
-            combined_segs.groupby("segment_type", as_index=False)[numeric_cols]
-            .mean(numeric_only=True)
-            .merge(counts, on="segment_type")
-            .sort_values("segment_type")
-            .reset_index(drop=True)
-        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            condition_summary_df = (
+                combined_segs.groupby("segment_type", as_index=False)[numeric_cols]
+                .mean(numeric_only=True)
+                .merge(counts, on="segment_type")
+                .sort_values("segment_type")
+                .reset_index(drop=True)
+            )
     else:
         condition_summary_df = pd.DataFrame()
 
