@@ -184,6 +184,164 @@ Run with:
 - Compiled descriptor shards strictly deposited in:
   - `BIDS/derivatives/signal_features/descriptors/sub-XXXX/ses-XX/eeg/*_desc-descriptors_eeg.parquet`
 
+## Dimensionality Reduction Workflow
+
+The dimensionality reduction entry point is [eeg_adhd_epilepsy/analysis/dimensionality_reduction.py](eeg_adhd_epilepsy/analysis/dimensionality_reduction.py). It is the main analysis script for exploring low-dimensional structure in:
+
+- raw EEG
+- extracted descriptors
+- saved embeddings when supported by the current config
+
+It builds on `coco-pipe.dim_reduction` and supports multiple analysis styles, post-hoc evaluation targets, and report generation in one run.
+
+Run with:
+
+```bash
+.venv/bin/python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
+  --bids_root /path/to/BIDS \
+  --config /path/to/config.yaml \
+  --metadata /path/to/patients_metadata_clean.csv \
+  --input_mode raw \
+  --analysis_mode flat \
+  --representation subject_flat \
+  --output_group example_group \
+  --n_jobs 4
+```
+
+### Core Concepts
+
+Three arguments define what the script loads and what one “analysis unit” means:
+
+- `--input_mode`
+  - `raw`: load EEG from BIDS or saved derivatives
+  - `descriptors`: load merged descriptor tables
+  - embedding modes remain config-dependent and should be used only when the saved artifacts exist
+- `--analysis_mode`
+  - `flat`: one embedding per condition or pooled dataset
+  - `sensor`: one independent analysis per sensor or channel-group
+  - `family`: one independent analysis per descriptor family
+  - `sensor_within_family`: one independent sensor analysis inside each family
+- `--representation`
+  - `epoch_flat`: keep each epoch/window as one observation
+  - `subject_flat`: average epochs within each subject, then flatten the feature space to `subjects x features`
+  - `subject_native`: keep the native tensor layout after subject averaging; this is mainly used for raw sensor-wise analysis
+
+The most common subject-level raw EEG setup is:
+
+- `--input_mode raw`
+- `--analysis_mode flat`
+- `--representation subject_flat`
+
+This means:
+
+- one row per subject
+- the feature space is the joint `sensor x time` space
+- the reducers operate across subjects on that flattened subject-level representation
+
+For descriptor analyses:
+
+- `flat` compares the full selected descriptor space
+- `sensor` compares sensors or channel-groups against each other
+- `family` compares descriptor families against each other
+- `sensor_within_family` compares sensors inside each requested family
+
+### Evals and Selection
+
+The script separates:
+
+- fit metrics from the reducer itself, such as:
+  - `trustworthiness`
+  - `continuity`
+  - `shepard_correlation`
+- post-hoc evaluation metrics from user-defined eval specs, such as:
+  - logistic-regression balanced accuracy for clinical or demographic targets
+
+Each config can define multiple evals. Typical examples are:
+
+- the main clinical comparison, such as `med_adhd_vs_ctrl`
+- additional control analyses, such as `sex_separation`, `age_separation`, or `condition_separation`
+
+Best-fit selection is driven by:
+
+- `selection_metric`
+- optionally `selection_eval_name`
+
+Use:
+
+- `selection_metric: separation_logreg_balanced_accuracy`
+- `selection_eval_name: <main_eval_name>`
+
+when you want the report to rank fits by separation on one specific analysis target.
+
+The report can still show the additional evals, but the “best” rows and summary choices should usually be tied to one explicit primary eval.
+
+### Reports and Outputs
+
+Outputs are separated by analysis variant. The main derivative root is:
+
+- `BIDS/derivatives/dim_reduction/<output_group>/<dataset_name>/<input_mode>/<analysis_mode>__<representation>/`
+
+This separation is important when you run the same config with:
+
+- different `input_mode`
+- different `analysis_mode`
+- different `representation`
+
+Reports follow the same variant split under:
+
+- `reports/summary/dim_reduction/<output_group>/<dataset_name>/<input_mode>/<analysis_mode>__<representation>_dataset_summary.html`
+
+At the run root, the script writes:
+
+- fit and eval inventories
+- per-fit artifacts
+- the dataset summary report
+- `run_summary.json`
+- one terminal marker:
+  - `_RUN_SUCCESS`
+  - `_RUN_PARTIAL`
+  - `_RUN_FAILED`
+
+This makes it easier to see which variants completed cleanly, which are partial, and which should be rerun.
+
+### Parallelism and Runtime Notes
+
+The script supports outer-task parallelism through `--n_jobs`:
+
+- `1`: fully serial
+- `>1`: use that many outer workers
+- `-1`: use all available CPUs
+
+Parallelism is applied to:
+
+- independent fit tasks
+- independent eval tasks
+
+It does not currently parallelize inner CV folds inside the separation evaluation itself. In practice:
+
+- moderate `n_jobs` values are usually better for eval-heavy runs
+- `-1` can be too aggressive for large sensor analyses with many eval targets
+
+Recommended rule of thumb:
+
+- start with `--n_jobs 4` or `--n_jobs 6`
+- increase only after confirming memory and CPU behavior are acceptable
+
+### Practical Notes
+
+- `subject_flat` averages epochs within subject. Use this when you want one observation per subject.
+- PCA-like reducers are still limited by `min(n_samples, n_features)`, so subject-level runs with small cohorts cannot request very large `n_components`.
+- In raw sensor analyses, topomaps use the standard 10-20 montage and work only when sensor names match valid EEG channel labels.
+- In descriptor sensor analyses, the meaning of “sensor” depends on the input table:
+  - per-channel descriptor tables produce true electrodes like `Fz`
+  - pooled descriptor tables produce grouped regions like `front_left`
+- For any serious comparison study, explicitly set:
+  - `selection_metric`
+  - `selection_eval_name`
+  - `output_group`
+
+This avoids ambiguous report selection and keeps run variants separated on disk.
+
 ## Installation
 
 Python `3.10+` is required.
