@@ -492,6 +492,7 @@ def _build_flat_condition_section(
     eval_frame: pd.DataFrame,
     subjects: Optional[Sequence[str]],
     meta_df: Optional[pd.DataFrame],
+    eval_specs: Sequence[dict[str, Any]],
 ) -> Section:
     container = load_container(args, subjects, meta_df, condition, target_col=None)
     meta_dict = _build_meta_dict(container)
@@ -637,6 +638,12 @@ def _add_unit_summary(
     section: Section,
     unit_runs: pd.DataFrame,
     *,
+    args: Any,
+    eval_specs: Sequence[dict[str, Any]],
+    meta_df: Optional[pd.DataFrame],
+    artifacts: dict[str, Any],
+    output_root: Path,
+    subjects: Optional[Sequence[str]],
     unit_label: str,
     title_prefix: str,
     input_mode: str,
@@ -797,6 +804,7 @@ def _build_nonflat_condition_section(
     metric_columns: Sequence[str],
     subjects: Optional[Sequence[str]],
     meta_df: Optional[pd.DataFrame],
+    eval_specs: Sequence[dict[str, Any]],
 ) -> Section:
     unit_label = "family" if args.analysis_mode == "family" else "sensor"
     family_label = (
@@ -952,6 +960,12 @@ def _build_nonflat_condition_section(
             _add_unit_summary(
                 section,
                 family_runs,
+                args=args,
+                eval_specs=eval_specs,
+                meta_df=meta_df,
+                artifacts=artifacts,
+                output_root=output_root,
+                subjects=subjects,
                 unit_label="sensor",
                 title_prefix=f"{condition} - {family}",
                 input_mode=args.input_mode,
@@ -963,6 +977,12 @@ def _build_nonflat_condition_section(
     _add_unit_summary(
         section,
         merged,
+        args=args,
+        eval_specs=eval_specs,
+        meta_df=meta_df,
+        artifacts=artifacts,
+        output_root=output_root,
+        subjects=subjects,
         unit_label=unit_label,
         title_prefix=condition,
         input_mode=args.input_mode,
@@ -1028,6 +1048,9 @@ def _build_pooled_section(
     pooled_runs: pd.DataFrame,
     pooled_eval_runs: pd.DataFrame,
     metric_columns: Sequence[str],
+    subjects: Optional[Sequence[str]],
+    meta_df: Optional[pd.DataFrame],
+    eval_specs: Sequence[dict[str, Any]],
 ) -> Optional[Section]:
     if pooled_runs.empty:
         return None
@@ -1340,6 +1363,7 @@ def generate_dataset_report(
                     eval_frame[eval_frame["condition"] == condition].copy(),
                     subjects,
                     meta_df,
+                    eval_specs,
                 )
             )
     else:
@@ -1361,6 +1385,7 @@ def generate_dataset_report(
                     metric_columns,
                     subjects,
                     meta_df,
+                    eval_specs,
                 )
             )
 
@@ -1379,6 +1404,9 @@ def generate_dataset_report(
                 & (eval_frame["condition"] == pooled_condition)
             ].copy(),
             metric_columns,
+            subjects,
+            meta_df,
+            eval_specs,
         )
         if pooled_section is not None:
             report.add_section(pooled_section)
