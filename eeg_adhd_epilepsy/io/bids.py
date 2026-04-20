@@ -634,7 +634,7 @@ def load_eeg_data(
     use_derivatives: bool = False,
     subjects: Optional[List[str]] = None,
     task: str = "clinical",
-    session: str = "01",
+    session: Optional[str | List[str]] = None,
     segment_duration: float = 10.0,
     overlap: float = 0.0,
     metadata_df: Optional[pd.DataFrame] = None,

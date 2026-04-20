@@ -12,7 +12,7 @@ from typing import Any
 import pandas as pd
 import yaml
 
-from eeg_adhd_epilepsy.io.csv import load as load_csv
+from eeg_adhd_epilepsy.io.table import load
 from eeg_adhd_epilepsy.reports.cohort_report import generate_cohort_report
 from eeg_adhd_epilepsy.utils.analysis_opportunities_schema import (
     CONSTRAINT_RULES,
@@ -1246,7 +1246,7 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Loading clean metadata from %s", args.metadata_csv)
-    metadata_df = load_csv(str(args.metadata_csv), sep=None)
+    metadata_df = load(str(args.metadata_csv), sep=None)
     cohort_df = _apply_row_filter(metadata_df, cohort_config["row_filter"])
     logger.info("Cohort '%s' contains %d rows", cohort_config["name"], len(cohort_df))
 

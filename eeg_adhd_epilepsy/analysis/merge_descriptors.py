@@ -11,12 +11,36 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
-from eeg_adhd_epilepsy.analysis.utils import (
-    required_descriptor_files,
-    save_table,
-)
+from eeg_adhd_epilepsy.io.table import save
 
 LOGGER = logging.getLogger(__name__)
+
+_SENSOR_DESCRIPTOR_FILES = (
+    "_SUCCESS",
+    "sensor_descriptor_bundle.npz",
+    "sensor_epoch_features.csv",
+    "sensor_epoch_features.parquet",
+    "sensor_epoch_features_feature_columns.json",
+    "sensor_subject_features.csv",
+    "sensor_subject_features.parquet",
+    "sensor_subject_features_feature_columns.json",
+    "failures.csv",
+)
+
+_POOLED_DESCRIPTOR_FILES = (
+    "pooled_epoch_features.csv",
+    "pooled_epoch_features.parquet",
+    "pooled_epoch_features_feature_columns.json",
+    "pooled_subject_features.csv",
+    "pooled_subject_features.parquet",
+    "pooled_subject_features_feature_columns.json",
+)
+
+
+def _required_descriptor_files(include_pooled: bool) -> tuple[str, ...]:
+    if include_pooled:
+        return _SENSOR_DESCRIPTOR_FILES + _POOLED_DESCRIPTOR_FILES
+    return _SENSOR_DESCRIPTOR_FILES
 
 
 def main() -> None:
@@ -51,7 +75,7 @@ def main() -> None:
     shard_roots: list[Path] = []
     for success_path in sorted(derivative_root.glob("sub-*/ses-*/eeg/*/_SUCCESS")):
         shard_root = success_path.parent
-        if all((shard_root / f).exists() for f in required_descriptor_files(include_pooled)):
+        if all((shard_root / f).exists() for f in _required_descriptor_files(include_pooled)):
             shard_roots.append(shard_root)
 
     if not shard_roots:
@@ -98,12 +122,12 @@ def main() -> None:
     combined_root.mkdir(parents=True, exist_ok=True)
 
     LOGGER.info("Combining sensor families...")
-    save_table(
+    save(
         pd.concat(sensor_epoch_tables, ignore_index=True),
         combined_root / "sensor_epoch_features",
         feature_columns=feature_cols["sensor_epoch"],
     )
-    save_table(
+    save(
         pd.concat(sensor_agg_tables, ignore_index=True),
         combined_root / "sensor_subject_features",
         feature_columns=feature_cols["sensor_subject"],
@@ -111,12 +135,12 @@ def main() -> None:
 
     if include_pooled:
         LOGGER.info("Combining pooled families...")
-        save_table(
+        save(
             pd.concat(pooled_epoch_tables, ignore_index=True),
             combined_root / "pooled_epoch_features",
             feature_columns=feature_cols["pooled_epoch"],
         )
-        save_table(
+        save(
             pd.concat(pooled_agg_tables, ignore_index=True),
             combined_root / "pooled_subject_features",
             feature_columns=feature_cols["pooled_subject"],

@@ -1,403 +1,806 @@
 #!/usr/bin/env python3
-"""
-End-to-end Dimensionality Reduction Analysis for EEG Data.
+"""Checkpointed dimensionality-reduction analysis for EEG data."""
 
-Workflow:
-1. Load EEG data from BIDS directory (Raw or Specific Segments).
-2. Stack/Flatten data based on strategy (flat, time_as_sample, epoch_scalar_mean).
-3. Apply dimensionality reduction using coco-pipe (selected supported reducers).
-4. Generate interactive HTML reports with embeddings and diagnostics.
-
-Available Reducers:
-- pca, umap, phate, isomap
-
-Available Visualizations:
-- Embeddings (2D/3D), loss history
-"""
+from __future__ import annotations
 
 import argparse
+import os
+import hashlib
+import json
 import logging
-import random
+import shutil
+from datetime import datetime, timezone
+from itertools import product
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Optional, Sequence
 
+import joblib
 import numpy as np
 import pandas as pd
-
-# Project imports
-from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS, results_dir
-
-# Coco-pipe imports
-from coco_pipe.decoding import Experiment, ExperimentConfig
-from coco_pipe.decoding.configs import CVConfig, LogisticRegressionConfig
+import yaml
 from coco_pipe.dim_reduction.core import DimReduction
-from coco_pipe.report.core import Report, Section, PlotlyElement, ImageElement, TableElement
-from coco_pipe.viz import dim_reduction as viz
-from eeg_adhd_epilepsy.analysis.utils import (
-    add_embedding_plot,
-    apply_representation,
-    build_meta_dict,
-    coerce_sample_vector,
-    REPRESENTATION_CONFIG,
-)
-from eeg_adhd_epilepsy.io.bids import load_eeg_data, validate_bids_coverage
-from eeg_adhd_epilepsy.io.csv import load as load_csv
+from coco_pipe.dim_reduction.evaluation.core import evaluate_embedding
+from coco_pipe.io.structures import DataContainer
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from eeg_adhd_epilepsy.io.analysis import concat_containers, load_container
+from eeg_adhd_epilepsy.io.bids import get_reports_root, get_stage_summary_dir, validate_bids_coverage
+from eeg_adhd_epilepsy.io.table import load
+from eeg_adhd_epilepsy.reports.dim_reduction import (
+    SEPARATION_METRIC_KEY,
+    generate_dataset_report,
+    load_fit_artifact,
+    load_fit_runs,
+)
+from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# Default reducers for this analysis profile
-ALL_REDUCERS = [
-    "PCA", "UMAP", "PHATE", "ISOMAP"
-]
-
+DEFAULT_REDUCERS = ["PCA", "UMAP", "PHATE", "Isomap"]
+EXTENDED_REDUCERS = ["PCA", "UMAP", "PHATE", "Isomap", "Pacmap", "Trimap", "LLE", "TSNE"]
 DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
+DEFAULT_N_COMPONENTS_SWEEP = [2, 3, 5, 10, 20, 50, 75, 100]
+FIT_METRIC_COLUMNS = [
+    "trustworthiness",
+    "continuity",
+    "lcmc",
+    "shepard_correlation",
+    "mrre_intrusion",
+    "mrre_extrusion",
+    "mrre_total",
+]
+EVAL_METRIC_COLUMNS = [SEPARATION_METRIC_KEY]
+POOLED_CONDITION = "pooled_all"
+FIT_RUN_KEY_FIELDS = ("fit_id",)
+EVAL_RUN_KEY_FIELDS = ("eval_id",)
 
 
-def compute_embeddings(
-    X: np.ndarray,
-    reducer_names: List[str],
-) -> Dict[str, Dict]:
-    """
-    Compute embeddings for all reducers in both 2D and 3D.
-    """
-    results = {}
-
-    for name in reducer_names:
-        logger.info(f"Computing embeddings for {name}...")
-        results[name] = {
-            "embedding_2d": None,
-            "reducer_2d": None,
-            "embedding_3d": None,
-            "reducer_3d": None,
-        }
-        try:
-            dr_2d = DimReduction(method=name, n_components=2)
-            results[name]["embedding_2d"] = dr_2d.fit_transform(X)
-            results[name]["reducer_2d"] = dr_2d
-        except Exception as err:
-            logger.warning(f"Failed to compute 2D {name}: {err}")
-
-        try:
-            dr_3d = DimReduction(method=name, n_components=3)
-            results[name]["embedding_3d"] = dr_3d.fit_transform(X)
-            results[name]["reducer_3d"] = dr_3d
-        except Exception as err:
-            logger.warning(f"Failed to compute 3D {name}: {err}")
-    return results
-
-
-def compute_embedding_separation_score(
-    embedding: Optional[np.ndarray],
-    labels: Optional[np.ndarray],
-    groups: np.ndarray,
-) -> float:
-    """Estimate class separation from an embedding using grouped CV balanced accuracy."""
-    if embedding is None or labels is None:
-        return np.nan
-
-    y = np.asarray(labels).ravel().astype(str)
-    group_ids = np.asarray(groups).ravel().astype(str)
-    if embedding.shape[0] != y.shape[0] or embedding.shape[0] != group_ids.shape[0]:
-        return np.nan
-    if pd.Index(y).nunique() < 2:
-        return np.nan
-
-    subject_labels = pd.DataFrame({"group": group_ids, "label": y})
-    if subject_labels.groupby("group")["label"].nunique(dropna=False).max() > 1:
-        raise ValueError("Each subject must map to a single target label.")
-
-    grouped_y = subject_labels.groupby("group")["label"].first()
-    min_count = int(grouped_y.value_counts().min())
-    if min_count < 2:
-        return np.nan
-
-    n_splits = min(5, min_count)
-    experiment = Experiment(
-        ExperimentConfig(
-            task="classification",
-            tag="embedding-separation",
-            models={
-                "logreg": LogisticRegressionConfig(
-                    method="LogisticRegression",
-                    max_iter=1000,
-                    class_weight="balanced",
-                )
-            },
-            cv=CVConfig(
-                strategy="stratified_group_kfold",
-                n_splits=n_splits,
-                shuffle=True,
-                random_state=42,
-            ),
-            metrics=["balanced_accuracy"],
-            use_scaler=True,
-            verbose=False,
-            n_jobs=1,
-        )
-    )
-    result = experiment.run(np.asarray(embedding), y, groups=group_ids)
-    summary = result.summary()
-    return float(summary.loc["logreg", "balanced_accuracy_mean"])
-
-
-def build_condition_ranking_rows(
-    condition: str,
-    embeddings: Dict[str, Dict],
-    labels: Optional[np.ndarray],
-    groups: np.ndarray,
-    loaded_subjects: int,
-    loaded_epochs: int,
-    samples_used: int,
-) -> List[Dict[str, object]]:
-    """Build reducer ranking rows for one condition."""
-    rows: List[Dict[str, object]] = []
-    for reducer_name, reducer_results in embeddings.items():
-        for dimension, key in (("2D", "embedding_2d"), ("3D", "embedding_3d")):
-            score = compute_embedding_separation_score(
-                reducer_results.get(key),
-                labels,
-                groups,
-            )
-            rows.append(
-                {
-                    "condition": condition,
-                    "reducer": reducer_name,
-                    "dimension": dimension,
-                    "cv_balanced_accuracy": score,
-                    "loaded_subjects": loaded_subjects,
-                    "loaded_epochs": loaded_epochs,
-                    "samples_used": samples_used,
-                }
-            )
-    return rows
-
-
-def add_reducer_report_elements(
-    section: Section,
-    condition: str,
-    name: str,
-    embeddings: Dict,
-    labels: Optional[np.ndarray],
-    meta_dict: Optional[Dict[str, np.ndarray]] = None,
-    interactive: bool = True
+def save_fit_artifact(
+    path: Path,
+    embedding: np.ndarray,
+    ids: np.ndarray,
+    fit_payload: dict[str, Any],
+    metrics_payload: dict[str, Any],
+    diagnostics: dict[str, Any],
 ) -> None:
-    """Add 2D/3D reducer plots and diagnostics to an existing section."""
-    emb_2d = embeddings.get("embedding_2d")
-    emb_3d = embeddings.get("embedding_3d")
-    reducer_2d = embeddings.get("reducer_2d")
+    path.mkdir(parents=True, exist_ok=True)
+    np.save(path / "embedding.npy", np.asarray(embedding))
+    np.save(path / "ids.npy", np.asarray(ids, dtype=object))
+    (path / "fit.json").write_text(json.dumps(fit_payload, indent=2), encoding="utf-8")
+    (path / "metrics.json").write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+    np.savez_compressed(path / "diagnostics.npz", payload=np.asarray([diagnostics], dtype=object))
+    (path / "_SUCCESS").write_text("ok\n", encoding="utf-8")
 
-    n_2d = emb_2d.shape[0] if emb_2d is not None else 0
-    labels_2d = coerce_sample_vector(labels, n_2d) if n_2d else None
-    if labels is not None and n_2d and labels_2d is None:
-        logger.warning(
-            f"Skipping labels for {condition}/{name} 2D plot due to size mismatch "
-            f"(labels={len(np.asarray(labels).ravel())}, samples={n_2d})."
+
+def save_eval_artifact(path: Path, eval_payload: dict[str, Any]) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "eval.json").write_text(json.dumps(eval_payload, indent=2), encoding="utf-8")
+    (path / "_SUCCESS").write_text("ok\n", encoding="utf-8")
+
+
+def update_runs(path: Path, record: dict[str, Any], key_fields: Sequence[str]) -> None:
+    if path.exists():
+        runs = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(runs, list):
+            raise ValueError(f"Expected list payload in {path}.")
+    else:
+        runs = []
+
+    key = tuple(record.get(field) for field in key_fields)
+    for idx, existing in enumerate(runs):
+        if tuple(existing.get(field) for field in key_fields) == key:
+            runs[idx] = dict(record)
+            break
+    else:
+        runs.append(dict(record))
+
+    sort_fields = list(key_fields) + [
+        "scope",
+        "condition",
+        "analysis_mode",
+        "family",
+        "unit_name",
+        "reducer",
+        "n_components",
+    ]
+    runs.sort(key=lambda item: tuple(str(item.get(field, "")) for field in sort_fields))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(runs, indent=2), encoding="utf-8")
+
+
+def _build_result_record(
+    payload: dict[str, Any],
+    artifact_path: Path,
+    output_root: Path,
+    metric_columns: Sequence[str],
+    metrics_payload: Optional[dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> dict[str, Any]:
+    record = {
+        key: value
+        for key, value in dict(payload).items()
+        if key not in {"metrics", "records", "metadata", "artifacts"}
+    }
+    record["artifact_path"] = str(artifact_path.relative_to(output_root))
+    for metric_name in metric_columns:
+        value = None if metrics_payload is None else metrics_payload.get(metric_name)
+        record[metric_name] = np.nan if value is None else float(value)
+    if error is not None:
+        record["status"] = "failed"
+        record["error"] = error
+    else:
+        record["status"] = "success"
+    return record
+
+
+def _build_fit_record(
+    fit_payload: dict[str, Any],
+    artifact_path: Path,
+    output_root: Path,
+    metrics_payload: Optional[dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> dict[str, Any]:
+    return _build_result_record(
+        fit_payload, artifact_path, output_root, FIT_METRIC_COLUMNS, metrics_payload, error
+    )
+
+
+def _build_eval_record(
+    eval_payload: dict[str, Any],
+    artifact_path: Path,
+    output_root: Path,
+    metrics_payload: Optional[dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> dict[str, Any]:
+    return _build_result_record(
+        eval_payload, artifact_path, output_root, EVAL_METRIC_COLUMNS, metrics_payload, error
+    )
+
+
+def iter_analysis_units(args, container: DataContainer) -> list[dict[str, Any]]:
+    units: list[dict[str, Any]] = []
+
+    def _add_unit(u_type, u_name, u_key, u_family, u_container):
+        u_container.meta = {
+            **dict(u_container.meta),
+            "unit_type": u_type,
+            "unit_name": u_name,
+            "unit_key": u_key,
+            "family": u_family,
+        }
+        units.append(
+            {
+                "unit_type": u_type,
+                "unit_name": u_name,
+                "unit_key": u_key,
+                "family": u_family,
+                "container": u_container,
+            }
         )
 
-    meta_2d = None
-    if meta_dict and n_2d:
-        filtered = {}
-        for col_name, col_values in meta_dict.items():
-            arr = coerce_sample_vector(col_values, n_2d)
-            if arr is not None:
-                filtered[col_name] = arr
-        if filtered:
-            meta_2d = filtered
+    if args.analysis_mode == "flat":
+        _add_unit("global", "all", "all", None, container)
+        return units
 
-    n_3d = emb_3d.shape[0] if emb_3d is not None else 0
-    labels_3d = coerce_sample_vector(labels, n_3d) if n_3d else None
-    meta_3d = None
-    if meta_dict and n_3d:
-        filtered = {}
-        for col_name, col_values in meta_dict.items():
-            arr = coerce_sample_vector(col_values, n_3d)
-            if arr is not None:
-                filtered[col_name] = arr
-        if filtered:
-            meta_3d = filtered
+    if args.analysis_mode == "sensor":
+        if args.input_mode == "raw":
+            for idx, channel_name in enumerate(np.asarray(container.coords["channel"], dtype=object)):
+                _add_unit("sensor", str(channel_name), str(channel_name), None, container.isel(channel=idx).flatten(preserve="obs"))
+            return units
 
-    reducer_diagnostics: Dict = {}
+        feature_families = np.asarray(container.coords["feature_family"], dtype=object)
+        allowed_families = set(args.descriptor_families or feature_families.tolist())
+        feature_mask = np.isin(feature_families.astype(str), list(allowed_families))
+        if not feature_mask.any():
+            raise RuntimeError("No descriptor features matched the requested families.")
+        feature_indices = np.flatnonzero(feature_mask).tolist()
+        for idx, sensor_name in enumerate(np.asarray(container.coords["sensor"], dtype=object)):
+            _add_unit("sensor", str(sensor_name), str(sensor_name), None, container.isel(sensor=idx, feature=feature_indices).flatten(preserve="obs"))
+        return units
 
-    if reducer_2d is not None and hasattr(reducer_2d, "get_diagnostics"):
-        try:
-            reducer_diagnostics = reducer_2d.get_diagnostics() or {}
-        except Exception as err:
-            logger.warning(f"Could not fetch diagnostics for {condition}/{name}: {err}")
+    if args.input_mode != "descriptors":
+        raise ValueError(f"analysis_mode='{args.analysis_mode}' is only supported for descriptor inputs.")
 
-    section.add_markdown(f"### {name.upper()}")
+    sensor_names = np.asarray(container.coords["sensor"], dtype=object).astype(str)
+    feature_families = np.asarray(container.coords["feature_family"], dtype=object).astype(str)
+    wanted_families = list(dict.fromkeys(args.descriptor_families or feature_families.tolist()))
 
-    add_embedding_plot(
-        section=section,
-        embedding=emb_2d,
-        labels=labels_2d,
-        meta=meta_2d,
-        title=f"{condition} - {name.upper()} - 2D",
-        dimensions=2,
-        interactive=interactive,
+    if args.analysis_mode == "family":
+        for family in wanted_families:
+            feature_indices = np.flatnonzero(feature_families == family).tolist()
+            if not feature_indices:
+                continue
+            _add_unit("family", family, family, family, container.isel(feature=feature_indices).flatten(preserve="obs"))
+        return units
+
+    if args.analysis_mode == "sensor_within_family":
+        for family in wanted_families:
+            feature_indices = np.flatnonzero(feature_families == family).tolist()
+            if not feature_indices:
+                continue
+            for idx, sensor_name in enumerate(sensor_names):
+                _add_unit("sensor", str(sensor_name), f"{family}_{sensor_name}", family, container.isel(sensor=idx, feature=feature_indices).flatten(preserve="obs"))
+        return units
+
+    raise ValueError(f"Unsupported analysis_mode '{args.analysis_mode}'.")
+
+
+def parse_eval_specs(raw_specs: Any, subject_col: str) -> list[dict[str, Any]]:
+    if raw_specs is None:
+        return []
+    raw_specs = raw_specs.get("evals") if isinstance(raw_specs, dict) else raw_specs
+    if not isinstance(raw_specs, list):
+        raise ValueError("Expected eval specs to be a list or a mapping with an 'evals' key.")
+
+    specs: list[dict[str, Any]] = []
+    for idx, raw_spec in enumerate(raw_specs):
+        if not isinstance(raw_spec, dict):
+            raise ValueError(f"Eval spec #{idx} must be a dictionary.")
+        specs.append(
+            {
+                "name": str(raw_spec["name"]),
+                "target_col": str(raw_spec["target_col"]),
+                "group_col": str(raw_spec.get("group_col", subject_col)),
+                "filters": [
+                    {
+                        "column": str(item["column"]),
+                        "values": [str(value) for value in item["values"]],
+                    }
+                    for item in raw_spec.get("filters", [])
+                ],
+                "label_map": {
+                    str(key): str(value)
+                    for key, value in (raw_spec.get("label_map") or {}).items()
+                },
+            }
+        )
+    return specs
+
+
+def _prepare_eval_inputs(
+    container: DataContainer,
+    fit_ids: np.ndarray,
+    eval_spec: dict[str, Any],
+) -> tuple[pd.Index, np.ndarray, np.ndarray, np.ndarray]:
+    if container.ids is None:
+        raise ValueError("Dim-reduction fit/eval expects container.ids to be present.")
+
+    container_ids = np.asarray(container.ids, dtype=object).astype(str)
+    frame = pd.DataFrame({"obs_id": container_ids})
+    n_obs = len(container_ids)
+    for key, values in container.coords.items():
+        arr = np.asarray(values)
+        if arr.ndim == 1 and len(arr) == n_obs and key != "feature":
+            frame[key] = arr
+    if container.y is not None and "y" not in frame.columns:
+        frame["y"] = np.asarray(container.y)
+
+    aligned_keys = []
+    counts: dict[str, int] = {}
+    for obs_id in np.asarray(fit_ids, dtype=object).astype(str):
+        occurrence = counts.get(obs_id, 0)
+        aligned_keys.append(f"{obs_id}__{occurrence}")
+        counts[obs_id] = occurrence + 1
+    counts = {}
+    frame_keys = []
+    for obs_id in frame["obs_id"].astype(str):
+        occurrence = counts.get(obs_id, 0)
+        frame_keys.append(f"{obs_id}__{occurrence}")
+        counts[obs_id] = occurrence + 1
+    frame["_obs_key"] = frame_keys
+
+    aligned_frame = frame.drop_duplicates("_obs_key", keep="first").set_index("_obs_key")
+    missing = [key for key in aligned_keys if key not in aligned_frame.index]
+    if missing:
+        raise RuntimeError("Saved fit ids could not be aligned to the current container.")
+    aligned_frame = aligned_frame.loc[aligned_keys].reset_index(drop=True)
+
+    for filter_spec in eval_spec["filters"]:
+        column = filter_spec["column"]
+        if column not in aligned_frame.columns:
+            raise ValueError(f"Eval filter column '{column}' is not available.")
+        values = {str(value) for value in filter_spec["values"]}
+        aligned_frame = aligned_frame[aligned_frame[column].astype(str).isin(values)].copy()
+
+    if eval_spec["target_col"] not in aligned_frame.columns:
+        raise ValueError(f"Eval target column '{eval_spec['target_col']}' is not available.")
+    if eval_spec["group_col"] not in aligned_frame.columns:
+        raise ValueError(f"Eval group column '{eval_spec['group_col']}' is not available.")
+
+    labels = aligned_frame[eval_spec["target_col"]].astype(str)
+    if eval_spec["label_map"]:
+        labels = labels.map(lambda value: eval_spec["label_map"].get(value, value))
+    labels = labels.replace({"nan": np.nan, "None": np.nan, "": np.nan})
+    groups = aligned_frame[eval_spec["group_col"]].astype(str)
+    valid_mask = labels.notna() & groups.notna()
+    if not valid_mask.any():
+        raise RuntimeError(f"Eval '{eval_spec['name']}' produced no valid samples.")
+
+    selected_frame = aligned_frame.loc[valid_mask].copy()
+    return (
+        selected_frame.index,
+        selected_frame["obs_id"].astype(str).to_numpy(),
+        labels.loc[valid_mask].astype(str).to_numpy(),
+        groups.loc[valid_mask].astype(str).to_numpy(),
     )
 
-    add_embedding_plot(
-        section=section,
-        embedding=emb_3d,
-        labels=labels_3d,
-        meta=meta_3d,
-        title=f"{condition} - {name.upper()} - 3D",
-        dimensions=3,
-        interactive=interactive,
+
+def run_fit(
+    fit_payload: dict[str, Any],
+    container: DataContainer,
+    out_path: Path,
+    output_root: Path,
+    overwrite: bool,
+) -> dict[str, Any]:
+    success_marker = out_path / "_SUCCESS"
+    if success_marker.exists() and not overwrite:
+        artifact = load_fit_artifact(out_path)
+        return _build_fit_record(
+            fit_payload=artifact["fit"],
+            artifact_path=out_path,
+            output_root=output_root,
+            metrics_payload=artifact["metrics"],
+        )
+
+    if overwrite and out_path.exists():
+        shutil.rmtree(out_path)
+
+    X = np.asarray(container.X)
+    if X.ndim != 2:
+        raise ValueError("run_fit expects a 2D matrix.")
+    if container.ids is None:
+        raise ValueError("Dim-reduction fits expect container.ids to be present.")
+    ids = np.asarray(container.ids, dtype=object).astype(str)
+
+    reducer = DimReduction(method=fit_payload["reducer"], n_components=fit_payload["n_components"])
+    embedding = reducer.fit_transform(X)
+    score_payload = reducer.score(embedding, X=X)
+    score_metrics = dict(reducer.get_metrics())
+    metrics_payload = {
+        metric_name: (
+            None
+            if np.isnan(score_metrics.get(metric_name, np.nan))
+            else float(score_metrics.get(metric_name))
+        )
+        for metric_name in FIT_METRIC_COLUMNS
+    }
+
+    summary = reducer.get_summary()
+    diagnostics = dict(summary.get("diagnostics") or {})
+    diagnostics["score_payload"] = score_payload
+    diagnostics["summary"] = summary
+    try:
+        components = reducer.get_components()
+    except Exception:
+        components = None
+    if components is not None:
+        diagnostics["components"] = components
+    explained_variance = getattr(reducer.reducer, "explained_variance_ratio_", None)
+    if explained_variance is not None:
+        diagnostics["explained_variance_ratio"] = np.asarray(explained_variance)
+
+    save_fit_artifact(out_path, embedding, ids, fit_payload, metrics_payload, diagnostics)
+    return _build_fit_record(
+        fit_payload=fit_payload,
+        artifact_path=out_path,
+        output_root=output_root,
+        metrics_payload=metrics_payload,
     )
 
-    # 3. Loss History (diagnostics API first)
-    loss_history = reducer_diagnostics.get("loss_history_")
-    if loss_history is None and reducer_2d is not None:
-        reducer_obj = reducer_2d.reducer
-        if hasattr(reducer_obj, "loss_history_"):
-            loss_history = reducer_obj.loss_history_
 
-    if loss_history is not None:
-        loss_array = np.asarray(loss_history).ravel()
-        if loss_array.size > 0:
-            fig_loss = viz.plot_loss_history(
-                loss_history=loss_array,
-                title=f"{condition} - {name.upper()} - Training Loss",
-                interactive=interactive,
-            )
-            if interactive:
-                section.add_element(PlotlyElement(fig_loss))
-            else:
-                section.add_element(ImageElement(fig_loss))
+def run_eval(
+    fit_payload: dict[str, Any],
+    fit_artifact: dict[str, Any],
+    container: DataContainer,
+    eval_spec: dict[str, Any],
+    out_path: Path,
+    output_root: Path,
+    overwrite: bool,
+) -> dict[str, Any]:
+    success_marker = out_path / "_SUCCESS"
+    if success_marker.exists() and not overwrite:
+        eval_payload = json.loads((out_path / "eval.json").read_text(encoding="utf-8"))
+        return _build_eval_record(
+            eval_payload=eval_payload,
+            artifact_path=out_path,
+            output_root=output_root,
+            metrics_payload=eval_payload.get("metrics"),
+        )
+
+    if overwrite and out_path.exists():
+        shutil.rmtree(out_path)
+
+    selected_index, selected_ids, labels, groups = _prepare_eval_inputs(
+        container=container,
+        fit_ids=np.asarray(fit_artifact["ids"], dtype=object).astype(str),
+        eval_spec=eval_spec,
+    )
+    selected_ids_sha256 = hashlib.sha256("\0".join(selected_ids.tolist()).encode("utf-8")).hexdigest()[:16]
+    eval_id = hashlib.sha256(
+        json.dumps(
+            {
+                "fit_id": fit_payload["fit_id"],
+                "eval_name": eval_spec["name"],
+                "target_col": eval_spec["target_col"],
+                "group_col": eval_spec["group_col"],
+                "filters": eval_spec["filters"],
+                "label_map": eval_spec["label_map"],
+                "selected_ids_sha256": selected_ids_sha256,
+                "n_samples": int(len(selected_ids)),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    embedding = np.asarray(fit_artifact["embedding"])[selected_index.to_numpy()]
+    if embedding.ndim != 2:
+        raise ValueError("run_eval expects a 2D embedding artifact.")
+
+    score_payload = evaluate_embedding(
+        embedding,
+        method_name=fit_payload["reducer"],
+        metrics=EVAL_METRIC_COLUMNS,
+        labels=labels,
+        groups=groups,
+    )
+    metrics_payload = dict(score_payload["metrics"])
+    eval_payload = {
+        "eval_id": eval_id,
+        "fit_id": fit_payload["fit_id"],
+        "scope": fit_payload["scope"],
+        "condition": fit_payload["condition"],
+        "analysis_mode": fit_payload["analysis_mode"],
+        "unit_type": fit_payload["unit_type"],
+        "unit_name": fit_payload["unit_name"],
+        "unit_key": fit_payload["unit_key"],
+        "family": fit_payload.get("family"),
+        "eval_name": eval_spec["name"],
+        "input_mode": fit_payload["input_mode"],
+        "representation": fit_payload["representation"],
+        "reducer": fit_payload["reducer"],
+        "n_components": int(fit_payload["n_components"]),
+        "target_col": eval_spec["target_col"],
+        "group_col": eval_spec["group_col"],
+        "filters": list(eval_spec["filters"]),
+        "label_map": dict(eval_spec["label_map"]),
+        "descriptor_families": list(fit_payload.get("descriptor_families", [])),
+        "status": "success",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "n_samples": int(len(selected_ids)),
+        "metrics": metrics_payload,
+        "records": score_payload.get("records", []),
+        "metadata": score_payload.get("metadata", {}),
+        "artifacts": score_payload.get("artifacts", {}),
+    }
+    save_eval_artifact(out_path, eval_payload)
+    return _build_eval_record(
+        eval_payload=eval_payload,
+        artifact_path=out_path,
+        output_root=output_root,
+        metrics_payload=metrics_payload,
+    )
 
 
-def create_condition_section(
+def _build_fit_task(
+    args,
+    scope: str,
     condition: str,
-    embeddings: Dict[str, Dict],
-    labels: Optional[np.ndarray],
-    meta_dict: Dict[str, np.ndarray],
-    ranking_rows: List[Dict[str, object]],
-    loaded_subjects: int,
-    loaded_epochs: int,
-    samples_used: int,
-    interactive: bool,
-) -> Section:
-    """Create one report section for a single condition."""
-    section = Section(title=condition, icon="🧠")
-    section.add_markdown(
-        f"Condition-specific embeddings for **{condition}**. "
-        f"Loaded subjects: **{loaded_subjects}**. "
-        f"Loaded epochs: **{loaded_epochs}**. "
-        f"Samples used after representation: **{samples_used}**."
-    )
-    ranking_df = pd.DataFrame(ranking_rows)
-    if not ranking_df.empty:
-        ranking_df = ranking_df.sort_values(
-            by=["dimension", "cv_balanced_accuracy"],
-            ascending=[True, False],
-        ).reset_index(drop=True)
-        section.add_element(
-            TableElement(
-                ranking_df[["reducer", "dimension", "cv_balanced_accuracy"]].round(4),
-                title="Reducer Ranking",
-            )
+    unit_spec: dict[str, Any],
+    reducer_name: str,
+    n_components: int,
+    output_root: Path,
+) -> dict[str, Any]:
+    container = unit_spec["container"]
+    if container.ids is None:
+        raise ValueError("Dim-reduction fits expect container.ids to be present.")
+    ids = np.asarray(container.ids, dtype=object).astype(str)
+
+    filter_specs = [
+        {"column": str(column), "values": [str(value) for value in values]}
+        for column, values in zip(args.filter_col, args.filter_val)
+        if values
+    ]
+    input_signature = {
+        "input_mode": args.input_mode,
+        "representation": args.representation,
+        "analysis_mode": args.analysis_mode,
+        "descriptor_families": list(getattr(args, "descriptor_families", []) or []),
+        "filters": filter_specs,
+        "balance_target": args.balance_target,
+        "balance_strategy": args.balance_strategy if args.balance_target else None,
+        "unit_type": unit_spec["unit_type"],
+        "unit_name": unit_spec["unit_name"],
+        "family": unit_spec.get("family"),
+    }
+    if args.input_mode == "raw":
+        input_signature.update(
+            {
+                "bids_root": str(Path(args.bids_root).expanduser()),
+                "use_derivatives": bool(args.use_derivatives),
+                "task": getattr(args, "task", "clinical"),
+                "segment_duration": float(args.segment_duration),
+                "overlap": float(args.overlap),
+                "desc": args.desc,
+            }
+        )
+    elif args.input_mode == "descriptors":
+        input_signature.update(
+            {
+                "descriptor_table_path": str(Path(args.descriptor_table_path).expanduser()),
+                "descriptor_feature_columns_path": str(
+                    Path(args.descriptor_feature_columns_path).expanduser()
+                ),
+            }
+        )
+    else:
+        input_signature.update(
+            {
+                "embeddings_root": str(Path(args.embeddings_root).expanduser()),
+                "segments_root": str(Path(args.segments_root or args.bids_root).expanduser()),
+                "embedding_model": args.embedding_model,
+                "embedding_desc": args.embedding_desc,
+                "embedding_min_overlap_fraction": float(args.embedding_min_overlap_fraction),
+                "reve_segment_duration": float(args.reve_segment_duration),
+                "cbramod_sampling_rate": float(args.cbramod_sampling_rate),
+            }
         )
 
-    for reducer_name, reducer_results in embeddings.items():
-        add_reducer_report_elements(
-            section=section,
-            condition=condition,
-            name=reducer_name,
-            embeddings=reducer_results,
-            labels=labels,
-            meta_dict=meta_dict,
-            interactive=interactive,
-        )
-    return section
+    sample_ids_sha256 = hashlib.sha256("\0".join(ids.tolist()).encode("utf-8")).hexdigest()[:16]
+    fit_id = hashlib.sha256(
+        json.dumps(
+            {
+                "scope": scope,
+                "condition": condition,
+                "analysis_mode": args.analysis_mode,
+                "unit_type": unit_spec["unit_type"],
+                "unit_name": unit_spec["unit_name"],
+                "family": unit_spec.get("family"),
+                "input_signature": input_signature,
+                "reducer": reducer_name,
+                "n_components": int(n_components),
+                "sample_ids_sha256": sample_ids_sha256,
+                "n_samples": int(len(ids)),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
 
-def main():
-    parser = argparse.ArgumentParser(description="Run Comprehensive EEG DimReduction Pipeline")
-    parser.add_argument("--bids_root", default="/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS", help="Path to BIDS dataset")
-    parser.add_argument("--task", default="clinical", help="Task name (default: clinical)")
-    parser.add_argument("--session", default="01", help="Session ID (default: 01)")
-    parser.add_argument("--metadata", default=None, help="Path to canonical metadata CSV")
-    parser.add_argument("--output_dir", default=results_dir, help="Output directory")
-    parser.add_argument("--dataset_name", required=True, help="Name for this analysis run")
-    
-    parser.add_argument(
-        "--conditions",
-        nargs="+",
-        default=DEFAULT_CONDITIONS,
-        choices=DEFAULT_CONDITIONS,
-        help="Conditions to evaluate for separation ranking.",
-    )
-    parser.add_argument("--segment_duration", type=float, default=60.0, help="Segment duration in seconds")
-    parser.add_argument("--overlap", type=float, default=0.0, help="Window overlap in seconds")
-    
-    parser.add_argument(
-        "--representation",
-        choices=list(REPRESENTATION_CONFIG.keys()),
-        default="epoch_flat",
-        help=(
-            "Combined sample granularity + feature layout: "
-            "'epoch_flat' => one row per epoch, columns=(channel x time); "
-            "'epoch_time_as_sample' => one row per time-step, columns=channel; "
-            "'epoch_scalar_mean' => one row per epoch, columns=1 scalar mean; "
-            "'subject_*' variants first average epochs per subject then apply same layout."
+    fit_payload = {
+        "fit_id": fit_id,
+        "scope": scope,
+        "condition": condition,
+        "analysis_mode": args.analysis_mode,
+        "unit_type": unit_spec["unit_type"],
+        "unit_name": unit_spec["unit_name"],
+        "unit_key": unit_spec["unit_key"],
+        "family": unit_spec.get("family"),
+        "input_mode": args.input_mode,
+        "representation": args.representation,
+        "descriptor_families": list(getattr(args, "descriptor_families", []) or []),
+        "reducer": reducer_name,
+        "n_components": int(n_components),
+        "status": "success",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "n_samples": int(container.X.shape[0]),
+        "n_subjects": int(
+            pd.Index(np.asarray(container.coords.get(args.subject_col, ids), dtype=object).astype(str)).nunique()
         ),
+        "loaded_obs": int(container.meta.get("loaded_obs", container.X.shape[0])),
+        "samples_used": int(container.meta.get("samples_used", container.X.shape[0])),
+        "input_signature": input_signature,
+    }
+    artifact_path = (
+        output_root
+        / "sub-all"
+        / "ses-all"
+        / "eeg"
+        / "fits"
+        / scope
+        / condition
+        / args.input_mode
+        / args.analysis_mode
+        / unit_spec["unit_type"]
+        / unit_spec["unit_key"]
+        / reducer_name
+        / f"n{n_components}"
+        / fit_id
     )
-    
-    parser.add_argument("--subsample", type=int, default=None, help="Number of subjects to random sample")
-    parser.add_argument("--subject_col", default="study_id", help="Subject identifier column in canonical metadata")
-    parser.add_argument(
-        "--target_col",
-        default=None,
-        help="Optional metadata column to use as labels for separation ranking.",
+    return {
+        "fit_payload": fit_payload,
+        "container": container,
+        "artifact_path": artifact_path,
+        "output_root": output_root,
+        "overwrite": bool(args.overwrite),
+    }
+
+
+def _execute_fit_task(task: dict[str, Any]) -> dict[str, Any]:
+    fit_payload = task["fit_payload"]
+    container = task["container"]
+    artifact_path = task["artifact_path"]
+    output_root = task["output_root"]
+    overwrite = task["overwrite"]
+    logger.info(
+        "Fitting %s/%s/%s/%s/n%d",
+        fit_payload["condition"],
+        fit_payload["analysis_mode"],
+        fit_payload["unit_name"],
+        fit_payload["reducer"],
+        fit_payload["n_components"],
     )
-    
-    parser.add_argument("--reducers", nargs="+", default=ALL_REDUCERS, help="List of reducers")
-    parser.add_argument(
-        "--interactive",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Enable interactive plots (use --no-interactive for static report figures)",
+    try:
+        return run_fit(
+            fit_payload=fit_payload,
+            container=container,
+            out_path=artifact_path,
+            output_root=output_root,
+            overwrite=overwrite,
+        )
+    except Exception as err:
+        logger.exception(
+            "Fit failed for %s/%s/%s/n%d",
+            fit_payload["condition"],
+            fit_payload["unit_name"],
+            fit_payload["reducer"],
+            fit_payload["n_components"],
+        )
+        return _build_fit_record(
+            fit_payload={**fit_payload, "status": "failed"},
+            artifact_path=artifact_path,
+            output_root=output_root,
+            error=str(err),
+        )
+
+
+def _build_eval_task(
+    fit_record: dict[str, Any],
+    eval_spec: dict[str, Any],
+    container: DataContainer,
+    output_root: Path,
+    overwrite: bool,
+) -> dict[str, Any]:
+    fit_path = output_root / fit_record["artifact_path"]
+    fit_artifact = load_fit_artifact(fit_path)
+    selected_ids: list[str] = []
+    try:
+        _, selected_ids_array, _, _ = _prepare_eval_inputs(
+            container=container,
+            fit_ids=np.asarray(fit_artifact["ids"], dtype=object).astype(str),
+            eval_spec=eval_spec,
+        )
+        selected_ids = selected_ids_array.tolist()
+    except Exception:
+        selected_ids = []
+    selected_ids_sha256 = hashlib.sha256("\0".join(selected_ids).encode("utf-8")).hexdigest()[:16]
+    eval_id = hashlib.sha256(
+        json.dumps(
+            {
+                "fit_id": fit_record["fit_id"],
+                "eval_name": eval_spec["name"],
+                "target_col": eval_spec["target_col"],
+                "group_col": eval_spec["group_col"],
+                "filters": eval_spec["filters"],
+                "label_map": eval_spec["label_map"],
+                "selected_ids_sha256": selected_ids_sha256,
+                "n_samples": int(len(selected_ids)),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode("utf-8")
+    ).hexdigest()[:16]
+    eval_payload = {
+        "eval_id": eval_id,
+        "fit_id": fit_record["fit_id"],
+        "scope": fit_record["scope"],
+        "condition": fit_record["condition"],
+        "analysis_mode": fit_record["analysis_mode"],
+        "unit_type": fit_record["unit_type"],
+        "unit_name": fit_record["unit_name"],
+        "unit_key": fit_record["unit_key"],
+        "family": fit_record.get("family"),
+        "eval_name": eval_spec["name"],
+        "input_mode": fit_record["input_mode"],
+        "representation": fit_record["representation"],
+        "reducer": fit_record["reducer"],
+        "n_components": int(fit_record["n_components"]),
+        "target_col": eval_spec["target_col"],
+        "group_col": eval_spec["group_col"],
+        "filters": list(eval_spec["filters"]),
+        "label_map": dict(eval_spec["label_map"]),
+        "descriptor_families": list(fit_record.get("descriptor_families", [])),
+        "status": "success",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "n_samples": int(len(selected_ids)),
+    }
+    artifact_path = (
+        output_root
+        / "sub-all"
+        / "ses-all"
+        / "eeg"
+        / "evals"
+        / fit_record["fit_id"]
+        / eval_spec["name"]
+        / eval_id
     )
-    parser.add_argument(
-        "--save_static_figures",
-        action="store_true",
-        help="Save per-reducer static PNG embeddings in addition to the HTML report",
+    return {
+        "fit_record": fit_record,
+        "fit_artifact": fit_artifact,
+        "eval_spec": eval_spec,
+        "container": container,
+        "artifact_path": artifact_path,
+        "output_root": output_root,
+        "overwrite": bool(overwrite),
+        "eval_payload": eval_payload,
+    }
+
+
+def _execute_eval_task(task: dict[str, Any]) -> dict[str, Any]:
+    fit_record = task["fit_record"]
+    fit_artifact = task["fit_artifact"]
+    eval_spec = task["eval_spec"]
+    container = task["container"]
+    artifact_path = task["artifact_path"]
+    output_root = task["output_root"]
+    overwrite = task["overwrite"]
+    eval_payload = task["eval_payload"]
+    logger.info(
+        "Evaluating %s/%s/%s/%s/n%d [%s]",
+        fit_record["condition"],
+        fit_record["analysis_mode"],
+        fit_record["unit_name"],
+        fit_record["reducer"],
+        fit_record["n_components"],
+        eval_spec["name"],
     )
-    parser.add_argument("--save_embeddings", action="store_true", help="Save embeddings to disk")
-    parser.add_argument("--use_derivatives", action="store_true", help="Load saved epoch derivatives instead of raw BIDS")
-    parser.add_argument("--desc", default="base", help="Desc to load from derivatives (default: base)")
-    parser.add_argument("--subjects", nargs="+", default=None, help="Specific subjects to process")
-    parser.add_argument(
-        "--ignore_annotations",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Ignore BAD_ annotations during epoching (use --no-ignore-annotations to enforce them)",
-    )
-    
-    args = parser.parse_args()
-    
-    # Force logging level
-    logging.getLogger().setLevel(logging.INFO)
-    
-    interactive = args.interactive
-    logger.info(f"Using representation='{args.representation}'")
-    
-    # Setup Paths
-    bids_root = Path(args.bids_root)
-    out_path = Path(args.output_dir) / args.dataset_name
-    out_path.mkdir(parents=True, exist_ok=True)
-    
-    coverage_root = (
-        bids_root / "derivatives" / "preproc"
-        if args.use_derivatives
-        else bids_root
-    )
+    try:
+        return run_eval(
+            fit_payload=fit_artifact["fit"],
+            fit_artifact=fit_artifact,
+            container=container,
+            eval_spec=eval_spec,
+            out_path=artifact_path,
+            output_root=output_root,
+            overwrite=overwrite,
+        )
+    except Exception as err:
+        logger.exception(
+            "Eval failed for %s/%s/%s/%s/n%d [%s]",
+            fit_record["condition"],
+            fit_record["analysis_mode"],
+            fit_record["unit_name"],
+            fit_record["reducer"],
+            fit_record["n_components"],
+            eval_spec["name"],
+        )
+        return _build_eval_record(
+            eval_payload={**eval_payload, "status": "failed"},
+            artifact_path=artifact_path,
+            output_root=output_root,
+            error=str(err),
+        )
+
+
+def _resolve_subjects(args, bids_root: Path, meta_df: pd.DataFrame) -> list[str]:
+    if args.subjects:
+        subjects: list[str] = []
+        for subject in args.subjects:
+            value = str(subject).strip()
+            if value.startswith("sub-"):
+                value = value[4:]
+            if value.isdigit():
+                value = f"{int(value):04d}"
+            subjects.append(value)
+        return subjects
+    if args.input_mode != "raw":
+        return sorted(pd.Index(meta_df[args.subject_col]).astype(str).unique().tolist())
+
+    coverage_root = bids_root / "derivatives" / "preproc" if args.use_derivatives else bids_root
     coverage_desc = args.desc if args.use_derivatives else ""
     coverage_suffix = "epo" if args.use_derivatives else None
-
-    meta_df = load_csv(str(Path(args.metadata)), sep=None) if args.metadata else None
-    metadata_path = Path(args.metadata) if args.metadata else None
     coverage = validate_bids_coverage(
         meta_df,
         coverage_root,
@@ -405,238 +808,352 @@ def main():
         suffix=coverage_suffix,
         subject_col=args.subject_col,
     )
-    available_subjects = coverage["present_subjects"]
-    subjects = [f"{int(subject):04d}" for subject in args.subjects] if args.subjects else available_subjects
-    subjects = [subject for subject in subjects if subject in set(available_subjects)]
+    subjects = [str(subject) for subject in coverage["present_subjects"]]
     logger.info(
-        f"Using {len(subjects)} available subjects from "
-        f"{'derivatives' if args.use_derivatives else 'BIDS'}."
+        "Resolved %d available subjects from %s.",
+        len(subjects),
+        "derivatives" if args.use_derivatives else "BIDS",
+    )
+    return subjects
+
+
+def _build_auto_pooled_eval_spec(args) -> Optional[dict[str, Any]]:
+    if not args.run_pooled or len(args.conditions) < 2:
+        return None
+    return {
+        "name": "condition_separation",
+        "target_col": "condition",
+        "group_col": args.subject_col,
+        "filters": [],
+        "label_map": {},
+    }
+
+
+def _resolve_n_jobs(n_jobs: int) -> int:
+    if n_jobs == -1:
+        return max(os.cpu_count() or 1, 1)
+    if n_jobs < 1:
+        raise ValueError("n_jobs must be -1 or a positive integer.")
+    return n_jobs
+
+
+def _run_task_batch(
+    tasks: Sequence[dict[str, Any]],
+    worker_fn,
+    max_workers: int,
+) -> list[dict[str, Any]]:
+    if not tasks:
+        return []
+    if max_workers == 1:
+        return [worker_fn(task) for task in tasks]
+    return joblib.Parallel(n_jobs=min(max_workers, len(tasks)))(
+        joblib.delayed(worker_fn)(task) for task in tasks
     )
 
-    if meta_df is not None:
-        meta_df = meta_df[
-            meta_df[args.subject_col].map(lambda value: f"{int(value):04d}").isin(available_subjects)
-        ].copy()
-        logger.info(f"Metadata loaded from: {metadata_path}")
-        subjects = [
-            subject for subject in subjects
-            if subject in set(meta_df[args.subject_col].map(lambda value: f"{int(value):04d}"))
+
+def main() -> None:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default=None)
+    bootstrap_args, _ = pre_parser.parse_known_args()
+
+    parser = argparse.ArgumentParser(description="Run checkpointed EEG dimensionality reduction.")
+    parser.add_argument("--config", default=None, help="Path to dim-reduction YAML config.")
+
+    dataset_group = parser.add_argument_group("Dataset")
+    dataset_group.add_argument("--bids_root", default="/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS")
+    dataset_group.add_argument("--metadata", default=None, help="Path to canonical metadata CSV.")
+    dataset_group.add_argument("--dataset_name", default=None, help="Name for this dim-reduction run namespace.")
+    dataset_group.add_argument("--subject_col", default="study_id", help="Subject identifier column.")
+    dataset_group.add_argument("--subjects", nargs="+", default=None, help="Specific subjects to process.")
+    dataset_group.add_argument("--conditions", nargs="+", default=DEFAULT_CONDITIONS, choices=DEFAULT_CONDITIONS)
+
+    input_group = parser.add_argument_group("Input")
+    input_group.add_argument("--input_mode", choices=["raw", "descriptors", "embeddings"], default="raw")
+    input_group.add_argument("--segment_duration", type=float, default=60.0)
+    input_group.add_argument("--overlap", type=float, default=0.0)
+    input_group.add_argument("--use_derivatives", action="store_true")
+    input_group.add_argument("--desc", default="base")
+    input_group.add_argument(
+        "--representation",
+        choices=[
+            "epoch_native",
+            "epoch_flat",
+            "epoch_time_as_sample",
+            "epoch_scalar_mean",
+            "subject_native",
+            "subject_flat",
+            "subject_time_as_sample",
+            "subject_scalar_mean",
+        ],
+        default="epoch_flat",
+    )
+    input_group.add_argument(
+        "--analysis_mode",
+        choices=["flat", "sensor", "family", "sensor_within_family"],
+        default="flat",
+    )
+    input_group.add_argument("--descriptor_table_path", default=None)
+    input_group.add_argument("--descriptor_feature_columns_path", default=None)
+    input_group.add_argument("--descriptor_families", nargs="+", default=None)
+    input_group.add_argument("--embeddings_root", default=None)
+    input_group.add_argument("--segments_root", default=None)
+    input_group.add_argument("--embedding_model", choices=["reve", "cbramod"], default="cbramod")
+    input_group.add_argument("--embedding_desc", default="base")
+    input_group.add_argument("--embedding_min_overlap_fraction", type=float, default=0.8)
+    input_group.add_argument("--reve_segment_duration", type=float, default=10.0)
+    input_group.add_argument("--cbramod_sampling_rate", type=float, default=200.0)
+    input_group.add_argument(
+        "--ignore_annotations",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+
+    reduction_group = parser.add_argument_group("Reduction")
+    reduction_group.add_argument("--reducers", nargs="+", default=["default"])
+    reduction_group.add_argument("--n_components_sweep", nargs="+", type=int, default=DEFAULT_N_COMPONENTS_SWEEP)
+    reduction_group.add_argument("--run_pooled", action="store_true")
+    reduction_group.add_argument("--overwrite", action="store_true")
+    reduction_group.add_argument("--reports-only", action="store_true")
+    reduction_group.add_argument("--eval_config", default=None)
+    reduction_group.add_argument("--n_jobs", type=int, default=1)
+
+    filter_group = parser.add_argument_group("Filtering")
+    filter_group.add_argument("--filter_col", action="append", default=[])
+    filter_group.add_argument("--filter_val", action="append", nargs="+", default=[])
+    filter_group.add_argument("--balance_target", default=None)
+    filter_group.add_argument("--balance_strategy", choices=["undersample", "oversample", "auto"], default="undersample")
+
+    report_group = parser.add_argument_group("Report")
+    report_group.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=True)
+    report_group.add_argument("--save_static_figures", action="store_true")
+    report_group.add_argument("--compress_viz_with_pca", action="store_true")
+    report_group.add_argument(
+        "--selection_metric",
+        choices=[*FIT_METRIC_COLUMNS, SEPARATION_METRIC_KEY],
+        default=SEPARATION_METRIC_KEY,
+        help="Metric used to select the best run in report summaries.",
+    )
+
+    config_eval_specs = None
+    if bootstrap_args.config:
+        config_path = Path(bootstrap_args.config).expanduser()
+        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(raw_config, dict):
+            raise ValueError(f"Expected mapping payload in {config_path}.")
+        config_eval_specs = raw_config.pop("evals", None)
+        parser.set_defaults(**raw_config)
+    args = parser.parse_args()
+
+    if len(args.filter_col) != len(args.filter_val):
+        raise ValueError("--filter_col and --filter_val must be provided in matching pairs.")
+    if args.input_mode == "descriptors":
+        if not args.descriptor_table_path or not args.descriptor_feature_columns_path:
+            raise ValueError(
+                "--descriptor_table_path and --descriptor_feature_columns_path are required "
+                "when --input_mode descriptors."
+            )
+    if args.input_mode == "embeddings" and not args.embeddings_root:
+        raise ValueError("--embeddings_root is required when --input_mode embeddings.")
+    if args.input_mode == "embeddings" and args.analysis_mode != "flat":
+        raise ValueError("Embeddings currently support only analysis_mode='flat'.")
+    if args.analysis_mode in {"family", "sensor_within_family"} and args.input_mode != "descriptors":
+        raise ValueError(
+            f"analysis_mode='{args.analysis_mode}' is only supported for descriptor inputs."
+        )
+    if args.input_mode == "raw" and args.analysis_mode == "sensor":
+        if args.representation not in {"epoch_native", "subject_native"}:
+            raise ValueError(
+                "Raw sensor mode requires representation 'epoch_native' or 'subject_native'."
+            )
+    if args.input_mode == "raw" and args.analysis_mode != "flat":
+        if args.analysis_mode != "sensor":
+            raise ValueError("Raw inputs currently support only analysis_mode='flat' or 'sensor'.")
+    if args.input_mode == "raw" and args.analysis_mode == "flat":
+        if args.representation in {"epoch_native", "subject_native"}:
+            raise ValueError(
+                "Native EEG representations are reserved for sensor mode. "
+                "Use --analysis_mode sensor with epoch_native or subject_native."
+            )
+    if args.descriptor_families and args.input_mode != "descriptors":
+        raise ValueError("--descriptor_families is only supported for descriptor inputs.")
+    if args.descriptor_families:
+        invalid_families = [
+            family
+            for family in args.descriptor_families
+            if family not in ("band", "complexity", "param")
         ]
-
-    if args.subsample and args.subsample < len(subjects):
-        random.seed(42)
-        subjects = random.sample(subjects, args.subsample)
-        logger.info(f"Subsampled to {len(subjects)} subjects.")
-        
-    logger.info("Generating condition-wise report...")
-    report = Report(title=f"DimReduction Condition Screening: {args.dataset_name}")
-    condition_summary_rows: List[Dict[str, object]] = []
-    ranking_rows: List[Dict[str, object]] = []
-    condition_sections: List[Section] = []
-
-    for condition in args.conditions:
-        logger.info(f"Loading condition '{condition}'")
-        try:
-            dc_loaded = load_eeg_data(
-                bids_root=bids_root,
-                use_derivatives=args.use_derivatives,
-                subjects=subjects if subjects else None,
-                task=args.task,
-                session=args.session,
-                segment_duration=args.segment_duration,
-                overlap=args.overlap,
-                metadata_df=meta_df,
-                subject_col=args.subject_col,
-                target_col=args.target_col,
-                desc=args.desc,
-                condition=condition,
+        if invalid_families:
+            raise ValueError(
+                f"Unknown descriptor families: {invalid_families}. "
+                f"Valid families: {['band', 'complexity', 'param']}"
             )
-        except Exception as err:
-            logger.warning(f"Skipping {condition}: {err}")
-            condition_summary_rows.append(
-                {
-                    "condition": condition,
-                    "status": "load_failed",
-                    "loaded_subjects": 0,
-                    "loaded_epochs": 0,
-                    "samples_used": 0,
-                    "best_2d_reducer": None,
-                    "best_2d_score": np.nan,
-                    "best_3d_reducer": None,
-                    "best_3d_score": np.nan,
-                }
-            )
-            continue
+    resolved_n_jobs = _resolve_n_jobs(args.n_jobs)
 
-        loaded_subjects = pd.Series(dc_loaded.coords[args.subject_col]).astype(str).unique().tolist()
-        missing_subjects = [subject for subject in subjects if subject not in set(loaded_subjects)]
-        loaded_epochs = int(dc_loaded.X.shape[0])
-        logger.info(f"{condition}: loaded data for {len(loaded_subjects)}/{len(subjects)} subjects.")
-        if missing_subjects:
-            logger.info(f"{condition}: skipped subjects during loading: {missing_subjects}")
+    requested_reducers = [value.upper() for value in args.reducers]
+    if requested_reducers == ["DEFAULT"]:
+        reducers = DEFAULT_REDUCERS
+    elif requested_reducers == ["EXTENDED"]:
+        reducers = EXTENDED_REDUCERS
+    else:
+        valid_reducers = set(DEFAULT_REDUCERS + EXTENDED_REDUCERS)
+        invalid_reducers = [value for value in args.reducers if value not in valid_reducers]
+        if invalid_reducers:
+            raise ValueError(f"Unknown reducers: {invalid_reducers}. Valid reducers: {sorted(valid_reducers)}")
+        reducers = list(args.reducers)
 
-        logger.info(f"{condition}: applying representation '{args.representation}'")
-        dc = apply_representation(dc_loaded, args.representation, args.subject_col)
-        labels = None if dc.y is None else np.asarray(dc.y).ravel().astype(str)
-        groups = np.asarray(dc.coords[args.subject_col]).ravel().astype(str)
-        logger.info(f"{condition}: final data shape {dc.X.shape}")
+    bids_root = Path(args.bids_root).expanduser()
+    meta_df = load(str(Path(args.metadata)), sep=",")
+    subjects = _resolve_subjects(args, bids_root, meta_df)
+    raw_eval_specs = config_eval_specs
+    if raw_eval_specs is None and args.eval_config:
+        raw_eval_specs = yaml.safe_load(Path(args.eval_config).expanduser().read_text(encoding="utf-8")) or []
+    eval_specs = parse_eval_specs(raw_eval_specs, args.subject_col)
+    auto_pooled_eval_spec = _build_auto_pooled_eval_spec(args)
+    if auto_pooled_eval_spec is not None and not any(spec["name"] == auto_pooled_eval_spec["name"] for spec in eval_specs):
+        eval_specs = [*eval_specs, auto_pooled_eval_spec]
 
-        embeddings = compute_embeddings(X=dc.X, reducer_names=args.reducers)
-        meta_dict = build_meta_dict(dc)
-        logger.info(f"{condition}: color options {list(meta_dict.keys())}")
+    output_root = bids_root / "derivatives" / "dim_reduction" / args.dataset_name
+    output_root.mkdir(parents=True, exist_ok=True)
+    config_snapshot = {key: value for key, value in vars(args).items() if key not in {"config", "eval_config"}}
+    if eval_specs:
+        config_snapshot["evals"] = eval_specs
+    (output_root / "config_used.yaml").write_text(yaml.safe_dump(config_snapshot, sort_keys=True), encoding="utf-8")
+    fit_runs_path = output_root / "dim_reduction_fit_runs.json"
+    eval_runs_path = output_root / "dim_reduction_eval_runs.json"
+    logger.info("Using %d outer worker(s) for fits/evals.", resolved_n_jobs)
 
-        condition_ranking_rows = build_condition_ranking_rows(
-            condition=condition,
-            embeddings=embeddings,
-            labels=labels,
-            groups=groups,
-            loaded_subjects=len(loaded_subjects),
-            loaded_epochs=loaded_epochs,
-            samples_used=int(dc.X.shape[0]),
-        )
-        ranking_rows.extend(condition_ranking_rows)
+    base_containers_by_scope: dict[tuple[str, str], DataContainer] = {}
+    unit_containers_by_key: dict[tuple[str, str, str], DataContainer] = {}
 
-        condition_df = pd.DataFrame(condition_ranking_rows)
-        best_2d = condition_df[
-            (condition_df["dimension"] == "2D")
-            & condition_df["cv_balanced_accuracy"].notna()
-        ].sort_values(
-            "cv_balanced_accuracy", ascending=False, na_position="last"
-        )
-        best_3d = condition_df[
-            (condition_df["dimension"] == "3D")
-            & condition_df["cv_balanced_accuracy"].notna()
-        ].sort_values(
-            "cv_balanced_accuracy", ascending=False, na_position="last"
-        )
-        condition_summary_rows.append(
-            {
-                "condition": condition,
-                "status": "ok",
-                "loaded_subjects": len(loaded_subjects),
-                "loaded_epochs": loaded_epochs,
-                "samples_used": int(dc.X.shape[0]),
-                "best_2d_reducer": best_2d.iloc[0]["reducer"] if not best_2d.empty else None,
-                "best_2d_score": best_2d.iloc[0]["cv_balanced_accuracy"] if not best_2d.empty else np.nan,
-                "best_3d_reducer": best_3d.iloc[0]["reducer"] if not best_3d.empty else None,
-                "best_3d_score": best_3d.iloc[0]["cv_balanced_accuracy"] if not best_3d.empty else np.nan,
-            }
-        )
+    if args.reports_only:
+        if not fit_runs_path.exists():
+            raise FileNotFoundError(f"--reports-only requested but {fit_runs_path} does not exist.")
+    else:
+        fit_tasks: list[dict[str, Any]] = []
+        for condition in args.conditions:
+            logger.info("Loading input for condition '%s' (%s).", condition, args.input_mode)
+            try:
+                base_container = load_container(args, subjects, meta_df, condition, target_col=None)
+            except Exception:
+                logger.exception("Failed to load condition '%s'.", condition)
+                continue
 
-        condition_sections.append(
-            create_condition_section(
-                condition=condition,
-                embeddings=embeddings,
-                labels=labels,
-                meta_dict=meta_dict,
-                ranking_rows=condition_ranking_rows,
-                loaded_subjects=len(loaded_subjects),
-                loaded_epochs=loaded_epochs,
-                samples_used=int(dc.X.shape[0]),
-                interactive=interactive,
-            )
-        )
-
-        if args.save_embeddings:
-            embeddings_dir = out_path / "embeddings" / condition
-            embeddings_dir.mkdir(parents=True, exist_ok=True)
-            for name, res in embeddings.items():
-                if res["embedding_2d"] is not None:
-                    np.save(embeddings_dir / f"{name}_2d.npy", res["embedding_2d"])
-                if res["embedding_3d"] is not None:
-                    np.save(embeddings_dir / f"{name}_3d.npy", res["embedding_3d"])
-
-        if args.save_static_figures:
-            figures_dir = out_path / "figures" / condition
-            figures_dir.mkdir(parents=True, exist_ok=True)
-            for name, res in embeddings.items():
-                emb_2d = res.get("embedding_2d")
-                if emb_2d is not None:
-                    fig = viz.plot_embedding(
-                        X_emb=emb_2d,
-                        labels=labels,
-                        dims=(0, 1),
-                        title=f"{condition} - {name.upper()}",
-                        interactive=False,
+            base_containers_by_scope[("condition", condition)] = base_container
+            for unit_spec in iter_analysis_units(args, base_container):
+                unit_containers_by_key[("condition", condition, unit_spec["unit_key"])] = unit_spec["container"]
+                for reducer_name, n_components in product(reducers, args.n_components_sweep):
+                    fit_tasks.append(
+                        _build_fit_task(
+                            args=args,
+                            scope="condition",
+                            condition=condition,
+                            unit_spec=unit_spec,
+                            reducer_name=reducer_name,
+                            n_components=n_components,
+                            output_root=output_root,
+                        )
                     )
-                    fig.savefig(figures_dir / f"{name}_embedding.png", dpi=150, bbox_inches="tight")
-                    import matplotlib.pyplot as plt
-                    plt.close(fig)
 
-    if not condition_sections:
-        raise RuntimeError("No conditions produced usable embeddings.")
+        if args.run_pooled:
+            available_conditions = [
+                condition for condition in args.conditions if ("condition", condition) in base_containers_by_scope
+            ]
+            if available_conditions:
+                pooled_container = concat_containers(
+                    [base_containers_by_scope[("condition", condition)] for condition in available_conditions]
+                )
+                base_containers_by_scope[("pooled", POOLED_CONDITION)] = pooled_container
+                for unit_spec in iter_analysis_units(args, pooled_container):
+                    unit_containers_by_key[("pooled", POOLED_CONDITION, unit_spec["unit_key"])] = unit_spec["container"]
+                    for reducer_name, n_components in product(reducers, args.n_components_sweep):
+                        fit_tasks.append(
+                            _build_fit_task(
+                                args=args,
+                                scope="pooled",
+                                condition=POOLED_CONDITION,
+                                unit_spec=unit_spec,
+                                reducer_name=reducer_name,
+                                n_components=n_components,
+                                output_root=output_root,
+                            )
+                        )
+            else:
+                logger.warning("Skipping pooled mode: no condition containers were available.")
 
-    overview_df = pd.DataFrame(
-        [
-            {
-                "dataset_name": args.dataset_name,
-                "representation": args.representation,
-                "target_col": args.target_col,
-                "reducers": ", ".join(args.reducers),
-                "requested_subjects": len(subjects),
-                "conditions_tested": ", ".join(args.conditions),
-            }
-        ]
-    )
-    overview_sec = Section("Overview", icon="📋")
-    overview_sec.add_markdown(
-        "This report ranks **conditions** by how well each reducer separates the target labels "
-        "in 2D and 3D embeddings."
-    )
-    overview_sec.add_element(TableElement(overview_df, title="Run Configuration"))
-    report.add_section(overview_sec)
+        for record in _run_task_batch(fit_tasks, _execute_fit_task, resolved_n_jobs):
+            update_runs(fit_runs_path, record, key_fields=FIT_RUN_KEY_FIELDS)
 
-    condition_summary_df = pd.DataFrame(condition_summary_rows)
-    summary_sec = Section("Condition Summary", icon="🧾")
-    summary_sec.add_markdown(
-        "Per-condition data availability and best reducer scores."
-    )
-    summary_sec.add_element(
-        TableElement(
-            condition_summary_df[
-                [
-                    "condition",
-                    "status",
-                    "loaded_subjects",
-                    "loaded_epochs",
-                    "samples_used",
-                    "best_2d_reducer",
-                    "best_2d_score",
-                    "best_3d_reducer",
-                    "best_3d_score",
-                ]
-            ].round(4),
-            title="Condition Summary",
+        if eval_specs:
+            if not fit_runs_path.exists():
+                raise RuntimeError(
+                    "No fit runs were produced, so post-hoc evaluations cannot run. "
+                    "Check the condition load errors above."
+                )
+            fit_runs = [
+                record
+                for record in load_fit_runs(fit_runs_path)
+                if record.get("status") == "success"
+                and record.get("input_mode") == args.input_mode
+                and record.get("analysis_mode") == args.analysis_mode
+                and record.get("reducer") in reducers
+                and int(record.get("n_components", 0)) in args.n_components_sweep
+            ]
+            if not fit_runs:
+                raise RuntimeError(
+                    "No successful fit runs were produced, so post-hoc evaluations cannot run. "
+                    "Check the fit errors above."
+                )
+            eval_tasks: list[dict[str, Any]] = []
+            for fit_record in fit_runs:
+                unit_container = unit_containers_by_key.get(
+                    (fit_record["scope"], fit_record["condition"], fit_record["unit_key"])
+                )
+                if unit_container is None:
+                    logger.warning(
+                        "Skipping evals for missing unit scope %s/%s/%s.",
+                        fit_record["scope"],
+                        fit_record["condition"],
+                        fit_record["unit_key"],
+                    )
+                    continue
+                for eval_spec in eval_specs:
+                    if eval_spec["name"] == "condition_separation" and fit_record["scope"] != "pooled":
+                        continue
+                    eval_tasks.append(
+                        _build_eval_task(
+                            fit_record=fit_record,
+                            eval_spec=eval_spec,
+                            container=unit_container,
+                            output_root=output_root,
+                            overwrite=args.overwrite,
+                        )
+                    )
+            for record in _run_task_batch(eval_tasks, _execute_eval_task, resolved_n_jobs):
+                update_runs(eval_runs_path, record, key_fields=EVAL_RUN_KEY_FIELDS)
+
+    if not fit_runs_path.exists():
+        raise RuntimeError(
+            f"No fit runs found in {fit_runs_path}. Dim reduction produced no successful fit inventory."
         )
+
+    report = generate_dataset_report(
+        args=args,
+        output_root=output_root,
+        fit_runs_path=fit_runs_path,
+        eval_runs_path=eval_runs_path,
+        reducers=reducers,
+        subjects=subjects,
+        meta_df=meta_df,
+        containers_by_scope=base_containers_by_scope or None,
+        metric_columns=FIT_METRIC_COLUMNS,
+        eval_specs=eval_specs,
+        pooled_condition=POOLED_CONDITION,
     )
-    report.add_section(summary_sec)
-
-    ranking_df = pd.DataFrame(ranking_rows)
-    if not ranking_df.empty:
-        ranking_sec = Section("Condition Ranking", icon="🏁")
-        ranking_sec.add_markdown(
-            "Cross-validated balanced accuracy on the low-dimensional embeddings. "
-            "Higher is better."
-        )
-        ranking_sec.add_element(
-            TableElement(
-                ranking_df.sort_values(
-                    by="cv_balanced_accuracy",
-                    ascending=False,
-                    na_position="last",
-                ).reset_index(drop=True).round(4),
-                title="Reducer x Condition Ranking",
-            )
-        )
-        report.add_section(ranking_sec)
-
-    for section in condition_sections:
-        report.add_section(section)
-
-    # Save Report
-    save_path = out_path / "report.html"
-    report.save(save_path)
-    logger.info(f"Report saved to: {save_path}")
+    reports_root = get_reports_root(bids_root)
+    summary_dir = get_stage_summary_dir(reports_root, "dim_reduction", create_dir=True)
+    report_path = summary_dir / f"{args.dataset_name}_dataset_summary.html"
+    report.save(report_path)
+    logger.info("Report saved to: %s", report_path)
 
 
 if __name__ == "__main__":

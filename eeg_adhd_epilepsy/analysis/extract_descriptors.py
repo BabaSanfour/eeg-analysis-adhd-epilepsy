@@ -36,17 +36,13 @@ import yaml
 
 from coco_pipe.descriptors import DescriptorConfig, DescriptorPipeline
 from coco_pipe.io import DataContainer
-from eeg_adhd_epilepsy.analysis.utils import (
-    required_descriptor_files,
-    save_table,
-)
 from eeg_adhd_epilepsy.io.bids import (
     load_eeg_data,
     normalize_subject_id,
     parse_bids_components,
     validate_bids_coverage,
 )
-from eeg_adhd_epilepsy.io.csv import load as load_csv
+from eeg_adhd_epilepsy.io.table import load, save
 from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS
 
 LOGGER = logging.getLogger(__name__)
@@ -180,23 +176,23 @@ def _save_subject_shard(
         descriptor_names=np.asarray(sensor_result["descriptor_names"], dtype=object),
         failures=np.asarray(sensor_result["failures"], dtype=object),
     )
-    save_table(
+    save(
         sensor_outputs["epoch_df"],
         shard_root / "sensor_epoch_features",
         feature_columns=sensor_outputs["epoch_feature_columns"],
     )
-    save_table(
+    save(
         sensor_outputs["subject_df"],
         shard_root / "sensor_subject_features",
         feature_columns=sensor_outputs["subject_feature_columns"],
     )
     if pooled_outputs is not None:
-        save_table(
+        save(
             pooled_outputs["epoch_df"],
             shard_root / "pooled_epoch_features",
             feature_columns=pooled_outputs["epoch_feature_columns"],
         )
-        save_table(
+        save(
             pooled_outputs["subject_df"],
             shard_root / "pooled_subject_features",
             feature_columns=pooled_outputs["subject_feature_columns"],
@@ -307,7 +303,7 @@ def main() -> None:
         aggregated_ratio_floor = 0.0
 
     coverage_root = bids_root / "derivatives" / "preproc"
-    meta_df = load_csv(str(metadata_path), sep=None)
+    meta_df = load(str(metadata_path), sep=None)
     coverage = validate_bids_coverage(
         meta_df,
         coverage_root,

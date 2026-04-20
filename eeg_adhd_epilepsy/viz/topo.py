@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import base64
+import io
 import logging
 from typing import Dict, List, Optional, Sequence
 
 import matplotlib.pyplot as plt
 import numpy as np
 import mne
+import plotly.graph_objects as go
 
 from eeg_adhd_epilepsy.viz.utils import save_fig
 
@@ -38,23 +41,38 @@ def plot_topomap_from_channel_values(
     if arr.size == 0 or len(channel_names) != arr.size:
         return None
         
-    info = mne.create_info(list(channel_names), sfreq=100.0, ch_types="eeg")
     montage = mne.channels.make_standard_montage("standard_1020")
+    montage_names = set(montage.ch_names)
+    kept = [
+        (str(channel), float(value))
+        for channel, value in zip(channel_names, arr.tolist())
+        if str(channel) in montage_names
+    ]
+    if len(kept) < 3:
+        return None
+
+    kept_names = [channel for channel, _ in kept]
+    kept_values = np.asarray([value for _, value in kept], dtype=float)
+    info = mne.create_info(kept_names, sfreq=100.0, ch_types="eeg")
     try:
-        info.set_montage(montage, on_missing="ignore")
+        info.set_montage(montage, on_missing="raise")
     except Exception:
         return None
         
-    fig, ax = plt.subplots(figsize=(5.5, 4.5))
+    fig, ax = plt.subplots(figsize=(4.0, 3.2))
     
     # 1. Plot the topomap
-    im, _ = mne.viz.plot_topomap(arr, info, axes=ax, show=False, cmap=cmap)
+    try:
+        im, _ = mne.viz.plot_topomap(kept_values, info, axes=ax, show=False, cmap=cmap)
+    except Exception:
+        plt.close(fig)
+        return None
     
     # 2. Mark Bad Channels with X (if provided)
     if bad_channels:
         picks = mne.pick_types(info, eeg=True, exclude=[])
         pos = mne.channels.layout._find_topomap_coords(info, picks)
-        for i, ch in enumerate(channel_names):
+        for i, ch in enumerate(kept_names):
             if ch in bad_channels:
                 ax.plot(pos[i, 0], pos[i, 1], "kx", markersize=8, markeredgewidth=1.5)
 
@@ -65,6 +83,109 @@ def plot_topomap_from_channel_values(
         
     ax.set_title(title)
     plt.tight_layout()
+    return fig
+
+
+def plot_topomap_selector(
+    value_maps: Dict[str, tuple[Sequence[str], Sequence[float]]],
+    title: str,
+    unit: str | None = None,
+) -> go.Figure | None:
+    """Interactive selector over MNE-rendered topomaps."""
+    if not value_maps:
+        return None
+
+    rendered_maps: list[tuple[str, str]] = []
+    for label, payload in value_maps.items():
+        channel_names, values = payload
+        topo_fig = plot_topomap_from_channel_values(
+            channel_names=channel_names,
+            values=values,
+            title=f"{title} - {label}",
+            unit=unit,
+        )
+        if topo_fig is None:
+            continue
+        buf = io.BytesIO()
+        topo_fig.savefig(buf, format="png", bbox_inches="tight", dpi=150)
+        plt.close(topo_fig)
+        buf.seek(0)
+        rendered_maps.append(
+            (str(label), f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}")
+        )
+
+    if not rendered_maps:
+        return None
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 1],
+            y=[0, 1],
+            mode="markers",
+            marker={"opacity": 0},
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    first_label, first_image = rendered_maps[0]
+
+    fig.update_layout(
+        title=f"{title} - {first_label}",
+        width=520,
+        height=380,
+        xaxis={"visible": False, "range": [0, 1]},
+        yaxis={"visible": False, "range": [0, 1], "scaleanchor": "x", "scaleratio": 1},
+        margin={"l": 10, "r": 10, "t": 60, "b": 10},
+        images=[
+            {
+                "source": first_image,
+                "xref": "x",
+                "yref": "y",
+                "x": 0,
+                "y": 1,
+                "sizex": 1,
+                "sizey": 1,
+                "sizing": "contain",
+                "layer": "below",
+            }
+        ],
+        updatemenus=[
+            {
+                "type": "dropdown",
+                "direction": "down",
+                "x": 1.0,
+                "y": 1.16,
+                "xanchor": "right",
+                "yanchor": "top",
+                "buttons": [
+                    {
+                        "label": label,
+                        "method": "relayout",
+                        "args": [
+                            {
+                                "title": f"{title} - {label}",
+                                "images": [
+                                    {
+                                        "source": image_src,
+                                        "xref": "x",
+                                        "yref": "y",
+                                        "x": 0,
+                                        "y": 1,
+                                        "sizex": 1,
+                                        "sizey": 1,
+                                        "sizing": "contain",
+                                        "layer": "below",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                    for label, image_src in rendered_maps
+                ],
+            }
+        ],
+    )
     return fig
 
 

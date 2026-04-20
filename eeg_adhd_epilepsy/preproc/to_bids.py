@@ -1036,6 +1036,7 @@ def main() -> None:
                 record_result,
                 failed_ids=failed_ids,
                 successful_ids=successful_ids,
+                skipped_ids=skipped_ids,
                 eeg_run_records=eeg_run_records,
                 raw_qc_run_records=raw_qc_run_records,
             )

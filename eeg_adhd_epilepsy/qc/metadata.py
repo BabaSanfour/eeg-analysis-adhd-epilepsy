@@ -13,7 +13,7 @@ from typing import Any
 
 import pandas as pd
 
-from eeg_adhd_epilepsy.io.csv import load as load_csv
+from eeg_adhd_epilepsy.io.table import load
 from eeg_adhd_epilepsy.utils.metadata_schema import (
     EPILEPSY_MED_COLS,
     PATIENTS_METADATA_AUDIT_COLUMNS,
@@ -301,8 +301,8 @@ def build_patients_metadata(
 ) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    raw_adhd = load_csv(str(adhd_csv), sep=None)
-    raw_drug_resistant = load_csv(str(drug_resistant_csv), sep=None)
+    raw_adhd = load(str(adhd_csv), sep=None)
+    raw_drug_resistant = load(str(drug_resistant_csv), sep=None)
 
     merged_raw = pd.concat(
         [_rename_adhd_source(raw_adhd), _rename_drug_resistant_source(raw_drug_resistant)],

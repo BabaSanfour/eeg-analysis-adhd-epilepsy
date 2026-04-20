@@ -42,7 +42,6 @@ from eeg_adhd_epilepsy.preproc.epochs import (
 import sys
 import argparse
 from eeg_adhd_epilepsy.io import bids
-from eeg_adhd_epilepsy.io import csv as io_csv
 from eeg_adhd_epilepsy.qc import preproc_qc
 from joblib import Parallel, delayed
 from tqdm import tqdm
