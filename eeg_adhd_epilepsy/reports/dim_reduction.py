@@ -815,6 +815,10 @@ def _build_nonflat_condition_section(
         else ""
     )
     section = Section(condition, icon="📊")
+    artifacts = {
+        str(row["fit_id"]): load_fit_artifact(output_root / row["artifact_path"])
+        for _, row in condition_runs.iterrows()
+    }
     intro = f"Primary analysis unit: **{unit_label}**."
     if args.analysis_mode == "sensor_within_family":
         intro = "Primary analysis unit: **sensor within family**."
@@ -990,10 +994,6 @@ def _build_nonflat_condition_section(
         selection_eval_name=getattr(args, "selection_eval_name", None),
     )
     if args.analysis_mode == "sensor":
-        artifacts = {
-            str(row["fit_id"]): load_fit_artifact(output_root / row["artifact_path"])
-            for _, row in condition_runs.iterrows()
-        }
         sensor_container = load_container(args, subjects, meta_df, condition, target_col=None)
         sensor_meta = _build_meta_dict(sensor_container)
         for reducer_name in args.reducers_resolved:
@@ -1062,6 +1062,10 @@ def _build_pooled_section(
         else ""
     )
     section = Section("Pooled Multi-condition", icon="🌐")
+    artifacts = {
+        str(row["fit_id"]): load_fit_artifact(output_root / row["artifact_path"])
+        for _, row in pooled_runs.iterrows()
+    }
     section.add_markdown(
         (
             "Shared fits across all requested conditions. "
