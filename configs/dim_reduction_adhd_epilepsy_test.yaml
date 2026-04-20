@@ -1,0 +1,44 @@
+dataset_name: adhd_epilepsy_test_10sub
+bids_root: /Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS
+metadata: /Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/csv/patients_metadata_clean.csv
+subject_col: study_id
+
+conditions:
+  - EO_baseline
+  - EC_baseline
+
+input_mode: raw
+segment_duration: 10.0
+use_derivatives: true
+task: clinical
+desc: base
+representation: subject_flat
+
+reducers:
+  - DEFAULT
+
+n_components_sweep:
+  - 2
+  - 3
+  - 5
+
+run_pooled: true
+interactive: true
+save_static_figures: true
+compress_viz_with_pca: true
+
+evals:
+  - name: epilepsy
+    target_col: epilepsy
+  - name: adhd
+    target_col: adhd
+  - name: autism
+    target_col: autism
+  - name: asm_resistant
+    target_col: asm_resistant
+  - name: psychostimulant
+    target_col: psychostimulant
+  - name: asm
+    target_col: asm
+  - name: sex
+    target_col: sex

@@ -147,6 +147,194 @@ def _plot_meta(meta: Optional[dict[str, np.ndarray]], n_samples: int) -> Optiona
     return filtered or None
 
 
+def _selection_view(
+    frame: pd.DataFrame,
+    selection_metric: str,
+    selection_eval_name: Optional[str],
+) -> pd.DataFrame:
+    if frame.empty:
+        return frame
+    if (
+        selection_metric == SEPARATION_METRIC_KEY
+        and selection_eval_name
+        and "eval_name" in frame.columns
+    ):
+        selected = frame[frame["eval_name"] == selection_eval_name].copy()
+        if not selected.empty:
+            return selected
+    return frame
+
+
+def _primary_eval_spec(args: Any, eval_specs: Sequence[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    if not eval_specs:
+        return None
+    selection_eval_name = getattr(args, "selection_eval_name", None)
+    if selection_eval_name:
+        for spec in eval_specs:
+            if spec["name"] == selection_eval_name:
+                return spec
+    return eval_specs[0]
+
+
+def _overview_container(
+    args: Any,
+    subjects: Optional[Sequence[str]],
+    meta_df: Optional[pd.DataFrame],
+    containers_by_scope: Optional[dict[tuple[str, str], Any]],
+    pooled_condition: str,
+):
+    if containers_by_scope:
+        pooled = containers_by_scope.get(("pooled", pooled_condition))
+        if pooled is not None:
+            return pooled
+        condition_containers = [
+            containers_by_scope[("condition", condition)]
+            for condition in args.conditions
+            if ("condition", condition) in containers_by_scope
+        ]
+        if condition_containers:
+            if len(condition_containers) == 1:
+                return condition_containers[0]
+            return concat_containers(condition_containers)
+
+    loaded = []
+    for condition in args.conditions:
+        try:
+            loaded.append(load_container(args, subjects, meta_df, condition, target_col=None))
+        except Exception:
+            continue
+    if not loaded:
+        return None
+    if len(loaded) == 1:
+        return loaded[0]
+    return concat_containers(loaded)
+
+
+def _subject_frame(container, subject_col: str) -> pd.DataFrame:
+    n_obs = container.X.shape[0]
+    data: dict[str, np.ndarray] = {}
+    for key, values in container.coords.items():
+        arr = np.asarray(values)
+        if arr.ndim == 1 and len(arr) == n_obs:
+            data[str(key)] = arr
+    if container.ids is not None:
+        data["obs_id"] = np.asarray(container.ids, dtype=object).astype(str)
+    frame = pd.DataFrame(data)
+    if subject_col in frame.columns:
+        frame = frame.drop_duplicates(subset=[subject_col], keep="first").reset_index(drop=True)
+    return frame
+
+
+def _add_overview_cohort_summary(
+    overview_sec: Section,
+    args: Any,
+    eval_specs: Sequence[dict[str, Any]],
+    subjects: Optional[Sequence[str]],
+    meta_df: Optional[pd.DataFrame],
+    containers_by_scope: Optional[dict[tuple[str, str], Any]],
+    pooled_condition: str,
+) -> None:
+    primary_spec = _primary_eval_spec(args, eval_specs)
+    if primary_spec is None:
+        return
+    container = _overview_container(args, subjects, meta_df, containers_by_scope, pooled_condition)
+    if container is None:
+        return
+    frame = _subject_frame(container, args.subject_col)
+    if primary_spec["target_col"] not in frame.columns:
+        return
+
+    labels = frame[primary_spec["target_col"]].astype(str)
+    label_map = primary_spec.get("label_map") or {}
+    if label_map:
+        labels = labels.map(lambda value: label_map.get(value, value))
+    frame = frame.assign(_primary_class=labels.astype(str))
+    if frame["_primary_class"].nunique(dropna=True) <= 1:
+        return
+
+    overview_sec.add_markdown(
+        f"Primary cohort summary for **{primary_spec['name']}** using **{frame[args.subject_col].nunique() if args.subject_col in frame.columns else len(frame)}** unique subjects."
+    )
+
+    summary_rows = []
+    for class_value, class_df in frame.groupby("_primary_class", dropna=False):
+        row = {
+            "class": class_value,
+            "n_subjects": int(len(class_df)),
+            "pct_subjects": round(100.0 * len(class_df) / len(frame), 1),
+        }
+        if "age" in class_df.columns:
+            age = pd.to_numeric(class_df["age"], errors="coerce")
+            if age.notna().any():
+                row["mean_age"] = round(float(age.mean()), 2)
+                row["sd_age"] = round(float(age.std(ddof=0)), 2)
+        summary_rows.append(row)
+    overview_sec.add_element(
+        TableElement(pd.DataFrame(summary_rows), title="Primary class counts")
+    )
+
+    if "sex" in frame.columns:
+        sex_table = (
+            frame.assign(sex=frame["sex"].astype(str))
+            .groupby(["_primary_class", "sex"], dropna=False)
+            .size()
+            .unstack(fill_value=0)
+            .reset_index()
+            .rename(columns={"_primary_class": "class"})
+        )
+        overview_sec.add_element(TableElement(sex_table, title="Sex by class"))
+
+    if "age_group" in frame.columns:
+        age_group_table = (
+            frame.assign(age_group=frame["age_group"].astype(str))
+            .groupby(["_primary_class", "age_group"], dropna=False)
+            .size()
+            .unstack(fill_value=0)
+            .reset_index()
+            .rename(columns={"_primary_class": "class"})
+        )
+        overview_sec.add_element(TableElement(age_group_table, title="Age group by class"))
+
+    clinical_columns = [
+        column
+        for column in ["autism", "epilepsy", "asm", "asm_resistant", "psychostimulant"]
+        if column in frame.columns
+    ]
+    if clinical_columns:
+        clinical_rows = []
+        for class_value, class_df in frame.groupby("_primary_class", dropna=False):
+            row = {"class": class_value}
+            for column in clinical_columns:
+                values = class_df[column].astype(str).str.strip().str.lower()
+                present = values.isin({"1", "true", "yes", "y", "present"})
+                total = int(present.notna().sum())
+                if total == 0:
+                    row[column] = ""
+                else:
+                    count = int(present.sum())
+                    row[column] = f"{count} ({(100.0 * count / total):.1f}%)"
+            clinical_rows.append(row)
+        overview_sec.add_element(
+            TableElement(pd.DataFrame(clinical_rows), title="Clinical composition by class")
+        )
+
+    if "psychostimulant_category" in frame.columns:
+        medication_rows = []
+        for class_value, class_df in frame.groupby("_primary_class", dropna=False):
+            counts = class_df["psychostimulant_category"].fillna("None").astype(str).value_counts()
+            medication_rows.append(
+                {
+                    "class": class_value,
+                    "psychostimulant_category_counts": "; ".join(
+                        f"{name}={count}" for name, count in counts.items()
+                    ),
+                }
+            )
+        overview_sec.add_element(
+            TableElement(pd.DataFrame(medication_rows), title="Medication category by class")
+        )
+
+
 def _add_embedding_plot(
     section: Section,
     embedding: np.ndarray,
@@ -307,7 +495,7 @@ def _build_flat_condition_section(
             ].round(4),
             title="Fit ranking",
             selector_columns=["reducer", "eval_name"],
-            default_sort={"column": "trustworthiness", "direction": "desc"},
+            default_sort={"column": args.selection_metric, "direction": "desc"},
             page_size=5,
         )
     )
@@ -317,13 +505,17 @@ def _build_flat_condition_section(
         if reducer_runs.empty:
             continue
         best_row = (
-            reducer_runs.merge(
-                eval_frame.loc[:, ["fit_id", SEPARATION_METRIC_KEY]],
+            _selection_view(
+                reducer_runs.merge(
+                eval_frame.loc[:, ["fit_id", "eval_name", SEPARATION_METRIC_KEY]],
                 on="fit_id",
                 how="left",
+                ),
+                args.selection_metric,
+                getattr(args, "selection_eval_name", None),
             )
             .sort_values(
-                ["trustworthiness", "continuity", SEPARATION_METRIC_KEY],
+                [args.selection_metric, "trustworthiness", "continuity"],
                 ascending=[False, False, False],
                 na_position="last",
             )
@@ -347,9 +539,9 @@ def _build_flat_condition_section(
         if not sweep_df.empty:
             fig = go.Figure()
             for metric_name in ["trustworthiness", "continuity", "shepard_correlation"]:
-                if metric_name not in sweep_df.columns:
+                if metric_name not in reducer_runs.columns:
                     continue
-                metric_df = sweep_df.dropna(subset=[metric_name])
+                metric_df = reducer_runs.dropna(subset=[metric_name]).sort_values("n_components")
                 if metric_df.empty:
                     continue
                 fig.add_trace(
@@ -407,9 +599,12 @@ def _add_unit_summary(
     title_prefix: str,
     input_mode: str,
     selection_metric: str,
+    selection_eval_name: Optional[str] = None,
 ) -> None:
     if unit_runs.empty:
         return
+
+    unit_runs = _selection_view(unit_runs, selection_metric, selection_eval_name)
 
     group_columns = [
         column
@@ -598,6 +793,7 @@ def _build_nonflat_condition_section(
             title_prefix=condition,
             input_mode=args.input_mode,
             selection_metric=args.selection_metric,
+            selection_eval_name=getattr(args, "selection_eval_name", None),
         )
         family_container = load_container(args, subjects, meta_df, condition, target_col=None)
         family_meta = _build_meta_dict(family_container)
@@ -615,7 +811,11 @@ def _build_nonflat_condition_section(
                 comparison_metrics.append(SEPARATION_METRIC_KEY)
             comparison_metrics = list(dict.fromkeys(comparison_metrics))
             for family, family_runs in reducer_runs.groupby("family", dropna=False):
-                family_best_by_n = family_runs.sort_values(
+                family_best_by_n = _selection_view(
+                    family_runs,
+                    args.selection_metric,
+                    getattr(args, "selection_eval_name", None),
+                ).sort_values(
                     [args.selection_metric, "trustworthiness", "continuity"],
                     ascending=[False, False, False],
                     na_position="last",
@@ -655,7 +855,11 @@ def _build_nonflat_condition_section(
             )
         for family, family_runs in merged.groupby("family", dropna=False):
             best_row = (
-                family_runs.sort_values(
+                _selection_view(
+                    family_runs,
+                    args.selection_metric,
+                    getattr(args, "selection_eval_name", None),
+                ).sort_values(
                     [args.selection_metric, "trustworthiness", "continuity"],
                     ascending=[False, False, False],
                     na_position="last",
@@ -710,6 +914,7 @@ def _build_nonflat_condition_section(
                 title_prefix=f"{condition} - {family}",
                 input_mode=args.input_mode,
                 selection_metric=args.selection_metric,
+                selection_eval_name=getattr(args, "selection_eval_name", None),
             )
         return section
 
@@ -720,6 +925,7 @@ def _build_nonflat_condition_section(
         title_prefix=condition,
         input_mode=args.input_mode,
         selection_metric=args.selection_metric,
+        selection_eval_name=getattr(args, "selection_eval_name", None),
     )
     if args.analysis_mode == "sensor":
         artifacts = {
@@ -740,7 +946,11 @@ def _build_nonflat_condition_section(
             sensor_groups = list(reducer_runs.groupby(sensor_group_columns, dropna=False)) if sensor_group_columns else [((), reducer_runs)]
             for group_key, group_df in sensor_groups:
                 best_row = (
-                    group_df.sort_values(
+                    _selection_view(
+                        group_df,
+                        args.selection_metric,
+                        getattr(args, "selection_eval_name", None),
+                    ).sort_values(
                         [args.selection_metric, "trustworthiness", "continuity"],
                         ascending=[False, False, False],
                         na_position="last",
@@ -807,6 +1017,7 @@ def _build_pooled_section(
             title_prefix="Pooled",
             input_mode=args.input_mode,
             selection_metric=args.selection_metric,
+            selection_eval_name=getattr(args, "selection_eval_name", None),
         )
         for reducer_name in args.reducers_resolved:
             reducer_runs = merged[merged["reducer"] == reducer_name].copy()
@@ -823,7 +1034,11 @@ def _build_pooled_section(
             comparison_metrics = list(dict.fromkeys(comparison_metrics))
             for family, family_runs in reducer_runs.groupby("family", dropna=False):
                 family_best_by_n = (
-                    family_runs.sort_values(
+                    _selection_view(
+                        family_runs,
+                        args.selection_metric,
+                        getattr(args, "selection_eval_name", None),
+                    ).sort_values(
                         [args.selection_metric, "trustworthiness", "continuity"],
                         ascending=[False, False, False],
                         na_position="last",
@@ -875,6 +1090,7 @@ def _build_pooled_section(
                 title_prefix=f"Pooled - {family}",
                 input_mode=args.input_mode,
                 selection_metric=args.selection_metric,
+                selection_eval_name=getattr(args, "selection_eval_name", None),
             )
     else:
         unit_label = "family" if args.analysis_mode == "family" else "sensor"
@@ -885,6 +1101,7 @@ def _build_pooled_section(
             title_prefix="Pooled",
             input_mode=args.input_mode,
             selection_metric=args.selection_metric,
+            selection_eval_name=getattr(args, "selection_eval_name", None),
         )
     return section
 
@@ -941,7 +1158,8 @@ def generate_dataset_report(
         if args.input_mode == "descriptors"
         else ""
     )
-    report_title = f"Dimensionality Reduction: {args.dataset_name}"
+    run_variant = f"{args.analysis_mode}__{args.representation}"
+    report_title = f"Dimensionality Reduction: {args.dataset_name} ({args.input_mode} / {run_variant})"
     if family_label:
         report_title += f" [{family_label}]"
     report = Report(title=report_title)
@@ -956,11 +1174,14 @@ def generate_dataset_report(
                         "input_mode": args.input_mode,
                         "analysis_mode": args.analysis_mode,
                         "representation": args.representation,
+                        "run_variant": run_variant,
                         "descriptor_families": family_label,
                         "reducers": ", ".join(reducers),
                         "n_components_sweep": ", ".join(map(str, args.n_components_sweep)),
                         "conditions": ", ".join(args.conditions),
                         "eval_names": ", ".join(spec["name"] for spec in eval_specs) if eval_specs else "",
+                        "selection_metric": args.selection_metric,
+                        "selection_eval_name": getattr(args, "selection_eval_name", None) or "",
                         "run_pooled": args.run_pooled,
                     }
                 ]
@@ -968,15 +1189,27 @@ def generate_dataset_report(
             title="Run configuration",
         )
     )
+    _add_overview_cohort_summary(
+        overview_sec,
+        args,
+        eval_specs,
+        subjects,
+        meta_df,
+        containers_by_scope,
+        pooled_condition,
+    )
     report.add_section(overview_sec)
 
     fit_failures = fit_runs_df[fit_runs_df["status"] != "success"].copy()
     if not fit_failures.empty:
         failures_sec = Section("Fit Failures", icon="⚠️")
         failures_sec.add_element(
-            TableElement(
+            InteractiveTableElement(
                 fit_failures.loc[:, [column for column in _FIT_FAILURE_COLUMNS if column in fit_failures.columns]],
                 title="Failed fits",
+                selector_columns=[column for column in ["scope", "condition", "family", "unit_name", "reducer"] if column in fit_failures.columns],
+                default_sort={"column": "condition", "direction": "asc"} if "condition" in fit_failures.columns else None,
+                page_size=5,
             )
         )
         report.add_section(failures_sec)
@@ -985,9 +1218,12 @@ def generate_dataset_report(
     if not eval_failures.empty:
         failures_sec = Section("Eval Failures", icon="⚠️")
         failures_sec.add_element(
-            TableElement(
+            InteractiveTableElement(
                 eval_failures.loc[:, [column for column in _EVAL_FAILURE_COLUMNS if column in eval_failures.columns]],
                 title="Failed evals",
+                selector_columns=[column for column in ["scope", "condition", "family", "unit_name", "reducer", "eval_name"] if column in eval_failures.columns],
+                default_sort={"column": "condition", "direction": "asc"} if "condition" in eval_failures.columns else None,
+                page_size=5,
             )
         )
         report.add_section(failures_sec)

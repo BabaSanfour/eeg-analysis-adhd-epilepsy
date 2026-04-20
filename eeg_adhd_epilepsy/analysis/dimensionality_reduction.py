@@ -851,6 +851,64 @@ def _run_task_batch(
     )
 
 
+def _write_run_status(
+    output_root: Path,
+    fit_runs_path: Path,
+    eval_runs_path: Path,
+    *,
+    fatal_error: str | None = None,
+    report_path: Path | None = None,
+) -> None:
+    fit_runs = json.loads(fit_runs_path.read_text(encoding="utf-8")) if fit_runs_path.exists() else []
+    eval_runs = json.loads(eval_runs_path.read_text(encoding="utf-8")) if eval_runs_path.exists() else []
+
+    fit_success = sum(record.get("status") == "success" for record in fit_runs)
+    fit_failed = sum(record.get("status") == "failed" for record in fit_runs)
+    eval_success = sum(record.get("status") == "success" for record in eval_runs)
+    eval_failed = sum(record.get("status") == "failed" for record in eval_runs)
+    any_success = (fit_success + eval_success) > 0
+    any_failed = (fit_failed + eval_failed) > 0 or fatal_error is not None
+
+    if any_failed and any_success:
+        run_status = "partial"
+    elif any_failed:
+        run_status = "failed"
+    elif any_success:
+        run_status = "success"
+    else:
+        run_status = "failed" if fatal_error is not None else "partial"
+
+    summary_payload = {
+        "status": run_status,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "fit_total": len(fit_runs),
+        "fit_success": fit_success,
+        "fit_failed": fit_failed,
+        "eval_total": len(eval_runs),
+        "eval_success": eval_success,
+        "eval_failed": eval_failed,
+        "report_path": str(report_path) if report_path is not None else None,
+        "report_exists": bool(report_path is not None and report_path.exists()),
+        "fatal_error": fatal_error,
+    }
+    (output_root / "run_summary.json").write_text(
+        json.dumps(summary_payload, indent=2),
+        encoding="utf-8",
+    )
+
+    for marker_name in ("_RUN_SUCCESS", "_RUN_PARTIAL", "_RUN_FAILED"):
+        marker_path = output_root / marker_name
+        if marker_path.exists():
+            marker_path.unlink()
+
+    marker_name = {
+        "success": "_RUN_SUCCESS",
+        "partial": "_RUN_PARTIAL",
+        "failed": "_RUN_FAILED",
+    }[run_status]
+    (output_root / marker_name).write_text("ok\n", encoding="utf-8")
+
+
 def main() -> None:
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--config", default=None)
@@ -869,6 +927,7 @@ def main() -> None:
 
     input_group = parser.add_argument_group("Input")
     input_group.add_argument("--input_mode", choices=["raw", "descriptors", "embeddings"], default="raw")
+    input_group.add_argument("--task", default="clinical")
     input_group.add_argument("--segment_duration", type=float, default=60.0)
     input_group.add_argument("--overlap", type=float, default=0.0)
     input_group.add_argument("--use_derivatives", action="store_true")
@@ -916,6 +975,11 @@ def main() -> None:
     reduction_group.add_argument("--reports-only", action="store_true")
     reduction_group.add_argument("--eval_config", default=None)
     reduction_group.add_argument("--n_jobs", type=int, default=1)
+    reduction_group.add_argument(
+        "--output_group",
+        default=None,
+        help="Optional nested output group under derivatives/reports, e.g. 'medicated_adhd_vs_controls/lis'.",
+    )
 
     filter_group = parser.add_argument_group("Filtering")
     filter_group.add_argument("--filter_col", action="append", default=[])
@@ -929,9 +993,13 @@ def main() -> None:
     report_group.add_argument("--compress_viz_with_pca", action="store_true")
     report_group.add_argument(
         "--selection_metric",
-        choices=[*FIT_METRIC_COLUMNS, SEPARATION_METRIC_KEY],
         default=SEPARATION_METRIC_KEY,
         help="Metric used to select the best run in report summaries.",
+    )
+    report_group.add_argument(
+        "--selection_eval_name",
+        default=None,
+        help="Eval name whose separation metric should drive report selection, e.g. 'med_adhd_vs_ctrl'.",
     )
 
     config_eval_specs = None
@@ -1012,7 +1080,30 @@ def main() -> None:
     if auto_pooled_eval_spec is not None and not any(spec["name"] == auto_pooled_eval_spec["name"] for spec in eval_specs):
         eval_specs = [*eval_specs, auto_pooled_eval_spec]
 
-    output_root = bids_root / "derivatives" / "dim_reduction" / args.dataset_name
+    valid_selection_metrics = { *FIT_METRIC_COLUMNS, SEPARATION_METRIC_KEY }
+    eval_names = {spec["name"] for spec in eval_specs}
+    if args.selection_metric in eval_names and not args.selection_eval_name:
+        args.selection_eval_name = args.selection_metric
+        args.selection_metric = SEPARATION_METRIC_KEY
+    if args.selection_metric not in valid_selection_metrics:
+        raise ValueError(
+            f"Unknown selection_metric '{args.selection_metric}'. "
+            f"Valid metrics: {sorted(valid_selection_metrics)}"
+        )
+    if args.selection_eval_name and args.selection_eval_name not in eval_names:
+        raise ValueError(
+            f"Unknown selection_eval_name '{args.selection_eval_name}'. "
+            f"Valid eval names: {sorted(eval_names)}"
+        )
+
+    output_base = bids_root / "derivatives" / "dim_reduction"
+    if args.output_group:
+        output_group = Path(str(args.output_group))
+        if output_group.is_absolute():
+            raise ValueError("--output_group must be relative, not absolute.")
+        output_base = output_base / output_group
+    run_variant = f"{args.analysis_mode}__{args.representation}"
+    output_root = output_base / args.dataset_name / args.input_mode / run_variant
     output_root.mkdir(parents=True, exist_ok=True)
     config_snapshot = {key: value for key, value in vars(args).items() if key not in {"config", "eval_config"}}
     if eval_specs:
@@ -1131,29 +1222,47 @@ def main() -> None:
             for record in _run_task_batch(eval_tasks, _execute_eval_task, resolved_n_jobs):
                 update_runs(eval_runs_path, record, key_fields=EVAL_RUN_KEY_FIELDS)
 
-    if not fit_runs_path.exists():
-        raise RuntimeError(
-            f"No fit runs found in {fit_runs_path}. Dim reduction produced no successful fit inventory."
-        )
+    report_path: Path | None = None
+    fatal_error: str | None = None
+    try:
+        if not fit_runs_path.exists():
+            raise RuntimeError(
+                f"No fit runs found in {fit_runs_path}. Dim reduction produced no successful fit inventory."
+            )
 
-    report = generate_dataset_report(
-        args=args,
-        output_root=output_root,
-        fit_runs_path=fit_runs_path,
-        eval_runs_path=eval_runs_path,
-        reducers=reducers,
-        subjects=subjects,
-        meta_df=meta_df,
-        containers_by_scope=base_containers_by_scope or None,
-        metric_columns=FIT_METRIC_COLUMNS,
-        eval_specs=eval_specs,
-        pooled_condition=POOLED_CONDITION,
-    )
-    reports_root = get_reports_root(bids_root)
-    summary_dir = get_stage_summary_dir(reports_root, "dim_reduction", create_dir=True)
-    report_path = summary_dir / f"{args.dataset_name}_dataset_summary.html"
-    report.save(report_path)
-    logger.info("Report saved to: %s", report_path)
+        report = generate_dataset_report(
+            args=args,
+            output_root=output_root,
+            fit_runs_path=fit_runs_path,
+            eval_runs_path=eval_runs_path,
+            reducers=reducers,
+            subjects=subjects,
+            meta_df=meta_df,
+            containers_by_scope=base_containers_by_scope or None,
+            metric_columns=FIT_METRIC_COLUMNS,
+            eval_specs=eval_specs,
+            pooled_condition=POOLED_CONDITION,
+        )
+        reports_root = get_reports_root(bids_root)
+        summary_dir = get_stage_summary_dir(reports_root, "dim_reduction", create_dir=True)
+        if args.output_group:
+            summary_dir = summary_dir / Path(str(args.output_group))
+        summary_dir = summary_dir / args.dataset_name / args.input_mode
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        report_path = summary_dir / f"{run_variant}_dataset_summary.html"
+        report.save(report_path)
+        logger.info("Report saved to: %s", report_path)
+    except Exception as exc:
+        fatal_error = str(exc)
+        raise
+    finally:
+        _write_run_status(
+            output_root=output_root,
+            fit_runs_path=fit_runs_path,
+            eval_runs_path=eval_runs_path,
+            fatal_error=fatal_error,
+            report_path=report_path,
+        )
 
 
 if __name__ == "__main__":

@@ -159,6 +159,20 @@ def load_container(
         )
     else:
         raise ValueError(f"Unsupported input mode '{input_mode}'.")
+    group_filters = getattr(args, "group_filters", None)
+    if group_filters:
+        n_obs = container.X.shape[0]
+        final_mask = np.zeros(n_obs, dtype=bool)
+        for group_def in group_filters:
+            group_mask = np.ones(n_obs, dtype=bool)
+            for col, vals in group_def.items():
+                if col in container.coords:
+                    group_mask &= np.isin(np.asarray(container.coords[col]).astype(str), [str(v) for v in vals])
+                else:
+                    group_mask[:] = False
+            final_mask |= group_mask
+        container = container.isel(obs=np.flatnonzero(final_mask))
+
     for column, values in zip(args.filter_col, args.filter_val):
         if not values:
             continue

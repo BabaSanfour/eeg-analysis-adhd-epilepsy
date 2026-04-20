@@ -1,0 +1,40 @@
+dataset_name: dim_red_example
+subject_col: study_id
+conditions:
+  - EO_baseline
+  - EC_baseline
+
+input_mode: descriptors
+representation: epoch_flat
+descriptor_table_path: /path/to/sensor_epoch_features.parquet
+descriptor_feature_columns_path: /path/to/sensor_epoch_features_feature_columns.json
+
+reducers:
+  - default
+n_components_sweep:
+  - 2
+  - 3
+  - 5
+  - 10
+
+run_pooled: true
+interactive: true
+save_static_figures: false
+compress_viz_with_pca: false
+
+evals:
+  - name: epilepsy
+    target_col: epilepsy
+
+  - name: adhd
+    target_col: adhd
+
+  - name: female_adhd
+    target_col: adhd
+    group_col: study_id
+    filters:
+      - column: sex
+        values: ["F"]
+    label_map:
+      yes: "1"
+      no: "0"

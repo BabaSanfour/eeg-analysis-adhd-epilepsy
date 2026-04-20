@@ -1,0 +1,54 @@
+dataset_name: pooled_03_no_autism_female
+output_group: medicated_adhd_vs_controls/pooled
+subject_col: study_id
+selection_metric: separation_logreg_balanced_accuracy
+selection_eval_name: med_adhd_vs_ctrl
+conditions:
+- EO_baseline
+- EC_baseline
+run_pooled: true
+ignore_annotations: true
+use_derivatives: true
+interactive: true
+save_static_figures: true
+compress_viz_with_pca: true
+reducers:
+- DEFAULT
+n_components_sweep:
+- 2
+- 3
+- 5
+- 10
+- 15
+- 20
+- 25
+- 50
+group_filters:
+- combined_diagnosis:
+  - Control
+  autism:
+  - 0
+- adhd:
+  - 1
+  psychostimulant:
+  - 1
+  autism:
+  - 0
+filter_col:
+- sex
+filter_val:
+- - F
+evals:
+- name: med_adhd_vs_ctrl
+  target_col: combined_diagnosis
+  label_map:
+    Control: '0'
+    ADHD: '1'
+    ADHD+Epilepsy: '1'
+    ADHD+ASD: '1'
+    ADHD+ASD+Epilepsy: '1'
+- name: age_separation
+  target_col: age_group
+- name: condition_separation
+  target_col: condition
+  group_col: study_id
