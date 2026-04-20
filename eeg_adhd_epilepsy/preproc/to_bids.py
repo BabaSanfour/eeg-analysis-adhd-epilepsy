@@ -788,6 +788,19 @@ def process_record(
         )
 
     available_targets = [channel for channel in config.BASIC_1020_CHANNELS if channel in raw.ch_names]
+    if len(available_targets) < len(config.BASIC_1020_CHANNELS):
+        missing_targets = [channel for channel in config.BASIC_1020_CHANNELS if channel not in raw.ch_names]
+        LOGGER.warning(
+            "Skipping %s run-%s: expected %d canonical channels, found %d. Missing: %s",
+            subject_id,
+            run,
+            len(config.BASIC_1020_CHANNELS),
+            len(available_targets),
+            missing_targets,
+        )
+        result["skipped"] = True
+        result["success"] = True
+        return result
     if available_targets:
         raw.pick(available_targets)
     if raw.ch_names:
