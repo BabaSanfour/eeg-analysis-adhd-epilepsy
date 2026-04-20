@@ -40,6 +40,12 @@ group_filters:
   - 1
   asm:
   - 0
+filter_col:
+- age_group
+filter_val:
+- - 5-8
+  - 9-12
+  - 13-18
 evals:
 - name: med_adhd_vs_ctrl
   target_col: combined_diagnosis

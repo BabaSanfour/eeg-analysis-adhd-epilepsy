@@ -34,8 +34,12 @@ group_filters:
   - 1
 filter_col:
 - sex
+- age_group
 filter_val:
 - - F
+- - 5-8
+  - 9-12
+  - 13-18
 evals:
 - name: med_adhd_vs_ctrl
   target_col: combined_diagnosis

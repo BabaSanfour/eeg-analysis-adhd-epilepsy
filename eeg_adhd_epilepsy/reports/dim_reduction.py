@@ -210,6 +210,40 @@ def _overview_container(
     return concat_containers(loaded)
 
 
+def _build_primary_labels(
+    args: Any,
+    eval_specs: Sequence[dict[str, Any]],
+    meta_df: Optional[pd.DataFrame],
+    ids: np.ndarray,
+) -> tuple[Optional[np.ndarray], Optional[str]]:
+    primary_spec = _primary_eval_spec(args, eval_specs)
+    if primary_spec is None or meta_df is None:
+        return None, None
+
+    target_col = primary_spec["target_col"]
+    if target_col not in meta_df.columns:
+        return None, None
+
+    subject_col = args.subject_col
+    if subject_col not in meta_df.columns:
+        return None, None
+
+    # Map target column values to labels
+    label_map = primary_spec.get("label_map") or {}
+    
+    id_to_class = {}
+    subset = meta_df.dropna(subset=[subject_col, target_col])
+    for _, row in subset.iterrows():
+        sid = str(row[subject_col])
+        if sid not in id_to_class:
+            val = str(row[target_col])
+            id_to_class[sid] = str(label_map.get(val, val))
+            
+    # Map the requested IDs
+    labels = np.array([id_to_class.get(str(id_val), "unknown") for id_val in ids], dtype=object)
+    return labels, primary_spec["name"]
+
+
 def _subject_frame(container, subject_col: str) -> pd.DataFrame:
     n_obs = container.X.shape[0]
     data: dict[str, np.ndarray] = {}
@@ -523,6 +557,9 @@ def _build_flat_condition_section(
         )
         best_artifact = artifacts[str(best_row["fit_id"])]
         section.add_markdown(f"### {reducer_name} (best n={int(best_row['n_components'])})")
+        primary_labels, primary_name = _build_primary_labels(
+            args, eval_specs, meta_df, best_artifact["ids"]
+        )
         _add_best_fit_plots(
             section,
             f"{condition} - {reducer_name}",
@@ -530,6 +567,8 @@ def _build_flat_condition_section(
             meta_dict,
             interactive=args.interactive,
             compress_viz_with_pca=args.compress_viz_with_pca,
+            labels=primary_labels,
+            label_name=primary_name,
         )
         sweep_df = reducer_runs.merge(
             eval_frame.loc[:, ["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]],
@@ -552,15 +591,18 @@ def _build_flat_condition_section(
                         name=metric_name,
                     )
                 )
-            for eval_name, eval_group in sweep_df.dropna(subset=[SEPARATION_METRIC_KEY]).groupby("eval_name"):
-                fig.add_trace(
-                    go.Scatter(
-                        x=eval_group["n_components"],
-                        y=eval_group[SEPARATION_METRIC_KEY],
-                        mode="lines+markers",
-                        name=f"separation: {eval_name}",
+            # Separation metrics (Eval level)
+            if not sweep_df.empty and SEPARATION_METRIC_KEY in sweep_df.columns:
+                for eval_name, eval_group in sweep_df.dropna(subset=[SEPARATION_METRIC_KEY]).groupby("eval_name"):
+                    eval_group = eval_group.sort_values("n_components")
+                    fig.add_trace(
+                        go.Scatter(
+                            x=eval_group["n_components"],
+                            y=eval_group[SEPARATION_METRIC_KEY],
+                            mode="lines+markers",
+                            name=f"separation: {eval_name}",
+                        )
                     )
-                )
             fig.update_layout(
                 title=f"{condition} - {reducer_name} metrics vs n_components",
                 xaxis_title="n_components",
@@ -1119,6 +1161,20 @@ def generate_dataset_report(
     eval_specs: Sequence[dict[str, Any]],
     pooled_condition: str,
 ) -> Report:
+    # Inject research target labels into meta_df for automatic inclusion in all interactive plots
+    if meta_df is not None and eval_specs:
+        primary_spec = _primary_eval_spec(args, eval_specs)
+        if primary_spec:
+            target_col = primary_spec["target_col"]
+            if target_col in meta_df.columns:
+                label_map = primary_spec.get("label_map") or {}
+                meta_df = meta_df.copy()
+                meta_df["research_target"] = (
+                    meta_df[target_col]
+                    .astype(str)
+                    .map(lambda val: label_map.get(val, val))
+                )
+
     fit_runs_df = _filter_runs(pd.DataFrame(load_fit_runs(fit_runs_path)), args, reducers, pooled_condition)
 
     if eval_runs_path.exists():
