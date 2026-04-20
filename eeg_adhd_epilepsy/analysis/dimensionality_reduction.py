@@ -52,7 +52,7 @@ FIT_METRIC_COLUMNS = [
 EVAL_METRIC_COLUMNS = [SEPARATION_METRIC_KEY]
 POOLED_CONDITION = "pooled_all"
 FIT_RUN_KEY_FIELDS = ("fit_id",)
-EVAL_RUN_KEY_FIELDS = ("eval_id",)
+EVAL_RUN_KEY_FIELDS = ("fit_id", "eval_name", "target_col", "group_col")
 
 
 def save_fit_artifact(
@@ -415,7 +415,6 @@ def run_eval(
         fit_ids=np.asarray(fit_artifact["ids"], dtype=object).astype(str),
         eval_spec=eval_spec,
     )
-    selected_ids_sha256 = hashlib.sha256("\0".join(selected_ids.tolist()).encode("utf-8")).hexdigest()[:16]
     eval_id = hashlib.sha256(
         json.dumps(
             {
@@ -425,8 +424,6 @@ def run_eval(
                 "group_col": eval_spec["group_col"],
                 "filters": eval_spec["filters"],
                 "label_map": eval_spec["label_map"],
-                "selected_ids_sha256": selected_ids_sha256,
-                "n_samples": int(len(selected_ids)),
             },
             sort_keys=True,
             separators=(",", ":"),
@@ -674,7 +671,6 @@ def _build_eval_task(
         selected_ids = selected_ids_array.tolist()
     except Exception:
         selected_ids = []
-    selected_ids_sha256 = hashlib.sha256("\0".join(selected_ids).encode("utf-8")).hexdigest()[:16]
     eval_id = hashlib.sha256(
         json.dumps(
             {
@@ -684,8 +680,6 @@ def _build_eval_task(
                 "group_col": eval_spec["group_col"],
                 "filters": eval_spec["filters"],
                 "label_map": eval_spec["label_map"],
-                "selected_ids_sha256": selected_ids_sha256,
-                "n_samples": int(len(selected_ids)),
             },
             sort_keys=True,
             separators=(",", ":"),

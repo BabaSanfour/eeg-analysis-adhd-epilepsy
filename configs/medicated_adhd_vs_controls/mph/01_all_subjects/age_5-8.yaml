@@ -1,4 +1,4 @@
-dataset_name: mph_06_no_autism_no_asm_age_9-12
+dataset_name: mph_01_all_subjects_age_5-8
 output_group: medicated_adhd_vs_controls/mph
 subject_col: study_id
 selection_metric: separation_logreg_balanced_accuracy
@@ -34,14 +34,10 @@ group_filters:
   - 1
   psychostimulant_category:
   - Methylphenidate
-  autism:
-  - 0
-  asm:
-  - 0
 filter_col:
 - age_group
 filter_val:
-- - 9-12
+- - 5-8
 evals:
 - name: med_adhd_vs_ctrl
   target_col: combined_diagnosis

@@ -24,8 +24,15 @@ n_components_sweep:
 - 25
 - 50
 group_filters:
-- combined_diagnosis:
+- adhd:
+  - 0
+  psychostimulant:
+  - 0
+  combined_diagnosis:
   - Control
+  - Epilepsy
+  - ASD
+  - ASD+Epilepsy
 - adhd:
   - 1
   psychostimulant:
@@ -37,6 +44,9 @@ evals:
   target_col: combined_diagnosis
   label_map:
     Control: '0'
+    Epilepsy: '0'
+    ASD: '0'
+    ASD+Epilepsy: '0'
     ADHD: '1'
     ADHD+Epilepsy: '1'
     ADHD+ASD: '1'

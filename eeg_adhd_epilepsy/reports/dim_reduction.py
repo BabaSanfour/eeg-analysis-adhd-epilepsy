@@ -1125,6 +1125,10 @@ def generate_dataset_report(
         eval_runs_df = _filter_runs(pd.DataFrame(json.loads(eval_runs_path.read_text(encoding="utf-8"))), args, reducers, pooled_condition)
     else:
         eval_runs_df = pd.DataFrame()
+    if not eval_runs_df.empty and eval_specs:
+        wanted_eval_names = {spec["name"] for spec in eval_specs}
+        if "eval_name" in eval_runs_df.columns:
+            eval_runs_df = eval_runs_df[eval_runs_df["eval_name"].isin(wanted_eval_names)].copy()
 
     if eval_runs_df.empty or SEPARATION_METRIC_KEY not in eval_runs_df.columns:
         eval_frame = pd.DataFrame()
