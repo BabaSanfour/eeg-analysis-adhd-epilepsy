@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pandas as pd
 import yaml
+from eeg_adhd_epilepsy.io.bids import get_reports_root
 from eeg_adhd_epilepsy.io.table import save
+from eeg_adhd_epilepsy.qc.descriptor_qc import run_descriptor_dataset_qc
 
 LOGGER = logging.getLogger(__name__)
 
@@ -60,6 +62,7 @@ def main() -> None:
     )
     
     bids_root = Path(args.bids_root)
+    reports_root = get_reports_root(bids_root)
     derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
 
     config_path = derivative_root / "config_used.yaml"
@@ -88,6 +91,7 @@ def main() -> None:
     pooled_epoch_tables: list[pd.DataFrame] = []
     pooled_agg_tables: list[pd.DataFrame] = []
     failure_tables: list[pd.DataFrame] = []
+    shard_qc_rows: list[pd.DataFrame] = []
     
     feature_cols = {
         "sensor_epoch": None,
@@ -105,6 +109,9 @@ def main() -> None:
             pooled_agg_tables.append(pd.read_parquet(shard_root / "pooled_subject_features.parquet"))
             
         failure_tables.append(pd.read_csv(shard_root / "failures.csv"))
+        shard_qc_path = shard_root / "qc" / "summary_row.csv"
+        if shard_qc_path.exists():
+            shard_qc_rows.append(pd.read_csv(shard_qc_path))
 
         # Harvest feature column metadata from the first shard
         if feature_cols["sensor_epoch"] is None:
@@ -122,33 +129,62 @@ def main() -> None:
     combined_root.mkdir(parents=True, exist_ok=True)
 
     LOGGER.info("Combining sensor families...")
+    combined_sensor_epoch_df = pd.concat(sensor_epoch_tables, ignore_index=True)
+    combined_sensor_subject_df = pd.concat(sensor_agg_tables, ignore_index=True)
     save(
-        pd.concat(sensor_epoch_tables, ignore_index=True),
+        combined_sensor_epoch_df,
         combined_root / "sensor_epoch_features",
         feature_columns=feature_cols["sensor_epoch"],
     )
     save(
-        pd.concat(sensor_agg_tables, ignore_index=True),
+        combined_sensor_subject_df,
         combined_root / "sensor_subject_features",
         feature_columns=feature_cols["sensor_subject"],
     )
 
+    combined_pooled_epoch_df = None
+    combined_pooled_subject_df = None
     if include_pooled:
         LOGGER.info("Combining pooled families...")
+        combined_pooled_epoch_df = pd.concat(pooled_epoch_tables, ignore_index=True)
+        combined_pooled_subject_df = pd.concat(pooled_agg_tables, ignore_index=True)
         save(
-            pd.concat(pooled_epoch_tables, ignore_index=True),
+            combined_pooled_epoch_df,
             combined_root / "pooled_epoch_features",
             feature_columns=feature_cols["pooled_epoch"],
         )
         save(
-            pd.concat(pooled_agg_tables, ignore_index=True),
+            combined_pooled_subject_df,
             combined_root / "pooled_subject_features",
             feature_columns=feature_cols["pooled_subject"],
         )
 
-    pd.concat(failure_tables, ignore_index=True).to_csv(combined_root / "failures.csv", index=False)
+    combined_failures_df = pd.concat(failure_tables, ignore_index=True)
+    combined_failures_df.to_csv(combined_root / "failures.csv", index=False)
+    combined_sensor_subject_df.attrs["qc_dir"] = str(combined_root / "qc")
+    dataset_qc = run_descriptor_dataset_qc(
+        derivative_root=derivative_root,
+        reports_root=reports_root,
+        merged_sensor_epoch_df=combined_sensor_epoch_df,
+        merged_sensor_subject_df=combined_sensor_subject_df,
+        merged_sensor_epoch_feature_columns_path=combined_root / "sensor_epoch_features_feature_columns.json",
+        merged_sensor_subject_feature_columns_path=combined_root / "sensor_subject_features_feature_columns.json",
+        merged_pooled_epoch_df=combined_pooled_epoch_df,
+        merged_pooled_subject_df=combined_pooled_subject_df,
+        merged_pooled_epoch_feature_columns_path=None if not include_pooled else combined_root / "pooled_epoch_features_feature_columns.json",
+        merged_pooled_subject_feature_columns_path=None if not include_pooled else combined_root / "pooled_subject_features_feature_columns.json",
+        shard_qc_rows_df=pd.concat(shard_qc_rows, ignore_index=True) if shard_qc_rows else None,
+        merged_failures_df=combined_failures_df,
+        config_snapshot=config_used,
+    )
     
-    LOGGER.info("Merged %d shards into %s", len(shard_roots), combined_root)
+    LOGGER.info(
+        "Merged %d shards into %s; dataset qc=%s, report=%s",
+        len(shard_roots),
+        combined_root,
+        dataset_qc["qc_status"],
+        dataset_qc["report_path"],
+    )
 
 
 if __name__ == "__main__":

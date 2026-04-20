@@ -270,7 +270,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_csv",
+        "load",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -302,11 +302,12 @@ aggregation:
     extract_descriptors.main()
 
     derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
+    reports_root = tmp_path / "reports"
     assert (derivative_root / "dataset_description.json").exists()
     assert (derivative_root / "config_used.yaml").exists()
 
-    subject_one_root = derivative_root / "sub-0001" / "eeg" / "EO_baseline"
-    subject_two_root = derivative_root / "sub-0002" / "eeg" / "EO_baseline"
+    subject_one_root = derivative_root / "sub-0001" / "ses-01" / "eeg" / "EO_baseline"
+    subject_two_root = derivative_root / "sub-0002" / "ses-01" / "eeg" / "EO_baseline"
     for shard_root in (subject_one_root, subject_two_root):
         assert (shard_root / "_SUCCESS").exists()
         assert (shard_root / "sensor_descriptor_bundle.npz").exists()
@@ -323,6 +324,26 @@ aggregation:
         assert (shard_root / "pooled_subject_features.parquet").exists()
         assert (shard_root / "pooled_subject_features_feature_columns.json").exists()
         assert (shard_root / "failures.csv").exists()
+        assert (shard_root / "qc" / "summary_row.csv").exists()
+        assert (shard_root / "qc" / "summary_metrics.csv").exists()
+        assert (shard_root / "qc" / "flags.csv").exists()
+        assert (shard_root / "qc" / "failure_summary.csv").exists()
+        assert (shard_root / "qc" / "feature_missingness.csv").exists()
+        assert (shard_root / "qc" / "family_summary.csv").exists()
+    assert (
+        reports_root
+        / "sub-0001"
+        / "ses-01"
+        / "descriptor_qc"
+        / "sub-0001_ses-01_EO_baseline_descriptor_qc_report.html"
+    ).exists()
+    assert (
+        reports_root
+        / "sub-0002"
+        / "ses-01"
+        / "descriptor_qc"
+        / "sub-0002_ses-01_EO_baseline_descriptor_qc_report.html"
+    ).exists()
 
     sensor_epoch_df = pd.read_csv(subject_one_root / "sensor_epoch_features.csv")
     sensor_agg_df = pd.read_csv(subject_one_root / "sensor_subject_features.csv")
@@ -399,7 +420,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_csv",
+        "load",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -447,6 +468,7 @@ aggregation:
     combined_root = (
         bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
     )
+    reports_root = tmp_path / "reports"
     combined_sensor_epoch_df = pd.read_csv(combined_root / "sensor_epoch_features.csv")
     combined_sensor_agg_df = pd.read_csv(combined_root / "sensor_subject_features.csv")
     combined_pooled_epoch_df = pd.read_csv(combined_root / "pooled_epoch_features.csv")
@@ -475,6 +497,17 @@ aggregation:
     assert (combined_root / "sensor_subject_features_feature_columns.json").exists()
     assert (combined_root / "pooled_epoch_features_feature_columns.json").exists()
     assert (combined_root / "pooled_subject_features_feature_columns.json").exists()
+    assert (combined_root / "qc" / "dataset_summary_metrics.csv").exists()
+    assert (combined_root / "qc" / "dataset_flags.csv").exists()
+    assert (combined_root / "qc" / "shard_qc_summary.csv").exists()
+    assert (combined_root / "qc" / "failure_summary_by_family.csv").exists()
+    assert (combined_root / "qc" / "failure_summary_by_channel.csv").exists()
+    assert (combined_root / "qc" / "feature_missingness.csv").exists()
+    assert (combined_root / "qc" / "feature_distribution_summary.csv").exists()
+    assert (combined_root / "qc" / "low_variance_features.csv").exists()
+    assert (
+        reports_root / "summary" / "descriptor_qc" / "descriptor_qc_dataset_summary.html"
+    ).exists()
 
 
 def test_extract_descriptors_cli_skips_missing_subject_condition(
@@ -508,7 +541,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_csv",
+        "load",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -547,8 +580,8 @@ aggregation:
     extract_descriptors.main()
 
     derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
-    assert (derivative_root / "sub-0001" / "eeg" / "EO_baseline" / "_SUCCESS").exists()
-    assert not (derivative_root / "sub-0001" / "eeg" / "HV_EO").exists()
+    assert (derivative_root / "sub-0001" / "ses-01" / "eeg" / "EO_baseline" / "_SUCCESS").exists()
+    assert not (derivative_root / "sub-0001" / "ses-01" / "eeg" / "HV_EO").exists()
 
 
 def test_extract_descriptors_cli_resumes_completed_shards(
@@ -585,7 +618,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_csv",
+        "load",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -628,6 +661,7 @@ aggregation:
         / "signal_features"
         / "descriptors"
         / "sub-0001"
+        / "ses-01"
         / "eeg"
         / "EO_baseline"
     )
@@ -680,7 +714,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_csv",
+        "load",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -728,10 +762,14 @@ aggregation:
     combined_root = (
         bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
     )
+    reports_root = tmp_path / "reports"
     assert (combined_root / "sensor_epoch_features.csv").exists()
     assert (combined_root / "sensor_subject_features.csv").exists()
     assert not (combined_root / "pooled_epoch_features.csv").exists()
     assert not (combined_root / "pooled_subject_features.csv").exists()
+    assert (
+        reports_root / "summary" / "descriptor_qc" / "descriptor_qc_dataset_summary.html"
+    ).exists()
 
 
 def test_extract_descriptors_cli_raises_when_requested_subjects_are_unavailable(
@@ -765,7 +803,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load_csv",
+        "load",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(

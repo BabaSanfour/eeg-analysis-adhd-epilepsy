@@ -37,16 +37,68 @@ import yaml
 from coco_pipe.descriptors import DescriptorConfig, DescriptorPipeline
 from coco_pipe.io import DataContainer
 from eeg_adhd_epilepsy.io.bids import (
+    get_reports_root,
+    get_subject_session_stage_report_path,
     load_eeg_data,
     normalize_subject_id,
     parse_bids_components,
     validate_bids_coverage,
 )
 from eeg_adhd_epilepsy.io.table import load, save
+from eeg_adhd_epilepsy.qc.descriptor_qc import run_descriptor_subject_qc
 from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
+
+
+def _shard_complete(
+    shard_root: Path,
+    include_pooled: bool,
+    reports_root: Path,
+    subject: str,
+    session: str,
+    condition: str,
+) -> bool:
+    required_paths = [
+        shard_root / "_SUCCESS",
+        shard_root / "sensor_descriptor_bundle.npz",
+        shard_root / "sensor_epoch_features.csv",
+        shard_root / "sensor_epoch_features.parquet",
+        shard_root / "sensor_epoch_features_feature_columns.json",
+        shard_root / "sensor_subject_features.csv",
+        shard_root / "sensor_subject_features.parquet",
+        shard_root / "sensor_subject_features_feature_columns.json",
+        shard_root / "failures.csv",
+        shard_root / "qc" / "summary_row.csv",
+        shard_root / "qc" / "summary_metrics.csv",
+        shard_root / "qc" / "flags.csv",
+        shard_root / "qc" / "failure_summary.csv",
+        shard_root / "qc" / "feature_missingness.csv",
+        shard_root / "qc" / "family_summary.csv",
+        get_subject_session_stage_report_path(
+            reports_root=reports_root,
+            subject_id=subject,
+            session_id=session,
+            stage="descriptor_qc",
+            report_stem=f"sub-{subject}_ses-{session}_{condition}",
+            create_dir=False,
+        ),
+    ]
+    if include_pooled:
+        required_paths.extend(
+            [
+                shard_root / "pooled_epoch_features.csv",
+                shard_root / "pooled_epoch_features.parquet",
+                shard_root / "pooled_epoch_features_feature_columns.json",
+                shard_root / "pooled_subject_features.csv",
+                shard_root / "pooled_subject_features.parquet",
+                shard_root / "pooled_subject_features_feature_columns.json",
+            ]
+        )
+    return all(path.exists() for path in required_paths)
+
+
 def _build_feature_outputs(
     result: dict[str, Any],
     metadata_df: pd.DataFrame,
@@ -198,7 +250,6 @@ def _save_subject_shard(
             feature_columns=pooled_outputs["subject_feature_columns"],
         )
     failure_df.to_csv(shard_root / "failures.csv", index=False)
-    (shard_root / "_SUCCESS").write_text("ok\n", encoding="utf-8")
 
 
 def main() -> None:
@@ -249,6 +300,7 @@ def main() -> None:
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
     bids_root = Path(args.bids_root)
+    reports_root = get_reports_root(bids_root)
     metadata_path = Path(args.metadata)
     config_path = Path(args.config)
     derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
@@ -375,7 +427,7 @@ def main() -> None:
 
         for session, condition in itertools.product(sessions, subject_conditions):
             shard_root = derivative_root / f"sub-{subject}" / f"ses-{session}" / "eeg" / condition
-            if (shard_root / "_SUCCESS").exists():
+            if _shard_complete(shard_root, include_pooled, reports_root, subject, session, condition):
                 LOGGER.info("Skipping %s / %s (ses %s): already complete.", condition, subject, session)
                 continue
 
@@ -465,13 +517,33 @@ def main() -> None:
                 pooled_outputs,
                 failure_df,
             )
+            qc_summary = run_descriptor_subject_qc(
+                shard_root=shard_root,
+                reports_root=reports_root,
+                subject=subject,
+                session=session,
+                condition=condition,
+                sensor_epoch_df=sensor_outputs["epoch_df"],
+                sensor_subject_df=sensor_outputs["subject_df"],
+                sensor_epoch_feature_columns_path=shard_root / "sensor_epoch_features_feature_columns.json",
+                sensor_subject_feature_columns_path=shard_root / "sensor_subject_features_feature_columns.json",
+                pooled_epoch_df=None if pooled_outputs is None else pooled_outputs["epoch_df"],
+                pooled_subject_df=None if pooled_outputs is None else pooled_outputs["subject_df"],
+                pooled_epoch_feature_columns_path=None if pooled_outputs is None else shard_root / "pooled_epoch_features_feature_columns.json",
+                pooled_subject_feature_columns_path=None if pooled_outputs is None else shard_root / "pooled_subject_features_feature_columns.json",
+                failure_df=failure_df,
+                config_snapshot=config_snapshot,
+            )
+            (shard_root / "_SUCCESS").write_text("ok\n", encoding="utf-8")
             LOGGER.info(
-                "%s / %s: saved %d epoch rows, %d subject rows, %d failures",
+                "%s / %s: saved %d epoch rows, %d subject rows, %d failures, qc=%s, report=%s",
                 condition,
                 subject,
                 len(sensor_outputs["epoch_df"]),
                 len(sensor_outputs["subject_df"]),
                 len(failure_df),
+                qc_summary["qc_status"],
+                qc_summary["report_path"],
             )
 
     LOGGER.info("Derivative feature root: %s", derivative_root)

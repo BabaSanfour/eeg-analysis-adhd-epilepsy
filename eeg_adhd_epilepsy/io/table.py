@@ -13,6 +13,42 @@ from coco_pipe.io.structures import DataContainer
 logging.basicConfig(level=logging.INFO)
 
 
+def parse_descriptor_feature_column(column: str) -> dict[str, str]:
+    match = re.compile(r"(?P<body>.+)_(?P<scope>chgrp|ch)-(?P<sensor>.+)$").match(str(column))
+    if match is None:
+        raise ValueError(
+            f"Could not parse descriptor column '{column}'. "
+            "Expected names like 'mean_complexity_sample_entropy_chgrp-front_left' "
+            "or 'band_abs_alpha_ch-Fz'."
+        )
+    body = match.group("body")
+    family = None
+    prefix = ""
+    feature = ""
+    for family_name in ("band", "complexity", "param"):
+        token = f"_{family_name}_"
+        if body.startswith(f"{family_name}_"):
+            family = family_name
+            feature = body[len(f"{family_name}_"):]
+            break
+        if token in body:
+            prefix, feature = body.split(token, 1)
+            family = family_name
+            break
+    if family is None:
+        raise ValueError(
+            f"Could not parse descriptor column '{column}'. "
+            "Expected names like 'mean_complexity_sample_entropy_chgrp-front_left' "
+            "or 'band_abs_alpha_ch-Fz'."
+        )
+    return {
+        "column": str(column),
+        "family": family,
+        "feature": f"{prefix}_{feature}" if prefix else feature,
+        "scope": "sensor_group" if match.group("scope") == "chgrp" else "sensor",
+        "sensor": match.group("sensor"),
+    }
+
 def load(fpath: str, sep: Optional[str] = None) -> pd.DataFrame:
     """Load a CSV or parquet table with basic exploration logs.
 
@@ -71,36 +107,17 @@ def load_tabular_data(
         raise RuntimeError(f"No feature-table rows survived filtering for condition='{condition}'.")
 
     raw_feature_columns = json.loads(feature_columns_path.read_text(encoding="utf-8"))
-    parsed_feature_columns: list[tuple[str, str, str, str]] = []
-    for column in raw_feature_columns:
-        match = re.match(
-            r"(?P<prefix>.+?)_(?P<family>band|complexity|param)_(?P<feature>.+?)_(?:chgrp|ch)-(?P<sensor>.+)$",
-            str(column),
-        )
-        if match is None:
-            raise ValueError(
-                f"Could not parse descriptor column '{column}'. "
-                "Expected names like 'mean_complexity_sample_entropy_chgrp-front_left' "
-                "or 'band_abs_alpha_ch-Fz'."
-            )
-        parsed_feature_columns.append(
-            (
-                column,
-                match.group("family"),
-                f"{match.group('prefix')}_{match.group('feature')}",
-                match.group("sensor"),
-            )
-        )
+    parsed_feature_columns = [parse_descriptor_feature_column(column) for column in raw_feature_columns]
     if descriptor_families:
         allowed_families = {str(value).strip() for value in descriptor_families}
         parsed_feature_columns = [
-            item for item in parsed_feature_columns if item[1] in allowed_families
+            item for item in parsed_feature_columns if item["family"] in allowed_families
         ]
         if not parsed_feature_columns:
             raise RuntimeError(
                 f"No descriptor features matched descriptor_families={list(descriptor_families)}."
             )
-    feature_columns = [column for column, _, _, _ in parsed_feature_columns]
+    feature_columns = [item["column"] for item in parsed_feature_columns]
     feature_df = df.loc[:, feature_columns].replace([np.inf, -np.inf], np.nan)
     valid_mask = ~feature_df.isna().any(axis=1)
     if not valid_mask.all():
@@ -159,12 +176,12 @@ def load_tabular_data(
             meta={"source": str(table_path)},
         )
 
-    sensors = list(dict.fromkeys(sensor for _, _, _, sensor in parsed_feature_columns))
-    features = list(dict.fromkeys(feature_key for _, _, feature_key, _ in parsed_feature_columns))
+    sensors = list(dict.fromkeys(item["sensor"] for item in parsed_feature_columns))
+    features = list(dict.fromkeys(item["feature"] for item in parsed_feature_columns))
     sensor_to_index = {sensor: idx for idx, sensor in enumerate(sensors)}
     feature_to_index = {feature: idx for idx, feature in enumerate(features)}
     feature_family = {
-        feature_key: family for _, family, feature_key, _ in parsed_feature_columns
+        item["feature"]: item["family"] for item in parsed_feature_columns
     }
 
     X_tensor = np.full(
@@ -172,9 +189,9 @@ def load_tabular_data(
         np.nan,
         dtype=float,
     )
-    for column, _, feature_key, sensor in parsed_feature_columns:
-        X_tensor[:, sensor_to_index[sensor], feature_to_index[feature_key]] = feature_df[
-            column
+    for item in parsed_feature_columns:
+        X_tensor[:, sensor_to_index[item["sensor"]], feature_to_index[item["feature"]]] = feature_df[
+            item["column"]
         ].to_numpy(dtype=float)
     coords["sensor"] = np.asarray(sensors, dtype=object)
     coords["feature"] = np.asarray(features, dtype=object)
