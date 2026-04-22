@@ -462,6 +462,7 @@ def run_eval(
         "filters": list(eval_spec["filters"]),
         "label_map": dict(eval_spec["label_map"]),
         "descriptor_families": list(fit_payload.get("descriptor_families", [])),
+        "descriptor_max_abs_value": fit_payload.get("descriptor_max_abs_value"),
         "status": "success",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "n_samples": int(len(selected_ids)),
@@ -528,6 +529,7 @@ def _build_fit_task(
                 "descriptor_feature_columns_path": str(
                     Path(args.descriptor_feature_columns_path).expanduser()
                 ),
+                "descriptor_max_abs_value": getattr(args, "descriptor_max_abs_value", None),
             }
         )
     else:
@@ -577,6 +579,9 @@ def _build_fit_task(
         "input_mode": args.input_mode,
         "representation": args.representation,
         "descriptor_families": list(getattr(args, "descriptor_families", []) or []),
+        "descriptor_max_abs_value": getattr(args, "descriptor_max_abs_value", None)
+        if args.input_mode == "descriptors"
+        else None,
         "reducer": reducer_name,
         "n_components": int(n_components),
         "status": "success",
@@ -706,6 +711,7 @@ def _build_eval_task(
         "filters": list(eval_spec["filters"]),
         "label_map": dict(eval_spec["label_map"]),
         "descriptor_families": list(fit_record.get("descriptor_families", [])),
+        "descriptor_max_abs_value": fit_record.get("descriptor_max_abs_value"),
         "status": "success",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "n_samples": int(len(selected_ids)),
@@ -948,6 +954,15 @@ def main() -> None:
     input_group.add_argument("--descriptor_table_path", default=None)
     input_group.add_argument("--descriptor_feature_columns_path", default=None)
     input_group.add_argument("--descriptor_families", nargs="+", default=None)
+    input_group.add_argument(
+        "--descriptor_max_abs_value",
+        type=float,
+        default=1e12,
+        help=(
+            "For descriptor inputs, drop rows whose selected finite descriptor "
+            "features exceed this absolute value threshold."
+        ),
+    )
     input_group.add_argument("--embeddings_root", default=None)
     input_group.add_argument("--segments_root", default=None)
     input_group.add_argument("--embedding_model", choices=["reve", "cbramod"], default="cbramod")
@@ -1014,6 +1029,9 @@ def main() -> None:
                 "--descriptor_table_path and --descriptor_feature_columns_path are required "
                 "when --input_mode descriptors."
             )
+        if args.descriptor_max_abs_value is not None and args.descriptor_max_abs_value <= 0:
+            raise ValueError("--descriptor_max_abs_value must be positive when provided.")
+        args.representation = Path(args.descriptor_table_path).stem
     if args.input_mode == "embeddings" and not args.embeddings_root:
         raise ValueError("--embeddings_root is required when --input_mode embeddings.")
     if args.input_mode == "embeddings" and args.analysis_mode != "flat":

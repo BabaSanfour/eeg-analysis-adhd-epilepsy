@@ -133,6 +133,12 @@ def _filter_runs(
                 else desired_families == []
             )
         ].copy()
+    if args.input_mode == "descriptors" and "descriptor_max_abs_value" in filtered.columns:
+        desired_max_abs = getattr(args, "descriptor_max_abs_value", None)
+        if desired_max_abs is not None:
+            filtered = filtered[
+                pd.to_numeric(filtered["descriptor_max_abs_value"], errors="coerce").eq(float(desired_max_abs))
+            ].copy()
     return filtered
 
 
@@ -208,40 +214,6 @@ def _overview_container(
     if len(loaded) == 1:
         return loaded[0]
     return concat_containers(loaded)
-
-
-def _build_primary_labels(
-    args: Any,
-    eval_specs: Sequence[dict[str, Any]],
-    meta_df: Optional[pd.DataFrame],
-    ids: np.ndarray,
-) -> tuple[Optional[np.ndarray], Optional[str]]:
-    primary_spec = _primary_eval_spec(args, eval_specs)
-    if primary_spec is None or meta_df is None:
-        return None, None
-
-    target_col = primary_spec["target_col"]
-    if target_col not in meta_df.columns:
-        return None, None
-
-    subject_col = args.subject_col
-    if subject_col not in meta_df.columns:
-        return None, None
-
-    # Map target column values to labels
-    label_map = primary_spec.get("label_map") or {}
-    
-    id_to_class = {}
-    subset = meta_df.dropna(subset=[subject_col, target_col])
-    for _, row in subset.iterrows():
-        sid = str(row[subject_col])
-        if sid not in id_to_class:
-            val = str(row[target_col])
-            id_to_class[sid] = str(label_map.get(val, val))
-            
-    # Map the requested IDs
-    labels = np.array([id_to_class.get(str(id_val), "unknown") for id_val in ids], dtype=object)
-    return labels, primary_spec["name"]
 
 
 def _subject_frame(container, subject_col: str) -> pd.DataFrame:
@@ -411,19 +383,12 @@ def _add_best_fit_plots(
     meta_dict: dict[str, np.ndarray],
     interactive: bool,
     compress_viz_with_pca: bool = False,
-    labels: Optional[np.ndarray] = None,
-    label_name: Optional[str] = None,
 ) -> None:
     embedding = np.asarray(artifact["embedding"])
     if embedding.ndim != 2:
         return
 
     plot_meta = _plot_meta(meta_dict, embedding.shape[0])
-    if labels is not None:
-        arr = np.asarray(labels).ravel()
-        if arr.shape[0] == embedding.shape[0] and label_name:
-            plot_meta = dict(plot_meta or {})
-            plot_meta[str(label_name)] = arr
     if embedding.shape[1] == 2:
         _add_embedding_plot(section, embedding, plot_meta, f"{title} - native 2D", 2, interactive)
     elif embedding.shape[1] >= 3:
@@ -437,11 +402,6 @@ def _add_best_fit_plots(
     if compress_viz_with_pca and embedding.shape[1] > 3:
         pca_2d = DimReduction(method="PCA", n_components=2).fit_transform(embedding)
         pca_meta = _plot_meta(meta_dict, pca_2d.shape[0])
-        if labels is not None:
-            arr = np.asarray(labels).ravel()
-            if arr.shape[0] == pca_2d.shape[0] and label_name:
-                pca_meta = dict(pca_meta or {})
-                pca_meta[str(label_name)] = arr
         _add_embedding_plot(
             section,
             pca_2d,
@@ -452,23 +412,103 @@ def _add_best_fit_plots(
         )
 
 
-def _build_meta_dict(container) -> dict[str, np.ndarray]:
+def _container_obs_frame(container) -> pd.DataFrame:
     n_samples = container.X.shape[0]
-    meta: dict[str, np.ndarray] = {}
+    data: dict[str, np.ndarray] = {}
     for col_name, col_values in container.coords.items():
+        arr = np.asarray(col_values)
+        if arr.ndim == 1 and len(arr) == n_samples and str(col_name) != "feature":
+            data[str(col_name)] = arr
+    if container.y is not None and "y" not in data:
+        data["y"] = np.asarray(container.y)
+    if container.ids is not None:
+        data["obs_id"] = np.asarray(container.ids, dtype=object).astype(str)
+    return pd.DataFrame(data)
+
+
+def _align_obs_frame(container, ids: Optional[np.ndarray]) -> pd.DataFrame:
+    frame = _container_obs_frame(container)
+    if ids is None or "obs_id" not in frame.columns:
+        return frame.reset_index(drop=True)
+
+    requested_ids = np.asarray(ids, dtype=object).astype(str)
+    if len(requested_ids) == len(frame) and np.array_equal(
+        requested_ids,
+        frame["obs_id"].astype(str).to_numpy(),
+    ):
+        return frame.reset_index(drop=True)
+
+    counts: dict[str, int] = {}
+    frame_keys = []
+    for obs_id in frame["obs_id"].astype(str):
+        occurrence = counts.get(obs_id, 0)
+        frame_keys.append(f"{obs_id}__{occurrence}")
+        counts[obs_id] = occurrence + 1
+
+    counts = {}
+    requested_keys = []
+    for obs_id in requested_ids:
+        occurrence = counts.get(obs_id, 0)
+        requested_keys.append(f"{obs_id}__{occurrence}")
+        counts[obs_id] = occurrence + 1
+
+    keyed = frame.assign(_obs_key=frame_keys).drop_duplicates("_obs_key", keep="first").set_index("_obs_key")
+    if all(key in keyed.index for key in requested_keys):
+        return keyed.loc[requested_keys].drop(columns=[], errors="ignore").reset_index(drop=True)
+    if len(frame) == len(requested_ids):
+        return frame.reset_index(drop=True)
+    return pd.DataFrame()
+
+
+def _build_meta_dict(
+    container,
+    ids: Optional[np.ndarray] = None,
+    eval_specs: Sequence[dict[str, Any]] = (),
+) -> dict[str, np.ndarray]:
+    frame = _align_obs_frame(container, ids)
+    if frame.empty:
+        return {}
+
+    meta: dict[str, np.ndarray] = {}
+    for col_name in frame.columns:
+        if col_name == "_obs_key":
+            continue
         normalized = "".join(ch for ch in str(col_name).lower() if ch.isalnum())
         if (
             col_name in _PLOT_META_EXCLUDED_COLUMNS
             or normalized in _PLOT_META_EXCLUDED_NORMALIZED
             or "psychostimulant" in normalized
-            or col_name.endswith("_bool")
-            or col_name.endswith("_clean")
-            or len(col_values) != n_samples
+            or str(col_name).endswith("_bool")
+            or str(col_name).endswith("_clean")
         ):
             continue
-        values = np.asarray(col_values)
+        values = frame[col_name].to_numpy()
         if 1 < pd.Index(values.astype(str)).nunique() <= 200:
             meta[col_name] = values
+
+    for spec in eval_specs:
+        target_col = spec.get("target_col")
+        if target_col not in frame.columns:
+            continue
+        labels = frame[target_col].astype(str)
+        label_map = spec.get("label_map") or {}
+        if label_map:
+            labels = labels.map(lambda value: label_map.get(value, value))
+        labels = labels.replace({"nan": "unknown", "None": "unknown", "": "unknown"})
+        if spec.get("filters"):
+            filter_mask = pd.Series(True, index=frame.index)
+            for filter_spec in spec["filters"]:
+                column = filter_spec["column"]
+                if column not in frame.columns:
+                    filter_mask[:] = False
+                    continue
+                values = {str(value) for value in filter_spec["values"]}
+                filter_mask &= frame[column].astype(str).isin(values)
+            labels = labels.where(filter_mask, "unknown")
+        values = labels.to_numpy(dtype=object)
+        if 1 < pd.Index(values.astype(str)).nunique() <= 200:
+            meta[str(spec["name"])] = values
+
     if "condition" in meta:
         eye_state = np.array(
             [
@@ -495,7 +535,6 @@ def _build_flat_condition_section(
     eval_specs: Sequence[dict[str, Any]],
 ) -> Section:
     container = load_container(args, subjects, meta_df, condition, target_col=None)
-    meta_dict = _build_meta_dict(container)
     artifacts = {
         str(row["fit_id"]): load_fit_artifact(output_root / row["artifact_path"])
         for _, row in condition_runs.iterrows()
@@ -558,9 +597,7 @@ def _build_flat_condition_section(
         )
         best_artifact = artifacts[str(best_row["fit_id"])]
         section.add_markdown(f"### {reducer_name} (best n={int(best_row['n_components'])})")
-        primary_labels, primary_name = _build_primary_labels(
-            args, eval_specs, meta_df, best_artifact["ids"]
-        )
+        meta_dict = _build_meta_dict(container, best_artifact["ids"], eval_specs)
         _add_best_fit_plots(
             section,
             f"{condition} - {reducer_name}",
@@ -568,8 +605,6 @@ def _build_flat_condition_section(
             meta_dict,
             interactive=args.interactive,
             compress_viz_with_pca=args.compress_viz_with_pca,
-            labels=primary_labels,
-            label_name=primary_name,
         )
         sweep_df = reducer_runs.merge(
             eval_frame.loc[:, ["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]],
@@ -856,7 +891,6 @@ def _build_nonflat_condition_section(
             selection_eval_name=getattr(args, "selection_eval_name", None),
         )
         family_container = load_container(args, subjects, meta_df, condition, target_col=None)
-        family_meta = _build_meta_dict(family_container)
         for reducer_name in args.reducers_resolved:
             reducer_runs = merged[merged["reducer"] == reducer_name].copy()
             if reducer_runs.empty:
@@ -927,6 +961,7 @@ def _build_nonflat_condition_section(
                 .iloc[0]
             )
             best_artifact = artifacts[str(best_row["fit_id"])]
+            family_meta = _build_meta_dict(family_container, best_artifact["ids"], eval_specs)
             section.add_markdown(
                 f"### {family} (best {best_row['reducer']} n={int(best_row['n_components'])})"
             )
@@ -1001,7 +1036,6 @@ def _build_nonflat_condition_section(
     )
     if args.analysis_mode == "sensor":
         sensor_container = load_container(args, subjects, meta_df, condition, target_col=None)
-        sensor_meta = _build_meta_dict(sensor_container)
         for reducer_name in args.reducers_resolved:
             reducer_runs = merged[merged["reducer"] == reducer_name].copy()
             if reducer_runs.empty:
@@ -1026,6 +1060,7 @@ def _build_nonflat_condition_section(
                     .iloc[0]
                 )
                 best_artifact = artifacts[str(best_row["fit_id"])]
+                sensor_meta = _build_meta_dict(sensor_container, best_artifact["ids"], eval_specs)
                 if not isinstance(group_key, tuple):
                     group_key = (group_key,)
                 label_parts = [str(value) for value in group_key if pd.notna(value) and str(value) != ""]
@@ -1040,10 +1075,6 @@ def _build_nonflat_condition_section(
                     sensor_meta or {},
                     interactive=args.interactive,
                     compress_viz_with_pca=args.compress_viz_with_pca,
-                    labels=np.asarray(sensor_container.coords.get(best_row.get("target_col"), []))
-                    if best_row.get("target_col") in sensor_container.coords
-                    else None,
-                    label_name=best_row.get("target_col"),
                 )
     return section
 
@@ -1212,20 +1243,6 @@ def generate_dataset_report(
     eval_specs: Sequence[dict[str, Any]],
     pooled_condition: str,
 ) -> Report:
-    # Inject research target labels into meta_df for automatic inclusion in all interactive plots
-    if meta_df is not None and eval_specs:
-        primary_spec = _primary_eval_spec(args, eval_specs)
-        if primary_spec:
-            target_col = primary_spec["target_col"]
-            if target_col in meta_df.columns:
-                label_map = primary_spec.get("label_map") or {}
-                meta_df = meta_df.copy()
-                meta_df["research_target"] = (
-                    meta_df[target_col]
-                    .astype(str)
-                    .map(lambda val: label_map.get(val, val))
-                )
-
     fit_runs_df = _filter_runs(pd.DataFrame(load_fit_runs(fit_runs_path)), args, reducers, pooled_condition)
 
     if eval_runs_path.exists():
@@ -1287,6 +1304,7 @@ def generate_dataset_report(
                         "representation": args.representation,
                         "run_variant": run_variant,
                         "descriptor_families": family_label,
+                        "descriptor_max_abs_value": getattr(args, "descriptor_max_abs_value", ""),
                         "reducers": ", ".join(reducers),
                         "n_components_sweep": ", ".join(map(str, args.n_components_sweep)),
                         "conditions": ", ".join(args.conditions),

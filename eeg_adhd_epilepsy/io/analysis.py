@@ -140,6 +140,7 @@ def load_container(
             target_col=target_col,
             analysis_mode=analysis_mode,
             descriptor_families=getattr(args, "descriptor_families", None),
+            descriptor_max_abs_value=getattr(args, "descriptor_max_abs_value", None),
         )
     elif input_mode == "embeddings":
         container = load_temp_dl_data(

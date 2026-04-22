@@ -99,6 +99,7 @@ def load_tabular_data(
     target_col: str | None = None,
     analysis_mode: str = "flat",
     descriptor_families: Optional[Sequence[str]] = None,
+    descriptor_max_abs_value: float | None = None,
 ) -> DataContainer:
     df = load(str(table_path), sep=None)
     if condition is not None:
@@ -147,6 +148,48 @@ def load_tabular_data(
         raise RuntimeError(
             f"No feature-table rows survived missing-feature filtering for condition='{condition}'."
         )
+    dropped_extreme_rows = 0
+    if descriptor_max_abs_value is not None:
+        max_abs = float(descriptor_max_abs_value)
+        if max_abs <= 0:
+            raise ValueError("descriptor_max_abs_value must be positive when provided.")
+        extreme_mask = feature_df.abs().gt(max_abs).any(axis=1)
+        if extreme_mask.any():
+            dropped_extreme_rows = int(extreme_mask.sum())
+            dropped_df = df.loc[extreme_mask].copy()
+            dropped_feature_df = feature_df.loc[extreme_mask]
+            summary_cols = [
+                column
+                for column in ("obs_id", "study_id")
+                if column in dropped_df.columns
+            ]
+            dropped_summary = (
+                dropped_df.loc[:, summary_cols].copy()
+                if summary_cols
+                else pd.DataFrame(index=dropped_df.index)
+            )
+            abs_feature_df = dropped_feature_df.abs()
+            dropped_summary["extreme_feature_count"] = abs_feature_df.gt(max_abs).sum(axis=1).to_numpy()
+            dropped_summary["max_abs_feature_value"] = abs_feature_df.max(axis=1).to_numpy()
+            dropped_summary["extreme_features"] = [
+                ", ".join(abs_feature_df.columns[row.gt(max_abs)].tolist())
+                for _, row in abs_feature_df.iterrows()
+            ]
+            logging.warning(
+                "Dropping %d row(s) with descriptor feature abs(value) > %g from %s for condition=%r:\n%s",
+                dropped_extreme_rows,
+                max_abs,
+                table_path,
+                condition,
+                dropped_summary.to_string(index=False),
+            )
+            df = df.loc[~extreme_mask].copy()
+            feature_df = feature_df.loc[~extreme_mask].copy()
+        if df.empty:
+            raise RuntimeError(
+                "No feature-table rows survived finite-extreme filtering "
+                f"for condition='{condition}' with descriptor_max_abs_value={max_abs}."
+            )
     metadata_df = df.drop(columns=feature_columns)
 
     y = df[target_col].astype(str).to_numpy() if target_col else None
@@ -173,7 +216,11 @@ def load_tabular_data(
             coords=coords,
             y=y,
             ids=ids,
-            meta={"source": str(table_path)},
+            meta={
+                "source": str(table_path),
+                "descriptor_max_abs_value": descriptor_max_abs_value,
+                "dropped_extreme_rows": dropped_extreme_rows,
+            },
         )
 
     sensors = list(dict.fromkeys(item["sensor"] for item in parsed_feature_columns))
@@ -208,6 +255,8 @@ def load_tabular_data(
         meta={
             "source": str(table_path),
             "descriptor_families": list(dict.fromkeys(coords["feature_family"].tolist())),
+            "descriptor_max_abs_value": descriptor_max_abs_value,
+            "dropped_extreme_rows": dropped_extreme_rows,
         },
     )
 

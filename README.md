@@ -244,6 +244,8 @@ For descriptor analyses:
 - `sensor` compares sensors or channel-groups against each other
 - `family` compares descriptor families against each other
 - `sensor_within_family` compares sensors inside each requested family
+- `--representation` is table-driven for descriptors: the script uses the descriptor table stem, such as `sensor_subject_features`, so separate tables get separate output/report variants
+- descriptor rows with selected finite feature values above `--descriptor_max_abs_value` are dropped before fitting; the default is `1e12`
 
 ### Evals and Selection
 
