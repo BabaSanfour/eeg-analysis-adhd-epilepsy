@@ -9,7 +9,15 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 import pandas as pd
-from coco_pipe.report.core import Element, ImageElement, Report, Section, TableElement
+from coco_pipe.report.core import (
+    Element,
+    ImageElement,
+    InteractiveTableElement,
+    PlotlyElement,
+    Report,
+    Section,
+    TableElement,
+)
 
 
 def _add_images(section: Section, figures: Sequence[tuple[str, Path]]) -> None:
@@ -104,6 +112,7 @@ class InteractiveOpportunitiesElement(Element):
         <option value="Analysis">Analysis</option>
         <option value="Constraint">Constraint</option>
         <option value="cohort_n">Cohort N</option>
+        <option value="paired_patients">Paired Patients</option>
         <option value="N1">N1</option>
         <option value="N2">N2</option>
       </select>
@@ -216,7 +225,7 @@ class InteractiveOpportunitiesElement(Element):
 
     const sortBy = sortBySelect.value;
     const direction = sortDirectionSelect.value === 'asc' ? 1 : -1;
-    const numericColumns = new Set(['cohort_n', 'N1', 'N2']);
+    const numericColumns = new Set(['cohort_n', 'paired_patients', 'N1', 'N2']);
 
     return filtered.slice().sort((left, right) => {{
       const leftValue = left[sortBy];
@@ -574,6 +583,11 @@ def generate_cohort_report(
     medication_df: pd.DataFrame,
     valid_opportunities_df: pd.DataFrame,
     figures_by_section: Mapping[str, Sequence[tuple[str, Path]]],
+    drug_resistant_overview_df: pd.DataFrame | None = None,
+    first_later_drug_resistant_df: pd.DataFrame | None = None,
+    source_overlap_df: pd.DataFrame | None = None,
+    longitudinal_drug_resistant_patients_df: pd.DataFrame | None = None,
+    drug_resistant_first_later_figure: object | None = None,
     recruitment_markdown: str | None = None,
     recruitment_projection_df: pd.DataFrame | None = None,
     recruitment_summary_df: pd.DataFrame | None = None,
@@ -619,6 +633,34 @@ def generate_cohort_report(
     _add_optional_table(medication, medication_df, "Medication Summary")
     _add_images(medication, figures_by_section.get("Medication and Drug Resistance", []))
     report.add_section(medication)
+
+    drug_resistant = Section("Drug Resistant Longitudinal Cohort", icon="🔁")
+    drug_resistant.add_markdown(
+        "These tables summarize cohort 1 vs cohort 2 overlap and within-patient "
+        "first-EEG versus later-EEG availability for drug-resistant analyses."
+    )
+    if drug_resistant_overview_df is not None:
+        _add_optional_table(drug_resistant, drug_resistant_overview_df, "Drug-Resistant Overview")
+    if first_later_drug_resistant_df is not None:
+        _add_optional_table(
+            drug_resistant,
+            first_later_drug_resistant_df,
+            "Drug-Resistant First EEG vs Later EEG",
+        )
+    if drug_resistant_first_later_figure is not None:
+        drug_resistant.add_element(PlotlyElement(drug_resistant_first_later_figure, height="420px"))
+    _add_images(drug_resistant, figures_by_section.get("Drug Resistant Longitudinal Cohort", []))
+    if source_overlap_df is not None:
+        _add_optional_table(drug_resistant, source_overlap_df, "Cohort 1 vs Cohort 2 Overlap")
+    if longitudinal_drug_resistant_patients_df is not None:
+        drug_resistant.add_element(
+            InteractiveTableElement(
+                longitudinal_drug_resistant_patients_df,
+                title="Drug-Resistant Patients with First and Later Recordings",
+                page_size=5,
+            )
+        )
+    report.add_section(drug_resistant)
 
     opportunities = Section("Analysis Opportunities", icon="🧠")
     opportunities.add_element(InteractiveOpportunitiesElement(valid_opportunities_df))

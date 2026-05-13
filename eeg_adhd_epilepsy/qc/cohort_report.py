@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import plotly.graph_objects as go
 import yaml
 
 from eeg_adhd_epilepsy.io.table import load
@@ -184,6 +185,7 @@ ANALYSIS_OUTPUT_COLUMNS = [
     "Group 1",
     "Group 2",
     "cohort_n",
+    "paired_patients",
     "N1",
     "N2",
     "is_valid",
@@ -451,6 +453,181 @@ def _build_medication_summary(df: pd.DataFrame) -> pd.DataFrame:
         ),
     ]
     return _metric_table(rows)
+
+
+def _patient_id_col(df: pd.DataFrame) -> str:
+    return "patient_group_id" if "patient_group_id" in df.columns else "patient_id"
+
+
+def _n_unique_patients(df: pd.DataFrame) -> int:
+    if df.empty:
+        return 0
+    return int(df[_patient_id_col(df)].nunique(dropna=True))
+
+
+def _first_later_patient_sets(df: pd.DataFrame) -> tuple[set[Any], set[Any]]:
+    if df.empty or "first_eeg" not in df.columns:
+        return set(), set()
+    patient_col = _patient_id_col(df)
+    first_patients = set(df.loc[df["first_eeg"].eq(1), patient_col].dropna().tolist())
+    later_patients = set(df.loc[df["first_eeg"].eq(0), patient_col].dropna().tolist())
+    return first_patients, later_patients
+
+
+def _build_drug_resistant_overview(df: pd.DataFrame) -> pd.DataFrame:
+    rows = []
+    cohorts = [
+        ("ASM resistant label", df["asm_resistant"].eq(1)),
+        (
+            "Cohort 2 + ASM resistant",
+            df["source_dataset"].eq("drug_resistant") & df["asm_resistant"].eq(1),
+        ),
+    ]
+    patient_col = _patient_id_col(df)
+    for label, mask in cohorts:
+        subset = df.loc[mask].copy()
+        first_patients, later_patients = _first_later_patient_sets(subset)
+        recordings_per_patient = subset.groupby(patient_col, dropna=True).size()
+        rows.append(
+            {
+                "population": label,
+                "rows": len(subset),
+                "unique_patients": _n_unique_patients(subset),
+                "first_eeg_rows": int(subset["first_eeg"].eq(1).sum()) if "first_eeg" in subset else 0,
+                "later_eeg_rows": int(subset["first_eeg"].eq(0).sum()) if "first_eeg" in subset else 0,
+                "patients_with_first_eeg": len(first_patients),
+                "patients_with_later_eeg": len(later_patients),
+                "patients_with_both": len(first_patients & later_patients),
+                "patients_with_2plus_recordings": int(recordings_per_patient.ge(2).sum()),
+                "max_recordings_per_patient": int(recordings_per_patient.max()) if not recordings_per_patient.empty else 0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _build_first_later_drug_resistant_summary(df: pd.DataFrame) -> pd.DataFrame:
+    subset = df.loc[df["asm_resistant"].eq(1)].copy()
+    rows = []
+    for value, label in [(1, "First EEG"), (0, "Later EEG")]:
+        frame = subset.loc[subset["first_eeg"].eq(value)].copy()
+        rows.append(
+            {
+                "recording_type": label,
+                "rows": len(frame),
+                "unique_patients": _n_unique_patients(frame),
+                "mean_age": round(float(frame["age"].mean()), 2) if len(frame) else None,
+                "median_age": round(float(frame["age"].median()), 2) if len(frame) else None,
+                "adhd_rows": int(frame["adhd"].eq(1).sum()) if len(frame) else 0,
+                "autism_rows": int(frame["autism"].eq(1).sum()) if len(frame) else 0,
+                "psychostimulant_rows": int(frame["psychostimulant"].eq(1).sum()) if len(frame) else 0,
+                "asm_rows": int(frame["asm"].eq(1).sum()) if len(frame) else 0,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _build_source_overlap_summary(df: pd.DataFrame) -> pd.DataFrame:
+    patient_col = _patient_id_col(df)
+    source_sets = {
+        "cohort_1": set(df.loc[df["source_dataset"].eq("adhd"), patient_col].dropna().tolist()),
+        "cohort_2": set(df.loc[df["source_dataset"].eq("drug_resistant"), patient_col].dropna().tolist()),
+    }
+    categories = [
+        ("Only cohort 1", source_sets["cohort_1"] - source_sets["cohort_2"]),
+        ("Only cohort 2", source_sets["cohort_2"] - source_sets["cohort_1"]),
+        ("Both cohort 1 and cohort 2", source_sets["cohort_1"] & source_sets["cohort_2"]),
+    ]
+    rows = []
+    for label, patients in categories:
+        subset = df.loc[df[patient_col].isin(patients)].copy()
+        rows.append(
+            {
+                "source_overlap": label,
+                "unique_patients": len(patients),
+                "rows": len(subset),
+                "cohort_1_rows": int(subset["source_dataset"].eq("adhd").sum()),
+                "cohort_2_rows": int(subset["source_dataset"].eq("drug_resistant").sum()),
+                "asm_resistant_rows": int(subset["asm_resistant"].eq(1).sum()),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _build_drug_resistant_longitudinal_patients(df: pd.DataFrame) -> pd.DataFrame:
+    subset = df.loc[df["asm_resistant"].eq(1)].copy()
+    if subset.empty:
+        return pd.DataFrame(
+            columns=[
+                "patient_group_id",
+                "n_recordings",
+                "first_eeg_rows",
+                "later_eeg_rows",
+                "study_ids",
+                "eeg_dates",
+            ]
+        )
+    patient_col = _patient_id_col(subset)
+    rows = []
+    for patient_id, frame in subset.groupby(patient_col, dropna=True):
+        first_rows = int(frame["first_eeg"].eq(1).sum())
+        later_rows = int(frame["first_eeg"].eq(0).sum())
+        if first_rows == 0 or later_rows == 0:
+            continue
+        ordered = frame.sort_values(["first_eeg", "eeg_date"], ascending=[False, True])
+        rows.append(
+            {
+                "patient_group_id": patient_id,
+                "n_recordings": len(frame),
+                "first_eeg_rows": first_rows,
+                "later_eeg_rows": later_rows,
+                "study_ids": ",".join(ordered["study_id"].astype(str).tolist()),
+                "eeg_dates": ",".join(ordered["eeg_date"].astype(str).tolist()),
+            }
+        )
+    if not rows:
+        return pd.DataFrame(
+            columns=[
+                "patient_group_id",
+                "n_recordings",
+                "first_eeg_rows",
+                "later_eeg_rows",
+                "study_ids",
+                "eeg_dates",
+            ]
+        )
+    return pd.DataFrame(rows).sort_values(
+        ["n_recordings", "patient_group_id"],
+        ascending=[False, True],
+    ).reset_index(drop=True)
+
+
+def _build_drug_resistant_first_later_figure(df: pd.DataFrame) -> go.Figure | None:
+    summary = _build_first_later_drug_resistant_summary(df)
+    if summary.empty:
+        return None
+    fig = go.Figure()
+    fig.add_bar(
+        x=summary["recording_type"],
+        y=summary["rows"],
+        name="Rows",
+        marker_color="#4C78A8",
+    )
+    fig.add_bar(
+        x=summary["recording_type"],
+        y=summary["unique_patients"],
+        name="Unique patients",
+        marker_color="#F58518",
+    )
+    fig.update_layout(
+        title="Drug-Resistant First EEG vs Later EEG Availability",
+        xaxis_title="Recording type",
+        yaxis_title="Count",
+        barmode="group",
+        template="plotly_white",
+        legend_title_text="",
+        margin=dict(l=40, r=20, t=60, b=40),
+    )
+    return fig
 
 
 def _resolve_recruitment_selectors(
@@ -828,6 +1005,10 @@ def _constraint_mask(df: pd.DataFrame, name: str) -> pd.Series:
         return df["asm_resistant"] == 1
     if name == "ASM_Resistant_False":
         return df["asm_resistant"] == 0
+    if name == "First_EEG":
+        return df["first_eeg"] == 1
+    if name == "DrugResistant_First_EEG":
+        return df["asm_resistant"].ne(1) | df["first_eeg"].eq(1)
     if name == "Control_Only":
         return (df["adhd"] == 0) & (df["autism"] == 0) & (df["epilepsy"] == 0)
     if name == "ADHD_Only":
@@ -902,6 +1083,13 @@ def _analysis_group_masks(
             (subset["epilepsy"] == 1) & (subset["asm_resistant"] == 1),
             "Not Resistant",
             "Resistant",
+        )
+    if analysis_name == "DrugResistance_First_vs_Later":
+        return (
+            (subset["asm_resistant"] == 1) & (subset["first_eeg"] == 1),
+            (subset["asm_resistant"] == 1) & (subset["first_eeg"] == 0),
+            "First EEG",
+            "Later EEG",
         )
     if analysis_name == "Epilepsy_ASM_Effect_Any":
         return (
@@ -1039,6 +1227,8 @@ def _analysis_applicability_reason(subset: pd.DataFrame, analysis_name: str) -> 
 
 
 def _group_empty_reason(analysis_name: str, n1: int, n2: int) -> str:
+    if analysis_name == "DrugResistance_First_vs_Later":
+        return "insufficient_longitudinal_pairs"
     if analysis_name in {
         "Epilepsy_ASM_Effect_LEV_Only",
         "Epilepsy_ASM_Effect_VPA_Only",
@@ -1096,6 +1286,7 @@ def build_analysis_opportunities(df: pd.DataFrame, min_group_n: int) -> pd.DataF
                         "AgeGroup": age_label,
                         "Constraint": constraint_label,
                         "cohort_n": 0,
+                        "paired_patients": 0,
                         "N1": 0,
                         "N2": 0,
                         "is_valid": False,
@@ -1146,6 +1337,14 @@ def build_analysis_opportunities(df: pd.DataFrame, min_group_n: int) -> pd.DataF
                     mask_1, mask_2, label_1, label_2 = group_masks
                     group_1 = cohort_df.loc[mask_1].copy()
                     group_2 = cohort_df.loc[mask_2].copy()
+                    if analysis_spec.name == "DrugResistance_First_vs_Later":
+                        patient_col = _patient_id_col(cohort_df)
+                        paired_patients = set(group_1[patient_col].dropna()) & set(
+                            group_2[patient_col].dropna()
+                        )
+                        group_1 = group_1.loc[group_1[patient_col].isin(paired_patients)].copy()
+                        group_2 = group_2.loc[group_2[patient_col].isin(paired_patients)].copy()
+                        row["paired_patients"] = len(paired_patients)
                     row["Group 1"] = label_1
                     row["Group 2"] = label_2
                     row["N1"] = len(group_1)
@@ -1156,7 +1355,11 @@ def build_analysis_opportunities(df: pd.DataFrame, min_group_n: int) -> pd.DataF
                         rows.append(row)
                         continue
 
-                    if row["N1"] < min_group_n or row["N2"] < min_group_n:
+                    if analysis_spec.name == "DrugResistance_First_vs_Later":
+                        too_small = row["paired_patients"] < min_group_n
+                    else:
+                        too_small = row["N1"] < min_group_n or row["N2"] < min_group_n
+                    if too_small:
                         row["skip_reason"] = "too_small_group"
                         rows.append(row)
                         continue
@@ -1296,6 +1499,21 @@ def main() -> None:
     combined_diagnosis_df = _build_combined_diagnosis_summary(cohort_df)
     demographics_df = _build_demographics_summary(cohort_df)
     medication_df = _build_medication_summary(cohort_df)
+    drug_resistant_overview_df = _build_drug_resistant_overview(cohort_df)
+    first_later_drug_resistant_df = _build_first_later_drug_resistant_summary(cohort_df)
+    source_overlap_df = _build_source_overlap_summary(cohort_df)
+    longitudinal_drug_resistant_patients_df = _build_drug_resistant_longitudinal_patients(cohort_df)
+    drug_resistant_first_later_figure = _build_drug_resistant_first_later_figure(cohort_df)
+    drug_resistant_overview_df.to_csv(output_dir / "drug_resistant_overview.csv", index=False)
+    first_later_drug_resistant_df.to_csv(
+        output_dir / "drug_resistant_first_later_summary.csv",
+        index=False,
+    )
+    source_overlap_df.to_csv(output_dir / "cohort_source_overlap.csv", index=False)
+    longitudinal_drug_resistant_patients_df.to_csv(
+        output_dir / "drug_resistant_longitudinal_patients.csv",
+        index=False,
+    )
     cohort_markdown = _format_row_filter_markdown(cohort_config, len(cohort_df))
 
     generate_cohort_report(
@@ -1312,6 +1530,11 @@ def main() -> None:
         medication_df=medication_df,
         valid_opportunities_df=valid_opportunities,
         figures_by_section=figure_sections,
+        drug_resistant_overview_df=drug_resistant_overview_df,
+        first_later_drug_resistant_df=first_later_drug_resistant_df,
+        source_overlap_df=source_overlap_df,
+        longitudinal_drug_resistant_patients_df=longitudinal_drug_resistant_patients_df,
+        drug_resistant_first_later_figure=drug_resistant_first_later_figure,
         recruitment_markdown=recruitment_markdown,
         recruitment_projection_df=recruitment_projection_df,
         recruitment_summary_df=recruitment_summary_df,

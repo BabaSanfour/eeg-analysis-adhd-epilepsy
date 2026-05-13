@@ -31,7 +31,7 @@ evals:
 
   - name: female_adhd
     target_col: adhd
-    group_col: study_id
+    group_col: patient_group_id
     filters:
       - column: sex
         values: ["F"]

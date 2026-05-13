@@ -54,4 +54,4 @@ evals:
   target_col: sex
 - name: condition_separation
   target_col: condition
-  group_col: study_id
+  group_col: patient_group_id

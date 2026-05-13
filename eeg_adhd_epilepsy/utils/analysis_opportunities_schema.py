@@ -39,6 +39,12 @@ TARGET_CONSTRAINTS = (
     ConstraintSpec("ASM_False", "Keep rows without ASM exposure.", "asm == 0"),
     ConstraintSpec("ASM_Resistant_True", "Keep drug-resistant rows.", "asm_resistant == 1"),
     ConstraintSpec("ASM_Resistant_False", "Keep non-resistant rows.", "asm_resistant == 0"),
+    ConstraintSpec("First_EEG", "Keep first-EEG rows only.", "first_eeg == 1"),
+    ConstraintSpec(
+        "DrugResistant_First_EEG",
+        "Keep resistant rows only when they are first EEG recordings.",
+        "asm_resistant == 0 or first_eeg == 1",
+    ),
     ConstraintSpec("Control_Only", "No ADHD, autism, or epilepsy.", "adhd == 0 and autism == 0 and epilepsy == 0"),
     ConstraintSpec("ADHD_Only", "ADHD without autism or epilepsy.", "adhd == 1 and autism == 0 and epilepsy == 0"),
     ConstraintSpec("Epilepsy_Only", "Epilepsy without ADHD or autism.", "adhd == 0 and autism == 0 and epilepsy == 1"),
@@ -95,6 +101,19 @@ CONTROL_VS_ADHD_BACKGROUND_CONSTRAINTS = (
 
 DRUG_RESISTANCE_CONSTRAINTS = (
     ("No_Constraint",),
+    ("DrugResistant_First_EEG",),
+    ("No_ADHD",),
+    ("No_ADHD", "DrugResistant_First_EEG"),
+    ("No_Autism",),
+    ("No_Autism", "DrugResistant_First_EEG"),
+    ("No_ADHD", "No_Autism"),
+    ("No_ADHD", "No_Autism", "DrugResistant_First_EEG"),
+    ("Psychostim_False",),
+    ("Psychostim_False", "DrugResistant_First_EEG"),
+)
+
+DRUG_RESISTANCE_LONGITUDINAL_CONSTRAINTS = (
+    ("No_Constraint",),
     ("No_ADHD",),
     ("No_Autism",),
     ("No_ADHD", "No_Autism"),
@@ -129,6 +148,14 @@ TARGET_ANALYSES = (
         "Compare non-resistant vs drug-resistant rows.",
         "Only valid inside epilepsy/ASM cohorts with both resistance groups present.",
         DRUG_RESISTANCE_CONSTRAINTS,
+    ),
+    AnalysisSpec(
+        "DrugResistance_First_vs_Later",
+        "First EEG",
+        "Later EEG",
+        "Within-subject comparison of drug-resistant patients with both first and later recordings.",
+        "Only valid for drug-resistant patients with at least one first EEG and one later EEG.",
+        DRUG_RESISTANCE_LONGITUDINAL_CONSTRAINTS,
     ),
     AnalysisSpec(
         "Epilepsy_ASM_Effect_Any",
@@ -345,6 +372,7 @@ SKIP_REASONS = (
     "same_group_membership",
     "too_small_group",
     "insufficient_category_support",
+    "insufficient_longitudinal_pairs",
     "subset_specific_choice_required",
 )
 

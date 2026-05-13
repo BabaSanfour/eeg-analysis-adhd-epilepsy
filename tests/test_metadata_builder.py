@@ -118,10 +118,10 @@ def test_source_specific_rename_defaults_and_shared_normalize_pass() -> None:
 
     assert normalized["study_id"].tolist() == [1, 1014]
     assert normalized["patient_id"].tolist() == [1001, 2001]
+    assert normalized["patient_group_id"].tolist() == [0, 1]
     assert normalized["sex"].tolist() == ["F", "M"]
     assert normalized["eeg_date"].tolist() == ["1/1/2024", "4/16/2019"]
     assert normalized["age"].tolist() == [10.0, 0.38]
-    assert normalized["_potential_row"].tolist() == [True, False]
     assert normalized["psychostimulant_category"].tolist() == [
         "Dextroamphetamine",
         "Dextroamphetamine",
@@ -189,6 +189,19 @@ def test_build_patients_metadata_writes_raw_clean_and_removed_outputs(tmp_path: 
                 "Epilepsy": 0,
                 "Psychostimulant (y/n)": 1,
                 "EEG_date": "NO EEG",
+            }
+        ),
+        _old_row(
+            **{
+                "Study ID": 8,
+                "Pt ID": 1001,
+                "psychostimulant_description": "Methylphenidate",
+                "psychostimulant_category": 2,
+                "TDAH": 1,
+                "TSA": 0,
+                "Epilepsy": 0,
+                "Psychostimulant (y/n)": 1,
+                "EEG_date": "2/5/2024",
             }
         ),
         _old_row(
@@ -282,6 +295,21 @@ def test_build_patients_metadata_writes_raw_clean_and_removed_outputs(tmp_path: 
                 "First EEG": 1,
             }
         ),
+        _new_row(
+            **{
+                "EEG date": "7/3/2020",
+                "Study ID": 1018,
+                "Patient ID": 1001,
+                "Psychostimulant - description": "Lisdexamfetamine - Vyvanse",
+                "Psychostimulant - category": 1.0,
+                "Age": "09y00m",
+                "Sex": "F",
+                "TDAH": 1,
+                "TSA": 0,
+                "Epilepsy": 1,
+                "First EEG": 0,
+            }
+        ),
     ]
 
     old_path = tmp_path / "old.csv"
@@ -305,36 +333,69 @@ def test_build_patients_metadata_writes_raw_clean_and_removed_outputs(tmp_path: 
     assert "psychostimulant_description_input" not in raw_df.columns
     assert "psychostimulant_category_input" not in raw_df.columns
 
-    assert clean_df["study_id"].tolist() == [1, 1014, 1015, 1017]
-    assert clean_df["patient_id"].tolist() == [1001, 2001, 2002, 2004]
+    assert clean_df["study_id"].tolist() == [1, 8, 1014, 1015, 1017, 1018]
+    assert clean_df["patient_id"].tolist() == [1001, 1001, 2001, 2002, 2004, 1001]
+    assert clean_df.loc[
+        clean_df["patient_id"].eq(1001), "patient_group_id"
+    ].nunique() == 1
+    assert (
+        clean_df.loc[clean_df["patient_id"].eq(1001), "patient_group_id"]
+        != clean_df.loc[clean_df["patient_id"].eq(1001), "patient_id"]
+    ).all()
+    assert (
+        clean_df.loc[clean_df["patient_id"].eq(1001), "patient_group_id"]
+        != clean_df.loc[clean_df["patient_id"].eq(1001), "study_id"]
+    ).all()
     assert clean_df["eeg_date"].tolist() == [
         "1/5/2024",
+        "2/5/2024",
         "4/16/2019",
         "5/11/2021",
         "6/3/2020",
+        "7/3/2020",
     ]
     assert clean_df["psychostimulant_category"].tolist() == [
+        "Methylphenidate",
         "Methylphenidate",
         "No Psychostimulant",
         "Methylphenidate",
         "Dextroamphetamine",
+        "Lisdexamfetamine",
     ]
-    assert clean_df["psychostimulant"].tolist() == [1, 0, 1, 1]
-    assert clean_df["asm"].tolist() == [0, 1, 0, 0]
-    assert clean_df["asm_types"].tolist() == ["No_ASM", "LEV", "No_ASM", "No_ASM"]
+    assert clean_df["psychostimulant"].tolist() == [1, 1, 0, 1, 1, 1]
+    assert clean_df["asm"].tolist() == [0, 0, 1, 0, 0, 0]
+    assert clean_df["asm_types"].tolist() == [
+        "No_ASM",
+        "No_ASM",
+        "LEV",
+        "No_ASM",
+        "No_ASM",
+        "No_ASM",
+    ]
     assert clean_df["meds_summary"].tolist() == [
         "Psychostim",
+        "Psychostim",
         "ASM",
+        "Psychostim",
         "Psychostim",
         "Psychostim",
     ]
     assert clean_df["combined_diagnosis"].tolist() == [
         "ADHD",
+        "ADHD",
         "Epilepsy",
         "ADHD+Epilepsy",
         "ADHD+Epilepsy",
+        "ADHD+Epilepsy",
     ]
-    assert clean_df["age_group"].fillna("nan").tolist() == ["9-12", "5-8", "nan", "5-8"]
+    assert clean_df["age_group"].fillna("nan").tolist() == [
+        "9-12",
+        "9-12",
+        "5-8",
+        "0-4",
+        "5-8",
+        "9-12",
+    ]
     assert clean_df.loc[clean_df["study_id"] == 1014, "age"].iat[0] == 7.0
     assert clean_df.loc[clean_df["study_id"] == 1015, "age"].iat[0] == 0.38
     assert clean_df.loc[clean_df["study_id"] == 1017, "age"].iat[0] == 8.0
@@ -342,10 +403,9 @@ def test_build_patients_metadata_writes_raw_clean_and_removed_outputs(tmp_path: 
     assert not clean_df[["adhd", "autism"]].isna().any().any()
 
     assert removed["summary"]["drop_reason_counts"] == {
-        "duplicate_same_source_patient_id": 1,
-        "potential_diagnosis": 1,
-        "invalid_eeg_date": 1,
-        "missing_adhd_or_autism": 2,
+        "non_confirmed_diagnosis": 1,
+        "no_eeg_files": 2,
+        "missing_diagnosis": 2,
         "medication_mismatch": 2,
     }
     assert removed["summary"]["source_dataset_counts"] == {
@@ -357,10 +417,10 @@ def test_build_patients_metadata_writes_raw_clean_and_removed_outputs(tmp_path: 
         "drop_reason",
     ]
     removed_reasons = {row["study_id"]: row["drop_reason"] for row in removed["removed_rows"]}
-    assert removed_reasons[2] == "duplicate_same_source_patient_id"
-    assert removed_reasons[3] == "potential_diagnosis"
-    assert removed_reasons[4] == "invalid_eeg_date"
-    assert removed_reasons[5] == "missing_adhd_or_autism"
+    assert removed_reasons[2] == "no_eeg_files"
+    assert removed_reasons[3] == "non_confirmed_diagnosis"
+    assert removed_reasons[4] == "no_eeg_files"
+    assert removed_reasons[5] == "missing_diagnosis"
     assert removed_reasons[6] == "medication_mismatch"
     assert removed_reasons[7] == "medication_mismatch"
-    assert removed_reasons[1016] == "missing_adhd_or_autism"
+    assert removed_reasons[1016] == "missing_diagnosis"

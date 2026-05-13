@@ -26,7 +26,7 @@ DEFAULT_CSV_DIR = Path(
     "EEG_psychostimulants_2025-02/csv"
 )
 DEFAULT_ADHD_CSV = DEFAULT_CSV_DIR / "EEG_Psychostimulants_PatientList_08-2025.csv"
-DEFAULT_DRUG_RESISTANT_CSV = DEFAULT_CSV_DIR / "IRSC_data_03-22-2026.csv"
+DEFAULT_DRUG_RESISTANT_CSV = DEFAULT_CSV_DIR / "IRSC_data_final.csv"
 
 _AUDIT_OUTPUT_COLUMNS = [*PATIENTS_METADATA_AUDIT_COLUMNS, "drop_reason"]
 _RAW_MERGED_COLUMNS = [
@@ -164,6 +164,44 @@ def _add_metadata_derived_columns(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _patient_group_keys(df: pd.DataFrame) -> list[str]:
+    group_keys = []
+    for row in df.itertuples(index=False):
+        patient_id = getattr(row, "patient_id")
+        study_id = getattr(row, "study_id")
+        if pd.notna(patient_id):
+            group_keys.append(f"patient:{int(patient_id)}")
+        elif pd.notna(study_id):
+            group_keys.append(f"missing_patient_study:{int(study_id)}")
+        else:
+            group_keys.append(f"missing_patient_row:{len(group_keys)}")
+    return group_keys
+
+
+def _add_patient_group_ids(
+    df: pd.DataFrame,
+    preferred_keys: list[str] | None = None,
+) -> pd.DataFrame:
+    """Assign a deterministic surrogate group id for leakage-safe patient grouping."""
+    out = df.copy()
+    group_keys = _patient_group_keys(out)
+
+    preferred_order = []
+    for key in sorted(set(preferred_keys or [])):
+        if key not in preferred_order:
+            preferred_order.append(key)
+    remaining_order = sorted(set(group_keys) - set(preferred_order))
+    ordered_keys = [*preferred_order, *remaining_order]
+
+    key_to_group_id = {key: idx for idx, key in enumerate(ordered_keys)}
+    out["patient_group_id"] = pd.Series(
+        [key_to_group_id[key] for key in group_keys],
+        index=out.index,
+        dtype="Int64",
+    )
+    return out
+
+
 def _rename_adhd_source(df: pd.DataFrame) -> pd.DataFrame:
     out = df.rename(
         columns={
@@ -210,6 +248,7 @@ def _rename_drug_resistant_source(df: pd.DataFrame) -> pd.DataFrame:
 
 def _normalize_merged_metadata(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
+    out["study_id"] = pd.to_numeric(out["study_id"], errors="coerce").astype("Int64")
     out["patient_id"] = pd.to_numeric(out["patient_id"], errors="coerce").astype("Int64")
     out["age"] = out["age"].apply(_parse_age_years)
     out["sex"] = out["sex"].apply(_normalize_sex)
@@ -230,7 +269,7 @@ def _normalize_merged_metadata(df: pd.DataFrame) -> pd.DataFrame:
         out[EPILEPSY_MED_COLS].sum(axis=1).gt(0) | out["other_asm"].eq(1)
     ).astype(int)
 
-    return _add_metadata_derived_columns(out)
+    return _add_metadata_derived_columns(_add_patient_group_ids(out))
 
 
 def _append_removed(
@@ -246,40 +285,6 @@ def _append_removed(
     removed["drop_reason"] = reason
     removed_frames.append(removed[_AUDIT_OUTPUT_COLUMNS])
     return df.loc[~mask].copy()
-
-
-def _drop_same_source_duplicates(
-    df: pd.DataFrame,
-    removed_frames: list[pd.DataFrame],
-) -> pd.DataFrame:
-    sortable = df.copy()
-    sortable["_has_real_eeg"] = ~(
-        sortable["eeg_date"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-        .str.upper()
-        .isin({"NO EEG", "SEEG"})
-    )
-    sortable["_eeg_sort"] = pd.to_datetime(sortable["eeg_date"], errors="coerce")
-
-    nonmissing = sortable["patient_id"].notna()
-    ordered = sortable.loc[nonmissing].sort_values(
-        by=["source_dataset", "patient_id", "_has_real_eeg", "_eeg_sort", "study_id"],
-        ascending=[True, True, False, True, True],
-        na_position="last",
-    )
-    duplicate_mask = ordered.duplicated(subset=["source_dataset", "patient_id"], keep="first")
-    duplicate_indices = ordered.loc[duplicate_mask].index
-
-    keep = sortable.drop(columns=["_has_real_eeg", "_eeg_sort"])
-    if len(duplicate_indices) == 0:
-        return keep
-
-    removed = keep.loc[duplicate_indices, PATIENTS_METADATA_AUDIT_COLUMNS].copy()
-    removed["drop_reason"] = "duplicate_same_source_patient_id"
-    removed_frames.append(removed[_AUDIT_OUTPUT_COLUMNS])
-    return keep.drop(index=duplicate_indices).copy()
 
 
 def _serialize_removed_rows(removed_rows: pd.DataFrame) -> list[dict[str, Any]]:
@@ -317,17 +322,9 @@ def build_patients_metadata(
     clean_output = output_dir / "patients_metadata_clean.csv"
     removed_output = output_dir / "patients_metadata_removed.json"
 
-    (
-        merged_normalized[PATIENTS_METADATA_COLUMNS]
-        .sort_values("study_id")
-        .reset_index(drop=True)
-        .to_csv(raw_output, index=False)
-    )
-
     working = merged_normalized.copy()
     removed_frames: list[pd.DataFrame] = []
 
-    working = _drop_same_source_duplicates(working, removed_frames)
     working = _append_removed(
         removed_frames,
         working,
@@ -359,12 +356,6 @@ def build_patients_metadata(
     )
 
     clean_df = working.copy()
-    (
-        clean_df[PATIENTS_METADATA_COLUMNS]
-        .sort_values("study_id")
-        .reset_index(drop=True)
-        .to_csv(clean_output, index=False)
-    )
 
     if removed_frames:
         removed_rows = pd.concat(removed_frames, ignore_index=True)
@@ -374,6 +365,25 @@ def build_patients_metadata(
         ).reset_index(drop=True)
     else:
         removed_rows = pd.DataFrame(columns=_AUDIT_OUTPUT_COLUMNS)
+
+    preferred_group_keys = _patient_group_keys(clean_df)
+    merged_normalized = _add_patient_group_ids(merged_normalized, preferred_group_keys)
+    clean_df = _add_patient_group_ids(clean_df, preferred_group_keys)
+    if not removed_rows.empty:
+        removed_rows = _add_patient_group_ids(removed_rows, preferred_group_keys)
+
+    (
+        merged_normalized[PATIENTS_METADATA_COLUMNS]
+        .sort_values("study_id")
+        .reset_index(drop=True)
+        .to_csv(raw_output, index=False)
+    )
+    (
+        clean_df[PATIENTS_METADATA_COLUMNS]
+        .sort_values("study_id")
+        .reset_index(drop=True)
+        .to_csv(clean_output, index=False)
+    )
 
     summary = {
         "raw_rows": int(len(merged_normalized)),

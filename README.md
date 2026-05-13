@@ -18,7 +18,7 @@ The codebase currently includes:
 
 ## Metadata Workflow
 
-Metadata currently starts from two CSV files collected by students William and Jeanne: `EEG_Psychostimulants_PatientList_08-2025.csv` and `IRSC_data_03-22-2026.csv`. The builder in [eeg_adhd_epilepsy/qc/metadata.py](eeg_adhd_epilepsy/qc/metadata.py) merges them into one canonical schema, applies the agreed cleaning rules, and writes:
+Metadata currently starts from two CSV files collected by students William and Jeanne: `EEG_Psychostimulants_PatientList_08-2025.csv` and `IRSC_data_final.csv`. The builder in [eeg_adhd_epilepsy/qc/metadata.py](eeg_adhd_epilepsy/qc/metadata.py) merges them into one canonical schema, applies the agreed cleaning rules, assigns a generated `patient_group_id` for repeated recordings from the same patient, and writes:
 
 - `patients_metadata.csv`
 - `patients_metadata_clean.csv`

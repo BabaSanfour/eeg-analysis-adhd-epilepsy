@@ -53,6 +53,7 @@ EVAL_METRIC_COLUMNS = [SEPARATION_METRIC_KEY]
 POOLED_CONDITION = "pooled_all"
 FIT_RUN_KEY_FIELDS = ("fit_id",)
 EVAL_RUN_KEY_FIELDS = ("fit_id", "eval_name", "target_col", "group_col")
+DEFAULT_EVAL_GROUP_COL = "patient_group_id"
 
 
 def save_fit_artifact(
@@ -240,7 +241,7 @@ def parse_eval_specs(raw_specs: Any, subject_col: str) -> list[dict[str, Any]]:
             {
                 "name": str(raw_spec["name"]),
                 "target_col": str(raw_spec["target_col"]),
-                "group_col": str(raw_spec.get("group_col", subject_col)),
+                "group_col": str(raw_spec.get("group_col", DEFAULT_EVAL_GROUP_COL)),
                 "filters": [
                     {
                         "column": str(item["column"]),
@@ -823,7 +824,7 @@ def _build_auto_pooled_eval_spec(args) -> Optional[dict[str, Any]]:
     return {
         "name": "condition_separation",
         "target_col": "condition",
-        "group_col": args.subject_col,
+        "group_col": DEFAULT_EVAL_GROUP_COL,
         "filters": [],
         "label_map": {},
     }
