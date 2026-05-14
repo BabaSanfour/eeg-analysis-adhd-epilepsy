@@ -15,12 +15,12 @@ module purge
 module load gcc arrow/23.0.1 python/3.11
 
 PROJECT_ROOT=${PROJECT_ROOT:-/home/h/hamza97/links/eeg-analysis-adhd-epilepsy}
-BIDS_ROOT=${BIDS_ROOT:-/home/h/hamza97/links/projects/aip-kjerbi/shared/eeg-epilepsy-adhd/BIDS}
-METADATA_PATH=${METADATA_PATH:-/home/h/hamza97/links/projects/aip-kjerbi/shared/eeg-epilepsy-adhd/csv/EEG_Psychostimulants_PatientList_08-2025.csv}
+BIDS_ROOT=${BIDS_ROOT:-/home/h/hamza97/links/scratch/eeg-epilepsy-adhd/BIDS}
+METADATA_PATH=${METADATA_PATH:-/home/h/hamza97/links/projects/aip-kjerbi/shared/eeg-epilepsy-adhd/csv/patients_metadata_clean.csv}
 CONFIG_PATH=${CONFIG_PATH:-$PROJECT_ROOT/configs/descriptors.yaml}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
+SUBJECT_LIST=${SUBJECT_LIST:-$PROJECT_ROOT/cluster/compute_canada/descriptor_subjects.txt}
 
-SUBJECT_ID=$(printf "%04d" "$SLURM_ARRAY_TASK_ID")
 THREADS=${SLURM_CPUS_PER_TASK:-16}
 
 [ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
@@ -28,10 +28,15 @@ THREADS=${SLURM_CPUS_PER_TASK:-16}
 [ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }
 [ -f "$CONFIG_PATH" ] || { echo "Descriptor config not found: $CONFIG_PATH"; exit 1; }
 [ -d "$VENV_PATH" ] || { echo "Virtual environment not found: $VENV_PATH"; exit 1; }
+[ -f "$SUBJECT_LIST" ] || { echo "Subject list not found: $SUBJECT_LIST"; exit 1; }
+
+SUBJECT_ID=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SUBJECT_LIST")
+[ -n "$SUBJECT_ID" ] || { echo "No subject for SLURM_ARRAY_TASK_ID=$SLURM_ARRAY_TASK_ID"; exit 1; }
 
 cd "$PROJECT_ROOT"
 source "$VENV_PATH/bin/activate"
 
+export PYTHONNOUSERSITE=1
 export OMP_NUM_THREADS="$THREADS"
 export MKL_NUM_THREADS="$THREADS"
 export OPENBLAS_NUM_THREADS="$THREADS"
@@ -45,4 +50,5 @@ python -m eeg_adhd_epilepsy.analysis.extract_descriptors \
   --bids_root "$BIDS_ROOT" \
   --metadata "$METADATA_PATH" \
   --config "$CONFIG_PATH" \
+  --subject_col study_id \
   --subjects "$SUBJECT_ID"

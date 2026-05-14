@@ -92,11 +92,21 @@ def load(fpath: str, sep: Optional[str] = None) -> pd.DataFrame:
     return df
 
 
+def _normalize_subject_value(value: object) -> str:
+    text = str(value).strip().replace("sub-", "")
+    numeric = pd.to_numeric(text, errors="coerce")
+    if pd.notna(numeric):
+        return f"{int(numeric):04d}"
+    return text
+
+
 def load_tabular_data(
     table_path: Path,
     feature_columns_path: Path,
     condition: str | None = None,
     target_col: str | None = None,
+    subjects: Optional[Sequence[str]] = None,
+    subject_col: str = "study_id",
     analysis_mode: str = "flat",
     descriptor_families: Optional[Sequence[str]] = None,
     descriptor_max_abs_value: float | None = None,
@@ -104,6 +114,12 @@ def load_tabular_data(
     df = load(str(table_path), sep=None)
     if condition is not None:
         df = df[df["condition"].astype(str) == str(condition)].copy()
+    if subjects:
+        if subject_col not in df.columns:
+            raise ValueError(f"Subject filter column '{subject_col}' is not available in {table_path}.")
+        wanted_subjects = {_normalize_subject_value(subject) for subject in subjects}
+        subject_values = df[subject_col].map(_normalize_subject_value)
+        df = df[subject_values.isin(wanted_subjects)].copy()
     if df.empty:
         raise RuntimeError(f"No feature-table rows survived filtering for condition='{condition}'.")
 
@@ -195,6 +211,8 @@ def load_tabular_data(
     y = df[target_col].astype(str).to_numpy() if target_col else None
     if "obs_id" in df.columns:
         ids = df["obs_id"].astype(str).to_numpy()
+    elif "recording_id" in df.columns:
+        ids = df["recording_id"].astype(str).to_numpy()
     elif "subject" in df.columns:
         ids = df["subject"].astype(str).to_numpy()
     elif "study_id" in df.columns:

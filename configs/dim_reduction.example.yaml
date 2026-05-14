@@ -10,12 +10,14 @@ descriptor_table_path: /path/to/sensor_epoch_features.parquet
 descriptor_feature_columns_path: /path/to/sensor_epoch_features_feature_columns.json
 
 reducers:
-  - default
+  - PCA
+  - UMAP
 n_components_sweep:
   - 2
   - 3
   - 5
   - 10
+  - 25
 
 run_pooled: true
 interactive: true

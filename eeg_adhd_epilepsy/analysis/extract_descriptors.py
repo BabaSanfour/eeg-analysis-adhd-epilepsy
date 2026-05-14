@@ -25,6 +25,7 @@ import argparse
 import itertools
 import json
 import logging
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,7 @@ from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
+_MISSING_RUN_LABEL = "none"
 
 
 def _shard_complete(
@@ -99,6 +101,44 @@ def _shard_complete(
     return all(path.exists() for path in required_paths)
 
 
+def _infer_bids_entity_from_obs_id(obs_id: object, entity: str) -> str | None:
+    match = re.search(rf"(?:^|[_/]){entity}-([^_/]+)", str(obs_id))
+    if match:
+        return match.group(1)
+    return None
+
+
+def _clean_group_value(value: object, *, missing: str = "") -> str:
+    if pd.isna(value):
+        return missing
+    text = str(value).strip()
+    if text.lower() in {"", "nan", "none", "null", "<na>"}:
+        return missing
+    return text
+
+
+def _with_recording_group_columns(metadata_df: pd.DataFrame) -> pd.DataFrame:
+    """Add run-aware grouping columns for aggregated descriptor rows."""
+    out = metadata_df.copy()
+
+    if "session" not in out.columns:
+        out["session"] = out["obs_id"].map(lambda obs_id: _infer_bids_entity_from_obs_id(obs_id, "ses"))
+    out["session"] = out["session"].map(lambda value: _clean_group_value(value, missing="01"))
+
+    if "run" not in out.columns:
+        out["run"] = out["obs_id"].map(lambda obs_id: _infer_bids_entity_from_obs_id(obs_id, "run"))
+    out["run"] = out["run"].map(lambda value: _clean_group_value(value, missing=_MISSING_RUN_LABEL))
+
+    out["recording_id"] = (
+        out["subject"].astype(str)
+        + "_ses-"
+        + out["session"].astype(str)
+        + "_run-"
+        + out["run"].astype(str)
+    )
+    return out
+
+
 def _build_feature_outputs(
     result: dict[str, Any],
     metadata_df: pd.DataFrame,
@@ -108,6 +148,8 @@ def _build_feature_outputs(
     aggregated_ratio_pairs: list[tuple[str, str]],
     aggregated_ratio_floor: float,
 ) -> dict[str, Any]:
+    metadata_df = _with_recording_group_columns(metadata_df)
+
     # Extract feature columns and merge with metadata for epoch-level DF
     epoch_feature_df = pd.DataFrame(result["X"], columns=result["descriptor_names"])
     epoch_df = pd.concat([metadata_df.reset_index(drop=True), epoch_feature_df], axis=1)
@@ -129,13 +171,14 @@ def _build_feature_outputs(
         coords=coords,
     )
 
-    # Calculate subject-level means
-    grouped_mean = container.aggregate(by="subject", stats="mean")
+    # Calculate run-aware recording-level means. For single-run or run-missing
+    # data this preserves the previous one-row-per-subject/session behavior.
+    grouped_mean = container.aggregate(by="recording_id", stats="mean")
     agg_df = grouped_mean.obs_table(include_y=bool(target_col), y_col=target_col or "y")
     agg_df["condition"] = condition
     
     # Calculate additional grouped descriptors (e.g., medians)
-    grouped_features = container.aggregate_groups(by="subject", groups=aggregation_descriptors)
+    grouped_features = container.aggregate_groups(by="recording_id", groups=aggregation_descriptors)
     base_agg_features = pd.DataFrame(grouped_mean.X, columns=grouped_mean.coords["feature"])
     agg_features = pd.DataFrame(grouped_features.X, columns=grouped_features.coords["feature"])
 
@@ -477,7 +520,10 @@ def main() -> None:
             metadata_df["obs_id"] = metadata_df["obs_id"].astype(str)
             metadata_df["condition"] = condition
             metadata_df["subject"] = subject
-            metadata_front = ["obs_id", "subject", "condition"]
+            if "session" not in metadata_df.columns:
+                metadata_df["session"] = session
+            metadata_df = _with_recording_group_columns(metadata_df)
+            metadata_front = ["obs_id", "subject", "session", "run", "recording_id", "condition"]
             metadata_df = metadata_df[
                 metadata_front
                 + [column for column in metadata_df.columns if column not in metadata_front]

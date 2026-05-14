@@ -8,7 +8,7 @@
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
-set -uo pipefail
+set -euo pipefail
 
 # 1. Load Cluster Modules
 module purge
@@ -28,10 +28,18 @@ source "$VENV_PATH/bin/activate"
 export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
 export PYTHONNOUSERSITE=1
 THREADS=${SLURM_CPUS_PER_TASK:-16}
-export OMP_NUM_THREADS="$THREADS"
-export MKL_NUM_THREADS="$THREADS"
-export OPENBLAS_NUM_THREADS="$THREADS"
-export NUMEXPR_NUM_THREADS="$THREADS"
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
+export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
+export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
+mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
+
+[ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
+[ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }
+[ -d "$CONFIGS_DIR" ] || { echo "Config directory not found: $CONFIGS_DIR"; exit 1; }
 
 # 4. Tracking
 FAILED_CONFIGS=()
@@ -44,11 +52,13 @@ run_analysis() {
     local config=$2
     local representation=$3
     local input_mode="raw"
+    local aggregation_unit="${AGGREGATION_UNIT:-recording}"
     
     # Extract dataset info from config to check for existing report
     local ds_name=$(grep "dataset_name:" "$config" | awk '{print $2}')
     local out_grp=$(grep "output_group:" "$config" | awk '{print $2}')
-    local report_path="$REPORTS_ROOT/summary/dim_reduction/$out_grp/$ds_name/$input_mode/${mode}__${representation}_dataset_summary.html"
+    local report_repr="${representation//_/-}"
+    local report_path="$REPORTS_ROOT/summary/dim_reduction/$out_grp/$ds_name/$input_mode/dataset_summary_mode-${mode}_unit-${aggregation_unit}_repr-${report_repr}.html"
     
     if [[ -f "$report_path" ]]; then
         echo "SKIPPING: Mode=$mode | Config=$(basename "$config") (Report already exists: $report_path)"
@@ -69,6 +79,7 @@ run_analysis() {
         --input_mode "$input_mode" \
         --analysis_mode "$mode" \
         --representation "$representation" \
+        --aggregation_unit "$aggregation_unit" \
         --n_jobs "$THREADS"; then
         echo "SUCCESS: $mode - $(basename "$config")"
         SUCCESSFUL_RUNS=$((SUCCESSFUL_RUNS + 1))

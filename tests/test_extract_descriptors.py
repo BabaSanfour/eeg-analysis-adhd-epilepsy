@@ -28,6 +28,8 @@ def _demo_container() -> DataContainer:
             "channel": np.array(["Fz", "Cz"], dtype=object),
             "time": time,
             "study_id": np.array(["0001", "0001", "0002", "0002"], dtype=object),
+            "session": np.array(["01", "01", "01", "01"], dtype=object),
+            "run": np.array(["01", "02", "01", "01"], dtype=object),
             "combined_diagnosis": np.array(
                 ["Control", "Control", "ADHD", "ADHD"], dtype=object
             ),
@@ -224,6 +226,42 @@ def test_epoch_metadata_frame_requires_container_ids() -> None:
         )
 
 
+def test_feature_outputs_preserve_run_level_aggregation() -> None:
+    metadata_df = pd.DataFrame(
+        {
+            "obs_id": ["sub-0001_ses-01_run-01_ep-0", "sub-0001_ses-01_run-02_ep-0"],
+            "subject": ["0001", "0001"],
+            "session": ["01", "01"],
+            "run": ["01", "02"],
+            "condition": ["EO_baseline", "EO_baseline"],
+        }
+    )
+    result = {
+        "X": np.asarray([[1.0, 2.0], [10.0, 20.0]]),
+        "descriptor_names": ["band_abs_alpha_ch-Fz", "band_abs_beta_ch-Fz"],
+        "failures": [],
+    }
+
+    outputs = extract_descriptors._build_feature_outputs(
+        result,
+        metadata_df,
+        condition="EO_baseline",
+        target_col=None,
+        aggregation_descriptors=[{"name": "mean_export", "stats": "mean"}],
+        aggregated_ratio_pairs=[],
+        aggregated_ratio_floor=0.0,
+    )
+
+    subject_df = outputs["subject_df"]
+    assert subject_df["subject"].tolist() == ["0001", "0001"]
+    assert subject_df["run"].tolist() == ["01", "02"]
+    assert subject_df["recording_id"].tolist() == [
+        "0001_ses-01_run-01",
+        "0001_ses-01_run-02",
+    ]
+    assert subject_df["epoch_count"].tolist() == [1, 1]
+
+
 def test_extract_descriptors_cli_writes_epoch_and_subject_outputs(
     monkeypatch,
     tmp_path: Path,
@@ -350,16 +388,18 @@ aggregation:
     pooled_epoch_df = pd.read_csv(subject_one_root / "pooled_epoch_features.csv")
     pooled_agg_df = pd.read_csv(subject_one_root / "pooled_subject_features.csv")
     assert len(sensor_epoch_df) == 2
-    assert len(sensor_agg_df) == 1
+    assert len(sensor_agg_df) == 2
     assert len(pooled_epoch_df) == 2
-    assert len(pooled_agg_df) == 1
+    assert len(pooled_agg_df) == 2
     assert "band_abs_delta_ch-Fz" in sensor_epoch_df.columns
     assert not any("chgrp-" in column for column in sensor_epoch_df.columns)
     assert "band_abs_delta_chgrp-midline" in pooled_epoch_df.columns
     assert not any(column.endswith("_ch-Fz") for column in pooled_epoch_df.columns)
     assert "epoch_count" in sensor_agg_df.columns
-    assert sensor_agg_df["epoch_count"].tolist() == [2]
-    assert pooled_agg_df["epoch_count"].tolist() == [2]
+    assert "run" in sensor_agg_df.columns
+    assert "recording_id" in sensor_agg_df.columns
+    assert sensor_agg_df["epoch_count"].tolist() == [1, 1]
+    assert pooled_agg_df["epoch_count"].tolist() == [1, 1]
     assert any(column.startswith("mean_") for column in sensor_agg_df.columns)
     assert any(column.startswith("mean_band_log_abs_") for column in sensor_agg_df.columns)
     assert not any(column.startswith("mean_band_abs_") for column in sensor_agg_df.columns)
@@ -374,8 +414,12 @@ aggregation:
     assert not any(column.startswith("band_ratio_") for column in sensor_epoch_df.columns)
     pooled_log_col = "band_log_abs_alpha_chgrp-midline"
     assert pooled_log_col in pooled_epoch_df.columns
+    first_recording_id = pooled_agg_df.loc[0, "recording_id"]
+    first_recording_epochs = pooled_epoch_df[
+        pooled_epoch_df["recording_id"] == first_recording_id
+    ]
     assert pooled_agg_df.loc[0, f"median_{pooled_log_col}"] == pytest.approx(
-        pooled_epoch_df[pooled_log_col].median()
+        first_recording_epochs[pooled_log_col].median()
     )
     assert not (derivative_root / "combined").exists()
 
@@ -475,9 +519,9 @@ aggregation:
     combined_pooled_agg_df = pd.read_csv(combined_root / "pooled_subject_features.csv")
 
     assert len(combined_sensor_epoch_df) == 4
-    assert len(combined_sensor_agg_df) == 2
+    assert len(combined_sensor_agg_df) == 3
     assert len(combined_pooled_epoch_df) == 4
-    assert len(combined_pooled_agg_df) == 2
+    assert len(combined_pooled_agg_df) == 3
     assert any(
         column.startswith("agg_band_ratio_") for column in combined_sensor_agg_df.columns
     )

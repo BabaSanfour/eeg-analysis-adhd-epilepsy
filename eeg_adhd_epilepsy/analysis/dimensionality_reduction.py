@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import os
 import hashlib
 import json
 import logging
+import os
+import re
 import shutil
 from datetime import datetime, timezone
 from itertools import product
@@ -54,6 +55,34 @@ POOLED_CONDITION = "pooled_all"
 FIT_RUN_KEY_FIELDS = ("fit_id",)
 EVAL_RUN_KEY_FIELDS = ("fit_id", "eval_name", "target_col", "group_col")
 DEFAULT_EVAL_GROUP_COL = "patient_group_id"
+_MISSING_EVAL_VALUES = {"", "nan", "none", "null", "na", "n/a", "<na>"}
+
+
+def _slug(value: object, *, max_len: int = 80) -> str:
+    text = str(value).strip()
+    text = re.sub(r"[^A-Za-z0-9._=-]+", "-", text)
+    text = text.strip("-._")
+    if not text:
+        text = "none"
+    return text[:max_len]
+
+
+def _run_variant(args) -> str:
+    parts = [args.analysis_mode]
+    aggregation_unit = getattr(args, "aggregation_unit", None)
+    if args.input_mode == "raw" and args.representation.startswith("subject_") and aggregation_unit:
+        parts.append(str(aggregation_unit))
+    parts.append(args.representation)
+    return "__".join(_slug(part) for part in parts if part)
+
+
+def _report_variant(args) -> str:
+    parts = [f"mode-{_slug(args.analysis_mode).replace('_', '-')}"]
+    aggregation_unit = getattr(args, "aggregation_unit", None)
+    if args.input_mode == "raw" and args.representation.startswith("subject_") and aggregation_unit:
+        parts.append(f"unit-{_slug(aggregation_unit).replace('_', '-')}")
+    parts.append(f"repr-{_slug(args.representation).replace('_', '-')}")
+    return "_".join(parts)
 
 
 def save_fit_artifact(
@@ -65,18 +94,60 @@ def save_fit_artifact(
     diagnostics: dict[str, Any],
 ) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    np.save(path / "embedding.npy", np.asarray(embedding))
-    np.save(path / "ids.npy", np.asarray(ids, dtype=object))
-    (path / "fit.json").write_text(json.dumps(fit_payload, indent=2), encoding="utf-8")
-    (path / "metrics.json").write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
-    np.savez_compressed(path / "diagnostics.npz", payload=np.asarray([diagnostics], dtype=object))
+    stem = str(fit_payload.get("artifact_stem") or "dim_reduction_fit")
+    embedding_name = f"{stem}_embedding.npy"
+    ids_name = f"{stem}_ids.npy"
+    fit_name = f"{stem}_fit.json"
+    metrics_name = f"{stem}_metrics.json"
+    diagnostics_name = f"{stem}_diagnostics.npz"
+    np.save(path / embedding_name, np.asarray(embedding))
+    np.save(path / ids_name, np.asarray(ids, dtype=object))
+    (path / fit_name).write_text(json.dumps(fit_payload, indent=2), encoding="utf-8")
+    (path / metrics_name).write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
+    np.savez_compressed(path / diagnostics_name, payload=np.asarray([diagnostics], dtype=object))
+    (path / "artifact_manifest.json").write_text(
+        json.dumps(
+            {
+                "artifact_stem": stem,
+                "embedding": embedding_name,
+                "ids": ids_name,
+                "fit": fit_name,
+                "metrics": metrics_name,
+                "diagnostics": diagnostics_name,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     (path / "_SUCCESS").write_text("ok\n", encoding="utf-8")
 
 
 def save_eval_artifact(path: Path, eval_payload: dict[str, Any]) -> None:
     path.mkdir(parents=True, exist_ok=True)
-    (path / "eval.json").write_text(json.dumps(eval_payload, indent=2), encoding="utf-8")
+    stem = str(eval_payload.get("artifact_stem") or "dim_reduction_eval")
+    eval_name = f"{stem}_eval.json"
+    (path / eval_name).write_text(json.dumps(eval_payload, indent=2), encoding="utf-8")
+    (path / "artifact_manifest.json").write_text(
+        json.dumps({"artifact_stem": stem, "eval": eval_name}, indent=2),
+        encoding="utf-8",
+    )
     (path / "_SUCCESS").write_text("ok\n", encoding="utf-8")
+
+
+def _load_eval_payload(path: Path) -> dict[str, Any]:
+    manifest_path = path / "artifact_manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        eval_path = path / manifest.get("eval", "eval.json")
+        if eval_path.exists():
+            return json.loads(eval_path.read_text(encoding="utf-8"))
+    eval_path = path / "eval.json"
+    if eval_path.exists():
+        return json.loads(eval_path.read_text(encoding="utf-8"))
+    matches = sorted(path.glob("*_eval.json"))
+    if matches:
+        return json.loads(matches[0].read_text(encoding="utf-8"))
+    raise FileNotFoundError(f"No eval payload found in {path}")
 
 
 def update_runs(path: Path, record: dict[str, Any], key_fields: Sequence[str]) -> None:
@@ -308,11 +379,13 @@ def _prepare_eval_inputs(
     if eval_spec["group_col"] not in aligned_frame.columns:
         raise ValueError(f"Eval group column '{eval_spec['group_col']}' is not available.")
 
-    labels = aligned_frame[eval_spec["target_col"]].astype(str)
+    labels = aligned_frame[eval_spec["target_col"]]
     if eval_spec["label_map"]:
-        labels = labels.map(lambda value: eval_spec["label_map"].get(value, value))
-    labels = labels.replace({"nan": np.nan, "None": np.nan, "": np.nan})
-    groups = aligned_frame[eval_spec["group_col"]].astype(str)
+        labels = labels.map(lambda value: eval_spec["label_map"].get(str(value), value))
+    labels = labels.astype("string").str.strip()
+    labels = labels.mask(labels.str.lower().isin(_MISSING_EVAL_VALUES))
+    groups = aligned_frame[eval_spec["group_col"]].astype("string").str.strip()
+    groups = groups.mask(groups.str.lower().isin(_MISSING_EVAL_VALUES))
     valid_mask = labels.notna() & groups.notna()
     if not valid_mask.any():
         raise RuntimeError(f"Eval '{eval_spec['name']}' produced no valid samples.")
@@ -400,7 +473,7 @@ def run_eval(
 ) -> dict[str, Any]:
     success_marker = out_path / "_SUCCESS"
     if success_marker.exists() and not overwrite:
-        eval_payload = json.loads((out_path / "eval.json").read_text(encoding="utf-8"))
+        eval_payload = _load_eval_payload(out_path)
         return _build_eval_record(
             eval_payload=eval_payload,
             artifact_path=out_path,
@@ -443,6 +516,18 @@ def run_eval(
         groups=groups,
     )
     metrics_payload = dict(score_payload["metrics"])
+    artifact_stem = "_".join(
+        [
+            "sub-all",
+            "ses-all",
+            f"scope-{_slug(fit_payload['scope'], max_len=32)}",
+            f"cond-{_slug(fit_payload['condition'], max_len=32)}",
+            f"unit-{_slug(fit_payload['unit_key'], max_len=32)}",
+            f"reducer-{_slug(fit_payload['reducer'], max_len=32)}",
+            f"components-{int(fit_payload['n_components'])}",
+            f"eval-{_slug(eval_spec['name'], max_len=32)}",
+        ]
+    )
     eval_payload = {
         "eval_id": eval_id,
         "fit_id": fit_payload["fit_id"],
@@ -456,6 +541,8 @@ def run_eval(
         "eval_name": eval_spec["name"],
         "input_mode": fit_payload["input_mode"],
         "representation": fit_payload["representation"],
+        "aggregation_unit": fit_payload.get("aggregation_unit"),
+        "run_label": fit_payload.get("run_label"),
         "reducer": fit_payload["reducer"],
         "n_components": int(fit_payload["n_components"]),
         "target_col": eval_spec["target_col"],
@@ -467,10 +554,13 @@ def run_eval(
         "status": "success",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "n_samples": int(len(selected_ids)),
+        "n_groups": int(pd.Index(groups).nunique()),
+        "n_labels": int(pd.Index(labels).nunique()),
         "metrics": metrics_payload,
         "records": score_payload.get("records", []),
         "metadata": score_payload.get("metadata", {}),
         "artifacts": score_payload.get("artifacts", {}),
+        "artifact_stem": f"{artifact_stem}_eval-{eval_id}",
     }
     save_eval_artifact(out_path, eval_payload)
     return _build_eval_record(
@@ -521,6 +611,7 @@ def _build_fit_task(
                 "segment_duration": float(args.segment_duration),
                 "overlap": float(args.overlap),
                 "desc": args.desc,
+                "aggregation_unit": getattr(args, "aggregation_unit", None),
             }
         )
     elif args.input_mode == "descriptors":
@@ -567,6 +658,19 @@ def _build_fit_task(
             default=str,
         ).encode("utf-8")
     ).hexdigest()[:16]
+    artifact_stem = "_".join(
+        [
+            "sub-all",
+            "ses-all",
+            f"scope-{_slug(scope, max_len=32)}",
+            f"cond-{_slug(condition, max_len=32)}",
+            f"mode-{_slug(args.analysis_mode, max_len=32)}",
+            f"unit-{_slug(unit_spec['unit_key'], max_len=32)}",
+            f"reducer-{_slug(reducer_name, max_len=32)}",
+            f"components-{int(n_components)}",
+            f"fit-{fit_id}",
+        ]
+    )
 
     fit_payload = {
         "fit_id": fit_id,
@@ -579,6 +683,8 @@ def _build_fit_task(
         "family": unit_spec.get("family"),
         "input_mode": args.input_mode,
         "representation": args.representation,
+        "aggregation_unit": getattr(args, "aggregation_unit", None),
+        "run_label": getattr(args, "run_label", None),
         "descriptor_families": list(getattr(args, "descriptor_families", []) or []),
         "descriptor_max_abs_value": getattr(args, "descriptor_max_abs_value", None)
         if args.input_mode == "descriptors"
@@ -594,6 +700,7 @@ def _build_fit_task(
         "loaded_obs": int(container.meta.get("loaded_obs", container.X.shape[0])),
         "samples_used": int(container.meta.get("samples_used", container.X.shape[0])),
         "input_signature": input_signature,
+        "artifact_stem": artifact_stem,
     }
     artifact_path = (
         output_root
@@ -601,15 +708,15 @@ def _build_fit_task(
         / "ses-all"
         / "eeg"
         / "fits"
-        / scope
-        / condition
-        / args.input_mode
-        / args.analysis_mode
-        / unit_spec["unit_type"]
-        / unit_spec["unit_key"]
-        / reducer_name
-        / f"n{n_components}"
-        / fit_id
+        / f"scope-{_slug(scope)}"
+        / f"cond-{_slug(condition)}"
+        / f"input-{_slug(args.input_mode)}"
+        / f"mode-{_slug(args.analysis_mode)}"
+        / f"unit-{_slug(unit_spec['unit_type'])}"
+        / f"name-{_slug(unit_spec['unit_key'])}"
+        / f"reducer-{_slug(reducer_name)}"
+        / f"components-{int(n_components)}"
+        / f"fit-{fit_id}"
     )
     return {
         "fit_payload": fit_payload,
@@ -668,13 +775,17 @@ def _build_eval_task(
     fit_path = output_root / fit_record["artifact_path"]
     fit_artifact = load_fit_artifact(fit_path)
     selected_ids: list[str] = []
+    selected_groups: list[str] = []
+    selected_labels: list[str] = []
     try:
-        _, selected_ids_array, _, _ = _prepare_eval_inputs(
+        _, selected_ids_array, selected_labels_array, selected_groups_array = _prepare_eval_inputs(
             container=container,
             fit_ids=np.asarray(fit_artifact["ids"], dtype=object).astype(str),
             eval_spec=eval_spec,
         )
         selected_ids = selected_ids_array.tolist()
+        selected_labels = selected_labels_array.tolist()
+        selected_groups = selected_groups_array.tolist()
     except Exception:
         selected_ids = []
     eval_id = hashlib.sha256(
@@ -692,6 +803,19 @@ def _build_eval_task(
             default=str,
         ).encode("utf-8")
     ).hexdigest()[:16]
+    artifact_stem = "_".join(
+        [
+            "sub-all",
+            "ses-all",
+            f"scope-{_slug(fit_record['scope'], max_len=32)}",
+            f"cond-{_slug(fit_record['condition'], max_len=32)}",
+            f"unit-{_slug(fit_record['unit_key'], max_len=32)}",
+            f"reducer-{_slug(fit_record['reducer'], max_len=32)}",
+            f"components-{int(fit_record['n_components'])}",
+            f"eval-{_slug(eval_spec['name'], max_len=32)}",
+            f"eval-{eval_id}",
+        ]
+    )
     eval_payload = {
         "eval_id": eval_id,
         "fit_id": fit_record["fit_id"],
@@ -705,6 +829,8 @@ def _build_eval_task(
         "eval_name": eval_spec["name"],
         "input_mode": fit_record["input_mode"],
         "representation": fit_record["representation"],
+        "aggregation_unit": fit_record.get("aggregation_unit"),
+        "run_label": fit_record.get("run_label"),
         "reducer": fit_record["reducer"],
         "n_components": int(fit_record["n_components"]),
         "target_col": eval_spec["target_col"],
@@ -716,6 +842,9 @@ def _build_eval_task(
         "status": "success",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "n_samples": int(len(selected_ids)),
+        "n_groups": int(pd.Index(selected_groups).nunique()) if selected_groups else 0,
+        "n_labels": int(pd.Index(selected_labels).nunique()) if selected_labels else 0,
+        "artifact_stem": artifact_stem,
     }
     artifact_path = (
         output_root
@@ -723,9 +852,14 @@ def _build_eval_task(
         / "ses-all"
         / "eeg"
         / "evals"
-        / fit_record["fit_id"]
-        / eval_spec["name"]
-        / eval_id
+        / f"scope-{_slug(fit_record['scope'])}"
+        / f"cond-{_slug(fit_record['condition'])}"
+        / f"unit-{_slug(fit_record['unit_key'])}"
+        / f"reducer-{_slug(fit_record['reducer'])}"
+        / f"components-{int(fit_record['n_components'])}"
+        / f"eval-{_slug(eval_spec['name'])}"
+        / f"fit-{fit_record['fit_id']}"
+        / f"eval-{eval_id}"
     )
     return {
         "fit_record": fit_record,
@@ -785,19 +919,36 @@ def _execute_eval_task(task: dict[str, Any]) -> dict[str, Any]:
         )
 
 
+def _normalize_subject_value(subject: object) -> str:
+    value = str(subject).strip()
+    if value.startswith("sub-"):
+        value = value[4:]
+    numeric = pd.to_numeric(value, errors="coerce")
+    if pd.notna(numeric):
+        return f"{int(numeric):04d}"
+    return value
+
+
 def _resolve_subjects(args, bids_root: Path, meta_df: pd.DataFrame) -> list[str]:
     if args.subjects:
-        subjects: list[str] = []
-        for subject in args.subjects:
-            value = str(subject).strip()
-            if value.startswith("sub-"):
-                value = value[4:]
-            if value.isdigit():
-                value = f"{int(value):04d}"
-            subjects.append(value)
+        subjects = [_normalize_subject_value(subject) for subject in args.subjects]
         return subjects
-    if args.input_mode != "raw":
-        return sorted(pd.Index(meta_df[args.subject_col]).astype(str).unique().tolist())
+    if args.input_mode == "descriptors":
+        table_path = Path(args.descriptor_table_path).expanduser()
+        descriptor_df = load(str(table_path), sep=None)
+        if args.subject_col in descriptor_df.columns:
+            subject_series = descriptor_df[args.subject_col]
+        elif "subject" in descriptor_df.columns:
+            subject_series = descriptor_df["subject"]
+        else:
+            raise ValueError(
+                f"Descriptor table must contain '{args.subject_col}' or 'subject' to resolve available subjects."
+            )
+        subjects = sorted({_normalize_subject_value(value) for value in subject_series.dropna().unique()})
+        logger.info("Resolved %d available subjects from descriptor table %s.", len(subjects), table_path)
+        return subjects
+    if args.input_mode == "embeddings":
+        return sorted({_normalize_subject_value(value) for value in pd.Index(meta_df[args.subject_col]).dropna().unique()})
 
     coverage_root = bids_root / "derivatives" / "preproc" if args.use_derivatives else bids_root
     coverage_desc = args.desc if args.use_derivatives else ""
@@ -816,6 +967,56 @@ def _resolve_subjects(args, bids_root: Path, meta_df: pd.DataFrame) -> list[str]
         "derivatives" if args.use_derivatives else "BIDS",
     )
     return subjects
+
+
+def _valid_n_components_for_container(container: DataContainer, n_components: int) -> bool:
+    X = np.asarray(container.X)
+    if X.ndim != 2:
+        return False
+    if n_components < 1:
+        return False
+    max_components = min(int(X.shape[0]), int(X.shape[1]))
+    return int(n_components) <= max_components
+
+
+def _valid_component_sweep(container: DataContainer, requested: Sequence[int]) -> list[int]:
+    valid = [int(value) for value in requested if _valid_n_components_for_container(container, int(value))]
+    skipped = [int(value) for value in requested if int(value) not in valid]
+    if skipped:
+        logger.info(
+            "Skipping n_components values %s for matrix shape %s.",
+            skipped,
+            tuple(np.asarray(container.X).shape),
+        )
+    return valid
+
+
+def _availability_record(
+    *,
+    scope: str,
+    condition: str,
+    unit_spec: dict[str, Any] | None,
+    container: DataContainer,
+    requested_components: Sequence[int],
+    valid_components: Sequence[int],
+) -> dict[str, Any]:
+    X = np.asarray(container.X)
+    n_features = int(X.shape[1]) if X.ndim == 2 else None
+    return {
+        "scope": scope,
+        "condition": condition,
+        "unit_type": None if unit_spec is None else unit_spec["unit_type"],
+        "unit_name": None if unit_spec is None else unit_spec["unit_name"],
+        "unit_key": None if unit_spec is None else unit_spec["unit_key"],
+        "matrix_shape": list(X.shape),
+        "n_samples": int(X.shape[0]) if X.ndim >= 1 else 0,
+        "n_features": n_features,
+        "requested_n_components": [int(value) for value in requested_components],
+        "valid_n_components": [int(value) for value in valid_components],
+        "skipped_n_components": [
+            int(value) for value in requested_components if int(value) not in set(map(int, valid_components))
+        ],
+    }
 
 
 def _build_auto_pooled_eval_spec(args) -> Optional[dict[str, Any]]:
@@ -859,6 +1060,7 @@ def _write_run_status(
     *,
     fatal_error: str | None = None,
     report_path: Path | None = None,
+    run_metadata: dict[str, Any] | None = None,
 ) -> None:
     fit_runs = json.loads(fit_runs_path.read_text(encoding="utf-8")) if fit_runs_path.exists() else []
     eval_runs = json.loads(eval_runs_path.read_text(encoding="utf-8")) if eval_runs_path.exists() else []
@@ -892,6 +1094,8 @@ def _write_run_status(
         "report_exists": bool(report_path is not None and report_path.exists()),
         "fatal_error": fatal_error,
     }
+    if run_metadata:
+        summary_payload.update(run_metadata)
     (output_root / "run_summary.json").write_text(
         json.dumps(summary_payload, indent=2),
         encoding="utf-8",
@@ -922,6 +1126,7 @@ def main() -> None:
     dataset_group.add_argument("--bids_root", default="/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS")
     dataset_group.add_argument("--metadata", default=None, help="Path to canonical metadata CSV.")
     dataset_group.add_argument("--dataset_name", default=None, help="Name for this dim-reduction run namespace.")
+    dataset_group.add_argument("--run_label", default=None, help="Optional human-readable label used in reports and output folders.")
     dataset_group.add_argument("--subject_col", default="study_id", help="Subject identifier column.")
     dataset_group.add_argument("--subjects", nargs="+", default=None, help="Specific subjects to process.")
     dataset_group.add_argument("--conditions", nargs="+", default=DEFAULT_CONDITIONS, choices=DEFAULT_CONDITIONS)
@@ -975,6 +1180,15 @@ def main() -> None:
         "--ignore_annotations",
         action=argparse.BooleanOptionalAction,
         default=True,
+    )
+    input_group.add_argument(
+        "--aggregation_unit",
+        choices=["recording", "subject"],
+        default="recording",
+        help=(
+            "Aggregation unit for raw subject_* representations. "
+            "'recording' preserves separate session/run rows; 'subject' collapses all runs for a study_id."
+        ),
     )
 
     reduction_group = parser.add_argument_group("Reduction")
@@ -1033,6 +1247,8 @@ def main() -> None:
         if args.descriptor_max_abs_value is not None and args.descriptor_max_abs_value <= 0:
             raise ValueError("--descriptor_max_abs_value must be positive when provided.")
         args.representation = Path(args.descriptor_table_path).stem
+    if args.run_label is None:
+        args.run_label = args.dataset_name
     if args.input_mode == "embeddings" and not args.embeddings_root:
         raise ValueError("--embeddings_root is required when --input_mode embeddings.")
     if args.input_mode == "embeddings" and args.analysis_mode != "flat":
@@ -1115,8 +1331,11 @@ def main() -> None:
         if output_group.is_absolute():
             raise ValueError("--output_group must be relative, not absolute.")
         output_base = output_base / output_group
-    run_variant = f"{args.analysis_mode}__{args.representation}"
-    output_root = output_base / args.dataset_name / args.input_mode / run_variant
+    run_variant = _run_variant(args)
+    output_dataset_name = _slug(args.run_label or args.dataset_name)
+    args.run_variant = run_variant
+    args.output_dataset_name = output_dataset_name
+    output_root = output_base / output_dataset_name / args.input_mode / run_variant
     output_root.mkdir(parents=True, exist_ok=True)
     config_snapshot = {key: value for key, value in vars(args).items() if key not in {"config", "eval_config"}}
     if eval_specs:
@@ -1128,6 +1347,8 @@ def main() -> None:
 
     base_containers_by_scope: dict[tuple[str, str], DataContainer] = {}
     unit_containers_by_key: dict[tuple[str, str, str], DataContainer] = {}
+    data_availability: list[dict[str, Any]] = []
+    condition_load_failures: list[dict[str, str]] = []
 
     if args.reports_only:
         if not fit_runs_path.exists():
@@ -1138,14 +1359,34 @@ def main() -> None:
             logger.info("Loading input for condition '%s' (%s).", condition, args.input_mode)
             try:
                 base_container = load_container(args, subjects, meta_df, condition, target_col=None)
-            except Exception:
+            except Exception as exc:
                 logger.exception("Failed to load condition '%s'.", condition)
+                condition_load_failures.append({"condition": condition, "error": str(exc)})
                 continue
 
             base_containers_by_scope[("condition", condition)] = base_container
             for unit_spec in iter_analysis_units(args, base_container):
                 unit_containers_by_key[("condition", condition, unit_spec["unit_key"])] = unit_spec["container"]
-                for reducer_name, n_components in product(reducers, args.n_components_sweep):
+                valid_components = _valid_component_sweep(unit_spec["container"], args.n_components_sweep)
+                data_availability.append(
+                    _availability_record(
+                        scope="condition",
+                        condition=condition,
+                        unit_spec=unit_spec,
+                        container=unit_spec["container"],
+                        requested_components=args.n_components_sweep,
+                        valid_components=valid_components,
+                    )
+                )
+                if not valid_components:
+                    logger.warning(
+                        "Skipping %s/%s: no valid n_components for matrix shape %s.",
+                        condition,
+                        unit_spec["unit_name"],
+                        tuple(np.asarray(unit_spec["container"].X).shape),
+                    )
+                    continue
+                for reducer_name, n_components in product(reducers, valid_components):
                     fit_tasks.append(
                         _build_fit_task(
                             args=args,
@@ -1169,7 +1410,26 @@ def main() -> None:
                 base_containers_by_scope[("pooled", POOLED_CONDITION)] = pooled_container
                 for unit_spec in iter_analysis_units(args, pooled_container):
                     unit_containers_by_key[("pooled", POOLED_CONDITION, unit_spec["unit_key"])] = unit_spec["container"]
-                    for reducer_name, n_components in product(reducers, args.n_components_sweep):
+                    valid_components = _valid_component_sweep(unit_spec["container"], args.n_components_sweep)
+                    data_availability.append(
+                        _availability_record(
+                            scope="pooled",
+                            condition=POOLED_CONDITION,
+                            unit_spec=unit_spec,
+                            container=unit_spec["container"],
+                            requested_components=args.n_components_sweep,
+                            valid_components=valid_components,
+                        )
+                    )
+                    if not valid_components:
+                        logger.warning(
+                            "Skipping %s/%s: no valid n_components for matrix shape %s.",
+                            POOLED_CONDITION,
+                            unit_spec["unit_name"],
+                            tuple(np.asarray(unit_spec["container"].X).shape),
+                        )
+                        continue
+                    for reducer_name, n_components in product(reducers, valid_components):
                         fit_tasks.append(
                             _build_fit_task(
                                 args=args,
@@ -1260,9 +1520,9 @@ def main() -> None:
         summary_dir = get_stage_summary_dir(reports_root, "dim_reduction", create_dir=True)
         if args.output_group:
             summary_dir = summary_dir / Path(str(args.output_group))
-        summary_dir = summary_dir / args.dataset_name / args.input_mode
+        summary_dir = summary_dir / output_dataset_name / args.input_mode
         summary_dir.mkdir(parents=True, exist_ok=True)
-        report_path = summary_dir / f"{run_variant}_dataset_summary.html"
+        report_path = summary_dir / f"dataset_summary_{_report_variant(args)}.html"
         report.save(report_path)
         logger.info("Report saved to: %s", report_path)
     except Exception as exc:
@@ -1275,6 +1535,19 @@ def main() -> None:
             eval_runs_path=eval_runs_path,
             fatal_error=fatal_error,
             report_path=report_path,
+            run_metadata={
+                "dataset_name": args.dataset_name,
+                "run_label": args.run_label,
+                "input_mode": args.input_mode,
+                "analysis_mode": args.analysis_mode,
+                "representation": args.representation,
+                "aggregation_unit": args.aggregation_unit,
+                "run_variant": run_variant,
+                "conditions_requested": list(args.conditions),
+                "subjects_resolved": len(subjects),
+                "condition_load_failures": condition_load_failures,
+                "data_availability": data_availability,
+            },
         )
 
 

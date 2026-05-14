@@ -15,12 +15,15 @@ desc: base
 representation: subject_flat
 
 reducers:
-  - DEFAULT
+  - PCA
+  - UMAP
 
 n_components_sweep:
   - 2
   - 3
   - 5
+  - 10
+  - 25
 
 run_pooled: true
 interactive: true

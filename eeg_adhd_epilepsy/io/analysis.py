@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Optional, Sequence
 
@@ -12,6 +13,79 @@ from coco_pipe.io.structures import DataContainer
 from eeg_adhd_epilepsy.dl import load_temp_dl_data
 from eeg_adhd_epilepsy.io.bids import load_eeg_data
 from eeg_adhd_epilepsy.io.table import load_tabular_data
+
+
+def _infer_bids_entity_from_text(value: object, entity: str) -> str | None:
+    match = re.search(rf"(?:^|[_/]){entity}-([^_/]+)", str(value))
+    if match:
+        return match.group(1)
+    return None
+
+
+def _clean_group_value(value: object, *, missing: str) -> str:
+    if pd.isna(value):
+        return missing
+    text = str(value).strip()
+    if text.lower() in {"", "nan", "none", "null", "<na>"}:
+        return missing
+    return text
+
+
+def _ensure_recording_id(container: DataContainer, subject_col: str) -> DataContainer:
+    """Add a run-aware observation coordinate for aggregating repeated recordings."""
+    obs_len = container.X.shape[0]
+    coords = dict(container.coords)
+
+    if "recording_id" in coords:
+        return container
+
+    subject_values = np.asarray(coords.get(subject_col, coords.get("subject", container.ids)), dtype=object)
+    if subject_values.ndim != 1 or len(subject_values) != obs_len:
+        subject_values = np.asarray(container.ids, dtype=object) if container.ids is not None else np.arange(obs_len).astype(str)
+    subject_values = np.asarray([_clean_group_value(value, missing=str(idx)) for idx, value in enumerate(subject_values)], dtype=object)
+
+    id_values = np.asarray(container.ids, dtype=object) if container.ids is not None else np.asarray([""] * obs_len, dtype=object)
+
+    session_values = np.asarray(coords.get("session", [None] * obs_len), dtype=object)
+    if session_values.ndim != 1 or len(session_values) != obs_len:
+        session_values = np.asarray([None] * obs_len, dtype=object)
+    session_values = np.asarray(
+        [
+            _clean_group_value(value, missing=_infer_bids_entity_from_text(obs_id, "ses") or "01")
+            for value, obs_id in zip(session_values, id_values)
+        ],
+        dtype=object,
+    )
+
+    run_values = np.asarray(coords.get("run", [None] * obs_len), dtype=object)
+    if run_values.ndim != 1 or len(run_values) != obs_len:
+        run_values = np.asarray([None] * obs_len, dtype=object)
+    run_values = np.asarray(
+        [
+            _clean_group_value(value, missing=_infer_bids_entity_from_text(obs_id, "run") or "none")
+            for value, obs_id in zip(run_values, id_values)
+        ],
+        dtype=object,
+    )
+
+    coords["session"] = session_values
+    coords["run"] = run_values
+    coords["recording_id"] = np.asarray(
+        [
+            f"{subject}_ses-{session}_run-{run}"
+            for subject, session, run in zip(subject_values, session_values, run_values)
+        ],
+        dtype=object,
+    )
+
+    return DataContainer(
+        X=container.X,
+        dims=container.dims,
+        coords=coords,
+        y=container.y,
+        ids=container.ids,
+        meta=dict(container.meta),
+    )
 
 
 def _to_epoch_scalar_mean(container: DataContainer) -> DataContainer:
@@ -138,6 +212,8 @@ def load_container(
             feature_columns_path=Path(args.descriptor_feature_columns_path),
             condition=condition,
             target_col=target_col,
+            subjects=subjects,
+            subject_col=args.subject_col,
             analysis_mode=analysis_mode,
             descriptor_families=getattr(args, "descriptor_families", None),
             descriptor_max_abs_value=getattr(args, "descriptor_max_abs_value", None),
@@ -187,7 +263,14 @@ def load_container(
     represented = container
     if input_mode == "raw":
         if args.representation in {"subject_flat", "subject_time_as_sample", "subject_scalar_mean", "subject_native"}:
-            container = container.aggregate(by=args.subject_col, stats="mean")
+            aggregation_unit = getattr(args, "aggregation_unit", "recording")
+            if aggregation_unit == "recording":
+                container = _ensure_recording_id(container, args.subject_col)
+                container = container.aggregate(by="recording_id", stats="mean")
+            elif aggregation_unit == "subject":
+                container = container.aggregate(by=args.subject_col, stats="mean")
+            else:
+                raise ValueError(f"Unsupported aggregation_unit '{aggregation_unit}'.")
 
         if analysis_mode == "flat":
             if args.representation in {"epoch_flat", "subject_flat"}:
@@ -222,6 +305,7 @@ def load_container(
             "input_mode": input_mode,
             "condition": condition,
             "analysis_mode": analysis_mode,
+            "aggregation_unit": getattr(args, "aggregation_unit", None),
             "loaded_obs": int(container.X.shape[0]),
             "loaded_subjects": int(pd.Index(np.asarray(container.coords.get(args.subject_col, []))).nunique())
             if args.subject_col in container.coords

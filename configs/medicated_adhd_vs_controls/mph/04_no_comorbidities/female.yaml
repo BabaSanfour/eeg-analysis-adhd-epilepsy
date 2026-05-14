@@ -1,5 +1,5 @@
-dataset_name: pooled_03_no_autism_total
-output_group: medicated_adhd_vs_controls/pooled
+dataset_name: mph_04_no_comorbidities_female
+output_group: medicated_adhd_vs_controls/mph
 subject_col: study_id
 selection_metric: separation_logreg_balanced_accuracy
 selection_eval_name: med_adhd_vs_ctrl
@@ -28,17 +28,24 @@ group_filters:
   - 0
   psychostimulant:
   - 0
-  autism:
-  - 0
+  combined_diagnosis:
+  - Control
+  - Epilepsy
+  - ASD
+  - ASD+Epilepsy
 - adhd:
   - 1
   psychostimulant:
   - 1
-  autism:
-  - 0
+  psychostimulant_category:
+  - Methylphenidate
+  combined_diagnosis:
+  - ADHD
 filter_col:
+- sex
 - age_group
 filter_val:
+- - F
 - - 5-8
   - 9-12
   - 13-18
@@ -54,8 +61,6 @@ evals:
     ADHD+Epilepsy: '1'
     ADHD+ASD: '1'
     ADHD+ASD+Epilepsy: '1'
-- name: sex_separation
-  target_col: sex
 - name: age_separation
   target_col: age_group
 - name: condition_separation

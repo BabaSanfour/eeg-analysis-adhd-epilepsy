@@ -83,19 +83,47 @@ _EVAL_FAILURE_COLUMNS = [
 
 
 def load_fit_artifact(path: Path) -> dict[str, Any]:
+    manifest_path = path / "artifact_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    fit_path = path / manifest.get("fit", "fit.json")
+    metrics_path = path / manifest.get("metrics", "metrics.json")
+    embedding_path = path / manifest.get("embedding", "embedding.npy")
+    ids_path = path / manifest.get("ids", "ids.npy")
+    diagnostics_path = path / manifest.get("diagnostics", "diagnostics.npz")
+    if not fit_path.exists():
+        fit_matches = sorted(path.glob("*_fit.json"))
+        if fit_matches:
+            fit_path = fit_matches[0]
+    if not metrics_path.exists():
+        metrics_matches = sorted(path.glob("*_metrics.json"))
+        if metrics_matches:
+            metrics_path = metrics_matches[0]
+    if not embedding_path.exists():
+        embedding_matches = sorted(path.glob("*_embedding.npy"))
+        if embedding_matches:
+            embedding_path = embedding_matches[0]
+    if not ids_path.exists():
+        ids_matches = sorted(path.glob("*_ids.npy"))
+        if ids_matches:
+            ids_path = ids_matches[0]
+    if not diagnostics_path.exists():
+        diagnostics_matches = sorted(path.glob("*_diagnostics.npz"))
+        if diagnostics_matches:
+            diagnostics_path = diagnostics_matches[0]
+
     diagnostics = {}
-    diagnostics_path = path / "diagnostics.npz"
     if diagnostics_path.exists():
         with np.load(diagnostics_path, allow_pickle=True) as npz:
             diagnostics = dict(npz["payload"][0])
-    fit = json.loads((path / "fit.json").read_text(encoding="utf-8"))
-    metrics = json.loads((path / "metrics.json").read_text(encoding="utf-8"))
+    fit = json.loads(fit_path.read_text(encoding="utf-8"))
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     return {
-        "embedding": np.load(path / "embedding.npy", allow_pickle=True),
-        "ids": np.load(path / "ids.npy", allow_pickle=True),
+        "embedding": np.load(embedding_path, allow_pickle=True),
+        "ids": np.load(ids_path, allow_pickle=True),
         "fit": fit,
         "metrics": metrics,
         "diagnostics": diagnostics,
+        "manifest": manifest,
         "path": path,
     }
 
@@ -339,6 +367,52 @@ def _add_overview_cohort_summary(
         overview_sec.add_element(
             TableElement(pd.DataFrame(medication_rows), title="Medication category by class")
         )
+
+
+def _add_data_availability_summary(
+    overview_sec: Section,
+    args: Any,
+    containers_by_scope: Optional[dict[tuple[str, str], Any]],
+    fit_runs_df: pd.DataFrame,
+    pooled_condition: str,
+) -> None:
+    rows = []
+    for scope, condition in [("condition", condition) for condition in args.conditions] + (
+        [("pooled", pooled_condition)] if getattr(args, "run_pooled", False) else []
+    ):
+        container = None if containers_by_scope is None else containers_by_scope.get((scope, condition))
+        condition_runs = (
+            fit_runs_df[
+                (fit_runs_df["scope"] == scope)
+                & (fit_runs_df["condition"] == condition)
+                & (fit_runs_df["status"] == "success")
+            ]
+            if not fit_runs_df.empty
+            else pd.DataFrame()
+        )
+        if container is None and condition_runs.empty:
+            continue
+        row = {
+            "scope": scope,
+            "condition": condition,
+            "loaded_observations": "",
+            "samples_used": "",
+            "unique_subjects": "",
+            "unique_recordings": "",
+            "successful_fits": int(len(condition_runs)),
+            "reducers": ", ".join(sorted(condition_runs["reducer"].dropna().astype(str).unique())) if "reducer" in condition_runs else "",
+            "valid_n_components": ", ".join(map(str, sorted(condition_runs["n_components"].dropna().astype(int).unique()))) if "n_components" in condition_runs and not condition_runs.empty else "",
+        }
+        if container is not None:
+            row["loaded_observations"] = int(container.meta.get("loaded_obs", container.X.shape[0]))
+            row["samples_used"] = int(container.X.shape[0])
+            if getattr(args, "subject_col", None) in container.coords:
+                row["unique_subjects"] = int(pd.Index(np.asarray(container.coords[args.subject_col]).astype(str)).nunique())
+            if "recording_id" in container.coords:
+                row["unique_recordings"] = int(pd.Index(np.asarray(container.coords["recording_id"]).astype(str)).nunique())
+        rows.append(row)
+    if rows:
+        overview_sec.add_element(TableElement(pd.DataFrame(rows), title="Data Availability"))
 
 
 def _add_embedding_plot(
@@ -1286,8 +1360,9 @@ def generate_dataset_report(
         if args.input_mode == "descriptors"
         else ""
     )
-    run_variant = f"{args.analysis_mode}__{args.representation}"
-    report_title = f"Dimensionality Reduction: {args.dataset_name} ({args.input_mode} / {run_variant})"
+    run_variant = getattr(args, "run_variant", f"{args.analysis_mode}__{args.representation}")
+    run_label = getattr(args, "run_label", None) or args.dataset_name
+    report_title = f"Dimensionality Reduction: {run_label} ({args.input_mode} / {run_variant})"
     if family_label:
         report_title += f" [{family_label}]"
     report = Report(title=report_title)
@@ -1299,9 +1374,11 @@ def generate_dataset_report(
                 [
                     {
                         "dataset_name": args.dataset_name,
+                        "run_label": run_label,
                         "input_mode": args.input_mode,
                         "analysis_mode": args.analysis_mode,
                         "representation": args.representation,
+                        "aggregation_unit": getattr(args, "aggregation_unit", ""),
                         "run_variant": run_variant,
                         "descriptor_families": family_label,
                         "descriptor_max_abs_value": getattr(args, "descriptor_max_abs_value", ""),
@@ -1317,6 +1394,13 @@ def generate_dataset_report(
             ),
             title="Run configuration",
         )
+    )
+    _add_data_availability_summary(
+        overview_sec,
+        args,
+        containers_by_scope,
+        fit_runs_df,
+        pooled_condition,
     )
     _add_overview_cohort_summary(
         overview_sec,

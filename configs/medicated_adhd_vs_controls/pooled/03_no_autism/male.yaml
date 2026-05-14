@@ -13,7 +13,8 @@ interactive: true
 save_static_figures: true
 compress_viz_with_pca: true
 reducers:
-- DEFAULT
+  - PCA
+  - UMAP
 n_components_sweep:
 - 2
 - 3
@@ -22,7 +23,6 @@ n_components_sweep:
 - 15
 - 20
 - 25
-- 50
 group_filters:
 - adhd:
   - 0
