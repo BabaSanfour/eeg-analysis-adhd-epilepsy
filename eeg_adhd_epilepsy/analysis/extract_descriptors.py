@@ -327,6 +327,15 @@ def main() -> None:
         help="Specific BIDS subjects to process.",
     )
     parser.add_argument(
+        "--metadata_row",
+        type=int,
+        default=None,
+        help=(
+            "One-based row number in the metadata CSV to process. "
+            "Useful for Slurm job arrays where SLURM_ARRAY_TASK_ID selects a metadata row."
+        ),
+    )
+    parser.add_argument(
         "--subject_col",
         default="study_id",
         help="Subject identifier column in cleaned metadata.",
@@ -337,6 +346,10 @@ def main() -> None:
         help="Optional canonical metadata column to also expose as container y during aggregation.",
     )
     args = parser.parse_args()
+    if args.metadata_row is not None and args.subjects:
+        raise ValueError("--metadata_row and --subjects are mutually exclusive.")
+    if args.metadata_row is not None and args.metadata_row < 1:
+        raise ValueError("--metadata_row is one-based and must be >= 1.")
 
     logging.basicConfig(
         level=logging.INFO,
@@ -399,6 +412,24 @@ def main() -> None:
 
     coverage_root = bids_root / "derivatives" / "preproc"
     meta_df = load(str(metadata_path), sep=None)
+    row_requested_subjects: list[str] | None = None
+    if args.metadata_row is not None:
+        row_position = args.metadata_row - 1
+        if row_position >= len(meta_df):
+            LOGGER.warning(
+                "Metadata row %d is outside the metadata table with %d rows; nothing to do.",
+                args.metadata_row,
+                len(meta_df),
+            )
+            return
+        row_value = meta_df.iloc[row_position][args.subject_col]
+        row_requested_subjects = [f"{int(row_value):04d}"]
+        LOGGER.info(
+            "Resolved metadata row %d to %s=%s.",
+            args.metadata_row,
+            args.subject_col,
+            row_requested_subjects[0],
+        )
     coverage = validate_bids_coverage(
         meta_df,
         coverage_root,
@@ -420,7 +451,23 @@ def main() -> None:
     ]
 
     available_subject_set = set(available_subjects)
-    if args.subjects:
+    if row_requested_subjects is not None:
+        requested_subjects = row_requested_subjects
+        subjects = [
+            subject for subject in requested_subjects if subject in available_subject_set
+        ]
+        missing_subjects = [
+            subject for subject in requested_subjects if subject not in available_subject_set
+        ]
+        if missing_subjects:
+            LOGGER.warning(
+                "Skipping metadata row %d because %s=%s has no saved derivatives.",
+                args.metadata_row,
+                args.subject_col,
+                ", ".join(missing_subjects),
+            )
+            return
+    elif args.subjects:
         requested_subjects = [
             normalize_subject_id(subject).replace("sub-", "")
             for subject in args.subjects

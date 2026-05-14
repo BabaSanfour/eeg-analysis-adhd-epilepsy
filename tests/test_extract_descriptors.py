@@ -882,3 +882,144 @@ aggregation:
 
     with pytest.raises(ValueError, match="No matching saved-derivative subjects"):
         extract_descriptors.main()
+
+
+def test_extract_descriptors_metadata_row_selects_subject_by_row(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "descriptors.yaml"
+    config_path.write_text(
+        """
+precision: float32
+families:
+  bands:
+    enabled: true
+    outputs: [absolute_power]
+  parametric:
+    enabled: false
+  complexity:
+    enabled: false
+runtime:
+  execution_backend: sequential
+  n_jobs: 1
+  obs_chunk: 8
+  on_error: collect
+aggregation:
+  descriptors:
+    - name: mean_export
+      stats: mean
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        extract_descriptors,
+        "load",
+        lambda metadata_path, sep=None: _demo_raw_metadata(),
+    )
+    monkeypatch.setattr(
+        extract_descriptors,
+        "validate_bids_coverage",
+        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
+            "present_subjects": ["0001", "0002"]
+        },
+    )
+    load_calls = []
+
+    def _load_eeg_data(**kwargs):
+        load_calls.append(tuple(kwargs.get("subjects") or []))
+        return _demo_container_for_subjects(kwargs.get("subjects"))
+
+    monkeypatch.setattr(extract_descriptors, "load_eeg_data", _load_eeg_data)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eeg-descriptors",
+            "--bids_root",
+            str(tmp_path / "BIDS"),
+            "--metadata",
+            str(tmp_path / "patients.csv"),
+            "--config",
+            str(config_path),
+            "--metadata_row",
+            "2",
+            "--conditions",
+            "EO_baseline",
+        ],
+    )
+
+    extract_descriptors.main()
+
+    assert load_calls == [("0002",)]
+    derivative_root = tmp_path / "BIDS" / "derivatives" / "signal_features" / "descriptors"
+    assert (derivative_root / "sub-0002" / "ses-01" / "eeg" / "EO_baseline" / "_SUCCESS").exists()
+    assert not (derivative_root / "sub-0001").exists()
+
+
+def test_extract_descriptors_metadata_row_without_derivatives_exits_cleanly(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "descriptors.yaml"
+    config_path.write_text(
+        """
+precision: float32
+families:
+  bands:
+    enabled: true
+    outputs: [absolute_power]
+  parametric:
+    enabled: false
+  complexity:
+    enabled: false
+runtime:
+  execution_backend: sequential
+  n_jobs: 1
+  obs_chunk: 8
+  on_error: collect
+aggregation:
+  descriptors:
+    - name: mean_export
+      stats: mean
+""".strip(),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        extract_descriptors,
+        "load",
+        lambda metadata_path, sep=None: _demo_raw_metadata(),
+    )
+    monkeypatch.setattr(
+        extract_descriptors,
+        "validate_bids_coverage",
+        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
+            "present_subjects": ["0001"]
+        },
+    )
+
+    def _unexpected_load(**kwargs):
+        raise AssertionError("load_eeg_data should not be called for an unavailable metadata row")
+
+    monkeypatch.setattr(extract_descriptors, "load_eeg_data", _unexpected_load)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eeg-descriptors",
+            "--bids_root",
+            str(tmp_path / "BIDS"),
+            "--metadata",
+            str(tmp_path / "patients.csv"),
+            "--config",
+            str(config_path),
+            "--metadata_row",
+            "2",
+            "--conditions",
+            "EO_baseline",
+        ],
+    )
+
+    extract_descriptors.main()
