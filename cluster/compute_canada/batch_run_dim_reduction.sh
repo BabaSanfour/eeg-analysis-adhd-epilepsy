@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_dimred_batch
-#SBATCH --output=slurm-%x-%A.out
-#SBATCH --error=slurm-%x-%A.err
-#SBATCH --time=24:00:00
+#SBATCH --output=slurm-%x-%A_%a.out
+#SBATCH --error=slurm-%x-%A_%a.err
+#SBATCH --time=03:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
+#SBATCH --array=1-142
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -19,7 +20,7 @@ PROJECT_ROOT=${PROJECT_ROOT:-/home/h/hamza97/links/eeg-analysis-adhd-epilepsy}
 BIDS_ROOT=${BIDS_ROOT:-/home/h/hamza97/links/scratch/eeg-epilepsy-adhd/BIDS}
 METADATA_PATH=${METADATA_PATH:-/home/h/hamza97/links/projects/aip-kjerbi/shared/eeg-epilepsy-adhd/csv/patients_metadata_clean.csv}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-CONFIGS_DIR="$PROJECT_ROOT/configs/medicated_adhd_vs_controls"
+CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/medicated_adhd_vs_controls}
 REPORTS_ROOT="${BIDS_ROOT%/*}/reports"
 
 # 3. Environment Setup
@@ -41,86 +42,53 @@ mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 [ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }
 [ -d "$CONFIGS_DIR" ] || { echo "Config directory not found: $CONFIGS_DIR"; exit 1; }
 
-# 4. Tracking
-FAILED_CONFIGS=()
-SKIPPED_RUNS=0
-TOTAL_RUNS=0
-SUCCESSFUL_RUNS=0
+# 4. Map this array task to one config/mode pair
+mapfile -t CONFIGS < <(find "$CONFIGS_DIR" -name "*.yaml" | sort)
+MODES=("flat:recording_flat" "sensor:recording_native")
+CONFIG_COUNT=${#CONFIGS[@]}
+MODE_COUNT=${#MODES[@]}
+TOTAL_TASKS=$((CONFIG_COUNT * MODE_COUNT))
+TASK_ID=${SLURM_ARRAY_TASK_ID:-1}
 
-run_analysis() {
-    local mode=$1
-    local config=$2
-    local representation=$3
-    local input_mode="raw"
-    local aggregation_unit="${AGGREGATION_UNIT:-recording}"
-    
-    # Extract dataset info from config to check for existing report
-    local ds_name=$(grep "dataset_name:" "$config" | awk '{print $2}')
-    local out_grp=$(grep "output_group:" "$config" | awk '{print $2}')
-    local report_repr="${representation//_/-}"
-    local report_path="$REPORTS_ROOT/summary/dim_reduction/$out_grp/$ds_name/$input_mode/dataset_summary_mode-${mode}_unit-${aggregation_unit}_repr-${report_repr}.html"
-    
-    if [[ -f "$report_path" ]]; then
-        echo "SKIPPING: Mode=$mode | Config=$(basename "$config") (Report already exists: $report_path)"
-        SKIPPED_RUNS=$((SKIPPED_RUNS + 1))
-        return 0
-    fi
-
-    echo "--------------------------------------------------------------------------------"
-    echo "RUNNING: Mode=$mode | Config=$(basename "$config")"
-    echo "--------------------------------------------------------------------------------"
-    
-    TOTAL_RUNS=$((TOTAL_RUNS + 1))
-    
-    if python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
-        --bids_root "$BIDS_ROOT" \
-        --metadata "$METADATA_PATH" \
-        --config "$config" \
-        --input_mode "$input_mode" \
-        --analysis_mode "$mode" \
-        --representation "$representation" \
-        --aggregation_unit "$aggregation_unit" \
-        --n_jobs "$THREADS"; then
-        echo "SUCCESS: $mode - $(basename "$config")"
-        SUCCESSFUL_RUNS=$((SUCCESSFUL_RUNS + 1))
-    else
-        echo "FAILED: $mode - $(basename "$config")" >&2
-        FAILED_CONFIGS+=("$mode: $(basename "$config")")
-    fi
-}
-
-# 5. Iteration
-# First run all with 'flat' mode
-echo "=== STARTING FLAT MODE ANALYSES ==="
-for conf in $(find "$CONFIGS_DIR" -name "*.yaml" | sort); do
-    run_analysis "flat" "$conf" "subject_flat"
-done
-
-# Then run all with 'sensor' mode
-echo "=== STARTING SENSOR MODE ANALYSES ==="
-for conf in $(find "$CONFIGS_DIR" -name "*.yaml" | sort); do
-    run_analysis "sensor" "$conf" "subject_native"
-done
-
-# 6. Final Summary
-echo ""
-echo "================================================================================"
-echo "FINAL BATCH SUMMARY"
-echo "================================================================================"
-echo "Total attempted: $TOTAL_RUNS"
-echo "Skipped:         $SKIPPED_RUNS"
-echo "Successful:      $SUCCESSFUL_RUNS"
-echo "Failed:          ${#FAILED_CONFIGS[@]}"
-
-if [ ${#FAILED_CONFIGS[@]} -ne 0 ]; then
-    echo ""
-    echo "LIST OF FAILED CONFIGURATIONS:"
-    for failed in "${FAILED_CONFIGS[@]}"; do
-        echo "  - $failed"
-    done
-    exit 1
-else
-    echo ""
-    echo "All analyses completed successfully."
+if (( TASK_ID < 1 || TASK_ID > TOTAL_TASKS )); then
+    echo "Array task $TASK_ID is outside valid task range 1-$TOTAL_TASKS; nothing to do."
     exit 0
 fi
+
+task_index=$((TASK_ID - 1))
+mode_index=$((task_index / CONFIG_COUNT))
+config_index=$((task_index % CONFIG_COUNT))
+mode_spec="${MODES[$mode_index]}"
+mode="${mode_spec%%:*}"
+representation="${mode_spec##*:}"
+config="${CONFIGS[$config_index]}"
+input_mode="raw"
+aggregation_unit="${AGGREGATION_UNIT:-recording}"
+
+ds_name=$(grep "dataset_name:" "$config" | awk '{print $2}')
+out_grp=$(grep "output_group:" "$config" | awk '{print $2}')
+report_repr="${representation//_/-}"
+report_path="$REPORTS_ROOT/summary/dim_reduction/$out_grp/$ds_name/$input_mode/dataset_summary_mode-${mode}_unit-${aggregation_unit}_repr-${report_repr}.html"
+
+echo "================================================================================"
+echo "DIM REDUCTION ARRAY TASK $TASK_ID / $TOTAL_TASKS"
+echo "Config:         $config"
+echo "Mode:           $mode"
+echo "Representation: $representation"
+echo "Report:         $report_path"
+echo "================================================================================"
+
+if [[ -f "$report_path" ]]; then
+    echo "SKIPPING: report already exists."
+    exit 0
+fi
+
+python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
+    --bids_root "$BIDS_ROOT" \
+    --metadata "$METADATA_PATH" \
+    --config "$config" \
+    --input_mode "$input_mode" \
+    --analysis_mode "$mode" \
+    --representation "$representation" \
+    --aggregation_unit "$aggregation_unit" \
+    --n_jobs "$THREADS"

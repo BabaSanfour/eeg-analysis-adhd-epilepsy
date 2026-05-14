@@ -262,7 +262,16 @@ def load_container(
 
     represented = container
     if input_mode == "raw":
-        if args.representation in {"subject_flat", "subject_time_as_sample", "subject_scalar_mean", "subject_native"}:
+        if args.representation in {
+            "subject_flat",
+            "subject_time_as_sample",
+            "subject_scalar_mean",
+            "subject_native",
+            "recording_flat",
+            "recording_time_as_sample",
+            "recording_scalar_mean",
+            "recording_native",
+        }:
             aggregation_unit = getattr(args, "aggregation_unit", "recording")
             if aggregation_unit == "recording":
                 container = _ensure_recording_id(container, args.subject_col)
@@ -273,15 +282,15 @@ def load_container(
                 raise ValueError(f"Unsupported aggregation_unit '{aggregation_unit}'.")
 
         if analysis_mode == "flat":
-            if args.representation in {"epoch_flat", "subject_flat"}:
+            if args.representation in {"epoch_flat", "subject_flat", "recording_flat"}:
                 represented = container.flatten(preserve="obs")
-            elif args.representation in {"epoch_time_as_sample", "subject_time_as_sample"}:
+            elif args.representation in {"epoch_time_as_sample", "subject_time_as_sample", "recording_time_as_sample"}:
                 represented = container.stack(dims=("obs", "time"), new_dim="obs")
-            elif args.representation in {"epoch_scalar_mean", "subject_scalar_mean"}:
+            elif args.representation in {"epoch_scalar_mean", "subject_scalar_mean", "recording_scalar_mean"}:
                 represented = _to_epoch_scalar_mean(container)
             else:
                 raise ValueError(f"Unsupported raw flat representation '{args.representation}'.")
-        elif analysis_mode == "sensor" and args.representation in {"epoch_native", "subject_native"}:
+        elif analysis_mode == "sensor" and args.representation in {"epoch_native", "subject_native", "recording_native"}:
             represented = container
         else:
             raise ValueError(

@@ -70,7 +70,11 @@ def _slug(value: object, *, max_len: int = 80) -> str:
 def _run_variant(args) -> str:
     parts = [args.analysis_mode]
     aggregation_unit = getattr(args, "aggregation_unit", None)
-    if args.input_mode == "raw" and args.representation.startswith("subject_") and aggregation_unit:
+    if (
+        args.input_mode == "raw"
+        and args.representation.startswith(("subject_", "recording_"))
+        and aggregation_unit
+    ):
         parts.append(str(aggregation_unit))
     parts.append(args.representation)
     return "__".join(_slug(part) for part in parts if part)
@@ -79,7 +83,11 @@ def _run_variant(args) -> str:
 def _report_variant(args) -> str:
     parts = [f"mode-{_slug(args.analysis_mode).replace('_', '-')}"]
     aggregation_unit = getattr(args, "aggregation_unit", None)
-    if args.input_mode == "raw" and args.representation.startswith("subject_") and aggregation_unit:
+    if (
+        args.input_mode == "raw"
+        and args.representation.startswith(("subject_", "recording_"))
+        and aggregation_unit
+    ):
         parts.append(f"unit-{_slug(aggregation_unit).replace('_', '-')}")
     parts.append(f"repr-{_slug(args.representation).replace('_', '-')}")
     return "_".join(parts)
@@ -1149,6 +1157,10 @@ def main() -> None:
             "subject_flat",
             "subject_time_as_sample",
             "subject_scalar_mean",
+            "recording_native",
+            "recording_flat",
+            "recording_time_as_sample",
+            "recording_scalar_mean",
         ],
         default="epoch_flat",
     )
@@ -1258,19 +1270,23 @@ def main() -> None:
             f"analysis_mode='{args.analysis_mode}' is only supported for descriptor inputs."
         )
     if args.input_mode == "raw" and args.analysis_mode == "sensor":
-        if args.representation not in {"epoch_native", "subject_native"}:
+        if args.representation not in {"epoch_native", "subject_native", "recording_native"}:
             raise ValueError(
-                "Raw sensor mode requires representation 'epoch_native' or 'subject_native'."
+                "Raw sensor mode requires representation 'epoch_native', "
+                "'subject_native', or 'recording_native'."
             )
     if args.input_mode == "raw" and args.analysis_mode != "flat":
         if args.analysis_mode != "sensor":
             raise ValueError("Raw inputs currently support only analysis_mode='flat' or 'sensor'.")
     if args.input_mode == "raw" and args.analysis_mode == "flat":
-        if args.representation in {"epoch_native", "subject_native"}:
+        if args.representation in {"epoch_native", "subject_native", "recording_native"}:
             raise ValueError(
                 "Native EEG representations are reserved for sensor mode. "
-                "Use --analysis_mode sensor with epoch_native or subject_native."
+                "Use --analysis_mode sensor with epoch_native, subject_native, or recording_native."
             )
+    if args.input_mode == "raw" and args.representation.startswith("recording_"):
+        if args.aggregation_unit != "recording":
+            raise ValueError("recording_* representations require --aggregation_unit recording.")
     if args.descriptor_families and args.input_mode != "descriptors":
         raise ValueError("--descriptor_families is only supported for descriptor inputs.")
     if args.descriptor_families:
