@@ -28,10 +28,6 @@ THREADS=${SLURM_CPUS_PER_TASK:-16}
 [ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }
 [ -f "$CONFIG_PATH" ] || { echo "Descriptor config not found: $CONFIG_PATH"; exit 1; }
 [ -d "$VENV_PATH" ] || { echo "Virtual environment not found: $VENV_PATH"; exit 1; }
-[ -f "$SUBJECT_LIST" ] || { echo "Subject list not found: $SUBJECT_LIST"; exit 1; }
-
-SUBJECT_ID=$(sed -n "${SLURM_ARRAY_TASK_ID}p" "$SUBJECT_LIST")
-[ -n "$SUBJECT_ID" ] || { echo "No subject for SLURM_ARRAY_TASK_ID=$SLURM_ARRAY_TASK_ID"; exit 1; }
 
 cd "$PROJECT_ROOT"
 source "$VENV_PATH/bin/activate"
@@ -51,4 +47,4 @@ python -m eeg_adhd_epilepsy.analysis.extract_descriptors \
   --metadata "$METADATA_PATH" \
   --config "$CONFIG_PATH" \
   --subject_col study_id \
-  --subjects "$SUBJECT_ID"
+  --subjects "$SLURM_ARRAY_TASK_ID"
