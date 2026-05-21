@@ -1,0 +1,37 @@
+# Preprocessing pipeline for synthetic EEG data.
+#
+# Steps per recording:
+#   SourceFile (.vhdr) → bandpass 1–40 Hz → epoch 2 s (no overlap) → resample 256 Hz
+#
+# Output: {reference_base}@BasicPrep.fif (MNE Epochs, cached)
+#
+# Usage:
+#   neurodags run pipelines/step-0_preprocessing.yml --derivative BasicPrep
+#   neurodags run pipelines/step-0_preprocessing.yml  # runs DerivativeList
+
+datasets: datasets_raw.yml
+mount_point: local
+
+DerivativeDefinitions:
+
+  BasicPrep:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: basic_preprocessing
+        args:
+          mne_object: id.0
+          filter_args:
+            l_freq: 1.0
+            h_freq: 40.0
+          epoch_config:
+            duration: 2.0
+            overlap: 0.0
+            preload: True
+          resample: 256
+
+DerivativeList:
+  - BasicPrep

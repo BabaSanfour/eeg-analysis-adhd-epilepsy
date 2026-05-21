@@ -1,0 +1,6 @@
+synthetic_eeg_prep:
+  name: synthetic_eeg_prep
+  file_pattern:
+    local: "/home/yorguin/code/coco-pipe/datasets/synthetic_eeg/derivatives/preprocessing/**/*@BasicPrep.fif"
+  derivatives_path:
+    local: "/home/yorguin/code/coco-pipe/datasets/synthetic_eeg/derivatives/features"

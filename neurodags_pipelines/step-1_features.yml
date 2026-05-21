@@ -1,0 +1,1057 @@
+# Feature extraction pipeline — neurodags style equivalent of coco-pipe descriptors.
+#
+# Input: preprocessed epoch .fif files from step-0_preprocessing.yml
+#        (SourceFile = *@BasicPrep.fif, dims: epochs × spaces × times, 256 Hz, 1–40 Hz)
+#
+# Output per recording (one CSV row = one file):
+#   Spectral  : absolute/relative/log/corrected band power, band ratios, FOOOF scalars
+#   Complexity: antropy (entropy, fractal dims, Hjorth) + neurokit2 (multiscale, fuzzy, …)
+#   Stats     : kurtosis, RMS
+#
+# All *Mean derivatives have for_dataframe: True (mean across epochs → shape: spaces).
+# Intermediate computations (PSD, FOOOF, per-epoch features) are cached on disk.
+#
+# Usage:
+#   neurodags run  pipelines/step-1_features.yml
+#   neurodags dataframe pipelines/step-1_features.yml --output features.csv
+
+datasets: datasets_preprocessed.yml
+mount_point: local
+
+DerivativeDefinitions:
+
+  # ---------------------------------------------------------------------------
+  # Shared intermediates: PSD and FOOOF fit
+  # These are computed once and reused by all spectral consumers.
+  # ---------------------------------------------------------------------------
+
+  SpectrumWelch:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: mne_spectrum_array
+        args:
+          meeg: id.0
+          method: welch
+          method_kwargs:
+            fmin: 1.0
+            fmax: 40.0
+            n_fft: 512
+            n_overlap: 256
+
+  FooofFit:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SpectrumWelch.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: spectrum
+      - id: 2
+        node: fooof
+        args:
+          psd_like: id.1
+          freq_dim: frequencies
+          fooof_options:
+            FOOOF:
+              aperiodic_mode: fixed
+              max_n_peaks: 6
+              peak_width_limits: [0.5, 12.0]
+            fit:
+              freq_range: [2, 40]
+            freq_res: 0.5
+            save:
+              save_results: True
+              save_settings: True
+              save_data: True
+
+  # ---------------------------------------------------------------------------
+  # Absolute band power
+  # ---------------------------------------------------------------------------
+
+  AbsBandPower:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SpectrumWelch.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: spectrum
+      - id: 2
+        node: bandpower
+        args:
+          psd_like: id.1
+          relative: False
+          log_transform: False
+
+  AbsBandPowerMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: AbsBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Relative band power
+  # ---------------------------------------------------------------------------
+
+  RelBandPower:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SpectrumWelch.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: spectrum
+      - id: 2
+        node: bandpower
+        args:
+          psd_like: id.1
+          relative: True
+          log_transform: False
+
+  RelBandPowerMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: RelBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Log absolute band power
+  # ---------------------------------------------------------------------------
+
+  LogBandPower:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SpectrumWelch.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: spectrum
+      - id: 2
+        node: bandpower
+        args:
+          psd_like: id.1
+          relative: False
+          log_transform: True
+
+  LogBandPowerMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: LogBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Aperiodic-corrected band power
+  # Subtracts FOOOF aperiodic component before integrating each band.
+  # ---------------------------------------------------------------------------
+
+  CorrectedBandPower:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SpectrumWelch.nc
+      - id: 1
+        derivative: FooofFit.nc
+      - id: 2
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: spectrum
+      - id: 3
+        node: extract_data_var
+        args:
+          dataset_like: id.1
+          data_var: fooof
+      - id: 4
+        node: bandpower_corrected
+        args:
+          psd_like: id.2
+          fooof_like: id.3
+          relative: False
+          log_transform: False
+
+  CorrectedBandPowerMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Band ratios (all pairwise permutations of DEFAULT_BANDS)
+  # ---------------------------------------------------------------------------
+
+  BandRatios:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: AbsBandPower.nc
+      - id: 1
+        node: band_ratios
+        args:
+          bandpower_like: id.0
+
+  BandRatiosMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: BandRatios.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # FOOOF scalars: aperiodic exponent, offset, fit quality
+  # ---------------------------------------------------------------------------
+
+  FooofScalarsDs:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: FooofFit.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof
+      - id: 2
+        node: fooof_scalars
+        args:
+          fooof_like: id.1
+          component: all
+
+  FooofExponentMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_aperiodic_exponent
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  FooofOffsetMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_aperiodic_offset
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  FooofRSquaredMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_r_squared
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Sample entropy
+  # ---------------------------------------------------------------------------
+
+  SampleEntropy:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_sample_entropy
+        args:
+          data_like: id.0
+          dim: times
+          order: 2
+          metric: chebyshev
+
+  SampleEntropyMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: SampleEntropy.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Approximate entropy
+  # ---------------------------------------------------------------------------
+
+  AppEntropy:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_app_entropy
+        args:
+          data_like: id.0
+          dim: times
+          order: 2
+          metric: chebyshev
+
+  AppEntropyMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: AppEntropy.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Permutation entropy
+  # ---------------------------------------------------------------------------
+
+  PermEntropy:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_perm_entropy
+        args:
+          data_like: id.0
+          dim: times
+          order: 3
+          delay: 1
+          normalize: True
+
+  PermEntropyMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: PermEntropy.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # SVD entropy
+  # ---------------------------------------------------------------------------
+
+  SVDEntropy:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_svd_entropy
+        args:
+          data_like: id.0
+          dim: times
+          order: 3
+          delay: 1
+          normalize: True
+
+  SVDEntropyMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: SVDEntropy.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Spectral entropy (antropy, Welch variant)
+  # sf must match the preprocessing resample target.
+  # ---------------------------------------------------------------------------
+
+  SpectralEntropy:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_spectral_entropy
+        args:
+          data_like: id.0
+          dim: times
+          sf: 256.0
+          method: welch
+          nperseg: 128
+          normalize: True
+
+  SpectralEntropyMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: SpectralEntropy.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Hjorth parameters (mobility + complexity)
+  # Output has an extra hjorthComponents dimension: [mobility, complexity]
+  # ---------------------------------------------------------------------------
+
+  HjorthParams:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_hjorth_params
+        args:
+          data_like: id.0
+          dim: times
+
+  HjorthMobilityMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: HjorthParams.nc
+      - id: 1
+        node: slice_xarray
+        args:
+          xarray_data: id.0
+          dim: hjorthComponents
+          start: mobility
+          end: mobility
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  HjorthComplexityMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: HjorthParams.nc
+      - id: 1
+        node: slice_xarray
+        args:
+          xarray_data: id.0
+          dim: hjorthComponents
+          start: complexity
+          end: complexity
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Lempel-Ziv complexity (binarize at median first)
+  # ---------------------------------------------------------------------------
+
+  LZivComplexity:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: meeg_to_xarray
+        args:
+          mne_object: id.0
+      - id: 2
+        node: binarize_with_median
+        args:
+          data: id.1
+          dim: times
+      - id: 3
+        node: antropy_lziv_complexity
+        args:
+          data_like: id.2
+          dim: times
+          normalize: True
+
+  LZivComplexityMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: LZivComplexity.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Zero crossings (normalized)
+  # ---------------------------------------------------------------------------
+
+  NumZeroCross:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_num_zerocross
+        args:
+          data_like: id.0
+          dim: times
+          normalize: True
+
+  NumZeroCrossMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: NumZeroCross.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Higuchi fractal dimension
+  # ---------------------------------------------------------------------------
+
+  HiguchiFD:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_higuchi_fd
+        args:
+          data_like: id.0
+          dim: times
+          kmax: 10
+
+  HiguchiFDMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: HiguchiFD.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Katz fractal dimension
+  # ---------------------------------------------------------------------------
+
+  KatzFD:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_katz_fd
+        args:
+          data_like: id.0
+          dim: times
+
+  KatzFDMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: KatzFD.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Petrosian fractal dimension
+  # ---------------------------------------------------------------------------
+
+  PetrosianFD:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_petrosian_fd
+        args:
+          data_like: id.0
+          dim: times
+
+  PetrosianFDMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: PetrosianFD.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Detrended fluctuation analysis
+  # ---------------------------------------------------------------------------
+
+  DetrendedFluctuation:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: antropy_detrended_fluctuation
+        args:
+          data_like: id.0
+          dim: times
+
+  DetrendedFluctuationMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: DetrendedFluctuation.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Multiscale entropy (neurokit2)
+  # ---------------------------------------------------------------------------
+
+  EntropyMultiscale:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: neurokit_entropy_multiscale
+        args:
+          data_like: id.0
+          dim: times
+          figure_encoding: none
+          scale: default
+          dimension: 2
+          r: default
+
+  EntropyMultiscaleMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyMultiscale.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Shannon entropy (neurokit2)
+  # ---------------------------------------------------------------------------
+
+  EntropyShannon:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: neurokit_entropy_shannon
+        args:
+          data_like: id.0
+          dim: times
+          figure_encoding: none
+
+  EntropyShannonMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyShannon.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Fuzzy entropy (neurokit2)
+  # ---------------------------------------------------------------------------
+
+  EntropyFuzzy:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: neurokit_entropy_fuzzy
+        args:
+          data_like: id.0
+          dim: times
+          figure_encoding: none
+
+  EntropyFuzzyMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyFuzzy.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Dispersion entropy (neurokit2)
+  # ---------------------------------------------------------------------------
+
+  EntropyDispersion:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: neurokit_entropy_dispersion
+        args:
+          data_like: id.0
+          dim: times
+          figure_encoding: none
+
+  EntropyDispersionMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyDispersion.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Hurst exponent (neurokit2)
+  # ---------------------------------------------------------------------------
+
+  FractalHurst:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: neurokit_fractal_hurst
+        args:
+          data_like: id.0
+          dim: times
+          figure_encoding: none
+
+  FractalHurstMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FractalHurst.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Kurtosis (scipy)
+  # ---------------------------------------------------------------------------
+
+  Kurtosis:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: stats_kurtosis
+        args:
+          data_like: id.0
+          dim: times
+
+  KurtosisMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: Kurtosis.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # RMS amplitude
+  # ---------------------------------------------------------------------------
+
+  RMS:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: stats_rms
+        args:
+          data_like: id.0
+          dim: times
+
+  RMSMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: RMS.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+DerivativeList:
+  # Shared spectral intermediates (computed once, cached)
+  - SpectrumWelch
+  - FooofFit
+
+  # Spectral features
+  - AbsBandPower
+  - AbsBandPowerMean
+  - RelBandPower
+  - RelBandPowerMean
+  - LogBandPower
+  - LogBandPowerMean
+  - CorrectedBandPower
+  - CorrectedBandPowerMean
+  - BandRatios
+  - BandRatiosMean
+  - FooofScalarsDs
+  - FooofExponentMean
+  - FooofOffsetMean
+  - FooofRSquaredMean
+
+  # Complexity — antropy
+  - SampleEntropy
+  - SampleEntropyMean
+  - AppEntropy
+  - AppEntropyMean
+  - PermEntropy
+  - PermEntropyMean
+  - SVDEntropy
+  - SVDEntropyMean
+  - SpectralEntropy
+  - SpectralEntropyMean
+  - HjorthParams
+  - HjorthMobilityMean
+  - HjorthComplexityMean
+  - LZivComplexity
+  - LZivComplexityMean
+  - NumZeroCross
+  - NumZeroCrossMean
+  - HiguchiFD
+  - HiguchiFDMean
+  - KatzFD
+  - KatzFDMean
+  - PetrosianFD
+  - PetrosianFDMean
+  - DetrendedFluctuation
+  - DetrendedFluctuationMean
+
+  # Complexity — neurokit2
+  - EntropyMultiscale
+  - EntropyMultiscaleMean
+  - EntropyShannon
+  - EntropyShannonMean
+  - EntropyFuzzy
+  - EntropyFuzzyMean
+  - EntropyDispersion
+  - EntropyDispersionMean
+  - FractalHurst
+  - FractalHurstMean
+
+  # Stats
+  - Kurtosis
+  - KurtosisMean
+  - RMS
+  - RMSMean
