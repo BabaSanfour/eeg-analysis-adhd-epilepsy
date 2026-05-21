@@ -67,7 +67,7 @@ Both are valid; the output is nearly identical in practice.
 ### 2.3 ZapLine adaptive parameter
 
 base.py reads `adaptive` from config (CLI `--adaptive` flag); default is `False`.
-neurodags hardcodes `adaptive=False`. Functionally identical for default usage; a YAML param would be needed to expose this.
+neurodags exposes `adaptive: False` as an explicit YAML arg in `step-0b_preproc_cleaned.yml`. Change to `adaptive: True` to enable adaptive mode.
 
 ### 2.4 AR chunk size minimum
 
@@ -79,7 +79,7 @@ Difference: neurodags uses `min_epochs` (default 5) as the floor instead of 1. A
 ### 2.5 AR n_jobs
 
 base.py passes `n_jobs` to AutoReject (from CLI `--n-jobs`).
-neurodags hardcodes `n_jobs=1`. No impact on results; only on speed for large AR fits.
+neurodags exposes `n_jobs: 1` as a YAML arg in `step-0b_preproc_cleaned.yml`. Increase for parallel CV folds on large datasets.
 
 ### 2.6 AR plot granularity
 
@@ -181,7 +181,7 @@ Same config as `configs/descriptors.yaml`. Equivalent.
 | Ratio-of-means on abs power | Yes — `agg_band_ratio_*` | `BandRatiosOnMeans` ✓ |
 | Ratio-of-means on corr-abs power | Yes — `agg_band_corr_ratio_*` | `BandRatiosOnCorrectedMeans` ✓ |
 
-Original applies a `aggregated_ratio_floor` guard (`where=d_vals > floor`) before dividing. neurodags `band_ratios` node should implement the same guard — verify this if NaN/inf values appear in the ratio columns.
+Both implementations guard against near-zero denominators. Original: `where=d_vals > aggregated_ratio_floor` (floor=0.0 from config, fallback 0.0 → NaN when denominator ≤ 0). neurodags `band_ratios`: `where |denominator| <= eps` (default=machine epsilon ~2.2e-16 → NaN for zero and tiny negative float noise). neurodags is marginally stricter but functionally equivalent. `eps` is configurable as a YAML arg if exact matching is needed.
 
 ### 4.6 Run-aware aggregation
 
@@ -282,7 +282,7 @@ Processing continues for other descriptors and epochs.
 | Annotation inflation | Yes | `inflate_bad_annotations` ✓ |
 | Resample | Near-equivalent | Filter then resample in neurodags; resample then filter in base.py (§2.2) |
 | Bandpass filter 0.1–100 Hz | Yes | Same parameters ✓ |
-| ZapLine | Near-equivalent | `adaptive=False` hardcoded in neurodags; configurable in original (§2.3) |
+| ZapLine | Near-equivalent | `adaptive=False` explicit YAML param in step-0b; matches original default ✓ |
 | RANSAC bad channels | Yes | Both use EC-block subset, `random_state=42` ✓ |
 | CAR | Yes | `set_eeg_reference("average", projection=False)` ✓ |
 | AR scope | Yes | Per-condition, all windows merged, one AR per condition ✓ |
@@ -291,7 +291,7 @@ Processing continues for other descriptors and epochs.
 | AR CV | Yes | `min(10, len(epochs_chunk))` per chunk ✓ |
 | AR epoch label | Yes | `BAD_epoch_{cond_name}` ✓ |
 | AR per-channel spans | Yes | `BAD_{cond}` + `ch_names` tuples ✓ |
-| AR n_jobs | Partial | Hardcoded `n_jobs=1` in neurodags; no result difference |
+| AR n_jobs | Yes | `n_jobs: 1` exposed as YAML param; matches original default ✓ |
 | AR rejection plots | Partial | Combined per-condition PNG vs per-chunk in original (§2.6) |
 | Condition epoch extraction | Near-equivalent | float32 round-trip via CleanedPrepRaw.fif save/load (§2.8) |
 | Provenance JSON | Partial | AR stats + bad channels; missing integrity fractions + config dump (§2.7) |
@@ -356,8 +356,8 @@ neurodags produces Median+IQR for abs/corr-abs power; original does not. Extra c
 **V. Run-aware aggregation** (§4.6)  
 neurodags is file-level only. Post-hoc grouping by run is needed for multi-run studies.
 
-**W. Band ratio floor guard**  
-Verify `band_ratios` node applies the same `aggregated_ratio_floor` guard as the original to prevent division by near-zero denominators.
+~~**W. Band ratio floor guard** — VERIFIED~~  
+neurodags uses `|denominator| <= eps` (machine epsilon); original uses `d_vals > 0.0` floor. Both produce NaN for zero/near-zero denominators. Functionally equivalent.
 
 ---
 
@@ -379,12 +379,12 @@ Verify `band_ratios` node applies the same `aggregated_ratio_floor` guard as the
 | L. Config versioning | **DONE\*** | Snapshot to `derivatives_path/code/`; no re-run guard |
 | M. SpectralEntropy sf | **DONE** | Dynamic via `extract_sfreq_from_xarray` node |
 | N. Resample order | **open (minor)** | Filter→resample vs resample→filter; negligible for 256 Hz source |
-| O. AR chunk floor | **open (negligible)** | min_epochs vs 1 floor; no practical impact |
+| O. AR chunk floor | **DONE** | Both now use `max(1, ...)` floor |
 | P. Float32 precision | **open (negligible)** | CleanedPrepRaw save/load; below EEG noise floor |
-| Q. ZapLine adaptive | **open (minor)** | Add YAML param if needed |
-| R. AR n_jobs | **open (perf)** | No result impact; add param for speed |
+| Q. ZapLine adaptive | **DONE** | Explicit `adaptive: False` in step-0b YAML; change to True to enable |
+| R. AR n_jobs | **DONE** | `n_jobs: 1` in step-0b YAML; increase for parallel CV folds |
 | S. Provenance richness | **open** | Missing integrity fractions and by-block stats |
 | T. AR plot granularity | **open (minor)** | Per-chunk plots for long recordings |
 | U. Abs power extra stats | **by design** | neurodags computes more; not a bug |
 | V. Run-aware aggregation | **open** | Post-hoc only in neurodags; no recording_id grouping |
-| W. Band ratio floor guard | **verify** | Check `band_ratios` node applies denominator floor |
+| W. Band ratio floor guard | **DONE** | Both guard near-zero: neurodags `eps`=machine-ε vs original floor=0.0; equivalent |

@@ -51,22 +51,36 @@ def _resolve_xr(obj):
 
 @register_node
 def extract_sfreq_from_xarray(data_like) -> NodeResult:
-    """Return sfreq as a scalar NodeResult from xarray epoch metadata attrs.
+    """Return sfreq as a scalar NodeResult from any MNE/xarray input.
 
-    Neurodags stores sfreq in attrs["metadata"] JSON when converting MNE
-    Epochs to xarray. Used to pass sf dynamically to antropy_spectral_entropy
-    instead of hardcoding 256.0.
+    Handles: file path string (.fif), MNE Raw/Epochs, xarray DataArray/Dataset.
+    Used to pass sf dynamically to antropy_spectral_entropy instead of
+    hardcoding 256.0.
     """
     import json
+    from pathlib import Path as _Path
+
     import xarray as xr
 
-    if not isinstance(data_like, (xr.DataArray, xr.Dataset)):
-        raise TypeError(f"extract_sfreq_from_xarray: expected xarray, got {type(data_like)}")
-    meta = json.loads(data_like.attrs.get("metadata", "{}"))
-    sfreq = meta.get("sfreq")
+    sfreq: float | None = None
+
+    if isinstance(data_like, (str, _Path)):
+        import mne
+        obj = mne.read_epochs(str(data_like), preload=False, verbose="ERROR")
+        sfreq = float(obj.info["sfreq"])
+    elif hasattr(data_like, "info"):
+        sfreq = float(data_like.info["sfreq"])
+    elif isinstance(data_like, (xr.DataArray, xr.Dataset)):
+        meta = json.loads(data_like.attrs.get("metadata", "{}"))
+        sfreq = meta.get("sfreq")
+        if sfreq is not None:
+            sfreq = float(sfreq)
+    else:
+        raise TypeError(f"extract_sfreq_from_xarray: unsupported type {type(data_like)}")
+
     if sfreq is None:
-        raise ValueError("extract_sfreq_from_xarray: no 'sfreq' key in xarray metadata attrs")
-    return NodeResult(artifacts={"": Artifact(item=float(sfreq), writer=lambda _: None)})
+        raise ValueError("extract_sfreq_from_xarray: could not determine sfreq")
+    return NodeResult(artifacts={"": Artifact(item=sfreq, writer=lambda _: None)})
 
 
 # ---------------------------------------------------------------------------
@@ -417,6 +431,7 @@ def autoreject_annotate_blockwise(
     n_interpolate: list[int] | None = None,
     min_epochs: int = 5,
     ar_max_chunk_minutes: float = 30.0,
+    n_jobs: int = 1,
 ) -> NodeResult:
     """Condition-grouped AutoReject on Raw — port of annotate_artifacts_blockwise from base.py.
 
@@ -445,7 +460,7 @@ def autoreject_annotate_blockwise(
     sfreq = raw.info["sfreq"]
     step = int(segment_duration * sfreq)
     tmax = max(segment_duration - 1.0 / sfreq, 0.0)
-    n_per_chunk = max(min_epochs, int((ar_max_chunk_minutes * 60.0) / segment_duration))
+    n_per_chunk = max(1, int((ar_max_chunk_minutes * 60.0) / segment_duration))
 
     # Collect all BLOCK_* condition windows
     condition_windows: dict[str, list[tuple[float, float]]] = {}
@@ -512,7 +527,7 @@ def autoreject_annotate_blockwise(
                 s = ci * n_per_chunk
                 e = min((ci + 1) * n_per_chunk, n_total)
                 chunk = cond_epochs[s:e]
-                if len(chunk) >= min_epochs:
+                if len(chunk) >= 1:
                     chunks.append((chunk, f"_chunk{ci + 1}"))
 
         chunk_labels: list[np.ndarray] = []
@@ -523,7 +538,7 @@ def autoreject_annotate_blockwise(
 
         for epochs_chunk, _ in chunks:
             cv = min(10, len(epochs_chunk))
-            ar = AutoReject(n_interpolate=n_interp, random_state=42, n_jobs=1, verbose=False, cv=cv)
+            ar = AutoReject(n_interpolate=n_interp, random_state=42, n_jobs=n_jobs, verbose=False, cv=cv)
             ar.fit(epochs_chunk)
             reject_log = ar.get_reject_log(epochs_chunk)
 

@@ -67,10 +67,16 @@ INTER_BLOCK_GAP = 1.0
 BLOCKS_PER_COND = 2
 START_OFFSET = 1.0
 
+# 8 channels mapped to standard 10-20 names covering 8 of 9 spatial groups
+# (missing only posterior_midline/Pz — no 9th channel available)
+SYNTHETIC_CH_NAMES = ["F3", "Fz", "F4", "C3", "Cz", "C4", "O1", "O2"]
+
 _base_conditions = ["EC"] * BLOCKS_PER_COND + ["EO"] * BLOCKS_PER_COND
 
 for i, vhdr in enumerate(sorted(RAW_DIR.rglob("*.vhdr"))):
     raw = mne.io.read_raw_brainvision(str(vhdr), preload=True, verbose="ERROR")
+
+    raw.rename_channels(dict(zip(raw.ch_names, SYNTHETIC_CH_NAMES)))
 
     rng = np.random.default_rng(seed=i)
     block_order = _base_conditions.copy()
