@@ -1,0 +1,13 @@
+synthetic_eeg_eo:
+  name: synthetic_eeg_eo
+  file_pattern:
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/preprocessing/**/*@ConditionEO.fif"
+  derivatives_path:
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/features_conditions_eo"
+
+synthetic_eeg_ec:
+  name: synthetic_eeg_ec
+  file_pattern:
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/preprocessing/**/*@ConditionEC.fif"
+  derivatives_path:
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/features_conditions_ec"

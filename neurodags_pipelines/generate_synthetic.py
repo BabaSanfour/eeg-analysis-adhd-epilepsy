@@ -1,7 +1,11 @@
 """Generate a synthetic EEG dataset for testing the neurodags pipelines.
 
 Produces BrainVision (.vhdr/.vmrk/.eeg) files under datasets/synthetic_eeg/rawdata/
-using neurodags's built-in 1/f noise generator.
+using neurodags's built-in 1/f noise generator. Each recording gets two BLOCK_*
+annotations so condition-level pipelines (step-0c_conditions.yml) can be tested:
+
+  BLOCK_EO   [2–12s]  — eyes open (5 × 2s epochs)
+  BLOCK_EC   [16–26s] — eyes closed (5 × 2s epochs)
 
 Layout:
   rawdata/
@@ -15,6 +19,9 @@ Usage:
 """
 
 from pathlib import Path
+
+import mne
+import numpy as np
 
 from neurodags.datasets import generate_dummy_dataset
 
@@ -46,6 +53,22 @@ generate_dummy_dataset(
         "random_state": 42,
     },
 )
+
+# Add BLOCK_EO / BLOCK_EC annotations and re-export in-place.
+# Recording is 30s; EO occupies 2-12s, EC occupies 16-26s.
+EO_ONSET, EO_DUR = 2.0, 10.0
+EC_ONSET, EC_DUR = 16.0, 10.0
+
+for vhdr in sorted(RAW_DIR.rglob("*.vhdr")):
+    raw = mne.io.read_raw_brainvision(str(vhdr), preload=True, verbose="ERROR")
+    block_annots = mne.Annotations(
+        onset=[EO_ONSET, EC_ONSET],
+        duration=[EO_DUR, EC_DUR],
+        description=["BLOCK_EO", "BLOCK_EC"],
+        orig_time=raw.annotations.orig_time,
+    )
+    raw.set_annotations(raw.annotations + block_annots)
+    mne.export.export_raw(str(vhdr), raw, fmt="brainvision", overwrite=True, verbose="ERROR")
 
 print(f"Synthetic dataset generated at: {RAW_DIR}")
 print("Files:")

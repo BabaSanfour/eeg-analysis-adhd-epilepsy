@@ -1,0 +1,80 @@
+# Condition-level epoch extraction pipeline.
+#
+# Equivalent of the condition-aware epoching in extract_descriptors.py:
+# splits continuous raw into per-condition epoch sets using BLOCK_* annotations.
+#
+# Input: raw .vhdr recordings with BLOCK_* annotations.
+#        Applies the same basic preprocessing as step-0 (filter 1–45 Hz, 256 Hz).
+#
+# Conditions extracted:
+#   ConditionEO  — epochs from BLOCK_EO windows (eyes open)
+#   ConditionEC  — epochs from BLOCK_EC windows (eyes closed)
+#
+# Each condition derivative:
+#   1. preprocess_raw : bandpass 1–45 Hz, resample 256 Hz (continuous Raw)
+#   2. extract_condition_epochs : slice fixed-length epochs from BLOCK_* windows
+#
+# BrainVision annotations gain a "Comment/" prefix on round-trip —
+# extract_condition_epochs normalises this automatically.
+#
+# Output: {reference_base}@ConditionEO.fif / @ConditionEC.fif  (MNE Epochs)
+#
+# Usage:
+#   neurodags run neurodags_pipelines/step-0c_conditions.yml
+#   # Then use datasets_conditions.yml with step-1_features.yml for per-condition features
+
+new_definitions: custom_nodes.py
+datasets: datasets_raw.yml
+mount_point: local
+
+DerivativeDefinitions:
+
+  ConditionEO:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: preprocess_raw
+        args:
+          mne_object: id.0
+          filter_args:
+            l_freq: 1.0
+            h_freq: 45.0
+          resample: 256
+      - id: 2
+        node: extract_condition_epochs
+        args:
+          mne_object: id.1
+          condition_name: EO
+          annotation_prefix: "BLOCK_"
+          epoch_duration: 2.0
+          epoch_overlap: 0.0
+
+  ConditionEC:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: preprocess_raw
+        args:
+          mne_object: id.0
+          filter_args:
+            l_freq: 1.0
+            h_freq: 45.0
+          resample: 256
+      - id: 2
+        node: extract_condition_epochs
+        args:
+          mne_object: id.1
+          condition_name: EC
+          annotation_prefix: "BLOCK_"
+          epoch_duration: 2.0
+          epoch_overlap: 0.0
+
+DerivativeList:
+  - ConditionEO
+  - ConditionEC

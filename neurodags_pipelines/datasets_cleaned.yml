@@ -1,0 +1,6 @@
+synthetic_eeg_cleaned:
+  name: synthetic_eeg_cleaned
+  file_pattern:
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/preprocessing/**/*@CleanedPrep.fif"
+  derivatives_path:
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/features_cleaned"

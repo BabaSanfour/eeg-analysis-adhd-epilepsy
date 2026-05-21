@@ -243,14 +243,22 @@ def extract_condition_epochs(
     target_desc = f"{annotation_prefix}{condition_name}"
     windows: list[tuple[float, float]] = []
     for annot in mne_object.annotations:
-        if annot["description"] == target_desc:
+        desc = str(annot["description"])
+        # BrainVision round-trip wraps descriptions in "Comment/" — strip it.
+        if desc.startswith("Comment/"):
+            desc = desc[len("Comment/"):]
+        if desc == target_desc:
             onset = float(annot["onset"])
             windows.append((onset, onset + float(annot["duration"])))
 
     if not windows:
+        normalized = sorted({
+            str(a["description"]).removeprefix("Comment/")
+            for a in mne_object.annotations
+        })
         raise ValueError(
             f"No annotations matching '{target_desc}' found. "
-            f"Present descriptions: {sorted({a['description'] for a in mne_object.annotations})}"
+            f"Present descriptions (normalized): {normalized}"
         )
 
     epoch_chunks: list[_mne.BaseEpochs] = []
@@ -448,6 +456,18 @@ def autoreject_annotate(
                 ".fif": Artifact(item=epochs, writer=lambda path, e=epochs: e.save(path, overwrite=True, verbose="ERROR"))
             }
         )
+
+    # AutoReject requires valid channel positions. If missing (e.g. synthetic data),
+    # directly patch ch['loc'][:3] with evenly-spaced positions on a unit circle.
+    _locs = np.array([ch["loc"][:3] for ch in seg_epochs.info["chs"]])
+    if np.allclose(_locs, 0) or not np.all(np.isfinite(_locs)):
+        _n = len(seg_epochs.ch_names)
+        _angles = np.linspace(0, 2 * np.pi, _n, endpoint=False)
+        seg_epochs = seg_epochs.copy()
+        with seg_epochs.info._unlock():
+            for _i, _ch in enumerate(seg_epochs.info["chs"]):
+                _a = _angles[_i]
+                _ch["loc"][:3] = [np.cos(_a) * 0.09, np.sin(_a) * 0.09, 0.01]
 
     ar = AutoReject(n_interpolate=n_interp, random_state=42, n_jobs=1, verbose=False, cv=cv)
     ar.fit(seg_epochs)
