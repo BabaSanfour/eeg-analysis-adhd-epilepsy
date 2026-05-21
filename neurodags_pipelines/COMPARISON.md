@@ -80,9 +80,16 @@ neurodags run step-1_features.yml -d neurodags_pipelines/datasets_conditions.yml
 - `qc/summary_row.csv`, `qc/summary_metrics.csv`, `qc/flags.csv`, `qc/feature_missingness.csv`, `qc/family_summary.csv`
 - `_SUCCESS` marker per condition
 
-**neurodags**: `.error` markers per failed file/derivative, `neurodags status --list-errors`. No per-feature missingness tracking, no structured failure rows, no `_SUCCESS` markers.
+**neurodags coverage by sub-gap**:
 
-**Status**: significant gap for production use. Not planned for current scope.
+| Sub-gap | neurodags coverage | Notes |
+|---|---|---|
+| Complete derivative failures | ✓ **covered** | `.error` marker + `neurodags status --list-errors` |
+| `_SUCCESS` markers | ✓ **equivalent** | `neurodags status` scripting-friendly; no explicit file marker |
+| Partial NaN within a successful derivative | ✗ **missing** | `.nc` writes OK but may contain NaN for some epochs/channels (e.g. FOOOF fit failures); post-hoc scan needed |
+| Structured per-epoch/channel failure log | ✗ **missing** | No partial-failure ledger; neurodags either writes full derivative or `.error` |
+
+**Status**: complete-failure tracking covered. Intra-file missingness and structured failure rows require a post-hoc script that loads each `.nc` and counts NaN per feature/channel — not planned for current scope.
 
 ### 2.4 Float32 precision on CleanedPrepRaw
 
@@ -195,4 +202,4 @@ Original computes `_compute_artifact_overlap(raw, new_annots)` — percentage of
 | W. Band ratio floor guard | **DONE** | Both guard near-zero (eps vs 0.0 floor; equivalent) |
 | X. Condition separation | **open (workflow)** | Default run uses all epochs; must pass `-d datasets_conditions.yml` |
 | Y. ZapLine n_removed in prov | **open (minor)** | Not tracked; config is in code/ snapshot |
-| Z. QC layer | **open** | No structured failure CSV, no feature missingness; out of scope |
+| Z. QC layer | **partial** | Complete failures: covered via `.error` + `neurodags status`. Intra-file NaN tracking + structured failure rows: missing; post-hoc scan needed |
