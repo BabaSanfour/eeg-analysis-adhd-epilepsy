@@ -11,6 +11,7 @@ plots/
 *egg-info/
 results/
 venv/
+datasets/
 
 uv.lock
 # Ignore everything in dl/ except cbramod/

@@ -1,13 +1,19 @@
-# Preprocessing pipeline for synthetic EEG data.
+# Preprocessing pipeline for EEG data.
+#
+# Equivalent of the base cleaning stage: bandpass filter, line noise removal,
+# fixed-length epoching, and resampling.
 #
 # Steps per recording:
-#   SourceFile (.vhdr) → bandpass 1–40 Hz → epoch 2 s (no overlap) → resample 256 Hz
+#   SourceFile (.vhdr) → notch 60 Hz → bandpass 1–45 Hz → epoch 2 s (no overlap) → resample 256 Hz
+#
+# Upper bound 45 Hz covers the gamma band (30–45 Hz) used in feature extraction.
+# 60 Hz notch removes North-American power line noise (use 50 Hz for European data).
 #
 # Output: {reference_base}@BasicPrep.fif (MNE Epochs, cached)
 #
 # Usage:
-#   neurodags run pipelines/step-0_preprocessing.yml --derivative BasicPrep
-#   neurodags run pipelines/step-0_preprocessing.yml  # runs DerivativeList
+#   neurodags run neurodags_pipelines/step-0_preprocessing.yml --derivative BasicPrep
+#   neurodags run neurodags_pipelines/step-0_preprocessing.yml
 
 datasets: datasets_raw.yml
 mount_point: local
@@ -24,13 +30,16 @@ DerivativeDefinitions:
         node: basic_preprocessing
         args:
           mne_object: id.0
+          notch_filter:
+            freqs: [60.0]
+            method: spectrum_fit
+            filter_length: auto
           filter_args:
             l_freq: 1.0
-            h_freq: 40.0
+            h_freq: 45.0
           epoch_config:
             duration: 2.0
             overlap: 0.0
-            preload: True
           resample: 256
 
 DerivativeList:

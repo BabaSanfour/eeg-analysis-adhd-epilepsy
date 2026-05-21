@@ -1,28 +1,46 @@
-# Feature extraction pipeline — neurodags style equivalent of coco-pipe descriptors.
+# Feature extraction pipeline — neurodags equivalent of coco-pipe descriptors.
 #
 # Input: preprocessed epoch .fif files from step-0_preprocessing.yml
-#        (SourceFile = *@BasicPrep.fif, dims: epochs × spaces × times, 256 Hz, 1–40 Hz)
+#        (SourceFile = *@BasicPrep.fif, dims: epochs × spaces × times, 256 Hz, 1–45 Hz)
 #
-# Output per recording (one CSV row = one file):
-#   Spectral  : absolute/relative/log/corrected band power, band ratios, FOOOF scalars
-#   Complexity: antropy (entropy, fractal dims, Hjorth) + neurokit2 (multiscale, fuzzy, …)
-#   Stats     : kurtosis, RMS
+# Bands (matching configs/descriptors.yaml):
+#   delta [1–4], theta [4–8], alpha [8–13], beta [13–30], gamma [30–45]
 #
-# All *Mean derivatives have for_dataframe: True (mean across epochs → shape: spaces).
+# Spectral outputs (per band, per epoch, per channel):
+#   absolute power, log absolute, relative, corrected absolute,
+#   corrected log absolute, corrected relative, band ratios (10 pairs), FOOOF scalars
+#
+# Complexity outputs (per epoch, per channel):
+#   antropy: sample/app/perm/svd/spectral entropy, Hjorth, LZiv, zero crossings,
+#            Higuchi/Katz/Petrosian FD, detrended fluctuation
+#   neurokit2: multiscale/Shannon/fuzzy/dispersion entropy, Hurst exponent
+#
+# Stats: kurtosis, RMS
+#
+# All *Mean derivatives aggregate across epochs (for_dataframe: True → included in CSV).
 # Intermediate computations (PSD, FOOOF, per-epoch features) are cached on disk.
 #
 # Usage:
-#   neurodags run  pipelines/step-1_features.yml
-#   neurodags dataframe pipelines/step-1_features.yml --output features.csv
+#   neurodags run  neurodags_pipelines/step-1_features.yml
+#   neurodags dataframe neurodags_pipelines/step-1_features.yml --output features.csv
 
 datasets: datasets_preprocessed.yml
 mount_point: local
 
+# Shared band definition — matches configs/descriptors.yaml
+# Referenced as YAML anchor to keep all bandpower nodes consistent.
+_bands: &BANDS
+  delta: [1.0, 4.0]
+  theta: [4.0, 8.0]
+  alpha: [8.0, 13.0]
+  beta: [13.0, 30.0]
+  gamma: [30.0, 45.0]
+
 DerivativeDefinitions:
 
   # ---------------------------------------------------------------------------
-  # Shared intermediates: PSD and FOOOF fit
-  # These are computed once and reused by all spectral consumers.
+  # Shared intermediates: PSD (Welch) and FOOOF fit
+  # Computed once and reused by all spectral consumers.
   # ---------------------------------------------------------------------------
 
   SpectrumWelch:
@@ -38,7 +56,7 @@ DerivativeDefinitions:
           method: welch
           method_kwargs:
             fmin: 1.0
-            fmax: 40.0
+            fmax: 45.0
             n_fft: 512
             n_overlap: 256
 
@@ -62,9 +80,9 @@ DerivativeDefinitions:
             FOOOF:
               aperiodic_mode: fixed
               max_n_peaks: 6
-              peak_width_limits: [0.5, 12.0]
+              peak_width_limits: [1.0, 12.0]
             fit:
-              freq_range: [2, 40]
+              freq_range: [1, 45]
             freq_res: 0.5
             save:
               save_results: True
@@ -90,6 +108,7 @@ DerivativeDefinitions:
         node: bandpower
         args:
           psd_like: id.1
+          bands: *BANDS
           relative: False
           log_transform: False
 
@@ -100,42 +119,6 @@ DerivativeDefinitions:
     nodes:
       - id: 0
         derivative: AbsBandPower.nc
-      - id: 1
-        node: aggregate_across_dimension
-        args:
-          xarray_data: id.0
-          dim: epochs
-          operation: mean
-
-  # ---------------------------------------------------------------------------
-  # Relative band power
-  # ---------------------------------------------------------------------------
-
-  RelBandPower:
-    overwrite: False
-    for_dataframe: False
-    nodes:
-      - id: 0
-        derivative: SpectrumWelch.nc
-      - id: 1
-        node: extract_data_var
-        args:
-          dataset_like: id.0
-          data_var: spectrum
-      - id: 2
-        node: bandpower
-        args:
-          psd_like: id.1
-          relative: True
-          log_transform: False
-
-  RelBandPowerMean:
-    overwrite: False
-    save: False
-    for_dataframe: True
-    nodes:
-      - id: 0
-        derivative: RelBandPower.nc
       - id: 1
         node: aggregate_across_dimension
         args:
@@ -162,6 +145,7 @@ DerivativeDefinitions:
         node: bandpower
         args:
           psd_like: id.1
+          bands: *BANDS
           relative: False
           log_transform: True
 
@@ -180,8 +164,44 @@ DerivativeDefinitions:
           operation: mean
 
   # ---------------------------------------------------------------------------
-  # Aperiodic-corrected band power
-  # Subtracts FOOOF aperiodic component before integrating each band.
+  # Relative band power
+  # ---------------------------------------------------------------------------
+
+  RelBandPower:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SpectrumWelch.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: spectrum
+      - id: 2
+        node: bandpower
+        args:
+          psd_like: id.1
+          bands: *BANDS
+          relative: True
+          log_transform: False
+
+  RelBandPowerMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: RelBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Aperiodic-corrected absolute band power
   # ---------------------------------------------------------------------------
 
   CorrectedBandPower:
@@ -207,6 +227,7 @@ DerivativeDefinitions:
         args:
           psd_like: id.2
           fooof_like: id.3
+          bands: *BANDS
           relative: False
           log_transform: False
 
@@ -225,7 +246,98 @@ DerivativeDefinitions:
           operation: mean
 
   # ---------------------------------------------------------------------------
-  # Band ratios (all pairwise permutations of DEFAULT_BANDS)
+  # Aperiodic-corrected log absolute band power
+  # ---------------------------------------------------------------------------
+
+  CorrectedLogBandPower:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SpectrumWelch.nc
+      - id: 1
+        derivative: FooofFit.nc
+      - id: 2
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: spectrum
+      - id: 3
+        node: extract_data_var
+        args:
+          dataset_like: id.1
+          data_var: fooof
+      - id: 4
+        node: bandpower_corrected
+        args:
+          psd_like: id.2
+          fooof_like: id.3
+          bands: *BANDS
+          relative: False
+          log_transform: True
+
+  CorrectedLogBandPowerMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedLogBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Aperiodic-corrected relative band power
+  # ---------------------------------------------------------------------------
+
+  CorrectedRelBandPower:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SpectrumWelch.nc
+      - id: 1
+        derivative: FooofFit.nc
+      - id: 2
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: spectrum
+      - id: 3
+        node: extract_data_var
+        args:
+          dataset_like: id.1
+          data_var: fooof
+      - id: 4
+        node: bandpower_corrected
+        args:
+          psd_like: id.2
+          fooof_like: id.3
+          bands: *BANDS
+          relative: True
+          log_transform: False
+
+  CorrectedRelBandPowerMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedRelBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # Band ratios — 10 ordered pairs matching configs/descriptors.yaml ratio_pairs
+  # (always lower-band / higher-band, matching neuroscience convention)
   # ---------------------------------------------------------------------------
 
   BandRatios:
@@ -238,6 +350,17 @@ DerivativeDefinitions:
         node: band_ratios
         args:
           bandpower_like: id.0
+          combinations:
+            - [delta, theta]
+            - [delta, alpha]
+            - [delta, beta]
+            - [delta, gamma]
+            - [theta, alpha]
+            - [theta, beta]
+            - [theta, gamma]
+            - [alpha, beta]
+            - [alpha, gamma]
+            - [beta, gamma]
 
   BandRatiosMean:
     overwrite: False
@@ -254,7 +377,7 @@ DerivativeDefinitions:
           operation: mean
 
   # ---------------------------------------------------------------------------
-  # FOOOF scalars: aperiodic exponent, offset, fit quality
+  # FOOOF scalars: aperiodic exponent, offset, fit quality (R²)
   # ---------------------------------------------------------------------------
 
   FooofScalarsDs:
@@ -463,7 +586,7 @@ DerivativeDefinitions:
 
   # ---------------------------------------------------------------------------
   # Spectral entropy (antropy, Welch variant)
-  # sf must match the preprocessing resample target.
+  # sf must match the preprocessing resample target (256 Hz).
   # ---------------------------------------------------------------------------
 
   SpectralEntropy:
@@ -556,7 +679,7 @@ DerivativeDefinitions:
           operation: mean
 
   # ---------------------------------------------------------------------------
-  # Lempel-Ziv complexity (binarize at median first)
+  # Lempel-Ziv complexity (requires binary signal: binarize at median first)
   # ---------------------------------------------------------------------------
 
   LZivComplexity:
@@ -995,15 +1118,19 @@ DerivativeList:
   - SpectrumWelch
   - FooofFit
 
-  # Spectral features
+  # Spectral features — 6 band power variants + ratios + FOOOF scalars
   - AbsBandPower
   - AbsBandPowerMean
-  - RelBandPower
-  - RelBandPowerMean
   - LogBandPower
   - LogBandPowerMean
+  - RelBandPower
+  - RelBandPowerMean
   - CorrectedBandPower
   - CorrectedBandPowerMean
+  - CorrectedLogBandPower
+  - CorrectedLogBandPowerMean
+  - CorrectedRelBandPower
+  - CorrectedRelBandPowerMean
   - BandRatios
   - BandRatiosMean
   - FooofScalarsDs

@@ -1,6 +1,6 @@
 synthetic_eeg:
   name: synthetic_eeg
   file_pattern:
-    local: "/home/yorguin/code/coco-pipe/datasets/synthetic_eeg/rawdata/**/*_eeg.vhdr"
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/rawdata/**/*_eeg.vhdr"
   derivatives_path:
-    local: "/home/yorguin/code/coco-pipe/datasets/synthetic_eeg/derivatives/preprocessing"
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/preprocessing"
