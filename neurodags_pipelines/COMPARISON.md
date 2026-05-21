@@ -55,14 +55,9 @@ Covers all major design decisions, algorithmic equivalence, and known gaps.
 
 **base.py** resamples **before** bandpass: `raw.resample(target_sfreq)` → `raw.filter(l_freq, h_freq)`.
 
-**neurodags** `preprocess_raw` does the reverse: `raw.filter(l_freq, h_freq)` → `raw.resample(target_sfreq)`.
+**neurodags** `preprocess_raw` now uses `resample_first: True` in step-0b YAML: `raw.resample(target_sfreq)` → `raw.filter(l_freq, h_freq)`. Matches base.py.
 
-Impact: when source recording is already at 256 Hz (the target), no difference — resample is a no-op.
-For higher-rate recordings (e.g. 1000 Hz), the order matters numerically:
-- base.py: resample to 256 Hz (MNE applies anti-aliasing LP internally), then filter 0.1–100 Hz.
-- neurodags: filter 0.1–100 Hz at 1000 Hz, then resample to 256 Hz.
-
-Both are valid; the output is nearly identical in practice.
+Rationale: resample-first is the standard DSP order — MNE's anti-alias LP at Nyquist fires during downsample, then the analysis bandpass operates on the shorter signal (shorter FIR, no filter-length warnings). Filter-first forces the FIR to run at high sfreq on data that will be discarded anyway.
 
 ### 2.3 ZapLine adaptive parameter
 
@@ -100,11 +95,12 @@ Neurodags combined view is easier for overview; per-chunk is finer-grained for l
 
 **neurodags** `@CleanedPrepRaw_prov.json` fields:
 - `bad_channels` (from `raw.info["bads"]` at AR input, i.e. after RANSAC)
-- `conditions`: per-condition `n_epochs`, `n_bad_epochs`, `clean_fraction`
+- `config`: AR node params (`annotation_prefix`, `segment_duration`, `n_interpolate`, `min_epochs`, `ar_max_chunk_minutes`, `n_jobs`)
+- `artifact_stats`: `bad_epochs`, `bad_channel_spans`, `artifacts_count`, `by_block` (per condition: `n_windows`, `n_epochs`, `n_bad_epochs`, `n_bad_channel_spans`, `chunks_processed`, `clean_fraction`)
+- `integrity_stats`: `clean_duration_s`, `clean_fraction`, `manual_bad_fraction`, `autoreject_bad_fraction`
 - `overall_clean_fraction`
 
-Missing vs original: full config dump, pipeline warnings, manual vs autoreject fraction split, by-block detail.
-Config is separately captured in `derivatives_path/code/` (see §1).
+Remaining difference vs original: no `subject_id`, `steps_completed`, `pipeline_warnings` (pipeline-level fields not applicable to a single node). Full pipeline config is in `derivatives_path/code/` (§1).
 
 ### 2.8 Float precision on CleanedPrepRaw save/load
 
@@ -280,7 +276,7 @@ Processing continues for other descriptors and epochs.
 | Feature | Equivalent? | Notes |
 |---|---|---|
 | Annotation inflation | Yes | `inflate_bad_annotations` ✓ |
-| Resample | Near-equivalent | Filter then resample in neurodags; resample then filter in base.py (§2.2) |
+| Resample | Yes | `resample_first: True` in step-0b; resample→filter matches base.py ✓ |
 | Bandpass filter 0.1–100 Hz | Yes | Same parameters ✓ |
 | ZapLine | Near-equivalent | `adaptive=False` explicit YAML param in step-0b; matches original default ✓ |
 | RANSAC bad channels | Yes | Both use EC-block subset, `random_state=42` ✓ |
@@ -294,7 +290,7 @@ Processing continues for other descriptors and epochs.
 | AR n_jobs | Yes | `n_jobs: 1` exposed as YAML param; matches original default ✓ |
 | AR rejection plots | Partial | Combined per-condition PNG vs per-chunk in original (§2.6) |
 | Condition epoch extraction | Near-equivalent | float32 round-trip via CleanedPrepRaw.fif save/load (§2.8) |
-| Provenance JSON | Partial | AR stats + bad channels; missing integrity fractions + config dump (§2.7) |
+| Provenance JSON | Yes | `artifact_stats` + `integrity_stats` + `config` + `by_block`; pipeline-level fields in `code/` snapshot ✓ |
 | Config snapshot | Partial | YAML + code in `derivatives_path/code/`; no re-run guard |
 | Welch PSD | Yes | fmin=1, fmax=45, n_fft=512, n_overlap=256 ✓ |
 | FOOOF fit | Yes | aperiodic_mode=fixed, max_n_peaks=6, peak_width_limits=[1,12] ✓ |
@@ -327,8 +323,8 @@ Processing continues for other descriptors and epochs.
 
 ### Tier 2 — minor numerical differences
 
-**N. Resample order** (§2.2)  
-base.py resamples before filtering; neurodags filters then resamples. Affects only recordings where source sfreq > 256 Hz. Practically equivalent on 256 Hz data.
+~~**N. Resample order** — DONE~~  
+`resample_first: True` added to `preprocess_raw` in step-0b YAML. Resample→filter matches base.py; `preprocess_raw` node now accepts `resample_first` param (default False for backward compat).
 
 **O. AR chunk size floor** (§2.4)  
 `max(min_epochs=5, ...)` vs `max(1, ...)`. Affects only very short conditions (< 5 epochs at chunk boundary). Negligible in practice.
@@ -344,8 +340,8 @@ Hardcoded `adaptive=False`. Add a YAML param if needed.
 **R. AR n_jobs hardcoded 1** (§2.5)  
 No result difference. Add `n_jobs` param to `autoreject_annotate_blockwise` if speed matters on large datasets.
 
-**S. Provenance richness** (§2.7)  
-Missing: integrity stats (manual vs AR bad fractions), by-block detail, full config dump in JSON.
+~~**S. Provenance richness** — DONE~~  
+Added: `integrity_stats` (clean_duration_s, clean_fraction, manual_bad_fraction, autoreject_bad_fraction), `by_block` per condition (n_windows, chunks_processed, n_bad_channel_spans), `config` snapshot of AR params.
 
 **T. AR plot per-chunk vs combined** (§2.6)  
 Combined is better for overview; original per-chunk useful for very long recordings split into > 1 chunk.
@@ -378,12 +374,12 @@ neurodags uses `|denominator| <= eps` (machine epsilon); original uses `d_vals >
 | K. Provenance JSON | **DONE** | `@CleanedPrepRaw_prov.json`: bads + AR stats |
 | L. Config versioning | **DONE\*** | Snapshot to `derivatives_path/code/`; no re-run guard |
 | M. SpectralEntropy sf | **DONE** | Dynamic via `extract_sfreq_from_xarray` node |
-| N. Resample order | **open (minor)** | Filter→resample vs resample→filter; negligible for 256 Hz source |
+| N. Resample order | **DONE** | `resample_first: True` in step-0b; resample→filter matches base.py |
 | O. AR chunk floor | **DONE** | Both now use `max(1, ...)` floor |
 | P. Float32 precision | **open (negligible)** | CleanedPrepRaw save/load; below EEG noise floor |
 | Q. ZapLine adaptive | **DONE** | Explicit `adaptive: False` in step-0b YAML; change to True to enable |
 | R. AR n_jobs | **DONE** | `n_jobs: 1` in step-0b YAML; increase for parallel CV folds |
-| S. Provenance richness | **open** | Missing integrity fractions and by-block stats |
+| S. Provenance richness | **DONE** | integrity_stats + by_block + config now in prov JSON (§2.7) |
 | T. AR plot granularity | **open (minor)** | Per-chunk plots for long recordings |
 | U. Abs power extra stats | **by design** | neurodags computes more; not a bug |
 | V. Run-aware aggregation | **open** | Post-hoc only in neurodags; no recording_id grouping |

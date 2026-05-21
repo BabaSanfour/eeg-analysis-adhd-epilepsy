@@ -47,7 +47,7 @@ DerivativeDefinitions:
           default_duration: 3.0
           major_duration: 5.0
 
-      # 2. Filter (0.1–100 Hz) + resample — wide band preserved for ZapLine
+      # 2. Resample to 256 Hz (anti-alias) then filter 0.1–100 Hz — matches base.py order
       - id: 2
         node: preprocess_raw
         args:
@@ -56,6 +56,7 @@ DerivativeDefinitions:
             l_freq: 0.1
             h_freq: 100.0
           resample: 256
+          resample_first: True
 
       # 3. ZapLine: remove 60 Hz power line noise from continuous raw
       - id: 3

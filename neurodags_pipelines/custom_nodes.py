@@ -207,12 +207,17 @@ def preprocess_raw(
     filter_args: dict[str, Any] | None = None,
     notch_filter: dict[str, Any] | None = None,
     resample: float | None = None,
+    resample_first: bool = False,
 ) -> NodeResult:
     """Filter and resample a Raw recording without epoching.
 
     Equivalent to the filtering steps of basic_preprocessing but keeps the
     continuous Raw so that condition windows can be extracted downstream via
     extract_condition_epochs.
+
+    resample_first=True applies resample (with MNE's built-in anti-alias LP)
+    before bandpass filtering — the scientifically preferred order for
+    downsampling: anti-alias then filter (matches base.py behaviour).
     """
     import mne as _mne
     from neurodags.loaders import load_meeg
@@ -226,9 +231,11 @@ def preprocess_raw(
 
     if notch_filter is not None:
         raw.notch_filter(**notch_filter, verbose=False)
+    if resample_first and resample is not None:
+        raw.resample(float(resample), verbose=False)
     if filter_args is not None:
         raw.filter(**filter_args, verbose=False)
-    if resample is not None:
+    if not resample_first and resample is not None:
         raw.resample(float(resample), verbose=False)
 
     return NodeResult(
@@ -483,6 +490,8 @@ def autoreject_annotate_blockwise(
     all_new_annots: list[tuple[float, float, str, tuple]] = []
     condition_plots: dict[str, Any] = {}
     condition_stats: dict[str, dict] = {}
+    global_bad_epochs = 0
+    global_bad_channel_spans = 0
 
     for cond_name, windows in condition_windows.items():
         event_rows: list[list[int]] = []
@@ -535,6 +544,7 @@ def autoreject_annotate_blockwise(
         chunk_ch_names: list[str] | None = None
         cond_n_epochs = 0
         cond_n_bad = 0
+        cond_bad_spans = 0
 
         for epochs_chunk, _ in chunks:
             cv = min(10, len(epochs_chunk))
@@ -566,11 +576,18 @@ def autoreject_annotate_blockwise(
                         start_s = float(epochs_chunk.events[first_idx, 0] - raw.first_samp) / sfreq
                         end_s = float(epochs_chunk.events[last_idx, 0] - raw.first_samp) / sfreq + segment_duration
                         all_new_annots.append((max(0.0, start_s), max(end_s - start_s, segment_duration), f"BAD_{cond_name}", (ch_name,)))
+                        cond_bad_spans += 1
+
+        global_bad_epochs += cond_n_bad
+        global_bad_channel_spans += cond_bad_spans
 
         if cond_n_epochs > 0:
             condition_stats[cond_name] = {
+                "n_windows": len(windows),
                 "n_epochs": cond_n_epochs,
                 "n_bad_epochs": cond_n_bad,
+                "n_bad_channel_spans": cond_bad_spans,
+                "chunks_processed": len(chunks),
                 "clean_fraction": round((cond_n_epochs - cond_n_bad) / cond_n_epochs, 4),
             }
 
@@ -599,11 +616,54 @@ def autoreject_annotate_blockwise(
             ch_names=[a[3] for a in all_new_annots],
         ))
 
+    # Integrity stats — mirror base.py: scan global BAD_ annotations by type
+    total_samples = raw.n_times
+    mask_manual = np.zeros(total_samples, dtype=bool)
+    mask_autoreject = np.zeros(total_samples, dtype=bool)
+    mask_all_bad = np.zeros(total_samples, dtype=bool)
+    for annot in raw.annotations:
+        desc = str(annot["description"])
+        if not desc.startswith("BAD_"):
+            continue
+        if annot.get("ch_names"):  # per-channel spans — selective, skip for global mask
+            continue
+        i0 = max(0, int(raw.time_as_index(annot["onset"])[0]))
+        i1 = min(total_samples, int(raw.time_as_index(annot["onset"] + annot["duration"])[0]))
+        if i1 > i0:
+            mask_all_bad[i0:i1] = True
+            if desc.startswith("BAD_epoch_"):
+                mask_autoreject[i0:i1] = True
+            elif not desc.startswith(("BAD_ACQ_SKIP", "BAD_boundary")):
+                mask_manual[i0:i1] = True
+
+    clean_samples = int(total_samples - mask_all_bad.sum())
     total_epochs = sum(s["n_epochs"] for s in condition_stats.values())
     total_bad = sum(s["n_bad_epochs"] for s in condition_stats.values())
     provenance = {
         "bad_channels": bad_channels_prov,
-        "conditions": condition_stats,
+        "config": {
+            "annotation_prefix": annotation_prefix,
+            "segment_duration": segment_duration,
+            "n_interpolate": n_interp.tolist(),
+            "min_epochs": min_epochs,
+            "ar_max_chunk_minutes": ar_max_chunk_minutes,
+            "n_jobs": n_jobs,
+        },
+        "artifact_stats": {
+            "bad_epochs": global_bad_epochs,
+            "bad_channel_spans": global_bad_channel_spans,
+            "artifacts_count": len(all_new_annots),
+            "by_block": [
+                {"condition": cond, **stats}
+                for cond, stats in condition_stats.items()
+            ],
+        },
+        "integrity_stats": {
+            "clean_duration_s": round(clean_samples / sfreq, 3),
+            "clean_fraction": round(clean_samples / total_samples, 4) if total_samples else None,
+            "manual_bad_fraction": round(float(mask_manual.sum()) / total_samples, 4) if total_samples else None,
+            "autoreject_bad_fraction": round(float(mask_autoreject.sum()) / total_samples, 4) if total_samples else None,
+        },
         "overall_clean_fraction": round((total_epochs - total_bad) / total_epochs, 4) if total_epochs else None,
     }
 
