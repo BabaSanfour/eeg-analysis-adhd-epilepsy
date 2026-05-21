@@ -414,6 +414,20 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  # Saved corrected absolute mean — used by BandRatiosOnCorrectedMeans (point 4, corr variant)
+  CorrectedBandPowerAgg:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CorrectedBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
   CorrectedBandPowerPooled:
     overwrite: False
     for_dataframe: False
@@ -713,6 +727,30 @@ DerivativeDefinitions:
     nodes:
       - id: 0
         derivative: AbsBandPowerAgg.nc
+      - id: 1
+        node: band_ratios
+        args:
+          bandpower_like: id.0
+          combinations:
+            - [delta, theta]
+            - [delta, alpha]
+            - [delta, beta]
+            - [delta, gamma]
+            - [theta, alpha]
+            - [theta, beta]
+            - [theta, gamma]
+            - [alpha, beta]
+            - [alpha, gamma]
+            - [beta, gamma]
+
+  # Ratios of corrected absolute power means — matches agg_band_corr_ratio_* in extract_descriptors.py
+  BandRatiosOnCorrectedMeans:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedBandPowerAgg.nc
       - id: 1
         node: band_ratios
         args:
@@ -2758,9 +2796,10 @@ DerivativeList:
   - RelBandPowerPooled
   - RelBandPowerPooledMean
 
-  # Corrected absolute band power (mean + pooled; excluded from band_summaries)
+  # Corrected absolute band power (mean + pooled + saved agg for ratio-of-means)
   - CorrectedBandPower
   - CorrectedBandPowerMean
+  - CorrectedBandPowerAgg
   - CorrectedBandPowerPooled
   - CorrectedBandPowerPooledMean
 
@@ -2780,12 +2819,13 @@ DerivativeList:
   - CorrectedRelBandPowerPooled
   - CorrectedRelBandPowerPooledMean
 
-  # Band ratios (mean + median + IQR + subject-level + pooled)
+  # Band ratios (mean + median + IQR + subject-level abs + subject-level corr + pooled)
   - BandRatios
   - BandRatiosMean
   - BandRatiosMedian
   - BandRatiosIQR
   - BandRatiosOnMeans
+  - BandRatiosOnCorrectedMeans
   - BandRatiosPooled
   - BandRatiosPooledMean
 

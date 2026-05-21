@@ -339,11 +339,24 @@ def zapline_denoise(
 
 
 @register_node
-def ransac_bad_channels(mne_object) -> NodeResult:
+def ransac_bad_channels(
+    mne_object,
+    block_label: str | None = None,
+    annotation_prefix: str = "BLOCK_",
+) -> NodeResult:
     """Detect and mark bad channels using RANSAC (pyprep).
 
     Equivalent to detect_global_bads_ransac in base.py.
     Marks detected channels in raw.info['bads'] without removing them.
+
+    Parameters
+    ----------
+    block_label
+        If set, RANSAC runs only on segments matching
+        ``{annotation_prefix}{block_label}`` annotations (mirrors the
+        rest-block-biased approach in base.py).  None = use full recording.
+    annotation_prefix
+        Prefix for block annotations (default ``"BLOCK_"``).
     """
     from neurodags.loaders import load_meeg
 
@@ -366,8 +379,25 @@ def ransac_bad_channels(mne_object) -> NodeResult:
             artifacts={".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))}
         )
 
+    raw_for_ransac = raw
+    if block_label is not None:
+        target = f"{annotation_prefix}{block_label}"
+        crops: list = []
+        for annot in raw.annotations:
+            desc = str(annot["description"])
+            if desc.startswith("Comment/"):
+                desc = desc[len("Comment/"):]
+            if desc == target:
+                onset = float(annot["onset"])
+                offset = onset + float(annot["duration"])
+                crop = raw.copy().crop(onset, min(offset, raw.times[-1] + raw.first_time))
+                if crop.n_times > 0:
+                    crops.append(crop)
+        if crops:
+            raw_for_ransac = crops[0] if len(crops) == 1 else _mne.concatenate_raws(crops, verbose="ERROR")
+
     try:
-        nc = NoisyChannels(raw, random_state=42)
+        nc = NoisyChannels(raw_for_ransac, random_state=42)
         nc.find_bad_by_ransac()
         bads = nc.get_bads(verbose=False) or []
         bads = sorted(ch for ch in bads if ch in raw.ch_names)
@@ -500,6 +530,71 @@ def autoreject_annotate(
             ".fif": Artifact(
                 item=epochs,
                 writer=lambda path, e=epochs: e.save(path, overwrite=True, verbose="ERROR"),
+            )
+        }
+    )
+
+
+@register_node
+def autoreject_clean_epochs(
+    mne_object,
+    n_interpolate: list[int] | None = None,
+    min_epochs: int = 5,
+) -> NodeResult:
+    """Run AutoReject on Epochs and return cleaned Epochs (bad epochs dropped).
+
+    Condition-aware equivalent of autoreject_annotate — use after
+    extract_condition_epochs so AR thresholds are estimated per condition.
+    Unlike autoreject_annotate (which needs Raw), this node accepts Epochs
+    directly and simply drops rejected epochs rather than annotating raw time.
+    """
+    import mne as _mne
+
+    if isinstance(mne_object, NodeResult):
+        mne_object = mne_object.artifacts[".fif"].item
+    if isinstance(mne_object, (str, os.PathLike)):
+        mne_object = _mne.read_epochs(str(mne_object), preload=True, verbose="ERROR")
+
+    try:
+        from autoreject import AutoReject
+    except ImportError as exc:
+        raise ImportError("autoreject required for autoreject_clean_epochs") from exc
+
+    epochs = mne_object.copy().load_data()
+    n_interp = np.asarray(n_interpolate or [0], dtype=int)
+
+    if len(epochs) < min_epochs:
+        return NodeResult(
+            artifacts={
+                ".fif": Artifact(
+                    item=epochs,
+                    writer=lambda path, e=epochs: e.save(path, overwrite=True, verbose="ERROR"),
+                )
+            }
+        )
+
+    # Patch channel positions for synthetic data (same workaround as autoreject_annotate)
+    _locs = np.array([ch["loc"][:3] for ch in epochs.info["chs"]])
+    if np.allclose(_locs, 0) or not np.all(np.isfinite(_locs)):
+        _n = len(epochs.ch_names)
+        _angles = np.linspace(0, 2 * np.pi, _n, endpoint=False)
+        epochs = epochs.copy()
+        with epochs.info._unlock():
+            for _i, _ch in enumerate(epochs.info["chs"]):
+                _a = _angles[_i]
+                _ch["loc"][:3] = [np.cos(_a) * 0.09, np.sin(_a) * 0.09, 0.01]
+
+    cv = min(10, max(2, len(epochs)))
+    ar = AutoReject(n_interpolate=n_interp, random_state=42, n_jobs=1, verbose=False, cv=cv)
+    ar.fit(epochs)
+    reject_log = ar.get_reject_log(epochs)
+    cleaned = epochs[~reject_log.bad_epochs]
+
+    return NodeResult(
+        artifacts={
+            ".fif": Artifact(
+                item=cleaned,
+                writer=lambda path, e=cleaned: e.save(path, overwrite=True, verbose="ERROR"),
             )
         }
     )

@@ -1,7 +1,9 @@
 # Condition-level epoch extraction pipeline.
 #
 # Equivalent of the condition-aware epoching in extract_descriptors.py:
-# splits continuous raw into per-condition epoch sets using BLOCK_* annotations.
+# splits continuous raw into per-condition epoch sets using BLOCK_* annotations,
+# then runs AutoReject per condition (condition-aware AR, matching base.py
+# annotate_artifacts_blockwise which fits one AR instance per condition).
 #
 # Input: raw .vhdr recordings with BLOCK_* annotations.
 #        Applies the same basic preprocessing as step-0 (filter 1–45 Hz, 256 Hz).
@@ -11,13 +13,14 @@
 #   ConditionEC  — epochs from BLOCK_EC windows (eyes closed)
 #
 # Each condition derivative:
-#   1. preprocess_raw : bandpass 1–45 Hz, resample 256 Hz (continuous Raw)
-#   2. extract_condition_epochs : slice fixed-length epochs from BLOCK_* windows
+#   1. preprocess_raw            : bandpass 1–45 Hz, resample 256 Hz (continuous Raw)
+#   2. extract_condition_epochs  : slice fixed-length epochs from BLOCK_* windows
+#   3. autoreject_clean_epochs   : AR on condition epochs, bad epochs dropped
 #
 # BrainVision annotations gain a "Comment/" prefix on round-trip —
 # extract_condition_epochs normalises this automatically.
 #
-# Output: {reference_base}@ConditionEO.fif / @ConditionEC.fif  (MNE Epochs)
+# Output: {reference_base}@ConditionEO.fif / @ConditionEC.fif  (MNE Epochs, AR-cleaned)
 #
 # Usage:
 #   neurodags run neurodags_pipelines/step-0c_conditions.yml
@@ -51,6 +54,10 @@ DerivativeDefinitions:
           annotation_prefix: "BLOCK_"
           epoch_duration: 2.0
           epoch_overlap: 0.0
+      - id: 3
+        node: autoreject_clean_epochs
+        args:
+          mne_object: id.2
 
   ConditionEC:
     overwrite: False
@@ -74,6 +81,10 @@ DerivativeDefinitions:
           annotation_prefix: "BLOCK_"
           epoch_duration: 2.0
           epoch_overlap: 0.0
+      - id: 3
+        node: autoreject_clean_epochs
+        args:
+          mne_object: id.2
 
 DerivativeList:
   - ConditionEO
