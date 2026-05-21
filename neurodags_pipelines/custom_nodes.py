@@ -46,6 +46,30 @@ def _resolve_xr(obj):
 
 
 # ---------------------------------------------------------------------------
+# Utility — extract sfreq scalar from xarray epoch DataArray attrs
+# ---------------------------------------------------------------------------
+
+@register_node
+def extract_sfreq_from_xarray(data_like) -> NodeResult:
+    """Return sfreq as a scalar NodeResult from xarray epoch metadata attrs.
+
+    Neurodags stores sfreq in attrs["metadata"] JSON when converting MNE
+    Epochs to xarray. Used to pass sf dynamically to antropy_spectral_entropy
+    instead of hardcoding 256.0.
+    """
+    import json
+    import xarray as xr
+
+    if not isinstance(data_like, (xr.DataArray, xr.Dataset)):
+        raise TypeError(f"extract_sfreq_from_xarray: expected xarray, got {type(data_like)}")
+    meta = json.loads(data_like.attrs.get("metadata", "{}"))
+    sfreq = meta.get("sfreq")
+    if sfreq is None:
+        raise ValueError("extract_sfreq_from_xarray: no 'sfreq' key in xarray metadata attrs")
+    return NodeResult(artifacts={"": Artifact(item=float(sfreq), writer=lambda _: None)})
+
+
+# ---------------------------------------------------------------------------
 # Point 1 — Multi-stat aggregation
 # ---------------------------------------------------------------------------
 

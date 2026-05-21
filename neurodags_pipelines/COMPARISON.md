@@ -163,10 +163,8 @@ Note: neurodags computes **Median and IQR for absolute band power** even though 
 
 `antropy.spectral_entropy` requires `sf` (sampling frequency).
 
-neurodags **hardcodes `sf=256.0`** in `step-1_features.yml`.
-Original reads `sfreq` from the loaded epoch object dynamically.
-
-Impact: if the preprocessed data is not exactly 256 Hz (e.g. source recording at non-standard rate), neurodags SpectralEntropy will use a wrong `sf`. All other complexity measures are sfreq-agnostic.
+~~neurodags **hardcodes `sf=256.0`** in `step-1_features.yml`.~~
+**Fixed**: `extract_sfreq_from_xarray` node reads `sfreq` from epoch xarray `attrs["metadata"]` JSON (set by neurodags epoch factory); passed as `sf: id.1` to `antropy_spectral_entropy`.
 
 ### 4.4 FOOOF fit
 
@@ -195,7 +193,7 @@ Original applies a `aggregated_ratio_floor` guard (`where=d_vals > floor`) befor
 
 | Source | Original | neurodags |
 |---|---|---|
-| antropy (14) | SampleEnt(order=2,metric=chebyshev), ApproxEnt, PermEnt(order=3,delay=1,normalize), SVDEnt(order=3,delay=1,normalize), SpectralEnt(**sf=sfreq**,method=welch,nperseg=128,normalize), HjorthMobility, HjorthComplexity, LZiv, NumZeroCross(normalize), HiguchiFD(kmax=10), KatzFD, PetrosianFD, DFA | Same 14, **SpectralEnt sf=256.0 hardcoded** ± |
+| antropy (14) | SampleEnt(order=2,metric=chebyshev), ApproxEnt, PermEnt(order=3,delay=1,normalize), SVDEnt(order=3,delay=1,normalize), SpectralEnt(**sf=sfreq**,method=welch,nperseg=128,normalize), HjorthMobility, HjorthComplexity, LZiv, NumZeroCross(normalize), HiguchiFD(kmax=10), KatzFD, PetrosianFD, DFA | Same 14, SpectralEnt sf dynamic via `extract_sfreq_from_xarray` ✓ |
 | neurokit2 (5) | MultiscaleEntropy, ShannonEntropy, FuzzyEntropy, DispersionEntropy, HurstExponent | Same 5 ✓ |
 | stats (2) | Kurtosis, RMS | Same 2 ✓ |
 
@@ -324,9 +322,8 @@ Processing continues for other descriptors and epochs.
 
 ### Tier 1 — affect feature values
 
-**M. SpectralEntropy hardcoded sf=256.0**  
-`antropy.spectral_entropy(sf=256.0)` in `step-1_features.yml`. Original reads sfreq from epoch info dynamically. If source recording is not 256 Hz, SpectralEntropy values will be wrong.  
-Fix: pass sfreq as a computed or config parameter from the epoch derivative.
+~~**M. SpectralEntropy hardcoded sf=256.0** — FIXED~~  
+`extract_sfreq_from_xarray` node reads sfreq from epoch xarray attrs; passed as `sf: id.1`.
 
 ### Tier 2 — minor numerical differences
 
@@ -380,7 +377,7 @@ Verify `band_ratios` node applies the same `aggregated_ratio_floor` guard as the
 | J. AR rejection plots | **PARTIAL** | Combined per-condition PNG; original per-chunk (§10.T) |
 | K. Provenance JSON | **DONE** | `@CleanedPrepRaw_prov.json`: bads + AR stats |
 | L. Config versioning | **DONE\*** | Snapshot to `derivatives_path/code/`; no re-run guard |
-| M. SpectralEntropy sf | **open** | Hardcoded 256.0; wrong for non-256 Hz data |
+| M. SpectralEntropy sf | **DONE** | Dynamic via `extract_sfreq_from_xarray` node |
 | N. Resample order | **open (minor)** | Filter→resample vs resample→filter; negligible for 256 Hz source |
 | O. AR chunk floor | **open (negligible)** | min_epochs vs 1 floor; no practical impact |
 | P. Float32 precision | **open (negligible)** | CleanedPrepRaw save/load; below EEG noise floor |

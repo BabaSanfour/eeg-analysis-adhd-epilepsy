@@ -1731,7 +1731,7 @@ DerivativeDefinitions:
 
   # ---------------------------------------------------------------------------
   # Spectral entropy (antropy, Welch variant)
-  # sf must match the preprocessing resample target (256 Hz).
+  # sf read dynamically from epoch xarray attrs (set by neurodags epoch factory).
   # ---------------------------------------------------------------------------
 
   SpectralEntropy:
@@ -1741,11 +1741,15 @@ DerivativeDefinitions:
       - id: 0
         derivative: SourceFile
       - id: 1
+        node: extract_sfreq_from_xarray
+        args:
+          data_like: id.0
+      - id: 2
         node: antropy_spectral_entropy
         args:
           data_like: id.0
           dim: times
-          sf: 256.0
+          sf: id.1
           method: welch
           nperseg: 128
           normalize: True
