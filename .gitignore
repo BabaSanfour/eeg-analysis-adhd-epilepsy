@@ -12,6 +12,7 @@ plots/
 results/
 venv/
 
+uv.lock
 # Ignore everything in dl/ except cbramod/
 dl/*
 !dl/cbramod/
