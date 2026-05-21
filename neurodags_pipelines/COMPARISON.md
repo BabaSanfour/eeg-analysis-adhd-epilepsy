@@ -1,13 +1,12 @@
 # Original vs neurodags pipeline — detailed comparison
 
-Covers all major design decisions, algorithmic equivalence, and known gaps.  
-Files referenced:
+Covers all major design decisions, algorithmic equivalence, and known gaps.
 
 | Original | neurodags |
 |---|---|
-| `eeg_adhd_epilepsy/preproc/base.py` | `neurodags_pipelines/step-0b_preproc_cleaned.yml` + `custom_nodes.py` |
-| `eeg_adhd_epilepsy/analysis/extract_descriptors.py` | `neurodags_pipelines/step-1_features.yml` + `custom_nodes.py` |
-| `eeg_adhd_epilepsy/io/bids.py` (block windowing) | `neurodags_pipelines/step-0c_conditions.yml` + `custom_nodes.py` |
+| `eeg_adhd_epilepsy/preproc/base.py` | `step-0b_preproc_cleaned.yml` + `custom_nodes.py` |
+| `eeg_adhd_epilepsy/analysis/extract_descriptors.py` | `step-1_features.yml` + `custom_nodes.py` |
+| `eeg_adhd_epilepsy/io/bids.py` (block windowing) | `step-0c_conditions.yml` + `custom_nodes.py` |
 | `configs/descriptors.yaml` | YAML anchors `&BANDS`, `&CHANNEL_GROUPS` in `step-1_features.yml` |
 
 ---
@@ -20,84 +19,98 @@ Files referenced:
 | Invocation | `python base.py --bids_root ... --subjects ...` | `neurodags run step-0b_preproc_cleaned.yml` |
 | Subject selection | CLI `--subjects`, BIDS metadata CSV | Dataset YAML file glob (`datasets_raw.yml`) |
 | Granularity | Subject × session × run × condition loops in Python | One YAML derivative per logical output; per-file caching in `.nc` / `.fif` |
-| Intermediate storage | `.fif` saved per BIDS entity; derivative named with `_desc-base_epo.fif` | `.nc` (NetCDF4) per derivative per source file; `.fif` for epoch derivatives |
+| Intermediate storage | `.fif` per BIDS entity (`_desc-base_raw.fif`) | `.fif` for Raw/Epoch derivatives; `.nc` (NetCDF4) for feature derivatives |
 | Resume / idempotency | `_SUCCESS` marker per shard; `--overwrite` flag | `overwrite: False` per derivative; re-runs skip existing files |
-| Parallelism | `joblib.Parallel` for short files; sequential for long files | Not built in at YAML level; neurodags `run` is sequential per dataset by default |
-| Provenance | JSON sidecar `_prov.json` per run | None — derivative filenames + NetCDF4 metadata serve as implicit provenance |
-| BIDS compliance | Full BIDS path conventions; `dataset_description.json` | No BIDS awareness; flat `derivatives/preprocessing/` tree |
+| Parallelism | `joblib.Parallel` for short files; sequential (n_jobs per file) for long files | `--n-jobs` flag on `neurodags run`; sequential by default |
+| Provenance | Rich per-run JSON (`_prov.json`) + `config_used.yaml` guard | `@CleanedPrepRaw_prov.json` (AR stats) + `derivatives_path/code/` snapshot on every run |
+| BIDS compliance | Full BIDS conventions; `dataset_description.json` | No BIDS awareness; flat `derivatives/preprocessing/` tree |
 
 ---
 
 ## 2. Preprocessing chain
 
-### 2.1 Step ordering
+### 2.1 Step ordering (current state)
 
 | Step | Original (`base.py`) | neurodags step-0b | neurodags step-0c |
 |---|---|---|---|
-| Annotation inflation | `inflate_bad_annotations` | — | — |
-| Resample | `raw.resample(target_sfreq)` | `preprocess_raw(resample=256)` ✓ | `preprocess_raw(resample=256)` ✓ |
-| Bandpass filter | 0.1–100 Hz | 0.1–100 Hz ✓ | **1–45 Hz** ✗ |
-| ZapLine | `ZapLine.fit_transform(raw)` | `zapline_denoise` ✓ | **missing** ✗ |
-| RANSAC bad channels | rest-block subset | full recording ✗ | **missing** ✗ |
-| CAR | `set_eeg_reference("average")` | `apply_car` ✓ | **missing** ✗ |
-| AR — scope | per-condition (all EO blocks merged, all EC blocks merged) | whole-recording ✗ | per-condition ✓ |
-| AR — input quality | on ZapLine+RANSAC+CAR cleaned raw | on cleaned raw ✓ | **on raw-only (no ZapLine/RANSAC/CAR)** ✗ |
-| AR — chunking | `_iter_autoreject_chunks` (30 min default) | — ✗ | — ✗ |
-| AR — per-channel spans | `BAD_{cond}` with `ch_names` tuples | — ✗ | — ✗ |
-| AR — epoch label | `BAD_epoch_{condition_name}` | `BAD_epoch` ✗ (minor) | `BAD_epoch` ✗ (minor) |
-| AR — CV | `min(10, n_epochs_chunk)` | `min(10, max(2, min_epochs))` = 5 fixed ✗ | `min(10, max(2, n_epochs))` ✓ |
-| AR plots | per-chunk PNG (orientation=horizontal, 16×10 in, 150 dpi) | combined per-condition PNG (same orientation/size/dpi) ± | — |
-| Output format | annotated Raw + provenance JSON | Epochs (CleanedPrep.fif) | Epochs (ConditionEO/EC.fif) |
+| Annotation inflation | `inflate_bad_annotations` | `inflate_bad_annotations` ✓ | — (via CleanedPrepRaw) |
+| **Resample** | `raw.resample()` — **before** bandpass | `preprocess_raw(resample=256)` — **after** bandpass ± | — (via CleanedPrepRaw) |
+| Bandpass filter | 0.1–100 Hz | 0.1–100 Hz ✓ | — (via CleanedPrepRaw) ✓ |
+| ZapLine | `ZapLine.fit_transform(raw)`, adaptive from config | `zapline_denoise(line_freq=60, adaptive=False)` ± | — (via CleanedPrepRaw) ✓ |
+| RANSAC bad channels | EC-block subset (`collect_baseline_windows`) | `ransac_bad_channels(block_label="EC")` ✓ | — (via CleanedPrepRaw) ✓ |
+| CAR | `set_eeg_reference("average", projection=False)` | `apply_car` ✓ | — (via CleanedPrepRaw) ✓ |
+| AR — scope | per-condition (all EO blocks merged, all EC blocks merged) | `autoreject_annotate_blockwise`: per-condition ✓ | pure extraction (no AR) |
+| AR — input | ZapLine+RANSAC+CAR cleaned Raw | cleaned Raw (CleanedPrepRaw) ✓ | from CleanedPrepRaw ✓ |
+| AR — chunking | `_iter_autoreject_chunks`: `max(1, int(chunk_min*60/seg_dur))` | `max(min_epochs, int(...))` ± | — |
+| AR — CV | `min(10, n_epochs_chunk)` per chunk | `min(10, len(epochs_chunk))` ✓ | — |
+| AR — epoch label | `BAD_epoch_{condition_name}` | `BAD_epoch_{cond_name}` ✓ | — |
+| AR — per-channel spans | `BAD_{cond}` + `ch_names` tuples | `BAD_{cond}` + `ch_names` tuples ✓ | — |
+| AR plots | per-chunk PNG (horizontal, 16×10, 150 dpi) | combined per-condition PNG (same params) ± | — |
+| Provenance JSON | rich per-run JSON (bads, integrity stats, by-block) | `@CleanedPrepRaw_prov.json` (bads, AR stats) ± | — |
+| Output | annotated Raw (`_desc-base_raw.fif`) | `@CleanedPrepRaw.fif` (Raw) + `@CleanedPrep.fif` (Epochs) | `@ConditionEO/EC.fif` (Epochs) |
 
-### 2.2 Most critical architectural gap: step-0c starts from unclean raw
+**Legend:** ✓ = equivalent, ± = minor difference (see §2.x), ✗ = known gap, — = not applicable
 
-`base.py` outputs an **annotated Raw** after the full ZapLine→RANSAC→CAR→AR chain.  
-Condition epochs are then extracted **from that cleaned annotated Raw** — they benefit from all cleaning steps.
+### 2.2 Resample order
 
-`step-0c` starts fresh from raw VHDR and applies only `preprocess_raw(1–45 Hz)` before AR and condition extraction.  ZapLine, RANSAC, and CAR are absent.  This means condition epochs from step-0c contain line noise, potentially bad channels unreferenced, and no common average reference.
+**base.py** resamples **before** bandpass: `raw.resample(target_sfreq)` → `raw.filter(l_freq, h_freq)`.
 
-**For exact correspondence**, step-0c should read the intermediate cleaned Raw produced by step-0b (after ZapLine/RANSAC/CAR but before epoching), then do condition-specific AR and extraction from that.  This requires splitting step-0b into two derivatives:
-- `CleanedPrepRaw` — annotated Raw (ZapLine→RANSAC→CAR→`autoreject_annotate_raw` whole-recording)
-- `CleanedPrep` — Epochs from `CleanedPrepRaw` via `extract_fixed_length_epochs`
+**neurodags** `preprocess_raw` does the reverse: `raw.filter(l_freq, h_freq)` → `raw.resample(target_sfreq)`.
 
-And step-0c reads from `datasets_cleaned_raw.yml` pointing to `*@CleanedPrepRaw.fif`.
+Impact: when source recording is already at 256 Hz (the target), no difference — resample is a no-op.
+For higher-rate recordings (e.g. 1000 Hz), the order matters numerically:
+- base.py: resample to 256 Hz (MNE applies anti-aliasing LP internally), then filter 0.1–100 Hz.
+- neurodags: filter 0.1–100 Hz at 1000 Hz, then resample to 256 Hz.
 
-### 2.3 Filter range mismatch in step-0c
+Both are valid; the output is nearly identical in practice.
 
-`base.py` filters 0.1–100 Hz (broadband).  Condition epochs are extracted from this broadband signal.  
-`step-0c` filters 1–45 Hz before extraction.
+### 2.3 ZapLine adaptive parameter
 
-For **spectral features** (bandpower, FOOOF) this makes no difference — the Welch PSD is computed in 1–45 Hz range regardless.  
-For **complexity features** (entropy, fractal dimension, Kurtosis, RMS) computed on the raw time-domain signal, the filter affects values: a 0.1–100 Hz signal has different temporal structure than a 1–45 Hz signal.  High-frequency content (45–100 Hz) contributes to sample entropy, Higuchi FD, zero-crossings, etc.
+base.py reads `adaptive` from config (CLI `--adaptive` flag); default is `False`.
+neurodags hardcodes `adaptive=False`. Functionally identical for default usage; a YAML param would be needed to expose this.
 
-Fix: change step-0c `preprocess_raw` to 0.1–100 Hz (match base.py), and ensure downstream feature YAML still limits Welch PSD to 1–45 Hz (already done via `fmin=1.0, fmax=45.0` in `mne_spectrum_array`).
+### 2.4 AR chunk size minimum
 
-### 2.4 ZapLine
+base.py: `max_per_chunk = max(1, int((chunk_minutes * 60.0) / segment_duration))`
+neurodags: `n_per_chunk = max(min_epochs, int((ar_max_chunk_minutes * 60.0) / segment_duration))`
 
-Both use `mne_denoise.zapline.ZapLine`.  Parameters identical (60 Hz, non-adaptive).  No algorithmic difference.
+Difference: neurodags uses `min_epochs` (default 5) as the floor instead of 1. Affects only very short conditions where chunk limit < min_epochs. Practically identical on normal data.
 
-### 2.5 RANSAC
+### 2.5 AR n_jobs
 
-Both call `NoisyChannels(raw, random_state=42).find_bad_by_ransac()`.
+base.py passes `n_jobs` to AutoReject (from CLI `--n-jobs`).
+neurodags hardcodes `n_jobs=1`. No impact on results; only on speed for large AR fits.
 
-`base.py` crops to `bids.collect_baseline_windows(raw)` — baseline/rest block windows — before fitting RANSAC.  This focuses bad-channel detection on intrinsic channel quality rather than task-related amplitude bursts.  `ransac_bad_channels` now supports `block_label` param (e.g., `block_label: EC`), but step-0b does not currently pass it.  Fix: pass `block_label` to the step-0b RANSAC node for the rest condition.
+### 2.6 AR plot granularity
 
-### 2.6 AutoReject details
+base.py saves one PNG per chunk: `{record_label}_autoreject_{cond}{chunk_suffix}.png` (e.g. `_chunk1.png`).
+neurodags saves one PNG per condition (labels concatenated across chunks): `@CleanedPrepRaw_ar_plot_{cond}.png`.
+Same visual params: `orientation="horizontal"`, `figsize=(16, 10)`, `dpi=150`.
+Neurodags combined view is easier for overview; per-chunk is finer-grained for long recordings.
 
-**`annotate_artifacts_blockwise` (base.py)** vs **`autoreject_annotate` / `autoreject_annotate_raw`** (neurodags):
+### 2.7 Provenance JSON richness
 
-| Detail | base.py | neurodags |
-|---|---|---|
-| Event building | `build_block_events_by_condition`: 1 s non-overlapping events per block window | Same logic in `autoreject_annotate_raw` ✓ |
-| Condition merging | All EO blocks merged into one epoch set; one AR instance | Same ✓ |
-| Chunking | `_iter_autoreject_chunks`: splits if > 30 min per condition | Not implemented ✗ |
-| `n_interpolate` | `[0]` — no interpolation | `[0]` ✓ |
-| CV | `min(10, n_epochs_chunk)` — per chunk | `autoreject_annotate`: fixed 5; `autoreject_annotate_raw`: adaptive `min(10, n)` ✓ |
-| Epoch annotations | `BAD_epoch_{condition_name}` | `BAD_epoch` (no condition label) |
-| Channel span annotations | `BAD_{condition_name}` with `ch_names` per consecutive bad-channel run | Not implemented ✗ |
-| AR plots | saved PNG per condition per chunk | Not implemented ✗ |
+**base.py** `_prov.json` fields:
+- `subject_id`, `config` (full PreprocConfig), `steps_completed`
+- `pipeline_warnings`
+- `bad_channels_global` (RANSAC bads)
+- `artifact_stats` per condition: `bad_epochs`, `bad_channel_spans`, `artifacts_count`, `by_block`
+- `block_stats`
+- `integrity_stats`: `clean_duration_s`, `clean_fraction`, `manual_bad_fraction`, `autoreject_bad_fraction`
 
-**Per-channel span annotations**: base.py `_reject_log_to_annotations` groups consecutive epochs where the same channel is marked bad (`labels[:, ch_idx] != 0`) into a single `BAD_{condition}` annotation with `ch_names=(ch_name,)`.  This allows downstream analysis to identify which channels were systematically bad during which condition.  Not needed for `reject_by_annotation="omit"` behavior but is richer provenance.
+**neurodags** `@CleanedPrepRaw_prov.json` fields:
+- `bad_channels` (from `raw.info["bads"]` at AR input, i.e. after RANSAC)
+- `conditions`: per-condition `n_epochs`, `n_bad_epochs`, `clean_fraction`
+- `overall_clean_fraction`
+
+Missing vs original: full config dump, pipeline warnings, manual vs autoreject fraction split, by-block detail.
+Config is separately captured in `derivatives_path/code/` (see §1).
+
+### 2.8 Float precision on CleanedPrepRaw save/load
+
+step-0b saves `CleanedPrepRaw.fif` as float32 (MNE default). step-0c reloads it.
+base.py keeps the annotated Raw in memory and extracts condition epochs without a save/load round-trip.
+Numerical effect: float32 precision (~7 significant digits) vs float64 (~15). Negligible for EEG.
 
 ---
 
@@ -105,17 +118,17 @@ Both call `NoisyChannels(raw, random_state=42).find_bad_by_ransac()`.
 
 ### 3.1 Original flow
 
-`base.py` outputs annotated Raw (`_desc-base_raw.fif`).  `extract_descriptors.py` loads this via `load_eeg_data(..., condition=condition)` which reads BIDS event structure and extracts condition-labeled epochs on the fly.  All conditions come from the **same cleaned Raw**: they share the same ZapLine/RANSAC/CAR/AR preprocessing.
+`base.py` outputs annotated Raw (`_desc-base_raw.fif`). `extract_descriptors.py` loads this via
+`load_eeg_data(..., use_derivatives=True, desc="base")` — reads BIDS event structure and extracts
+condition-labeled epochs on the fly. All conditions come from the **same in-memory cleaned Raw**.
 
-### 3.2 neurodags flow (`step-0c_conditions.yml`)
+### 3.2 neurodags flow
 
-Separate per-condition `.fif` files: `*@ConditionEO.fif`, `*@ConditionEC.fif`.
+step-0c reads `CleanedPrepRaw.fif` (produced by step-0b) via `datasets_cleaned_raw.yml`.
+`extract_condition_epochs(condition_name, reject_by_annotation="omit")` tiles fixed-length 2 s epochs
+within BLOCK_{cond} windows, dropping BAD_-annotated segments.
 
-Chain: `preprocess_raw(1–45 Hz)` → `autoreject_annotate_raw(condition_name)` → `extract_condition_epochs(reject_by_annotation="omit")`.
-
-The event-building logic in `autoreject_annotate_raw` matches `build_block_events_by_condition`: collects all `BLOCK_{condition}` windows, creates 1 s events within each, merges across windows, runs one AR instance.  Epoch extraction with `reject_by_annotation="omit"` then drops annotated bad segments.
-
-**Key gap**: step-0c starts from unclean raw (see §2.2).  Steps ZapLine / RANSAC / CAR are absent.
+**Correspondence:** both extract fixed-length 2 s epochs from BLOCK_* windows of the fully cleaned annotated Raw. The only difference is the float32 round-trip (§2.8).
 
 ---
 
@@ -125,282 +138,229 @@ The event-building logic in `autoreject_annotate_raw` matches `build_block_event
 
 | | Original | neurodags |
 |---|---|---|
-| Entry | `python extract_descriptors.py --bids_root ...` | `neurodags run step-1_features.yml` (compute), then `neurodags dataframe step-1_features.yml` (export) |
-| Feature framework | `coco_pipe.descriptors.DescriptorPipeline` | neurodags built-in nodes + custom_nodes.py |
+| Entry | `python extract_descriptors.py --bids_root ...` | `neurodags run step-1_features.yml` → `neurodags dataframe step-1_features.yml` |
+| Feature framework | `coco_pipe.descriptors.DescriptorPipeline` | neurodags built-in nodes + `custom_nodes.py` |
 | Config | `configs/descriptors.yaml` (DescriptorConfig pydantic model) | `step-1_features.yml` YAML anchors `&BANDS`, `&CHANNEL_GROUPS` |
-| Output format | `.parquet` + `.csv` per subject/session/condition shard | Single flat CSV per dataset (from `neurodags dataframe`) |
+| Output format | `.parquet` + `.csv` per subject/session/condition shard | Single flat CSV per dataset |
 
-### 4.2 Band power variants
+### 4.2 Band power variants and stats
 
-Both produce 6 variants: absolute, log-absolute, relative, corrected-absolute, corrected-log-absolute, corrected-relative.  Bands: delta [1–4], theta [4–8], alpha [8–13], beta [13–30], gamma [30–45].
-
-Spectral estimation: `mne_spectrum_array` (Welch, fmin=1, fmax=45, n_fft=512, n_overlap=256) — matches the Welch parameters in the coco-pipe `band_abs` descriptor family.
-
-FOOOF fit: `fooof` node on the Welch spectrum.  `aperiodic_mode=fixed`, `max_n_peaks=6`, `peak_width_limits=[1.0, 12.0]`, `freq_range=[1,45]`.  This is the same configuration as `configs/descriptors.yaml`.
-
-### 4.3 Aggregation statistics
+Both produce 6 variants: absolute, log-absolute, relative, corrected-absolute, corrected-log-absolute, corrected-relative.
+Bands: delta [1–4 Hz], theta [4–8], alpha [8–13], beta [13–30], gamma [30–45].
+Spectral estimation: Welch, fmin=1, fmax=45, n_fft=512, n_overlap=256 — matches coco-pipe parameters.
 
 | Family | Original stats | neurodags |
 |---|---|---|
-| Band power (abs, corrected) | mean only | Mean (saved), IQR derivative excluded from band_summaries |
-| Band power (log, rel, corr-log, corr-rel) | mean + median + IQR | `*Mean`, `*Median`, `*IQR` derivatives |
-| FOOOF scalars (exponent, offset, R²) | mean + median + IQR | `*Mean`, `*Median`, `*IQR` derivatives |
-| FOOOF peaks | mean + median + IQR | `*Mean`, `*Median`, `*IQR` per variable |
-| Complexity (antropy, neurokit2, stats) | mean + median + MAD | `*Mean`, `*Median`, `*MAD` derivatives |
+| Band power abs + corrected-abs | **mean only** | Mean + Median + IQR (more than original) |
+| Band power log, rel, corr-log, corr-rel | mean + median + IQR | Mean + Median + IQR ✓ |
+| FOOOF scalars (exponent, offset, R²) | mean + median + IQR | Mean + Median + IQR ✓ |
+| FOOOF peaks (7 vars) | mean + median + IQR | Mean + Median + IQR ✓ |
+| Complexity (antropy, neurokit2, stats) | mean + median + MAD | Mean + Median + MAD ✓ |
 
-Aggregate functions:
-- `aggregate_across_dimension(operation: mean/median)` — uses xarray `.mean()` / `.median()`.
-- `iqr_across_dimension` — `scipy.stats.iqr` via `xr.apply_ufunc`.
-- `mad_across_dimension` — pure numpy median absolute deviation via `xr.apply_ufunc`.
+Note: neurodags computes **Median and IQR for absolute band power** even though the original only aggregates absolute power by mean. These extra columns are present in the neurodags dataframe but absent in the original.
 
-Original: `coco_pipe.io.DataContainer.aggregate_groups(by="recording_id", groups=aggregation_descriptors)` applies multiple stats in one call from config.
+### 4.3 SpectralEntropy sampling frequency
 
-### 4.4 FOOOF peak features (point 2)
+`antropy.spectral_entropy` requires `sf` (sampling frequency).
 
-**Original** (`configs/descriptors.yaml`, `param_summaries`): FOOOF peak features are extracted inside the coco-pipe `fooof` descriptor family.  Variables: dominant peak CF/PW/BW, alpha peak CF/PW/BW, n_peaks.
+neurodags **hardcodes `sf=256.0`** in `step-1_features.yml`.
+Original reads `sfreq` from the loaded epoch object dynamically.
 
-**neurodags**: `FooofPeaksDs` → `fooof_peaks(fooof_like, alpha_band=[8.0,13.0])` → returns Dataset with 7 vars: `n_peaks`, `dominant_peak_cf/pw/bw`, `alpha_peak_cf/pw/bw`.  Then each var gets Mean / Median / IQR derivatives (21 total consuming `FooofPeaksDs`).
+Impact: if the preprocessed data is not exactly 256 Hz (e.g. source recording at non-standard rate), neurodags SpectralEntropy will use a wrong `sf`. All other complexity measures are sfreq-agnostic.
 
-Algorithmic equivalence: the same peak-extraction logic applied per-epoch per-channel.
+### 4.4 FOOOF fit
 
-### 4.5 Subject-level band ratios (point 4)
+`aperiodic_mode=fixed`, `max_n_peaks=6`, `peak_width_limits=[1.0, 12.0]`, `freq_range=[1, 45]`.
+Same config as `configs/descriptors.yaml`. Equivalent.
 
-**Original** (`_build_feature_outputs`, lines 186–202):
-```python
-for num, den in aggregated_ratio_pairs:
-    for p in ["band_abs_", "band_corr_abs_"]:
-        for col in base_agg_features.columns:
-            ...
-            agg_ratio_columns[f"agg_band_ratio_{num}_{den}_{suffix}"] = np.divide(
-                n_vals, d_vals, ..., where=d_vals > aggregated_ratio_floor
-            )
-```
-Runs after `container.aggregate(by="recording_id", stats="mean")` — ratio of means, not mean of ratios.  Applied to both `band_abs_*` and `band_corr_abs_*` columns.
+### 4.5 Band ratios
 
-**neurodags** (`BandRatiosOnMeans`):
-```yaml
-BandRatiosOnMeans:
-  nodes:
-    - id: 0
-      derivative: AbsBandPowerAgg.nc   # saved mean across epochs
-    - id: 1
-      node: band_ratios
-      args:
-        bandpower_like: id.0
-        combinations: [...]            # same 10 pairs
-```
-`AbsBandPowerAgg` is the per-recording mean absolute band power (dims: `spaces × freqbands`).  `band_ratios` on this produces ratios of means — semantically identical to the original.
+10 pairs: delta/theta, delta/alpha, delta/beta, delta/gamma, theta/alpha, theta/beta, theta/gamma, alpha/beta, alpha/gamma, beta/gamma.
 
-**Gap**: original also computes `agg_band_corr_ratio_*` (ratios on corrected absolute band power means).  The neurodags `BandRatiosOnMeans` uses only uncorrected absolute power.  To complete parity, a `CorrectedBandPowerAgg` + `BandRatiosOnCorrectedMeans` pair would be needed.
-
-### 4.6 Complexity features
-
-| Source | Original (coco-pipe) | neurodags |
+| Variant | Original | neurodags |
 |---|---|---|
-| antropy | sample, approx, perm, SVD, spectral entropy; Hjorth mobility/complexity; LZiv; zero crossings; Higuchi FD; Katz FD; Petrosian FD; DFA | same 14 measures |
-| neurokit2 | multiscale entropy, Shannon entropy, fuzzy entropy, dispersion entropy, Hurst exponent | same 5 measures |
-| stats | kurtosis, RMS | same 2 |
+| Per-epoch ratios (mean/median/IQR over epochs) | Yes | `BandRatiosMean/Median/IQR` ✓ |
+| Ratio-of-means on abs power | Yes — `agg_band_ratio_*` | `BandRatiosOnMeans` ✓ |
+| Ratio-of-means on corr-abs power | Yes — `agg_band_corr_ratio_*` | `BandRatiosOnCorrectedMeans` ✓ |
 
-All 19 measures × 3 stats (mean/median/MAD) = 57 complexity derivatives in both.
+Original applies a `aggregated_ratio_floor` guard (`where=d_vals > floor`) before dividing. neurodags `band_ratios` node should implement the same guard — verify this if NaN/inf values appear in the ratio columns.
 
-### 4.7 Epoch-level vs subject-level output
+### 4.6 Run-aware aggregation
 
-**Original**: produces two DataFrames per shard:
-- `sensor_epoch_features.csv` — one row per epoch, all feature columns
-- `sensor_subject_features.csv` — one row per recording (mean across epochs + grouped stats + ratio-of-means columns)
+**Original** (`_with_recording_group_columns`): creates `recording_id = subject + "_ses-" + session + "_run-" + run` and aggregates by this key — so multi-run subjects get one aggregated row per run, not one row total.
 
-**neurodags**: `neurodags dataframe` produces one flat CSV where each row is a file and columns are all `for_dataframe: True` derivatives collapsed.  There is no epoch-level output from `neurodags dataframe`.  Epoch-level data is accessible via the `.nc` derivative files.
+**neurodags**: `neurodags dataframe` is file-level — one row per source file. Run information is implicit in the filename but not parsed. For multi-run studies, each run file gets its own row; cross-run aggregation must be done post-hoc.
 
-### 4.8 Feature column naming
+### 4.7 Complexity features
 
-Original column convention: `band_abs_delta_Fz`, `complexity_sample_entropy_Fz`.  
-neurodags: derivative name becomes column prefix, e.g. `AbsBandPowerMean_spaces_delta_Fz`.  Column names are not identical — mapping required for cross-system comparison.
+| Source | Original | neurodags |
+|---|---|---|
+| antropy (14) | SampleEnt(order=2,metric=chebyshev), ApproxEnt, PermEnt(order=3,delay=1,normalize), SVDEnt(order=3,delay=1,normalize), SpectralEnt(**sf=sfreq**,method=welch,nperseg=128,normalize), HjorthMobility, HjorthComplexity, LZiv, NumZeroCross(normalize), HiguchiFD(kmax=10), KatzFD, PetrosianFD, DFA | Same 14, **SpectralEnt sf=256.0 hardcoded** ± |
+| neurokit2 (5) | MultiscaleEntropy, ShannonEntropy, FuzzyEntropy, DispersionEntropy, HurstExponent | Same 5 ✓ |
+| stats (2) | Kurtosis, RMS | Same 2 ✓ |
+
+All 21 measures × 3 stats (mean/median/MAD) = 63 complexity aggregation derivatives.
+
+### 4.8 Epoch-level vs subject-level output
+
+**Original**: two DataFrames per shard:
+- `sensor_epoch_features.csv` — one row per epoch
+- `sensor_subject_features.csv` — one row per recording (mean + ratio-of-means)
+
+**neurodags**: `neurodags dataframe` produces one flat CSV; each row is a source file with all `for_dataframe: True` derivatives. No epoch-level CSV from the `dataframe` command. Epoch data accessible via `.nc` files.
+
+### 4.9 Feature column naming
+
+Original: `band_abs_delta_Fz`, `complexity_sample_entropy_Fz`.
+neurodags: derivative name as prefix, e.g. `AbsBandPowerMean_spaces_delta_Fz`. Column names differ — mapping required for cross-system comparison.
 
 ---
 
-## 5. Spatial pooling (point 3)
+## 5. Spatial pooling
 
 ### Original
 
-`pipeline.pool_channels(sensor_result, channel_groups)` inside `_build_feature_outputs`.  Produces a second `pooled_result` dict.  Pooled epoch and subject DataFrames are saved separately (`pooled_epoch_features.csv`, `pooled_subject_features.csv`).
-
-Channel groups (9 regions, 10-20 system):
+`pipeline.pool_channels(sensor_result, channel_groups)` in `_build_feature_outputs`.
+9 regions (10-20 system):
 ```
-front_left: [F7, F3], front_midline: [Fz], front_right: [F8, F4]
-central_left: [T3, C3], central_midline: [Cz], central_right: [T4, C4]
-posterior_left: [T5, P3, O1], posterior_midline: [Pz], posterior_right: [T6, P4, O2]
+front_left: [F7, F3]    front_midline: [Fz]      front_right: [F8, F4]
+central_left: [T3, C3]  central_midline: [Cz]    central_right: [T4, C4]
+posterior_left: [T5, P3, O1]  posterior_midline: [Pz]  posterior_right: [T6, P4, O2]
 ```
+Produces separate `pooled_epoch_features.csv` and `pooled_subject_features.csv`.
 
 ### neurodags
 
-`pool_channels` node on each band power variant, FOOOF scalar, and band ratio derivative:
-- `*Pooled` derivative: per-epoch pooled (saved, dims `epochs × regions × freqbands`)
-- `*PooledMean` derivative: mean over epochs (unsaved, `for_dataframe: True`, dims `regions × freqbands`)
+`pool_channels` node on each band power, FOOOF scalar, and band ratio derivative.
+Same 9 regions via `&CHANNEL_GROUPS` anchor — identical to original config.
+Absent channels silently skipped. `*Pooled` saved as `.nc`; `*PooledMean` is `for_dataframe: True`.
 
-Same 9 regions defined in `&CHANNEL_GROUPS` anchor (identical to orignal config).  
-Absent channels silently skipped; groups with no present channels dropped.
-
-**Behavior on synthetic data**: synthetic EEG uses channels `EEG000–EEG007` — none match 10-20 labels, so all groups are dropped.  `pool_channels` raises `ValueError("None of the channel_groups channels were found...")`.  The neurodags pipeline continues; pooled derivatives are absent from the dataframe for synthetic data.
+**Synthetic data**: channels `EEG000–EEG007` match no 10-20 labels → pooled derivatives absent from dataframe.
 
 ---
 
 ## 6. QC layer
 
-**Original**: full QC pipeline via `eeg_adhd_epilepsy.qc`:
-- `run_descriptor_subject_qc` — computes missingness, flag rates, family summary per subject/session/condition
-- `write_subject_preproc_qc_report` — HTML report per subject
-- QC outputs: `qc/summary_row.csv`, `qc/flags.csv`, `qc/feature_missingness.csv`, `qc/family_summary.csv`, HTML report
+**Original**: `eeg_adhd_epilepsy.qc` pipeline:
+- `run_descriptor_subject_qc` — missingness, flag rates, family summary
+- `write_subject_preproc_qc_report` — HTML per subject
+- Outputs: `qc/summary_row.csv`, `qc/flags.csv`, `qc/feature_missingness.csv`, `qc/family_summary.csv`, HTML
 
-**neurodags**: no QC layer.  Failed derivatives (e.g. FOOOF convergence failure) produce `NaN` values in the dataframe.  No structured failure tracking, no per-subject QC report.
+**neurodags**: no QC layer. `neurodags status` reports done/missing/errored counts per derivative.
+Failed derivatives yield `NaN` in the dataframe. No structured failure log, no HTML reports.
 
-This is the largest functional gap.  For production use, a post-processing step would need to compute missingness and flag suspicious subjects.
+Largest functional gap for production use.
 
 ---
 
 ## 7. Dataset / BIDS integration
 
 **Original**: fully BIDS-aware.
-- Subject IDs normalized to `sub-XXXX` format.
+- Subject IDs normalized to `sub-XXXX`.
 - Reads `BIDS/derivatives/preproc/sub-*/ses-*/eeg/*_desc-base_epo.fif`.
 - Validates coverage via `validate_bids_coverage`.
-- Supports `--metadata_row` for SLURM array jobs (row → subject ID mapping).
-- Writes `dataset_description.json` and `config_used.yaml` to derivative root.
-- Supports run-aware aggregation: `recording_id = subject_ses-{session}_run-{run}`.
+- `--metadata_row` for SLURM array jobs.
+- Writes `dataset_description.json` and `config_used.yaml`.
+- `recording_id = subject_ses-{session}_run-{run}` for run-aware aggregation.
 
-**neurodags**: dataset defined by glob pattern in `datasets_*.yml`.  File-level, not BIDS-aware.  Subject/session/run information is implicit in filenames but not structured.  No metadata CSV integration.  No config versioning or compatibility check.
+**neurodags**: file-glob based. Subject/session/run implicit in filenames. No metadata CSV, no BIDS paths, no config versioning guard. Config snapshot written to `derivatives_path/code/` on every run.
 
 ---
 
 ## 8. Failure handling
 
-**Original**: per-descriptor try/except inside coco-pipe `DescriptorPipeline.extract`.  Failures logged to `failures.csv` (subject, obs_id, channel, family, exception type, message).  Processing continues for other descriptors/epochs.
+**Original**: per-descriptor try/except in coco-pipe `DescriptorPipeline.extract`.
+Failures logged to `failures.csv` (subject, obs_id, channel, family, exception type, message).
+Processing continues for other descriptors and epochs.
 
-**neurodags**: if a node raises, the derivative computation fails for that file.  The dataframe for that file will have `NaN` for all columns coming from the failed derivative chain.  No structured failure log.
-
----
-
-## 9. Summary table of algorithmic equivalence
-
-| Feature | Equivalent? | Notes |
-|---|---|---|
-| Bandpass filter | Yes | Same parameters |
-| ZapLine | Yes | Same parameters |
-| RANSAC bad channels | Partial | neurodags uses full recording; original uses rest-block subset |
-| CAR | Yes | Identical call |
-| AutoReject | Partial | Original: condition-aware; neurodags: whole-recording |
-| Annotation inflation | No | Not implemented in neurodags |
-| Condition epoch extraction | Yes | Same logic, different output format |
-| Welch PSD | Yes | Same parameters |
-| FOOOF fit | Yes | Same config |
-| FOOOF peak features | Yes | Same 7 variables |
-| Absolute band power | Yes | — |
-| Log/rel/corr band power | Yes | — |
-| Band ratios (per epoch) | Yes | Same 10 pairs |
-| Band ratios on means (abs) | Yes | Semantically identical |
-| Band ratios on means (corr) | **No** | Not implemented in neurodags |
-| Multi-stat aggregation (IQR/MAD) | Yes | Via custom nodes |
-| Spatial pooling | Yes (real data) | Silently absent on synthetic/non-10-20 data |
-| antropy complexity (14) | Yes | — |
-| neurokit2 complexity (5) | Yes | — |
-| Kurtosis + RMS | Yes | — |
-| Epoch-level output | Partial | neurodags exposes `.nc` files; no epoch CSV from `dataframe` command |
-| Subject-level output | Yes | Both produce one aggregated row per recording |
-| QC reports | **No** | Not implemented in neurodags |
-| BIDS integration | **No** | neurodags is file-glob based |
-| SLURM array support | **No** | Not built in (could wrap `neurodags run` in an array script) |
-| Provenance JSON | **No** | Not implemented in neurodags |
-| Config versioning | **No** | Not implemented in neurodags |
+**neurodags**: if a node raises, the derivative fails for that file. The dataframe has `NaN` for all downstream columns. No structured failure log.
 
 ---
 
-## 9. Summary equivalence table (updated)
+## 9. Algorithmic equivalence summary
 
 | Feature | Equivalent? | Notes |
 |---|---|---|
-| Bandpass filter (step-0b) | Yes | 0.1–100 Hz ✓ |
-| Bandpass filter (step-0c) | **No** | 1–45 Hz vs 0.1–100 Hz — affects complexity features |
-| ZapLine (step-0b) | Yes | — |
-| ZapLine (step-0c) | **No** | Missing — step-0c starts from unclean raw |
-| RANSAC bad channels (step-0b) | Partial | Full recording vs rest-block subset |
-| RANSAC bad channels (step-0c) | **No** | Missing |
-| CAR (step-0b) | Yes | — |
-| CAR (step-0c) | **No** | Missing |
-| AR scope (step-0b) | **No** | Whole-recording vs condition-grouped |
-| AR input quality (step-0c) | **No** | step-0c AR on un-cleaned raw; base.py AR on ZapLine+RANSAC+CAR cleaned raw |
-| AR event building (step-0c) | Yes | Same block-window logic ✓ |
-| AR condition merging (step-0c) | Yes | All blocks of same condition merged ✓ |
-| AR chunking | **No** | Not implemented in any neurodags AR node |
-| AR per-channel span annotations | **No** | `BAD_{cond}` with ch_names not implemented |
-| AR epoch label | Partial | `BAD_epoch` vs `BAD_epoch_{cond}` — functionally same for omit |
-| AR CV | Partial | `autoreject_annotate`: fixed 5; `autoreject_annotate_raw`: adaptive ✓ |
-| Annotation inflation | No | Only matters for recordings with manual BAD_ marks |
-| Condition epoch extraction logic | Yes | Same fixed-length tiling within block windows ✓ |
-| reject_by_annotation omit | Yes | step-0c uses it ✓ |
-| All 6 band power variants | Yes | — |
-| FOOOF fit + scalars | Yes | — |
-| FOOOF peak features (7 vars) | Yes | — |
+| Annotation inflation | Yes | `inflate_bad_annotations` ✓ |
+| Resample | Near-equivalent | Filter then resample in neurodags; resample then filter in base.py (§2.2) |
+| Bandpass filter 0.1–100 Hz | Yes | Same parameters ✓ |
+| ZapLine | Near-equivalent | `adaptive=False` hardcoded in neurodags; configurable in original (§2.3) |
+| RANSAC bad channels | Yes | Both use EC-block subset, `random_state=42` ✓ |
+| CAR | Yes | `set_eeg_reference("average", projection=False)` ✓ |
+| AR scope | Yes | Per-condition, all windows merged, one AR per condition ✓ |
+| AR input quality | Yes | Both run AR on ZapLine+RANSAC+CAR cleaned Raw ✓ |
+| AR chunking | Near-equivalent | `max(min_epochs, ...)` vs `max(1, ...)` floor (§2.4) ✓ |
+| AR CV | Yes | `min(10, len(epochs_chunk))` per chunk ✓ |
+| AR epoch label | Yes | `BAD_epoch_{cond_name}` ✓ |
+| AR per-channel spans | Yes | `BAD_{cond}` + `ch_names` tuples ✓ |
+| AR n_jobs | Partial | Hardcoded `n_jobs=1` in neurodags; no result difference |
+| AR rejection plots | Partial | Combined per-condition PNG vs per-chunk in original (§2.6) |
+| Condition epoch extraction | Near-equivalent | float32 round-trip via CleanedPrepRaw.fif save/load (§2.8) |
+| Provenance JSON | Partial | AR stats + bad channels; missing integrity fractions + config dump (§2.7) |
+| Config snapshot | Partial | YAML + code in `derivatives_path/code/`; no re-run guard |
+| Welch PSD | Yes | fmin=1, fmax=45, n_fft=512, n_overlap=256 ✓ |
+| FOOOF fit | Yes | aperiodic_mode=fixed, max_n_peaks=6, peak_width_limits=[1,12] ✓ |
+| FOOOF peak features (7 vars) | Yes | n_peaks, dom/alpha CF/PW/BW ✓ |
+| Abs/corr-abs band power stats | **More than original** | neurodags also computes Median+IQR; original mean only (§4.2) |
+| Log/rel/corr-log/corr-rel band power stats | Yes | mean+median+IQR ✓ |
 | Band ratios per epoch | Yes | 10 pairs ✓ |
 | Band ratios on abs means | Yes | `BandRatiosOnMeans` ✓ |
-| Band ratios on corr abs means | Yes | `BandRatiosOnCorrectedMeans` ✓ |
-| Multi-stat aggregation (IQR/MAD) | Yes | — |
-| Spatial pooling | Yes (real data) | Absent on non-10-20 channel names |
-| antropy complexity (14) | Yes | — |
-| neurokit2 complexity (5) | Yes | — |
-| Kurtosis + RMS | Yes | — |
-| Epoch-level CSV | Partial | `.nc` files accessible; no epoch CSV from `dataframe` |
-| Subject-level CSV | Yes | Both produce one aggregated row per file |
-| QC / failure tracking | Partial | `neurodags status` covers done/missing/errored per derivative |
-| BIDS output structure | No | Flat derivative tree, no BIDS conventions |
-| Provenance JSON | Partial | `_prov.json` covers bad channels + AR stats; no ICA or filter params |
-| Config versioning | Partial | Snapshot written to `code/`; no re-run guard vs base.py's `config_used.yaml` check |
-| AR rejection plots | Partial | Combined per-condition PNG (`@CleanedPrepRaw_ar_plot_{cond}.png`); original saves one per chunk |
+| Band ratios on corr-abs means | Yes | `BandRatiosOnCorrectedMeans` ✓ |
+| Multi-stat aggregation (IQR/MAD) | Yes | Via custom nodes ✓ |
+| Spatial pooling | Yes (real data) | Absent on non-10-20 channels |
+| antropy complexity (14 measures) | Near-equivalent | SpectralEntropy `sf` hardcoded 256.0 (§4.3) |
+| neurokit2 complexity (5) | Yes | ✓ |
+| Kurtosis + RMS | Yes | ✓ |
+| Run-aware aggregation | **No** | neurodags is file-level only; no recording_id grouping (§4.6) |
+| Epoch-level CSV | Partial | `.nc` accessible; no epoch CSV from `dataframe` |
+| Subject-level CSV | Yes | One aggregated row per file ✓ |
+| QC / failure tracking | Partial | `neurodags status` covers done/missing/errored; no HTML reports |
+| BIDS output structure | No | Flat derivative tree |
+| SLURM array support | No | Wrap `neurodags run` in array script externally |
 
 ---
 
-## 10. Gaps ranked by impact on numerical output
+## 10. Remaining gaps
 
 ### Tier 1 — affect feature values
 
-**A. step-0c starts from unclean raw — DONE**  
-Fixed: `CleanedPrepRaw` derivative added to step-0b (inflate → preprocess → zapline → ransac → car → `autoreject_annotate_blockwise` → annotated Raw).  step-0c reads `datasets_cleaned_raw.yml` and is a pure extraction pipeline — condition epochs now inherit full cleaning.
+**M. SpectralEntropy hardcoded sf=256.0**  
+`antropy.spectral_entropy(sf=256.0)` in `step-1_features.yml`. Original reads sfreq from epoch info dynamically. If source recording is not 256 Hz, SpectralEntropy values will be wrong.  
+Fix: pass sfreq as a computed or config parameter from the epoch derivative.
 
-**B. Filter range in step-0c — DONE**  
-Fixed: step-0c no longer filters; reads from `CleanedPrepRaw` which is already 0.1–100 Hz.
+### Tier 2 — minor numerical differences
 
-**C. AR scope in step-0b — DONE**  
-Fixed: `autoreject_annotate_blockwise` replaces `autoreject_annotate`; discovers all BLOCK_* conditions, one AR instance per condition group, adaptive CV per chunk.
+**N. Resample order** (§2.2)  
+base.py resamples before filtering; neurodags filters then resamples. Affects only recordings where source sfreq > 256 Hz. Practically equivalent on 256 Hz data.
 
-**D. RANSAC rest-block subset — DONE**  
-Fixed: `block_label: EC` now set in step-0b RANSAC node; `ransac_bad_channels` crops to EC windows before fitting.
+**O. AR chunk size floor** (§2.4)  
+`max(min_epochs=5, ...)` vs `max(1, ...)`. Affects only very short conditions (< 5 epochs at chunk boundary). Negligible in practice.
 
-### Tier 2 — affect annotation richness, not epoch rejection
-
-**E. Per-channel span annotations — DONE**  
-Fixed: `autoreject_annotate_blockwise` adds `BAD_{cond}` annotations with `ch_names` tuples for consecutive per-channel bad spans, mirroring `_reject_log_to_annotations` in base.py.
-
-**F. AR chunking — DONE**  
-Fixed: `autoreject_annotate_blockwise` has `ar_max_chunk_minutes` param; chunks long conditions and merges annotations across chunks.
+**P. Float32 precision on CleanedPrepRaw** (§2.8)  
+`@CleanedPrepRaw.fif` is saved as float32; reloaded for step-0c. base.py keeps Raw in memory as float64. Difference is below noise floor for EEG.
 
 ### Tier 3 — cosmetic / infrastructure
 
-**G. Annotation epoch labels — DONE**  
-Fixed: `autoreject_annotate_blockwise` uses `BAD_epoch_{cond_name}`, not bare `BAD_epoch`.
+**Q. ZapLine adaptive param not exposed** (§2.3)  
+Hardcoded `adaptive=False`. Add a YAML param if needed.
 
-**H. AR CV — DONE**  
-Fixed: `autoreject_annotate_blockwise` uses `cv=min(10, len(epochs_chunk))` per chunk, identical to base.py.
+**R. AR n_jobs hardcoded 1** (§2.5)  
+No result difference. Add `n_jobs` param to `autoreject_annotate_blockwise` if speed matters on large datasets.
 
-**I. Annotation inflation — DONE**  
-Fixed: `inflate_bad_annotations` node is first step in `CleanedPrepRaw` chain.
+**S. Provenance richness** (§2.7)  
+Missing: integrity stats (manual vs AR bad fractions), by-block detail, full config dump in JSON.
 
-**J. AR rejection plots — PARTIAL**  
-`autoreject_annotate_blockwise` saves `@CleanedPrepRaw_ar_plot_{cond}.png` per condition alongside the `.fif` — same params as original (orientation=horizontal, 16×10 in, 150 dpi).  
-Difference: neurodags combines labels across chunks into **one plot per condition**; base.py saves **one plot per chunk** (e.g. `_autoreject_eo_chunk1.png`).  Combined gives better overview; per-chunk is finer-grained for long recordings.
+**T. AR plot per-chunk vs combined** (§2.6)  
+Combined is better for overview; original per-chunk useful for very long recordings split into > 1 chunk.
 
-**K. Provenance JSON — DONE**  
-`autoreject_annotate_blockwise` saves `@CleanedPrepRaw_prov.json` alongside the `.fif`: bad channels (from `raw.info["bads"]` at AR input, i.e. after RANSAC), per-condition epoch counts + bad counts + clean fraction, overall clean fraction.
+**U. Abs band power extra stats** (§4.2)  
+neurodags produces Median+IQR for abs/corr-abs power; original does not. Extra columns in the dataframe — not a gap but an asymmetry to be aware of when comparing outputs.
 
-**L. Config provenance — DONE (snapshot, no guard)**  
-`run_pipeline` now copies pipeline YAML + `new_definitions` file(s) + datasets YAML into `derivatives_path/code/` before executing any derivatives; also writes `neurodags_env.json` (installed version + git commit of neurodags source + UTC timestamp).  Snapshot runs on every `neurodags run`, skipped on `--dry-run`.  Difference vs base.py: no re-run guard (base.py refuses to re-run if `config_used.yaml` differs); neurodags still relies solely on `overwrite: False`.
+**V. Run-aware aggregation** (§4.6)  
+neurodags is file-level only. Post-hoc grouping by run is needed for multi-run studies.
+
+**W. Band ratio floor guard**  
+Verify `band_ratios` node applies the same `aggregated_ratio_floor` guard as the original to prevent division by near-zero denominators.
 
 ---
 
@@ -411,12 +371,23 @@ Difference: neurodags combines labels across chunks into **one plot per conditio
 | A. step-0c unclean raw | **DONE** | `CleanedPrepRaw` chain; step-0c reads `datasets_cleaned_raw.yml` |
 | B. Filter range step-0c | **DONE** | step-0c inherits 0.1–100 Hz from `CleanedPrepRaw` |
 | C. AR scope | **DONE** | `autoreject_annotate_blockwise`: per-condition, adaptive CV |
-| D. RANSAC rest-subset | **DONE** | `block_label: EC` set in step-0b |
-| E. Per-channel span annotations | **DONE** | `BAD_{cond}` + ch_names in `autoreject_annotate_blockwise` |
-| F. AR chunking | **DONE** | `ar_max_chunk_minutes` param in `autoreject_annotate_blockwise` |
-| G. Epoch annotation labels | **DONE** | `BAD_epoch_{cond_name}` in `autoreject_annotate_blockwise` |
+| D. RANSAC rest-subset | **DONE** | `block_label: EC` in step-0b |
+| E. Per-channel span annotations | **DONE** | `BAD_{cond}` + `ch_names` in `autoreject_annotate_blockwise` |
+| F. AR chunking | **DONE** | `ar_max_chunk_minutes` in `autoreject_annotate_blockwise` |
+| G. Epoch annotation labels | **DONE** | `BAD_epoch_{cond_name}` |
 | H. AR CV | **DONE** | `min(10, len(epochs_chunk))` per chunk |
 | I. Annotation inflation | **DONE** | `inflate_bad_annotations` first in `CleanedPrepRaw` chain |
-| J. AR rejection plots | **PARTIAL** | Combined per-condition PNG; original is per-chunk (see §10.J) |
-| K. Provenance JSON | **DONE** | `@CleanedPrepRaw_prov.json`: bad channels, per-condition AR stats, clean fractions |
-| L. Config versioning | **DONE*** | Snapshot to `derivatives_path/code/` on every run; no re-run guard |
+| J. AR rejection plots | **PARTIAL** | Combined per-condition PNG; original per-chunk (§10.T) |
+| K. Provenance JSON | **DONE** | `@CleanedPrepRaw_prov.json`: bads + AR stats |
+| L. Config versioning | **DONE\*** | Snapshot to `derivatives_path/code/`; no re-run guard |
+| M. SpectralEntropy sf | **open** | Hardcoded 256.0; wrong for non-256 Hz data |
+| N. Resample order | **open (minor)** | Filter→resample vs resample→filter; negligible for 256 Hz source |
+| O. AR chunk floor | **open (negligible)** | min_epochs vs 1 floor; no practical impact |
+| P. Float32 precision | **open (negligible)** | CleanedPrepRaw save/load; below EEG noise floor |
+| Q. ZapLine adaptive | **open (minor)** | Add YAML param if needed |
+| R. AR n_jobs | **open (perf)** | No result impact; add param for speed |
+| S. Provenance richness | **open** | Missing integrity fractions and by-block stats |
+| T. AR plot granularity | **open (minor)** | Per-chunk plots for long recordings |
+| U. Abs power extra stats | **by design** | neurodags computes more; not a bug |
+| V. Run-aware aggregation | **open** | Post-hoc only in neurodags; no recording_id grouping |
+| W. Band ratio floor guard | **verify** | Check `band_ratios` node applies denominator floor |
