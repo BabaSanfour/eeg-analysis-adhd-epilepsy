@@ -352,7 +352,7 @@ This is the largest functional gap.  For production use, a post-processing step 
 | QC / failure tracking | Partial | `neurodags status` covers done/missing/errored per derivative |
 | BIDS output structure | No | Flat derivative tree, no BIDS conventions |
 | Provenance JSON | Partial | `_prov.json` covers bad channels + AR stats; no ICA or filter params |
-| Config versioning | No | Not implemented |
+| Config versioning | Partial | Snapshot written to `code/`; no re-run guard vs base.py's `config_used.yaml` check |
 | AR rejection plots | Partial | Combined per-condition PNG (`@CleanedPrepRaw_ar_plot_{cond}.png`); original saves one per chunk |
 
 ---
@@ -399,8 +399,8 @@ Difference: neurodags combines labels across chunks into **one plot per conditio
 **K. Provenance JSON — DONE**  
 `autoreject_annotate_blockwise` saves `@CleanedPrepRaw_prov.json` alongside the `.fif`: bad channels (from `raw.info["bads"]` at AR input, i.e. after RANSAC), per-condition epoch counts + bad counts + clean fraction, overall clean fraction.
 
-**L. Config provenance — not implemented**  
-base.py copies `config_used.yaml` to derivatives and guards against re-running with a different config.  neurodags guard is `overwrite: False` only.
+**L. Config provenance — DONE (snapshot, no guard)**  
+`run_pipeline` now copies pipeline YAML + `new_definitions` file(s) + datasets YAML into `derivatives_path/code/` before executing any derivatives; also writes `neurodags_env.json` (installed version + git commit of neurodags source + UTC timestamp).  Snapshot runs on every `neurodags run`, skipped on `--dry-run`.  Difference vs base.py: no re-run guard (base.py refuses to re-run if `config_used.yaml` differs); neurodags still relies solely on `overwrite: False`.
 
 ---
 
@@ -419,4 +419,4 @@ base.py copies `config_used.yaml` to derivatives and guards against re-running w
 | I. Annotation inflation | **DONE** | `inflate_bad_annotations` first in `CleanedPrepRaw` chain |
 | J. AR rejection plots | **PARTIAL** | Combined per-condition PNG; original is per-chunk (see §10.J) |
 | K. Provenance JSON | **DONE** | `@CleanedPrepRaw_prov.json`: bad channels, per-condition AR stats, clean fractions |
-| L. Config versioning | open | Not implemented |
+| L. Config versioning | **DONE*** | Snapshot to `derivatives_path/code/` on every run; no re-run guard |
