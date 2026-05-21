@@ -1,37 +1,27 @@
-# Condition-level epoch extraction pipeline.
+# Condition-level epoch extraction from cleaned raw.
 #
-# Equivalent of the condition-aware epoching in extract_descriptors.py:
-# splits continuous raw into per-condition epoch sets using BLOCK_* annotations,
-# then runs AutoReject per condition (condition-aware AR, matching base.py
-# annotate_artifacts_blockwise which fits one AR instance per condition).
+# Reads CleanedPrepRaw.fif produced by step-0b_preproc_cleaned.yml —
+# the fully annotated Raw after ZapLine + RANSAC + CAR + blockwise AR.
+# No preprocessing is applied here; all cleaning was done in step-0b.
 #
-# Follows the same Raw-first pattern as base.py:
-#   - AR annotates the Raw with BAD_epoch marks restricted to condition windows
-#   - epoch extraction uses reject_by_annotation="omit" to drop bad segments
+# Extraction:
+#   ConditionEO : fixed-length 2 s epochs within BLOCK_EO windows, BAD_ omitted
+#   ConditionEC : fixed-length 2 s epochs within BLOCK_EC windows, BAD_ omitted
 #
-# Input: raw .vhdr recordings with BLOCK_* annotations.
-#        Applies the same basic preprocessing as step-0 (filter 1–45 Hz, 256 Hz).
+# This mirrors the original pipeline where extract_descriptors.py loads
+# condition epochs from the already-cleaned annotated Raw.
 #
-# Conditions extracted:
-#   ConditionEO  — epochs from BLOCK_EO windows (eyes open)
-#   ConditionEC  — epochs from BLOCK_EC windows (eyes closed)
+# BrainVision round-trip wraps annotation descriptions in "Comment/" —
+# extract_condition_epochs strips this automatically.
 #
-# Each condition derivative:
-#   1. preprocess_raw                         : bandpass 1–45 Hz, resample 256 Hz (Raw)
-#   2. autoreject_annotate_raw(condition_name): AR on condition windows → BAD_epoch on Raw
-#   3. extract_condition_epochs               : slice epochs, omit BAD_epoch segments
+# Output: {reference_base}@ConditionEO.fif / @ConditionEC.fif  (MNE Epochs)
 #
-# BrainVision annotations gain a "Comment/" prefix on round-trip —
-# extract_condition_epochs normalises this automatically.
-#
-# Output: {reference_base}@ConditionEO.fif / @ConditionEC.fif  (MNE Epochs, AR-cleaned)
-#
-# Usage:
+# Usage (run step-0b first):
+#   neurodags run neurodags_pipelines/step-0b_preproc_cleaned.yml
 #   neurodags run neurodags_pipelines/step-0c_conditions.yml
-#   # Then use datasets_conditions.yml with step-1_features.yml for per-condition features
 
 new_definitions: custom_nodes.py
-datasets: datasets_raw.yml
+datasets: datasets_cleaned_raw.yml
 mount_point: local
 
 DerivativeDefinitions:
@@ -41,25 +31,11 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: SourceFile   # CleanedPrepRaw.fif — fully cleaned annotated Raw
       - id: 1
-        node: preprocess_raw
-        args:
-          mne_object: id.0
-          filter_args:
-            l_freq: 1.0
-            h_freq: 45.0
-          resample: 256
-      - id: 2
-        node: autoreject_annotate_raw
-        args:
-          mne_object: id.1
-          condition_name: EO
-          annotation_prefix: "BLOCK_"
-      - id: 3
         node: extract_condition_epochs
         args:
-          mne_object: id.2
+          mne_object: id.0
           condition_name: EO
           annotation_prefix: "BLOCK_"
           epoch_duration: 2.0
@@ -73,23 +49,9 @@ DerivativeDefinitions:
       - id: 0
         derivative: SourceFile
       - id: 1
-        node: preprocess_raw
-        args:
-          mne_object: id.0
-          filter_args:
-            l_freq: 1.0
-            h_freq: 45.0
-          resample: 256
-      - id: 2
-        node: autoreject_annotate_raw
-        args:
-          mne_object: id.1
-          condition_name: EC
-          annotation_prefix: "BLOCK_"
-      - id: 3
         node: extract_condition_epochs
         args:
-          mne_object: id.2
+          mne_object: id.0
           condition_name: EC
           annotation_prefix: "BLOCK_"
           epoch_duration: 2.0

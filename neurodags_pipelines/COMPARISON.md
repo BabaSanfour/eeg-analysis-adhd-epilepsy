@@ -403,13 +403,24 @@ Fix: add `ar_max_chunk_minutes` param to `autoreject_annotate_raw`, implement ch
 
 ---
 
-## 11. Minimum changes for near-exact correspondence
+## 11. Implementation status (A–D + inflate)
 
-In order of importance:
+**A. step-0c starts from unclean raw — DONE**
+`CleanedPrepRaw` derivative added to step-0b: inflate → preprocess(0.1-100 Hz) → zapline → ransac → car → `autoreject_annotate_blockwise` → annotated Raw.  `CleanedPrep` epochs extracted from `CleanedPrepRaw`.  step-0c now reads `datasets_cleaned_raw.yml` (points to `*@CleanedPrepRaw.fif`) and is a pure extraction pipeline — no preprocessing.
 
-1. **YAML (1 line)**: fix step-0c filter to `l_freq: 0.1, h_freq: 100.0`.
-2. **Architecture**: split step-0b into `CleanedPrepRaw` (annotated Raw) + `CleanedPrep` (epochs); create `datasets_cleaned_raw.yml`; rewrite step-0c to start from `CleanedPrepRaw` instead of raw VHDR.
-3. **YAML (1 line)**: add `block_label` to step-0b RANSAC node for rest-block-biased detection.
-4. **Code (~20 lines)**: add per-channel span annotation logic to `autoreject_annotate_raw` (port `_reject_log_to_annotations` from base.py).
-5. **Code (~15 lines)**: add `ar_max_chunk_minutes` chunking to `autoreject_annotate_raw`.
-6. **Code (1 line)**: fix CV in `autoreject_annotate` to be adaptive (`min(10, len(seg_epochs))`).
+**B. Filter range in step-0c — DONE**
+step-0c no longer filters at all (reads from `CleanedPrepRaw` which is already 0.1-100 Hz).
+
+**C. AR scope — DONE**
+`autoreject_annotate_blockwise` ports `annotate_artifacts_blockwise` from base.py: discovers all BLOCK_* conditions, merges windows per condition, runs one AR instance per condition group, chunks if > `ar_max_chunk_minutes`.  Adds `BAD_epoch_{cond}` (whole-epoch) and `BAD_{cond}` with `ch_names` (per-channel spans) annotations.
+
+**D. RANSAC rest-block subset — wired, commented out by default**
+`ransac_bad_channels(block_label=...)` exists.  step-0b has the `block_label` arg commented out — uncomment and set to your rest condition label (e.g., `EC`).
+
+**inflate_bad_annotations — DONE**
+`inflate_bad_annotations` node added: expands manual BAD_ annotations by label slug (major→5 s, other→3 s).  First node in `CleanedPrepRaw` chain.  Harmless when no manual annotations are present.
+
+**Remaining minor gaps:**
+- AR rejection plots not saved (informational only)
+- Provenance JSON not saved
+- Config versioning guard not implemented

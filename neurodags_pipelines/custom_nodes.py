@@ -304,6 +304,261 @@ def extract_condition_epochs(
 # Point 6 — Artifact cleaning nodes
 # ---------------------------------------------------------------------------
 
+def _group_consecutive_indices(indices):
+    """Group consecutive integers into inclusive (start, end) pairs."""
+    if len(indices) == 0:
+        return []
+    groups = []
+    start = int(indices[0])
+    prev = start
+    for idx in indices[1:]:
+        idx = int(idx)
+        if idx == prev + 1:
+            prev = idx
+        else:
+            groups.append((start, prev))
+            start = idx
+            prev = idx
+    groups.append((start, prev))
+    return groups
+
+
+@register_node
+def inflate_bad_annotations(
+    mne_object,
+    default_duration: float = 3.0,
+    major_duration: float = 5.0,
+) -> NodeResult:
+    """Expand point-like manual BAD_ annotations to fixed durations by label type.
+
+    Port of inflate_bad_annotations from base.py.
+    Rare/disruptive labels (yawn, cough, blink, etc.) → major_duration (5 s).
+    All other BAD_ labels → default_duration (3 s), or keep existing if longer.
+    Non-BAD_ annotations are kept unchanged.
+    """
+    import mne as _mne
+    from neurodags.loaders import load_meeg
+
+    if isinstance(mne_object, NodeResult):
+        mne_object = mne_object.artifacts[".fif"].item
+    if isinstance(mne_object, (str, os.PathLike)):
+        mne_object = load_meeg(mne_object)
+
+    raw = mne_object.copy().load_data()
+
+    major_slugs = [
+        "yawn", "cough", "yawning_coughing",
+        "emotion_behavior", "oral_activity",
+        "sensor_artefact", "sensor_action",
+        "eye_movement", "blink",
+        "jaw_face_tension",
+        "sleep", "sleepy", "wakefulness",
+    ]
+
+    new_onsets, new_durations, new_descs = [], [], []
+    for annot in raw.annotations:
+        desc = str(annot["description"])
+        onset = float(annot["onset"])
+        duration = float(annot["duration"])
+        if not desc.lower().startswith("bad"):
+            new_onsets.append(onset)
+            new_durations.append(duration)
+            new_descs.append(desc)
+            continue
+        desc_lower = desc.lower()
+        if any(slug in desc_lower for slug in major_slugs):
+            new_durations.append(major_duration)
+        else:
+            new_durations.append(max(duration, default_duration))
+        new_onsets.append(onset)
+        new_descs.append(desc)
+
+    raw.set_annotations(_mne.Annotations(
+        onset=new_onsets,
+        duration=new_durations,
+        description=new_descs,
+        orig_time=raw.annotations.orig_time,
+    ))
+
+    return NodeResult(artifacts={
+        ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
+    })
+
+
+@register_node
+def autoreject_annotate_blockwise(
+    mne_object,
+    annotation_prefix: str = "BLOCK_",
+    segment_duration: float = 1.0,
+    n_interpolate: list[int] | None = None,
+    min_epochs: int = 5,
+    ar_max_chunk_minutes: float = 30.0,
+) -> NodeResult:
+    """Condition-grouped AutoReject on Raw — port of annotate_artifacts_blockwise from base.py.
+
+    Finds all unique BLOCK_* conditions, builds 1 s events within each condition's
+    windows, runs one AR instance per condition group (chunked if > ar_max_chunk_minutes).
+    Adds BAD_epoch_{condition} (whole-epoch) and BAD_{condition} (per-channel span)
+    annotations to Raw.  Returns annotated Raw.
+
+    Use epoch_fixed_length or extract_condition_epochs downstream to get Epochs.
+    """
+    import mne as _mne
+    from neurodags.loaders import load_meeg
+
+    if isinstance(mne_object, NodeResult):
+        mne_object = mne_object.artifacts[".fif"].item
+    if isinstance(mne_object, (str, os.PathLike)):
+        mne_object = load_meeg(mne_object)
+
+    try:
+        from autoreject import AutoReject
+    except ImportError as exc:
+        raise ImportError("autoreject required for autoreject_annotate_blockwise") from exc
+
+    raw = mne_object.copy().load_data()
+    n_interp = np.asarray(n_interpolate or [0], dtype=int)
+    sfreq = raw.info["sfreq"]
+    step = int(segment_duration * sfreq)
+    tmax = max(segment_duration - 1.0 / sfreq, 0.0)
+    n_per_chunk = max(min_epochs, int((ar_max_chunk_minutes * 60.0) / segment_duration))
+
+    # Collect all BLOCK_* condition windows
+    condition_windows: dict[str, list[tuple[float, float]]] = {}
+    for annot in raw.annotations:
+        desc = str(annot["description"])
+        if desc.startswith("Comment/"):
+            desc = desc[len("Comment/"):]
+        if desc.startswith(annotation_prefix):
+            cond = desc[len(annotation_prefix):]
+            condition_windows.setdefault(cond, []).append(
+                (float(annot["onset"]), float(annot["onset"]) + float(annot["duration"]))
+            )
+
+    if not condition_windows:
+        return NodeResult(artifacts={
+            ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
+        })
+
+    all_new_annots: list[tuple[float, float, str, tuple]] = []
+
+    for cond_name, windows in condition_windows.items():
+        event_rows: list[list[int]] = []
+        for onset, offset in windows:
+            start_samp = int(raw.time_as_index(onset)[0]) + raw.first_samp
+            end_samp = int(raw.time_as_index(offset)[0]) + raw.first_samp
+            t = start_samp
+            while t + step <= end_samp:
+                event_rows.append([t, 0, 1])
+                t += step
+
+        if len(event_rows) < min_epochs:
+            continue
+
+        events = np.array(event_rows, dtype=int)
+        cond_epochs = _mne.Epochs(
+            raw, events, event_id={"seg": 1}, tmin=0.0, tmax=tmax,
+            baseline=None, preload=True, verbose="ERROR", reject_by_annotation=False,
+        )
+        if len(cond_epochs) < min_epochs:
+            continue
+
+        # Patch channel positions for synthetic data
+        _locs = np.array([ch["loc"][:3] for ch in cond_epochs.info["chs"]])
+        if np.allclose(_locs, 0) or not np.all(np.isfinite(_locs)):
+            _n = len(cond_epochs.ch_names)
+            _angles = np.linspace(0, 2 * np.pi, _n, endpoint=False)
+            cond_epochs = cond_epochs.copy()
+            with cond_epochs.info._unlock():
+                for _i, _ch in enumerate(cond_epochs.info["chs"]):
+                    _a = _angles[_i]
+                    _ch["loc"][:3] = [np.cos(_a) * 0.09, np.sin(_a) * 0.09, 0.01]
+
+        # Chunk if condition is long
+        n_total = len(cond_epochs)
+        if n_total <= n_per_chunk:
+            chunks = [(cond_epochs, "")]
+        else:
+            n_chunks = int(np.ceil(n_total / n_per_chunk))
+            chunks = []
+            for ci in range(n_chunks):
+                s = ci * n_per_chunk
+                e = min((ci + 1) * n_per_chunk, n_total)
+                chunk = cond_epochs[s:e]
+                if len(chunk) >= min_epochs:
+                    chunks.append((chunk, f"_chunk{ci + 1}"))
+
+        for epochs_chunk, _ in chunks:
+            cv = min(10, len(epochs_chunk))
+            ar = AutoReject(n_interpolate=n_interp, random_state=42, n_jobs=1, verbose=False, cv=cv)
+            ar.fit(epochs_chunk)
+            reject_log = ar.get_reject_log(epochs_chunk)
+
+            # Whole-epoch bad annotations
+            for ep_idx, is_bad in enumerate(reject_log.bad_epochs):
+                if not is_bad:
+                    continue
+                onset = float(epochs_chunk.events[ep_idx, 0] - raw.first_samp) / sfreq
+                all_new_annots.append((max(0.0, onset), segment_duration, f"BAD_epoch_{cond_name}", ()))
+
+            # Per-channel span annotations (consecutive bad-channel runs)
+            labels = np.asarray(reject_log.labels)
+            if labels.ndim == 2 and labels.shape[0] == len(epochs_chunk):
+                for ch_idx, ch_name in enumerate(epochs_chunk.ch_names):
+                    bad_idx = np.flatnonzero(labels[:, ch_idx] != 0)
+                    for first_idx, last_idx in _group_consecutive_indices(bad_idx):
+                        start_s = float(epochs_chunk.events[first_idx, 0] - raw.first_samp) / sfreq
+                        end_s = float(epochs_chunk.events[last_idx, 0] - raw.first_samp) / sfreq + segment_duration
+                        all_new_annots.append((max(0.0, start_s), max(end_s - start_s, segment_duration), f"BAD_{cond_name}", (ch_name,)))
+
+    if all_new_annots:
+        all_new_annots.sort(key=lambda x: x[0])
+        raw.set_annotations(raw.annotations + _mne.Annotations(
+            onset=[a[0] for a in all_new_annots],
+            duration=[a[1] for a in all_new_annots],
+            description=[a[2] for a in all_new_annots],
+            ch_names=[a[3] for a in all_new_annots],
+        ))
+
+    return NodeResult(artifacts={
+        ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
+    })
+
+
+@register_node
+def epoch_fixed_length(
+    mne_object,
+    duration: float = 2.0,
+    overlap: float = 0.0,
+    reject_by_annotation: str | None = None,
+) -> NodeResult:
+    """Create fixed-length Epochs from Raw.
+
+    Thin wrapper around mne.make_fixed_length_epochs. Used to extract
+    CleanedPrep epochs from the annotated CleanedPrepRaw.
+    """
+    import mne as _mne
+    from neurodags.loaders import load_meeg
+
+    if isinstance(mne_object, NodeResult):
+        mne_object = mne_object.artifacts[".fif"].item
+    if isinstance(mne_object, (str, os.PathLike)):
+        mne_object = _mne.io.read_raw_fif(str(mne_object), preload=True, verbose="ERROR")
+
+    raw = mne_object.copy().load_data()
+    epochs = _mne.make_fixed_length_epochs(
+        raw,
+        duration=duration,
+        overlap=overlap,
+        preload=True,
+        verbose="ERROR",
+        reject_by_annotation=reject_by_annotation or False,
+    )
+
+    return NodeResult(artifacts={
+        ".fif": Artifact(item=epochs, writer=lambda path, e=epochs: e.save(path, overwrite=True, verbose="ERROR"))
+    })
+
 @register_node
 def zapline_denoise(
     mne_object,
