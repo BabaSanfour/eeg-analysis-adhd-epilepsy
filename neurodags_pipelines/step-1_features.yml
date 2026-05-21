@@ -8,33 +8,56 @@
 #
 # Spectral outputs (per band, per epoch, per channel):
 #   absolute power, log absolute, relative, corrected absolute,
-#   corrected log absolute, corrected relative, band ratios (10 pairs), FOOOF scalars
+#   corrected log absolute, corrected relative, band ratios (10 pairs), FOOOF scalars,
+#   FOOOF peak features (n_peaks, dominant/alpha peak CF/PW/BW)
+#
+# Subject-level ratios: BandRatiosOnMeans — ratios computed on per-recording mean
+#   band power (ratio of means, not mean of ratios) — point 4.
 #
 # Complexity outputs (per epoch, per channel):
 #   antropy: sample/app/perm/svd/spectral entropy, Hjorth, LZiv, zero crossings,
 #            Higuchi/Katz/Petrosian FD, detrended fluctuation
 #   neurokit2: multiscale/Shannon/fuzzy/dispersion entropy, Hurst exponent
+#   stats: kurtosis, RMS
 #
-# Stats: kurtosis, RMS
+# Aggregation across epochs (matching configs/descriptors.yaml):
+#   - *Mean     : mean (all features)
+#   - *Median   : median (band_*, param_* features)
+#   - *IQR      : inter-quartile range (band_*, param_* features)
+#   - *MAD      : median absolute deviation (complexity_ features)
 #
-# All *Mean derivatives aggregate across epochs (for_dataframe: True → included in CSV).
-# Intermediate computations (PSD, FOOOF, per-epoch features) are cached on disk.
+# Spatial pooling (point 3): *Pooled / *PooledMean aggregate channels into 9 regions.
+#   Channel groups match configs/descriptors.yaml (10-20 system).
+#   NOTE: synthetic data (EEG000-EEG007) won't produce pooled outputs — real data only.
 #
 # Usage:
 #   neurodags run  neurodags_pipelines/step-1_features.yml
 #   neurodags dataframe neurodags_pipelines/step-1_features.yml --output features.csv
 
+new_definitions: custom_nodes.py
 datasets: datasets_preprocessed.yml
 mount_point: local
 
 # Shared band definition — matches configs/descriptors.yaml
-# Referenced as YAML anchor to keep all bandpower nodes consistent.
 _bands: &BANDS
   delta: [1.0, 4.0]
   theta: [4.0, 8.0]
   alpha: [8.0, 13.0]
   beta: [13.0, 30.0]
   gamma: [30.0, 45.0]
+
+# Spatial channel groups — matches configs/descriptors.yaml pooling.channel_groups
+# (10-20 international system; unused groups are silently skipped per recording)
+_channel_groups: &CHANNEL_GROUPS
+  front_left: [F7, F3]
+  front_midline: [Fz]
+  front_right: [F8, F4]
+  central_left: [T3, C3]
+  central_midline: [Cz]
+  central_right: [T4, C4]
+  posterior_left: [T5, P3, O1]
+  posterior_midline: [Pz]
+  posterior_right: [T6, P4, O2]
 
 DerivativeDefinitions:
 
@@ -126,6 +149,46 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  # Saved mean — used by BandRatiosOnMeans (point 4)
+  AbsBandPowerAgg:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: AbsBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  AbsBandPowerPooled:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: AbsBandPower.nc
+      - id: 1
+        node: pool_channels
+        args:
+          xarray_data: id.0
+          channel_groups: *CHANNEL_GROUPS
+
+  AbsBandPowerPooledMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: AbsBandPowerPooled.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
   # ---------------------------------------------------------------------------
   # Log absolute band power
   # ---------------------------------------------------------------------------
@@ -163,6 +226,59 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  LogBandPowerMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: LogBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  LogBandPowerIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: LogBandPower.nc
+      - id: 1
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
+  LogBandPowerPooled:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: LogBandPower.nc
+      - id: 1
+        node: pool_channels
+        args:
+          xarray_data: id.0
+          channel_groups: *CHANNEL_GROUPS
+
+  LogBandPowerPooledMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: LogBandPowerPooled.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
   # ---------------------------------------------------------------------------
   # Relative band power
   # ---------------------------------------------------------------------------
@@ -193,6 +309,59 @@ DerivativeDefinitions:
     nodes:
       - id: 0
         derivative: RelBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  RelBandPowerMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: RelBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  RelBandPowerIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: RelBandPower.nc
+      - id: 1
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
+  RelBandPowerPooled:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: RelBandPower.nc
+      - id: 1
+        node: pool_channels
+        args:
+          xarray_data: id.0
+          channel_groups: *CHANNEL_GROUPS
+
+  RelBandPowerPooledMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: RelBandPowerPooled.nc
       - id: 1
         node: aggregate_across_dimension
         args:
@@ -245,6 +414,32 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  CorrectedBandPowerPooled:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CorrectedBandPower.nc
+      - id: 1
+        node: pool_channels
+        args:
+          xarray_data: id.0
+          channel_groups: *CHANNEL_GROUPS
+
+  CorrectedBandPowerPooledMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedBandPowerPooled.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
   # ---------------------------------------------------------------------------
   # Aperiodic-corrected log absolute band power
   # ---------------------------------------------------------------------------
@@ -283,6 +478,59 @@ DerivativeDefinitions:
     nodes:
       - id: 0
         derivative: CorrectedLogBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  CorrectedLogBandPowerMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedLogBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  CorrectedLogBandPowerIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedLogBandPower.nc
+      - id: 1
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
+  CorrectedLogBandPowerPooled:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CorrectedLogBandPower.nc
+      - id: 1
+        node: pool_channels
+        args:
+          xarray_data: id.0
+          channel_groups: *CHANNEL_GROUPS
+
+  CorrectedLogBandPowerPooledMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedLogBandPowerPooled.nc
       - id: 1
         node: aggregate_across_dimension
         args:
@@ -335,9 +583,63 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  CorrectedRelBandPowerMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedRelBandPower.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  CorrectedRelBandPowerIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedRelBandPower.nc
+      - id: 1
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
+  CorrectedRelBandPowerPooled:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CorrectedRelBandPower.nc
+      - id: 1
+        node: pool_channels
+        args:
+          xarray_data: id.0
+          channel_groups: *CHANNEL_GROUPS
+
+  CorrectedRelBandPowerPooledMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: CorrectedRelBandPowerPooled.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
   # ---------------------------------------------------------------------------
   # Band ratios — 10 ordered pairs matching configs/descriptors.yaml ratio_pairs
   # (always lower-band / higher-band, matching neuroscience convention)
+  # BandRatiosOnMeans computes ratios on per-recording mean band power (point 4).
   # ---------------------------------------------------------------------------
 
   BandRatios:
@@ -369,6 +671,83 @@ DerivativeDefinitions:
     nodes:
       - id: 0
         derivative: BandRatios.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  BandRatiosMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: BandRatios.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  BandRatiosIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: BandRatios.nc
+      - id: 1
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
+  # Ratios of means — ratio computed on per-recording mean, not mean of per-epoch ratios
+  BandRatiosOnMeans:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: AbsBandPowerAgg.nc
+      - id: 1
+        node: band_ratios
+        args:
+          bandpower_like: id.0
+          combinations:
+            - [delta, theta]
+            - [delta, alpha]
+            - [delta, beta]
+            - [delta, gamma]
+            - [theta, alpha]
+            - [theta, beta]
+            - [theta, gamma]
+            - [alpha, beta]
+            - [alpha, gamma]
+            - [beta, gamma]
+
+  BandRatiosPooled:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: BandRatios.nc
+      - id: 1
+        node: pool_channels
+        args:
+          xarray_data: id.0
+          channel_groups: *CHANNEL_GROUPS
+
+  BandRatiosPooledMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: BandRatiosPooled.nc
       - id: 1
         node: aggregate_across_dimension
         args:
@@ -416,6 +795,43 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  FooofExponentMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_aperiodic_exponent
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FooofExponentIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_aperiodic_exponent
+      - id: 2
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
   FooofOffsetMean:
     overwrite: False
     save: False
@@ -435,6 +851,43 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  FooofOffsetMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_aperiodic_offset
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FooofOffsetIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_aperiodic_offset
+      - id: 2
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
   FooofRSquaredMean:
     overwrite: False
     save: False
@@ -453,6 +906,552 @@ DerivativeDefinitions:
           xarray_data: id.1
           dim: epochs
           operation: mean
+
+  FooofRSquaredMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_r_squared
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FooofRSquaredIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_r_squared
+      - id: 2
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
+  # Pooled FOOOF scalars
+  FooofExponentPooled:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_aperiodic_exponent
+      - id: 2
+        node: pool_channels
+        args:
+          xarray_data: id.1
+          channel_groups: *CHANNEL_GROUPS
+
+  FooofExponentPooledMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofExponentPooled.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  FooofOffsetPooled:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_aperiodic_offset
+      - id: 2
+        node: pool_channels
+        args:
+          xarray_data: id.1
+          channel_groups: *CHANNEL_GROUPS
+
+  FooofOffsetPooledMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofOffsetPooled.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  FooofRSquaredPooled:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: FooofScalarsDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof_r_squared
+      - id: 2
+        node: pool_channels
+        args:
+          xarray_data: id.1
+          channel_groups: *CHANNEL_GROUPS
+
+  FooofRSquaredPooledMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofRSquaredPooled.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: mean
+
+  # ---------------------------------------------------------------------------
+  # FOOOF peak features — point 2
+  # Vars: n_peaks, dominant_peak_cf/pw/bw, alpha_peak_cf/pw/bw
+  # Stats per var: mean + median + IQR (param_summaries in descriptors.yaml)
+  # ---------------------------------------------------------------------------
+
+  FooofPeaksDs:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: FooofFit.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: fooof
+      - id: 2
+        node: fooof_peaks
+        args:
+          fooof_like: id.1
+          alpha_band: [8.0, 13.0]
+
+  FooofNPeaksMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: n_peaks
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  FooofNPeaksMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: n_peaks
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FooofNPeaksIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: n_peaks
+      - id: 2
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
+  FooofDomCFMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: dominant_peak_cf
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  FooofDomCFMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: dominant_peak_cf
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FooofDomCFIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: dominant_peak_cf
+      - id: 2
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
+  FooofDomPWMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: dominant_peak_pw
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  FooofDomPWMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: dominant_peak_pw
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FooofDomPWIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: dominant_peak_pw
+      - id: 2
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
+  FooofDomBWMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: dominant_peak_bw
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  FooofDomBWMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: dominant_peak_bw
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FooofDomBWIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: dominant_peak_bw
+      - id: 2
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
+  FooofAlphaCFMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: alpha_peak_cf
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  FooofAlphaCFMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: alpha_peak_cf
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FooofAlphaCFIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: alpha_peak_cf
+      - id: 2
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
+  FooofAlphaPWMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: alpha_peak_pw
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  FooofAlphaPWMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: alpha_peak_pw
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FooofAlphaPWIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: alpha_peak_pw
+      - id: 2
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
+  FooofAlphaBWMean:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: alpha_peak_bw
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: mean
+
+  FooofAlphaBWMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: alpha_peak_bw
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FooofAlphaBWIQR:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FooofPeaksDs.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: alpha_peak_bw
+      - id: 2
+        node: iqr_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # Sample entropy
@@ -486,6 +1485,33 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  SampleEntropyMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: SampleEntropy.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  SampleEntropyMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: SampleEntropy.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
   # ---------------------------------------------------------------------------
   # Approximate entropy
   # ---------------------------------------------------------------------------
@@ -517,6 +1543,33 @@ DerivativeDefinitions:
           xarray_data: id.0
           dim: epochs
           operation: mean
+
+  AppEntropyMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: AppEntropy.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  AppEntropyMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: AppEntropy.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # Permutation entropy
@@ -551,6 +1604,33 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  PermEntropyMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: PermEntropy.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  PermEntropyMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: PermEntropy.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
   # ---------------------------------------------------------------------------
   # SVD entropy
   # ---------------------------------------------------------------------------
@@ -583,6 +1663,33 @@ DerivativeDefinitions:
           xarray_data: id.0
           dim: epochs
           operation: mean
+
+  SVDEntropyMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: SVDEntropy.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  SVDEntropyMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: SVDEntropy.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # Spectral entropy (antropy, Welch variant)
@@ -618,6 +1725,33 @@ DerivativeDefinitions:
           xarray_data: id.0
           dim: epochs
           operation: mean
+
+  SpectralEntropyMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: SpectralEntropy.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  SpectralEntropyMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: SpectralEntropy.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # Hjorth parameters (mobility + complexity)
@@ -657,6 +1791,47 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  HjorthMobilityMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: HjorthParams.nc
+      - id: 1
+        node: slice_xarray
+        args:
+          xarray_data: id.0
+          dim: hjorthComponents
+          start: mobility
+          end: mobility
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  HjorthMobilityMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: HjorthParams.nc
+      - id: 1
+        node: slice_xarray
+        args:
+          xarray_data: id.0
+          dim: hjorthComponents
+          start: mobility
+          end: mobility
+      - id: 2
+        node: mad_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
   HjorthComplexityMean:
     overwrite: False
     save: False
@@ -677,6 +1852,47 @@ DerivativeDefinitions:
           xarray_data: id.1
           dim: epochs
           operation: mean
+
+  HjorthComplexityMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: HjorthParams.nc
+      - id: 1
+        node: slice_xarray
+        args:
+          xarray_data: id.0
+          dim: hjorthComponents
+          start: complexity
+          end: complexity
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  HjorthComplexityMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: HjorthParams.nc
+      - id: 1
+        node: slice_xarray
+        args:
+          xarray_data: id.0
+          dim: hjorthComponents
+          start: complexity
+          end: complexity
+      - id: 2
+        node: mad_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # Lempel-Ziv complexity (requires binary signal: binarize at median first)
@@ -718,6 +1934,33 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  LZivComplexityMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: LZivComplexity.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  LZivComplexityMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: LZivComplexity.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
   # ---------------------------------------------------------------------------
   # Zero crossings (normalized)
   # ---------------------------------------------------------------------------
@@ -748,6 +1991,33 @@ DerivativeDefinitions:
           xarray_data: id.0
           dim: epochs
           operation: mean
+
+  NumZeroCrossMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: NumZeroCross.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  NumZeroCrossMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: NumZeroCross.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # Higuchi fractal dimension
@@ -780,6 +2050,33 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  HiguchiFDMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: HiguchiFD.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  HiguchiFDMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: HiguchiFD.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
   # ---------------------------------------------------------------------------
   # Katz fractal dimension
   # ---------------------------------------------------------------------------
@@ -809,6 +2106,33 @@ DerivativeDefinitions:
           xarray_data: id.0
           dim: epochs
           operation: mean
+
+  KatzFDMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: KatzFD.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  KatzFDMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: KatzFD.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # Petrosian fractal dimension
@@ -840,6 +2164,33 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  PetrosianFDMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: PetrosianFD.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  PetrosianFDMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: PetrosianFD.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
   # ---------------------------------------------------------------------------
   # Detrended fluctuation analysis
   # ---------------------------------------------------------------------------
@@ -869,6 +2220,33 @@ DerivativeDefinitions:
           xarray_data: id.0
           dim: epochs
           operation: mean
+
+  DetrendedFluctuationMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: DetrendedFluctuation.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  DetrendedFluctuationMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: DetrendedFluctuation.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # Multiscale entropy (neurokit2)
@@ -909,6 +2287,43 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  EntropyMultiscaleMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyMultiscale.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  EntropyMultiscaleMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyMultiscale.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: mad_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
   # ---------------------------------------------------------------------------
   # Shannon entropy (neurokit2)
   # ---------------------------------------------------------------------------
@@ -944,6 +2359,43 @@ DerivativeDefinitions:
           xarray_data: id.1
           dim: epochs
           operation: mean
+
+  EntropyShannonMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyShannon.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  EntropyShannonMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyShannon.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: mad_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # Fuzzy entropy (neurokit2)
@@ -981,6 +2433,43 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  EntropyFuzzyMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyFuzzy.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  EntropyFuzzyMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyFuzzy.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: mad_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
   # ---------------------------------------------------------------------------
   # Dispersion entropy (neurokit2)
   # ---------------------------------------------------------------------------
@@ -1016,6 +2505,43 @@ DerivativeDefinitions:
           xarray_data: id.1
           dim: epochs
           operation: mean
+
+  EntropyDispersionMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyDispersion.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  EntropyDispersionMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: EntropyDispersion.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: mad_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # Hurst exponent (neurokit2)
@@ -1053,6 +2579,43 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  FractalHurstMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FractalHurst.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+          operation: median
+
+  FractalHurstMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: FractalHurst.nc
+      - id: 1
+        node: extract_data_var
+        args:
+          dataset_like: id.0
+          data_var: value
+      - id: 2
+        node: mad_across_dimension
+        args:
+          xarray_data: id.1
+          dim: epochs
+
   # ---------------------------------------------------------------------------
   # Kurtosis (scipy)
   # ---------------------------------------------------------------------------
@@ -1082,6 +2645,33 @@ DerivativeDefinitions:
           xarray_data: id.0
           dim: epochs
           operation: mean
+
+  KurtosisMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: Kurtosis.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  KurtosisMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: Kurtosis.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
 
   # ---------------------------------------------------------------------------
   # RMS amplitude
@@ -1113,72 +2703,215 @@ DerivativeDefinitions:
           dim: epochs
           operation: mean
 
+  RMSMedian:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: RMS.nc
+      - id: 1
+        node: aggregate_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+          operation: median
+
+  RMSMAD:
+    overwrite: False
+    save: False
+    for_dataframe: True
+    nodes:
+      - id: 0
+        derivative: RMS.nc
+      - id: 1
+        node: mad_across_dimension
+        args:
+          xarray_data: id.0
+          dim: epochs
+
 DerivativeList:
   # Shared spectral intermediates (computed once, cached)
   - SpectrumWelch
   - FooofFit
 
-  # Spectral features — 6 band power variants + ratios + FOOOF scalars
+  # Absolute band power (mean + pooled; no median/IQR per descriptors.yaml band_summaries exclusion)
   - AbsBandPower
   - AbsBandPowerMean
+  - AbsBandPowerAgg
+  - AbsBandPowerPooled
+  - AbsBandPowerPooledMean
+
+  # Log absolute band power (mean + median + IQR + pooled)
   - LogBandPower
   - LogBandPowerMean
+  - LogBandPowerMedian
+  - LogBandPowerIQR
+  - LogBandPowerPooled
+  - LogBandPowerPooledMean
+
+  # Relative band power (mean + median + IQR + pooled)
   - RelBandPower
   - RelBandPowerMean
+  - RelBandPowerMedian
+  - RelBandPowerIQR
+  - RelBandPowerPooled
+  - RelBandPowerPooledMean
+
+  # Corrected absolute band power (mean + pooled; excluded from band_summaries)
   - CorrectedBandPower
   - CorrectedBandPowerMean
+  - CorrectedBandPowerPooled
+  - CorrectedBandPowerPooledMean
+
+  # Corrected log absolute band power (mean + median + IQR + pooled)
   - CorrectedLogBandPower
   - CorrectedLogBandPowerMean
+  - CorrectedLogBandPowerMedian
+  - CorrectedLogBandPowerIQR
+  - CorrectedLogBandPowerPooled
+  - CorrectedLogBandPowerPooledMean
+
+  # Corrected relative band power (mean + median + IQR + pooled)
   - CorrectedRelBandPower
   - CorrectedRelBandPowerMean
+  - CorrectedRelBandPowerMedian
+  - CorrectedRelBandPowerIQR
+  - CorrectedRelBandPowerPooled
+  - CorrectedRelBandPowerPooledMean
+
+  # Band ratios (mean + median + IQR + subject-level + pooled)
   - BandRatios
   - BandRatiosMean
+  - BandRatiosMedian
+  - BandRatiosIQR
+  - BandRatiosOnMeans
+  - BandRatiosPooled
+  - BandRatiosPooledMean
+
+  # FOOOF scalars (mean + median + IQR + pooled)
   - FooofScalarsDs
   - FooofExponentMean
+  - FooofExponentMedian
+  - FooofExponentIQR
   - FooofOffsetMean
+  - FooofOffsetMedian
+  - FooofOffsetIQR
   - FooofRSquaredMean
+  - FooofRSquaredMedian
+  - FooofRSquaredIQR
+  - FooofExponentPooled
+  - FooofExponentPooledMean
+  - FooofOffsetPooled
+  - FooofOffsetPooledMean
+  - FooofRSquaredPooled
+  - FooofRSquaredPooledMean
 
-  # Complexity — antropy
+  # FOOOF peak features (mean + median + IQR per var)
+  - FooofPeaksDs
+  - FooofNPeaksMean
+  - FooofNPeaksMedian
+  - FooofNPeaksIQR
+  - FooofDomCFMean
+  - FooofDomCFMedian
+  - FooofDomCFIQR
+  - FooofDomPWMean
+  - FooofDomPWMedian
+  - FooofDomPWIQR
+  - FooofDomBWMean
+  - FooofDomBWMedian
+  - FooofDomBWIQR
+  - FooofAlphaCFMean
+  - FooofAlphaCFMedian
+  - FooofAlphaCFIQR
+  - FooofAlphaPWMean
+  - FooofAlphaPWMedian
+  - FooofAlphaPWIQR
+  - FooofAlphaBWMean
+  - FooofAlphaBWMedian
+  - FooofAlphaBWIQR
+
+  # Complexity — antropy (mean + median + MAD)
   - SampleEntropy
   - SampleEntropyMean
+  - SampleEntropyMedian
+  - SampleEntropyMAD
   - AppEntropy
   - AppEntropyMean
+  - AppEntropyMedian
+  - AppEntropyMAD
   - PermEntropy
   - PermEntropyMean
+  - PermEntropyMedian
+  - PermEntropyMAD
   - SVDEntropy
   - SVDEntropyMean
+  - SVDEntropyMedian
+  - SVDEntropyMAD
   - SpectralEntropy
   - SpectralEntropyMean
+  - SpectralEntropyMedian
+  - SpectralEntropyMAD
   - HjorthParams
   - HjorthMobilityMean
+  - HjorthMobilityMedian
+  - HjorthMobilityMAD
   - HjorthComplexityMean
+  - HjorthComplexityMedian
+  - HjorthComplexityMAD
   - LZivComplexity
   - LZivComplexityMean
+  - LZivComplexityMedian
+  - LZivComplexityMAD
   - NumZeroCross
   - NumZeroCrossMean
+  - NumZeroCrossMedian
+  - NumZeroCrossMAD
   - HiguchiFD
   - HiguchiFDMean
+  - HiguchiFDMedian
+  - HiguchiFDMAD
   - KatzFD
   - KatzFDMean
+  - KatzFDMedian
+  - KatzFDMAD
   - PetrosianFD
   - PetrosianFDMean
+  - PetrosianFDMedian
+  - PetrosianFDMAD
   - DetrendedFluctuation
   - DetrendedFluctuationMean
+  - DetrendedFluctuationMedian
+  - DetrendedFluctuationMAD
 
-  # Complexity — neurokit2
+  # Complexity — neurokit2 (mean + median + MAD)
   - EntropyMultiscale
   - EntropyMultiscaleMean
+  - EntropyMultiscaleMedian
+  - EntropyMultiscaleMAD
   - EntropyShannon
   - EntropyShannonMean
+  - EntropyShannonMedian
+  - EntropyShannonMAD
   - EntropyFuzzy
   - EntropyFuzzyMean
+  - EntropyFuzzyMedian
+  - EntropyFuzzyMAD
   - EntropyDispersion
   - EntropyDispersionMean
+  - EntropyDispersionMedian
+  - EntropyDispersionMAD
   - FractalHurst
   - FractalHurstMean
+  - FractalHurstMedian
+  - FractalHurstMAD
 
-  # Stats
+  # Stats (mean + median + MAD)
   - Kurtosis
   - KurtosisMean
+  - KurtosisMedian
+  - KurtosisMAD
   - RMS
   - RMSMean
+  - RMSMedian
+  - RMSMAD
