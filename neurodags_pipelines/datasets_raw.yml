@@ -2,5 +2,7 @@ synthetic_eeg:
   name: synthetic_eeg
   file_pattern:
     local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/rawdata/**/*_eeg.vhdr"
+    fir: "/home/yorguin/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS/**/*_eeg.vhdr"
   derivatives_path:
     local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/preprocessing"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/"
