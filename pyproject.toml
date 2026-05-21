@@ -23,7 +23,7 @@ dependencies = [
   "mne",
   "mne-bids",
   "pybv>=0.7.3",
-  "coco-pipe[decoding] @ git+https://github.com/BabaSanfour/coco-pipe.git@feature/decoding-module",
+  "coco-pipe[full] @ git+https://github.com/BabaSanfour/coco-pipe.git@decoding-module",
   "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",
