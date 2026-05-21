@@ -441,6 +441,7 @@ def autoreject_annotate_blockwise(
         })
 
     all_new_annots: list[tuple[float, float, str, tuple]] = []
+    condition_plots: dict[str, Any] = {}
 
     for cond_name, windows in condition_windows.items():
         event_rows: list[list[int]] = []
@@ -488,11 +489,20 @@ def autoreject_annotate_blockwise(
                 if len(chunk) >= min_epochs:
                     chunks.append((chunk, f"_chunk{ci + 1}"))
 
+        chunk_labels: list[np.ndarray] = []
+        chunk_bad_epochs: list[np.ndarray] = []
+        chunk_ch_names: list[str] | None = None
+
         for epochs_chunk, _ in chunks:
             cv = min(10, len(epochs_chunk))
             ar = AutoReject(n_interpolate=n_interp, random_state=42, n_jobs=1, verbose=False, cv=cv)
             ar.fit(epochs_chunk)
             reject_log = ar.get_reject_log(epochs_chunk)
+
+            chunk_labels.append(np.asarray(reject_log.labels))
+            chunk_bad_epochs.append(np.asarray(reject_log.bad_epochs))
+            if chunk_ch_names is None:
+                chunk_ch_names = reject_log.ch_names
 
             # Whole-epoch bad annotations
             for ep_idx, is_bad in enumerate(reject_log.bad_epochs):
@@ -511,6 +521,22 @@ def autoreject_annotate_blockwise(
                         end_s = float(epochs_chunk.events[last_idx, 0] - raw.first_samp) / sfreq + segment_duration
                         all_new_annots.append((max(0.0, start_s), max(end_s - start_s, segment_duration), f"BAD_{cond_name}", (ch_name,)))
 
+        # Build combined reject-log plot for this condition
+        if chunk_labels and chunk_ch_names is not None:
+            try:
+                from autoreject import RejectLog as _RejectLog
+                combined_log = _RejectLog(
+                    bad_epochs=np.concatenate(chunk_bad_epochs),
+                    labels=np.concatenate(chunk_labels, axis=0),
+                    ch_names=chunk_ch_names,
+                )
+                fig = combined_log.plot(orientation="horizontal", show=False)
+                fig.set_size_inches(16, 10)
+                fig.suptitle(f"AutoReject — {cond_name}", y=1.01)
+                condition_plots[cond_name] = fig
+            except Exception:
+                pass  # plots are optional; don't break the pipeline
+
     if all_new_annots:
         all_new_annots.sort(key=lambda x: x[0])
         raw.set_annotations(raw.annotations + _mne.Annotations(
@@ -520,9 +546,24 @@ def autoreject_annotate_blockwise(
             ch_names=[a[3] for a in all_new_annots],
         ))
 
-    return NodeResult(artifacts={
+    def _fig_writer(path: str, fig: Any) -> None:
+        fig.savefig(path, bbox_inches="tight", dpi=150)
+        try:
+            import matplotlib.pyplot as _plt
+            _plt.close(fig)
+        except Exception:
+            pass
+
+    artifacts: dict[str, Artifact] = {
         ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
-    })
+    }
+    for cond_name, fig in condition_plots.items():
+        artifacts[f"_ar_plot_{cond_name}.png"] = Artifact(
+            item=fig,
+            writer=lambda path, f=fig: _fig_writer(path, f),
+        )
+
+    return NodeResult(artifacts=artifacts)
 
 
 @register_node
