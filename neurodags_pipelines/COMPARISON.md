@@ -46,7 +46,7 @@ Files referenced:
 | AR — per-channel spans | `BAD_{cond}` with `ch_names` tuples | — ✗ | — ✗ |
 | AR — epoch label | `BAD_epoch_{condition_name}` | `BAD_epoch` ✗ (minor) | `BAD_epoch` ✗ (minor) |
 | AR — CV | `min(10, n_epochs_chunk)` | `min(10, max(2, min_epochs))` = 5 fixed ✗ | `min(10, max(2, n_epochs))` ✓ |
-| AR plots | saved to `figures_dir` | — | — |
+| AR plots | per-chunk PNG (orientation=horizontal, 16×10 in, 150 dpi) | combined per-condition PNG (same orientation/size/dpi) ± | — |
 | Output format | annotated Raw + provenance JSON | Epochs (CleanedPrep.fif) | Epochs (ConditionEO/EC.fif) |
 
 ### 2.2 Most critical architectural gap: step-0c starts from unclean raw
@@ -353,7 +353,7 @@ This is the largest functional gap.  For production use, a post-processing step 
 | BIDS output structure | No | Flat derivative tree, no BIDS conventions |
 | Provenance JSON | No | Not implemented |
 | Config versioning | No | Not implemented |
-| AR rejection plots | No | Not implemented |
+| AR rejection plots | Partial | Combined per-condition PNG (`@CleanedPrepRaw_ar_plot_{cond}.png`); original saves one per chunk |
 
 ---
 
@@ -361,66 +361,62 @@ This is the largest functional gap.  For production use, a post-processing step 
 
 ### Tier 1 — affect feature values
 
-**A. step-0c starts from unclean raw** (most impactful)  
-Condition epochs lack ZapLine / RANSAC / CAR cleaning.  Line noise present; bad channels not excluded from CAR; CAR computed over potentially noisy channels.  Complexity features and RMS are most affected.  
-Fix: split step-0b into `CleanedPrepRaw` (annotated Raw output) + `CleanedPrep` (epochs from it); add `datasets_cleaned_raw.yml`; rewrite step-0c to start from `CleanedPrepRaw`.
+**A. step-0c starts from unclean raw — DONE**  
+Fixed: `CleanedPrepRaw` derivative added to step-0b (inflate → preprocess → zapline → ransac → car → `autoreject_annotate_blockwise` → annotated Raw).  step-0c reads `datasets_cleaned_raw.yml` and is a pure extraction pipeline — condition epochs now inherit full cleaning.
 
-**B. Filter range in step-0c** (1–45 Hz vs 0.1–100 Hz)  
-Complexity features (entropy, fractal dimension, DFA, zero crossings) on the time-domain signal are sensitive to filter bandwidth.  
-Fix: change `preprocess_raw` in step-0c to `l_freq: 0.1, h_freq: 100.0`.  One-line YAML change.
+**B. Filter range in step-0c — DONE**  
+Fixed: step-0c no longer filters; reads from `CleanedPrepRaw` which is already 0.1–100 Hz.
 
-**C. AR scope in step-0b** (whole-recording vs condition-grouped)  
-step-0b `autoreject_annotate` uses global AR thresholds.  base.py fits one AR per condition.  If conditions have different SNR (e.g. EO quieter than EC), whole-recording AR misestimates thresholds.  
-Fix: replace `autoreject_annotate` in step-0b with `autoreject_annotate_raw(condition_name=None)` (existing node, already adaptive CV) and add final epoch extraction node.  Or accept as a design choice since step-0b is the "quick clean" pipeline.
+**C. AR scope in step-0b — DONE**  
+Fixed: `autoreject_annotate_blockwise` replaces `autoreject_annotate`; discovers all BLOCK_* conditions, one AR instance per condition group, adaptive CV per chunk.
 
-**D. RANSAC rest-block subset** (step-0b)  
-`ransac_bad_channels` in step-0b passes no `block_label` → uses full recording.  base.py uses baseline windows only.  Different bad channels may be detected on task recordings with high-amplitude task epochs.  
-Fix: add `block_label: EC` (or whichever is the rest condition) to step-0b RANSAC node args.
+**D. RANSAC rest-block subset — DONE**  
+Fixed: `block_label: EC` now set in step-0b RANSAC node; `ransac_bad_channels` crops to EC windows before fitting.
 
 ### Tier 2 — affect annotation richness, not epoch rejection
 
-**E. Per-channel span annotations** missing from `autoreject_annotate_raw`  
-base.py `_reject_log_to_annotations` also creates `BAD_{condition}` annotations with `ch_names` tuples for runs of epochs where a specific channel was bad.  neurodags only creates `BAD_epoch`.  For `reject_by_annotation="omit"` behavior this makes no difference — only the whole-epoch annotation matters.  But it means downstream code cannot identify *which channels* were frequently bad per condition.  
-Fix: add per-channel span logic to `autoreject_annotate_raw` (straightforward port of `_reject_log_to_annotations`).
+**E. Per-channel span annotations — DONE**  
+Fixed: `autoreject_annotate_blockwise` adds `BAD_{cond}` annotations with `ch_names` tuples for consecutive per-channel bad spans, mirroring `_reject_log_to_annotations` in base.py.
 
-**F. AR chunking** for long conditions  
-`_iter_autoreject_chunks` in base.py splits conditions with > 30 min of data into chunks to avoid memory issues.  `autoreject_annotate_raw` processes all condition epochs at once.  No impact on threshold accuracy (AR pools all epochs anyway), but could OOM on long clinical recordings.  
-Fix: add `ar_max_chunk_minutes` param to `autoreject_annotate_raw`, implement chunk loop, merge annotations.
+**F. AR chunking — DONE**  
+Fixed: `autoreject_annotate_blockwise` has `ar_max_chunk_minutes` param; chunks long conditions and merges annotations across chunks.
 
 ### Tier 3 — cosmetic / infrastructure
 
-**G. Annotation epoch labels**: `BAD_epoch` vs `BAD_epoch_EO`/`BAD_epoch_EC`.  Functionally equivalent for MNE's `reject_by_annotation` (any annotation starting with `BAD` is treated as bad).  Fix: pass `condition_name` to the annotation description string in `autoreject_annotate_raw`.
+**G. Annotation epoch labels — DONE**  
+Fixed: `autoreject_annotate_blockwise` uses `BAD_epoch_{cond_name}`, not bare `BAD_epoch`.
 
-**H. AR CV in step-0b**: `autoreject_annotate` uses fixed `cv=min(10, max(2, min_epochs))=5`.  Should be `min(10, len(seg_epochs))` like `autoreject_annotate_raw`.  Minor numerical difference in AR threshold CV folds.
+**H. AR CV — DONE**  
+Fixed: `autoreject_annotate_blockwise` uses `cv=min(10, len(epochs_chunk))` per chunk, identical to base.py.
 
-**I. Annotation inflation**: only relevant for recordings with human-made point annotations (BrainVision marker events like `bad_yawn`).
+**I. Annotation inflation — DONE**  
+Fixed: `inflate_bad_annotations` node is first step in `CleanedPrepRaw` chain.
 
-**J. AR rejection plots**: informational only.
+**J. AR rejection plots — PARTIAL**  
+`autoreject_annotate_blockwise` saves `@CleanedPrepRaw_ar_plot_{cond}.png` per condition alongside the `.fif` — same params as original (orientation=horizontal, 16×10 in, 150 dpi).  
+Difference: neurodags combines labels across chunks into **one plot per condition**; base.py saves **one plot per chunk** (e.g. `_autoreject_eo_chunk1.png`).  Combined gives better overview; per-chunk is finer-grained for long recordings.
 
-**K. Provenance JSON**: per-run JSON with bad channel list, AR stats, clean fraction.  Not needed for feature computation.
+**K. Provenance JSON — not implemented**  
+base.py saves a per-run JSON with bad channel list, AR epoch rejection stats, and clean fraction.  Not needed for feature computation but useful for QC.
 
-**L. Config provenance** (`config_used.yaml` guard): prevents re-running with different config on same derivatives.  Not in neurodags — `overwrite: False` is the only guard.
+**L. Config provenance — not implemented**  
+base.py copies `config_used.yaml` to derivatives and guards against re-running with a different config.  neurodags guard is `overwrite: False` only.
 
 ---
 
-## 11. Implementation status (A–D + inflate)
+## 11. Implementation status
 
-**A. step-0c starts from unclean raw — DONE**
-`CleanedPrepRaw` derivative added to step-0b: inflate → preprocess(0.1-100 Hz) → zapline → ransac → car → `autoreject_annotate_blockwise` → annotated Raw.  `CleanedPrep` epochs extracted from `CleanedPrepRaw`.  step-0c now reads `datasets_cleaned_raw.yml` (points to `*@CleanedPrepRaw.fif`) and is a pure extraction pipeline — no preprocessing.
-
-**B. Filter range in step-0c — DONE**
-step-0c no longer filters at all (reads from `CleanedPrepRaw` which is already 0.1-100 Hz).
-
-**C. AR scope — DONE**
-`autoreject_annotate_blockwise` ports `annotate_artifacts_blockwise` from base.py: discovers all BLOCK_* conditions, merges windows per condition, runs one AR instance per condition group, chunks if > `ar_max_chunk_minutes`.  Adds `BAD_epoch_{cond}` (whole-epoch) and `BAD_{cond}` with `ch_names` (per-channel spans) annotations.
-
-**D. RANSAC rest-block subset — wired, commented out by default**
-`ransac_bad_channels(block_label=...)` exists.  step-0b has the `block_label` arg commented out — uncomment and set to your rest condition label (e.g., `EC`).
-
-**inflate_bad_annotations — DONE**
-`inflate_bad_annotations` node added: expands manual BAD_ annotations by label slug (major→5 s, other→3 s).  First node in `CleanedPrepRaw` chain.  Harmless when no manual annotations are present.
-
-**Remaining minor gaps:**
-- AR rejection plots not saved (informational only)
-- Provenance JSON not saved
-- Config versioning guard not implemented
+| Gap | Status | Notes |
+|-----|--------|-------|
+| A. step-0c unclean raw | **DONE** | `CleanedPrepRaw` chain; step-0c reads `datasets_cleaned_raw.yml` |
+| B. Filter range step-0c | **DONE** | step-0c inherits 0.1–100 Hz from `CleanedPrepRaw` |
+| C. AR scope | **DONE** | `autoreject_annotate_blockwise`: per-condition, adaptive CV |
+| D. RANSAC rest-subset | **DONE** | `block_label: EC` set in step-0b |
+| E. Per-channel span annotations | **DONE** | `BAD_{cond}` + ch_names in `autoreject_annotate_blockwise` |
+| F. AR chunking | **DONE** | `ar_max_chunk_minutes` param in `autoreject_annotate_blockwise` |
+| G. Epoch annotation labels | **DONE** | `BAD_epoch_{cond_name}` in `autoreject_annotate_blockwise` |
+| H. AR CV | **DONE** | `min(10, len(epochs_chunk))` per chunk |
+| I. Annotation inflation | **DONE** | `inflate_bad_annotations` first in `CleanedPrepRaw` chain |
+| J. AR rejection plots | **PARTIAL** | Combined per-condition PNG; original is per-chunk (see §10.J) |
+| K. Provenance JSON | open | Not implemented |
+| L. Config versioning | open | Not implemented |
