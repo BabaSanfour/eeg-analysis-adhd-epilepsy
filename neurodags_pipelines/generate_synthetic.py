@@ -1,11 +1,16 @@
 """Generate a synthetic EEG dataset for testing the neurodags pipelines.
 
 Produces BrainVision (.vhdr/.vmrk/.eeg) files under datasets/synthetic_eeg/rawdata/
-using neurodags's built-in 1/f noise generator. Each recording gets two BLOCK_*
-annotations so condition-level pipelines (step-0c_conditions.yml) can be tested:
+using neurodags's built-in 1/f noise generator. Each recording gets multiple randomly
+ordered BLOCK_* annotations mimicking a real paradigm:
 
-  BLOCK_EO   [2–12s]  — eyes open (5 × 2s epochs)
-  BLOCK_EC   [16–26s] — eyes closed (5 × 2s epochs)
+  4 blocks total per recording (2 EC + 2 EO), each 6 s, 1 s gap between blocks.
+  Block ordering is shuffled per recording (seeded by recording index).
+  Example layout: BLOCK_EC [1-7s], BLOCK_EO [8-14s], BLOCK_EC [15-21s], BLOCK_EO [22-28s]
+
+  Each 6 s block yields:
+    - 6 × 1 s epochs for AutoReject (>= min_epochs=5)
+    - 3 × 2 s epochs for feature extraction
 
 Layout:
   rawdata/
@@ -54,17 +59,35 @@ generate_dummy_dataset(
     },
 )
 
-# Add BLOCK_EO / BLOCK_EC annotations and re-export in-place.
-# Recording is 30s; EO occupies 2-12s, EC occupies 16-26s.
-EO_ONSET, EO_DUR = 2.0, 10.0
-EC_ONSET, EC_DUR = 16.0, 10.0
+# Add randomly ordered BLOCK_EO / BLOCK_EC annotations and re-export in-place.
+# 2 EC + 2 EO blocks per recording, each 6 s, 1 s gap, starting at t=1 s.
+# Ordering shuffled per recording (seed = recording index).
+BLOCK_DURATION = 6.0
+INTER_BLOCK_GAP = 1.0
+BLOCKS_PER_COND = 2
+START_OFFSET = 1.0
 
-for vhdr in sorted(RAW_DIR.rglob("*.vhdr")):
+_base_conditions = ["EC"] * BLOCKS_PER_COND + ["EO"] * BLOCKS_PER_COND
+
+for i, vhdr in enumerate(sorted(RAW_DIR.rglob("*.vhdr"))):
     raw = mne.io.read_raw_brainvision(str(vhdr), preload=True, verbose="ERROR")
+
+    rng = np.random.default_rng(seed=i)
+    block_order = _base_conditions.copy()
+    rng.shuffle(block_order)
+
+    onsets, durations, descriptions = [], [], []
+    t = START_OFFSET
+    for cond in block_order:
+        onsets.append(t)
+        durations.append(BLOCK_DURATION)
+        descriptions.append(f"BLOCK_{cond}")
+        t += BLOCK_DURATION + INTER_BLOCK_GAP
+
     block_annots = mne.Annotations(
-        onset=[EO_ONSET, EC_ONSET],
-        duration=[EO_DUR, EC_DUR],
-        description=["BLOCK_EO", "BLOCK_EC"],
+        onset=onsets,
+        duration=durations,
+        description=descriptions,
         orig_time=raw.annotations.orig_time,
     )
     raw.set_annotations(raw.annotations + block_annots)

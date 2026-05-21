@@ -65,14 +65,13 @@ DerivativeDefinitions:
           line_freq: 60.0
           adaptive: False
 
-      # 4. RANSAC: mark broken channels.
-      #    Uncomment block_label and set to the rest/baseline condition to
-      #    bias RANSAC toward intrinsic channel quality (mirrors base.py).
+      # 4. RANSAC: mark broken channels using EC (rest) windows only.
+      #    Biases bad-channel detection toward intrinsic quality, not task artifacts.
       - id: 4
         node: ransac_bad_channels
         args:
           mne_object: id.3
-          # block_label: EC   # set to your rest condition label
+          block_label: EC
 
       # 5. CAR: common average reference (bads from step 4 are excluded)
       - id: 5
