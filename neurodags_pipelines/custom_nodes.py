@@ -440,8 +440,10 @@ def autoreject_annotate_blockwise(
             ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
         })
 
+    bad_channels_prov = list(raw.info["bads"])  # captured after RANSAC step
     all_new_annots: list[tuple[float, float, str, tuple]] = []
     condition_plots: dict[str, Any] = {}
+    condition_stats: dict[str, dict] = {}
 
     for cond_name, windows in condition_windows.items():
         event_rows: list[list[int]] = []
@@ -492,6 +494,8 @@ def autoreject_annotate_blockwise(
         chunk_labels: list[np.ndarray] = []
         chunk_bad_epochs: list[np.ndarray] = []
         chunk_ch_names: list[str] | None = None
+        cond_n_epochs = 0
+        cond_n_bad = 0
 
         for epochs_chunk, _ in chunks:
             cv = min(10, len(epochs_chunk))
@@ -503,6 +507,9 @@ def autoreject_annotate_blockwise(
             chunk_bad_epochs.append(np.asarray(reject_log.bad_epochs))
             if chunk_ch_names is None:
                 chunk_ch_names = reject_log.ch_names
+
+            cond_n_epochs += len(epochs_chunk)
+            cond_n_bad += int(np.sum(reject_log.bad_epochs))
 
             # Whole-epoch bad annotations
             for ep_idx, is_bad in enumerate(reject_log.bad_epochs):
@@ -520,6 +527,13 @@ def autoreject_annotate_blockwise(
                         start_s = float(epochs_chunk.events[first_idx, 0] - raw.first_samp) / sfreq
                         end_s = float(epochs_chunk.events[last_idx, 0] - raw.first_samp) / sfreq + segment_duration
                         all_new_annots.append((max(0.0, start_s), max(end_s - start_s, segment_duration), f"BAD_{cond_name}", (ch_name,)))
+
+        if cond_n_epochs > 0:
+            condition_stats[cond_name] = {
+                "n_epochs": cond_n_epochs,
+                "n_bad_epochs": cond_n_bad,
+                "clean_fraction": round((cond_n_epochs - cond_n_bad) / cond_n_epochs, 4),
+            }
 
         # Build combined reject-log plot for this condition
         if chunk_labels and chunk_ch_names is not None:
@@ -546,6 +560,14 @@ def autoreject_annotate_blockwise(
             ch_names=[a[3] for a in all_new_annots],
         ))
 
+    total_epochs = sum(s["n_epochs"] for s in condition_stats.values())
+    total_bad = sum(s["n_bad_epochs"] for s in condition_stats.values())
+    provenance = {
+        "bad_channels": bad_channels_prov,
+        "conditions": condition_stats,
+        "overall_clean_fraction": round((total_epochs - total_bad) / total_epochs, 4) if total_epochs else None,
+    }
+
     def _fig_writer(path: str, fig: Any) -> None:
         fig.savefig(path, bbox_inches="tight", dpi=150)
         try:
@@ -554,8 +576,14 @@ def autoreject_annotate_blockwise(
         except Exception:
             pass
 
+    def _json_writer(path: str, data: dict) -> None:
+        import json
+        with open(path, "w") as fh:
+            json.dump(data, fh, indent=2)
+
     artifacts: dict[str, Artifact] = {
-        ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
+        ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR")),
+        "_prov.json": Artifact(item=provenance, writer=lambda path, d=provenance: _json_writer(path, d)),
     }
     for cond_name, fig in condition_plots.items():
         artifacts[f"_ar_plot_{cond_name}.png"] = Artifact(

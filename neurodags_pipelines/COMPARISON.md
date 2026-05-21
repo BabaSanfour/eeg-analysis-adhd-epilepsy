@@ -351,7 +351,7 @@ This is the largest functional gap.  For production use, a post-processing step 
 | Subject-level CSV | Yes | Both produce one aggregated row per file |
 | QC / failure tracking | Partial | `neurodags status` covers done/missing/errored per derivative |
 | BIDS output structure | No | Flat derivative tree, no BIDS conventions |
-| Provenance JSON | No | Not implemented |
+| Provenance JSON | Partial | `_prov.json` covers bad channels + AR stats; no ICA or filter params |
 | Config versioning | No | Not implemented |
 | AR rejection plots | Partial | Combined per-condition PNG (`@CleanedPrepRaw_ar_plot_{cond}.png`); original saves one per chunk |
 
@@ -396,8 +396,8 @@ Fixed: `inflate_bad_annotations` node is first step in `CleanedPrepRaw` chain.
 `autoreject_annotate_blockwise` saves `@CleanedPrepRaw_ar_plot_{cond}.png` per condition alongside the `.fif` — same params as original (orientation=horizontal, 16×10 in, 150 dpi).  
 Difference: neurodags combines labels across chunks into **one plot per condition**; base.py saves **one plot per chunk** (e.g. `_autoreject_eo_chunk1.png`).  Combined gives better overview; per-chunk is finer-grained for long recordings.
 
-**K. Provenance JSON — not implemented**  
-base.py saves a per-run JSON with bad channel list, AR epoch rejection stats, and clean fraction.  Not needed for feature computation but useful for QC.
+**K. Provenance JSON — DONE**  
+`autoreject_annotate_blockwise` saves `@CleanedPrepRaw_prov.json` alongside the `.fif`: bad channels (from `raw.info["bads"]` at AR input, i.e. after RANSAC), per-condition epoch counts + bad counts + clean fraction, overall clean fraction.
 
 **L. Config provenance — not implemented**  
 base.py copies `config_used.yaml` to derivatives and guards against re-running with a different config.  neurodags guard is `overwrite: False` only.
@@ -418,5 +418,5 @@ base.py copies `config_used.yaml` to derivatives and guards against re-running w
 | H. AR CV | **DONE** | `min(10, len(epochs_chunk))` per chunk |
 | I. Annotation inflation | **DONE** | `inflate_bad_annotations` first in `CleanedPrepRaw` chain |
 | J. AR rejection plots | **PARTIAL** | Combined per-condition PNG; original is per-chunk (see §10.J) |
-| K. Provenance JSON | open | Not implemented |
+| K. Provenance JSON | **DONE** | `@CleanedPrepRaw_prov.json`: bad channels, per-condition AR stats, clean fractions |
 | L. Config versioning | open | Not implemented |
