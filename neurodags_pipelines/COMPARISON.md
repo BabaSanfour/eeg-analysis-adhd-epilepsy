@@ -300,7 +300,7 @@ This is the largest functional gap.  For production use, a post-processing step 
 
 1. **Corrected-absolute band ratio-of-means** (`agg_band_corr_ratio_*`): **DONE** — `CorrectedBandPowerAgg` + `BandRatiosOnCorrectedMeans` added to `step-1_features.yml`.
 
-2. **Condition-aware AutoReject**: **DONE** — new `autoreject_clean_epochs` node in `custom_nodes.py` takes Epochs directly (not Raw), runs AR, drops bad epochs.  Wired as node id.3 in both `ConditionEO` and `ConditionEC` derivatives in `step-0c_conditions.yml`.  Each condition gets its own AR instance — matches `annotate_artifacts_blockwise` behavior from `base.py`.
+2. **Condition-aware AutoReject**: **DONE** — new `autoreject_annotate_raw` node mirrors `annotate_artifacts_blockwise` from `base.py`: runs AR restricted to `BLOCK_{condition_name}` windows (1 s segments, same event-building logic as base.py), adds `BAD_epoch` annotations to Raw, returns annotated Raw.  `extract_condition_epochs` updated with `reject_by_annotation` param; step-0c chains `preprocess_raw → autoreject_annotate_raw → extract_condition_epochs(reject_by_annotation="omit")` — identical to the base.py Raw-first pattern.
 
 3. **RANSAC on block subset**: **DONE** — `ransac_bad_channels` now accepts `block_label: str | None` (e.g., `block_label: EC`).  When set, RANSAC crops to windows matching `BLOCK_{block_label}` before fitting, mirroring the rest-block-biased approach in `base.py`.  `None` = full recording (original behavior preserved).
 

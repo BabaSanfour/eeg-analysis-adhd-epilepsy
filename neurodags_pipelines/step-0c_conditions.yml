@@ -5,6 +5,10 @@
 # then runs AutoReject per condition (condition-aware AR, matching base.py
 # annotate_artifacts_blockwise which fits one AR instance per condition).
 #
+# Follows the same Raw-first pattern as base.py:
+#   - AR annotates the Raw with BAD_epoch marks restricted to condition windows
+#   - epoch extraction uses reject_by_annotation="omit" to drop bad segments
+#
 # Input: raw .vhdr recordings with BLOCK_* annotations.
 #        Applies the same basic preprocessing as step-0 (filter 1–45 Hz, 256 Hz).
 #
@@ -13,9 +17,9 @@
 #   ConditionEC  — epochs from BLOCK_EC windows (eyes closed)
 #
 # Each condition derivative:
-#   1. preprocess_raw            : bandpass 1–45 Hz, resample 256 Hz (continuous Raw)
-#   2. extract_condition_epochs  : slice fixed-length epochs from BLOCK_* windows
-#   3. autoreject_clean_epochs   : AR on condition epochs, bad epochs dropped
+#   1. preprocess_raw                         : bandpass 1–45 Hz, resample 256 Hz (Raw)
+#   2. autoreject_annotate_raw(condition_name): AR on condition windows → BAD_epoch on Raw
+#   3. extract_condition_epochs               : slice epochs, omit BAD_epoch segments
 #
 # BrainVision annotations gain a "Comment/" prefix on round-trip —
 # extract_condition_epochs normalises this automatically.
@@ -47,17 +51,20 @@ DerivativeDefinitions:
             h_freq: 45.0
           resample: 256
       - id: 2
-        node: extract_condition_epochs
+        node: autoreject_annotate_raw
         args:
           mne_object: id.1
           condition_name: EO
           annotation_prefix: "BLOCK_"
-          epoch_duration: 2.0
-          epoch_overlap: 0.0
       - id: 3
-        node: autoreject_clean_epochs
+        node: extract_condition_epochs
         args:
           mne_object: id.2
+          condition_name: EO
+          annotation_prefix: "BLOCK_"
+          epoch_duration: 2.0
+          epoch_overlap: 0.0
+          reject_by_annotation: "omit"
 
   ConditionEC:
     overwrite: False
@@ -74,17 +81,20 @@ DerivativeDefinitions:
             h_freq: 45.0
           resample: 256
       - id: 2
-        node: extract_condition_epochs
+        node: autoreject_annotate_raw
         args:
           mne_object: id.1
           condition_name: EC
           annotation_prefix: "BLOCK_"
-          epoch_duration: 2.0
-          epoch_overlap: 0.0
       - id: 3
-        node: autoreject_clean_epochs
+        node: extract_condition_epochs
         args:
           mne_object: id.2
+          condition_name: EC
+          annotation_prefix: "BLOCK_"
+          epoch_duration: 2.0
+          epoch_overlap: 0.0
+          reject_by_annotation: "omit"
 
 DerivativeList:
   - ConditionEO

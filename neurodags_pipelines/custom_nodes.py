@@ -210,6 +210,7 @@ def extract_condition_epochs(
     annotation_prefix: str = "BLOCK_",
     epoch_duration: float = 2.0,
     epoch_overlap: float = 0.0,
+    reject_by_annotation: str | None = None,
 ) -> NodeResult:
     """Extract fixed-length epochs from BLOCK_<condition_name> annotation windows.
 
@@ -272,6 +273,7 @@ def extract_condition_epochs(
             overlap=epoch_overlap,
             preload=True,
             verbose="ERROR",
+            reject_by_annotation=reject_by_annotation or False,
         )
         if len(eps) > 0:
             epoch_chunks.append(eps)
@@ -533,6 +535,122 @@ def autoreject_annotate(
             )
         }
     )
+
+
+@register_node
+def autoreject_annotate_raw(
+    mne_object,
+    condition_name: str | None = None,
+    annotation_prefix: str = "BLOCK_",
+    segment_duration: float = 1.0,
+    n_interpolate: list[int] | None = None,
+    min_epochs: int = 5,
+) -> NodeResult:
+    """Run AutoReject on Raw and add BAD_epoch annotations; return annotated Raw.
+
+    Equivalent of annotate_artifacts_blockwise in base.py.
+    When condition_name is set, AR runs only on 1s segments within
+    BLOCK_{condition_name} windows (per-condition AR, matching base.py behavior).
+    When condition_name is None, runs on the whole recording.
+
+    Use extract_condition_epochs(reject_by_annotation="omit") downstream
+    to get clean Epochs from the annotated Raw.
+    """
+    import mne as _mne
+    from neurodags.loaders import load_meeg
+
+    if isinstance(mne_object, NodeResult):
+        mne_object = mne_object.artifacts[".fif"].item
+    if isinstance(mne_object, (str, os.PathLike)):
+        mne_object = load_meeg(mne_object)
+
+    try:
+        from autoreject import AutoReject
+    except ImportError as exc:
+        raise ImportError("autoreject required for autoreject_annotate_raw") from exc
+
+    raw = mne_object.copy().load_data()
+    n_interp = np.asarray(n_interpolate or [0], dtype=int)
+    sfreq = raw.info["sfreq"]
+    step = int(segment_duration * sfreq)
+    tmax = max(segment_duration - 1.0 / sfreq, 0.0)
+
+    if condition_name is not None:
+        target = f"{annotation_prefix}{condition_name}"
+        windows: list[tuple[float, float]] = []
+        for annot in raw.annotations:
+            desc = str(annot["description"])
+            if desc.startswith("Comment/"):
+                desc = desc[len("Comment/"):]
+            if desc == target:
+                onset = float(annot["onset"])
+                windows.append((onset, onset + float(annot["duration"])))
+
+        if not windows:
+            return NodeResult(artifacts={
+                ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
+            })
+
+        event_rows: list[list[int]] = []
+        for onset, offset in windows:
+            start_samp = int(raw.time_as_index(onset)[0]) + raw.first_samp
+            end_samp = int(raw.time_as_index(offset)[0]) + raw.first_samp
+            t = start_samp
+            while t + step <= end_samp:
+                event_rows.append([t, 0, 1])
+                t += step
+
+        if not event_rows:
+            return NodeResult(artifacts={
+                ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
+            })
+
+        events = np.array(event_rows, dtype=int)
+        seg_epochs = _mne.Epochs(
+            raw, events, event_id={"seg": 1}, tmin=0.0, tmax=tmax,
+            baseline=None, preload=True, verbose="ERROR", reject_by_annotation=False,
+        )
+    else:
+        seg_epochs = _mne.make_fixed_length_epochs(raw, duration=segment_duration, preload=True, verbose="ERROR")
+
+    if len(seg_epochs) < min_epochs:
+        return NodeResult(artifacts={
+            ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
+        })
+
+    # Patch channel positions for synthetic data (same workaround as autoreject_annotate)
+    _locs = np.array([ch["loc"][:3] for ch in seg_epochs.info["chs"]])
+    if np.allclose(_locs, 0) or not np.all(np.isfinite(_locs)):
+        _n = len(seg_epochs.ch_names)
+        _angles = np.linspace(0, 2 * np.pi, _n, endpoint=False)
+        seg_epochs = seg_epochs.copy()
+        with seg_epochs.info._unlock():
+            for _i, _ch in enumerate(seg_epochs.info["chs"]):
+                _a = _angles[_i]
+                _ch["loc"][:3] = [np.cos(_a) * 0.09, np.sin(_a) * 0.09, 0.01]
+
+    cv = min(10, max(2, len(seg_epochs)))
+    ar = AutoReject(n_interpolate=n_interp, random_state=42, n_jobs=1, verbose=False, cv=cv)
+    ar.fit(seg_epochs)
+    reject_log = ar.get_reject_log(seg_epochs)
+
+    new_annots: list[tuple[float, float, str]] = []
+    for ep_idx, is_bad in enumerate(reject_log.bad_epochs):
+        if not is_bad:
+            continue
+        onset = float(seg_epochs.events[ep_idx, 0] - raw.first_samp) / sfreq
+        new_annots.append((max(0.0, onset), segment_duration, "BAD_epoch"))
+
+    if new_annots:
+        raw.set_annotations(raw.annotations + _mne.Annotations(
+            onset=[a[0] for a in new_annots],
+            duration=[a[1] for a in new_annots],
+            description=[a[2] for a in new_annots],
+        ))
+
+    return NodeResult(artifacts={
+        ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
+    })
 
 
 @register_node
