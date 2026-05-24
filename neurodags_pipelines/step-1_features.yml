@@ -34,7 +34,10 @@
 #   neurodags run  neurodags_pipelines/step-1_features.yml
 #   neurodags dataframe neurodags_pipelines/step-1_features.yml --output features.csv
 
-new_definitions: custom_nodes.py
+new_definitions:
+  - nodes_utils.py
+  - nodes_aggregation.py
+  - nodes_spatial.py
 datasets: datasets_preprocessed.yml
 mount_point: local
 

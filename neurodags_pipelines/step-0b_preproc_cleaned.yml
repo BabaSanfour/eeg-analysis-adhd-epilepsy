@@ -25,7 +25,14 @@
 #   neurodags run neurodags_pipelines/step-0b_preproc_cleaned.yml
 #   neurodags run neurodags_pipelines/step-0c_conditions.yml  # reads CleanedPrepRaw
 
-new_definitions: custom_nodes.py
+new_definitions:
+  - nodes_utils.py
+  - nodes_preprocessing.py
+  - nodes_annotations.py
+  - nodes_denoise.py
+  - nodes_bad_channels.py
+  - nodes_autoreject.py
+  - nodes_ica.py
 datasets: datasets_raw.yml
 mount_point: local
 

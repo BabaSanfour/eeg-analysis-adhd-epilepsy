@@ -20,7 +20,8 @@
 #   neurodags run neurodags_pipelines/step-0b_preproc_cleaned.yml
 #   neurodags run neurodags_pipelines/step-0c_conditions.yml
 
-new_definitions: custom_nodes.py
+new_definitions:
+  - nodes_preprocessing.py
 datasets: datasets_cleaned_raw.yml
 mount_point: local
 
