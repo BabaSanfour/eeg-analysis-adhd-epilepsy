@@ -2,32 +2,15 @@
 
 from __future__ import annotations
 
-import os
-
 import numpy as np
 import xarray as xr
+import nodes_utils
 
 from neurodags.definitions import Artifact, NodeResult
 from neurodags.nodes import register_node
 
-
-def _to_nc_writer(da_or_ds):
-    return lambda path, obj=da_or_ds: obj.to_netcdf(path, engine="netcdf4", format="NETCDF4")
-
-
-def _resolve_xr(obj):
-    if isinstance(obj, (str, os.PathLike)):
-        loaded = xr.open_dataset(str(obj))
-        if len(loaded.data_vars) == 1:
-            return next(iter(loaded.data_vars.values()))
-        return loaded
-    if isinstance(obj, NodeResult):
-        if ".nc" in obj.artifacts:
-            return _resolve_xr(obj.artifacts[".nc"].item)
-        raise ValueError("NodeResult has no .nc artifact")
-    if isinstance(obj, xr.Dataset) and len(obj.data_vars) == 1:
-        return next(iter(obj.data_vars.values()))
-    return obj
+_to_nc_writer = nodes_utils._to_nc_writer
+_resolve_xr = nodes_utils._resolve_xr
 
 
 @register_node

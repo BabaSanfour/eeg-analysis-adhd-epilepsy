@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import xarray as xr
+
+# Make this directory importable so other definition files can do:
+#   import nodes_utils
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from neurodags.definitions import Artifact, NodeResult
 from neurodags.nodes import register_node
