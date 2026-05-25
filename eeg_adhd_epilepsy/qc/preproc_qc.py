@@ -191,6 +191,8 @@ def _annotation_intervals(raw: mne.io.BaseRaw) -> list[tuple[float, float]]:
     intervals = []
     for annot in raw.annotations:
         if str(annot["description"]).startswith("BAD_"):
+            if annot.get("ch_names"):  # channel-specific marks don't make the window globally bad
+                continue
             onset = float(annot["onset"])
             duration = float(annot["duration"])
             stop = onset + duration
