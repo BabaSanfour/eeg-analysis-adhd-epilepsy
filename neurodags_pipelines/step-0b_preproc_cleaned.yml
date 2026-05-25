@@ -4,6 +4,7 @@
 # Produces TWO derivatives per source recording:
 #
 #   CleanedPrepRaw — fully annotated continuous Raw:
+#     0. inject_block_annotations      : read *_segments.csv sidecar → inject BLOCK_* annotations
 #     1. inflate_bad_annotations       : expand manual BAD_ marks to fixed durations
 #     2. preprocess_raw                : bandpass 0.1–100 Hz, resample 256 Hz
 #     3. zapline_denoise               : remove 60 Hz line noise
@@ -45,55 +46,63 @@ DerivativeDefinitions:
       - id: 0
         derivative: SourceFile
 
-      # 1. Expand manual BAD_ annotations to fixed durations by label type.
-      #    Harmless if no manual annotations are present.
+      # 1. Inject BLOCK_* annotations from *_segments.csv sidecar.
+      #    Required for RANSAC block_label and autoreject_annotate_blockwise.
+      #    Skips silently when no CSV is found (e.g. synthetic data).
       - id: 1
-        node: inflate_bad_annotations
+        node: inject_block_annotations
         args:
           mne_object: id.0
+
+      # 2. Expand manual BAD_ annotations to fixed durations by label type.
+      #    Harmless if no manual annotations are present.
+      - id: 2
+        node: inflate_bad_annotations
+        args:
+          mne_object: id.1
           default_duration: 3.0
           major_duration: 5.0
 
-      # 2. Resample to 256 Hz (anti-alias) then filter 0.1–100 Hz — matches base.py order
-      - id: 2
+      # 3. Resample to 256 Hz (anti-alias) then filter 0.1–100 Hz — matches base.py order
+      - id: 3
         node: preprocess_raw
         args:
-          mne_object: id.1
+          mne_object: id.2
           filter_args:
             l_freq: 0.1
             h_freq: 100.0
           resample: 256
           resample_first: True
 
-      # 3. ZapLine: remove 60 Hz power line noise from continuous raw
-      - id: 3
+      # 4. ZapLine: remove 60 Hz power line noise from continuous raw
+      - id: 4
         node: zapline_denoise
         args:
-          mne_object: id.2
+          mne_object: id.3
           line_freq: 60.0
           adaptive: False
 
-      # 4. RANSAC: mark broken channels using EC (rest) windows only.
+      # 5. RANSAC: mark broken channels using EC (rest) windows only.
       #    Biases bad-channel detection toward intrinsic quality, not task artifacts.
-      - id: 4
+      - id: 5
         node: ransac_bad_channels
         args:
-          mne_object: id.3
+          mne_object: id.4
           block_label: EC
 
-      # 5. CAR: common average reference (bads from step 4 are excluded)
-      - id: 5
+      # 6. CAR: common average reference (bads from step 5 are excluded)
+      - id: 6
         node: apply_car
         args:
-          mne_object: id.4
+          mne_object: id.5
 
-      # 6. Condition-grouped AutoReject — port of annotate_artifacts_blockwise.
+      # 7. Condition-grouped AutoReject — port of annotate_artifacts_blockwise.
       #    One AR instance per BLOCK_* condition group.
       #    Adds BAD_epoch_{cond} (whole-epoch) and BAD_{cond} (per-channel span).
-      - id: 6
+      - id: 7
         node: autoreject_annotate_blockwise
         args:
-          mne_object: id.5
+          mne_object: id.6
           annotation_prefix: "BLOCK_"
           segment_duration: 1.0
           min_epochs: 5

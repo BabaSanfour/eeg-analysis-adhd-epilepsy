@@ -84,12 +84,24 @@ def extract_condition_epochs(
         mne_object = _mne.io.read_raw_fif(str(mne_object), preload=True, verbose="ERROR")
 
     target_desc = f"{annotation_prefix}{condition_name}"
+
+    def _condition_matches(desc: str) -> bool:
+        # Exact match: BLOCK_EO matches BLOCK_EO
+        if desc == target_desc:
+            return True
+        # Token match for simple (no-underscore) condition names:
+        # "EO" matches BLOCK_EO_baseline, BLOCK_HV_EO, BLOCK_PHOTO_EO, etc.
+        if "_" not in condition_name and desc.startswith(annotation_prefix):
+            suffix = desc[len(annotation_prefix):]
+            return condition_name in suffix.split("_")
+        return False
+
     windows: list[tuple[float, float]] = []
     for annot in mne_object.annotations:
         desc = str(annot["description"])
         if desc.startswith("Comment/"):
             desc = desc[len("Comment/"):]
-        if desc == target_desc:
+        if _condition_matches(desc):
             onset = float(annot["onset"])
             windows.append((onset, onset + float(annot["duration"])))
 
@@ -108,6 +120,35 @@ def extract_condition_epochs(
         crop = mne_object.copy().crop(onset, min(offset, mne_object.times[-1] + mne_object.first_time))
         if crop.n_times < int(epoch_duration * crop.info["sfreq"]):
             continue
+        if reject_by_annotation:
+            # Rename BAD_ annotations that should not cause epoch rejection here:
+            #   - per-channel AR spans (have ch_names): they mark channels, not epochs
+            #   - BAD_epoch_{other_condition}: epoch markers from a different condition
+            # Manual BAD_ annotations (no ch_names, not BAD_epoch_) are kept as BAD_.
+            new_onsets, new_durations, new_descs, new_ch_names = [], [], [], []
+            for a in crop.annotations:
+                desc = str(a["description"]).removeprefix("Comment/")
+                ch_names_val = a.get("ch_names") or ()
+                mask_out = False
+                if desc.startswith("BAD_"):
+                    if ch_names_val:
+                        mask_out = True
+                    elif desc.startswith("BAD_epoch_"):
+                        cond_part = desc[len("BAD_epoch_"):]
+                        if "_" not in condition_name:
+                            mask_out = condition_name not in cond_part.split("_")
+                        else:
+                            mask_out = cond_part != condition_name
+                if mask_out:
+                    desc = "SKIP_" + desc[4:]
+                new_onsets.append(float(a["onset"]))
+                new_durations.append(float(a["duration"]))
+                new_descs.append(desc)
+                new_ch_names.append(ch_names_val)
+            crop.set_annotations(_mne.Annotations(
+                onset=new_onsets, duration=new_durations, description=new_descs,
+                ch_names=new_ch_names, orig_time=crop.annotations.orig_time,
+            ))
         eps = _mne.make_fixed_length_epochs(
             crop,
             duration=epoch_duration,
