@@ -15,7 +15,7 @@
 #   neurodags run neurodags_pipelines/step-0_preprocessing.yml --derivative BasicPrep
 #   neurodags run neurodags_pipelines/step-0_preprocessing.yml
 
-datasets: datasets_raw.yml
+datasets: step-0_datasets_raw.yml
 mount_point: local
 
 DerivativeDefinitions:

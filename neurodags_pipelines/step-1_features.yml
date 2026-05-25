@@ -38,7 +38,7 @@ new_definitions:
   - nodes_utils.py
   - nodes_aggregation.py
   - nodes_spatial.py
-datasets: datasets_preprocessed.yml
+datasets: step-1_datasets_preprocessed.yml
 mount_point: local
 
 # Shared band definition — matches configs/descriptors.yaml

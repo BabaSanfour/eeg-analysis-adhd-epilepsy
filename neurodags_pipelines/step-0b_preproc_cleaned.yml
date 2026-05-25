@@ -14,7 +14,7 @@
 #   CleanedPrep — fixed-length 2 s Epochs from CleanedPrepRaw:
 #     epoch_fixed_length(reject_by_annotation="omit")
 #
-# CleanedPrepRaw is also read by step-0c_conditions.yml (via datasets_cleaned_raw.yml)
+# CleanedPrepRaw is also read by step-0c_conditions.yml (via step-0c_datasets_cleaned_raw.yml)
 # for condition-level epoch extraction — no re-preprocessing needed there.
 #
 # Output:
@@ -33,7 +33,7 @@ new_definitions:
   - nodes_bad_channels.py
   - nodes_autoreject.py
   - nodes_ica.py
-datasets: datasets_raw.yml
+datasets: step-0_datasets_raw.yml
 mount_point: local
 
 DerivativeDefinitions:

@@ -139,7 +139,7 @@ neurodags run "$PIPELINES_DIR/step-1_features.yml" \
 # ---------------------------------------------------------------------------
 # STEP 3b — Feature extraction, per condition (mirrors --conditions EO EC)
 #
-# Uses datasets_conditions.yml which points to @ConditionEO.fif /
+# Uses step-1_datasets_conditions.yml which points to @ConditionEO.fif /
 # @ConditionEC.fif. Writes to separate derivatives paths:
 #   features_conditions_eo/features@*.nc
 #   features_conditions_ec/features@*.nc
@@ -147,7 +147,7 @@ neurodags run "$PIPELINES_DIR/step-1_features.yml" \
 echo ""
 echo "--- STEP 3b: feature extraction, per condition ---"
 neurodags run "$PIPELINES_DIR/step-1_features.yml" \
-    -d "$PIPELINES_DIR/datasets_conditions.yml" \
+    -d "$PIPELINES_DIR/step-1_datasets_conditions.yml" \
     --n-jobs "$N_JOBS"
 
 # ---------------------------------------------------------------------------
@@ -177,13 +177,13 @@ neurodags dataframe "$PIPELINES_DIR/step-1_features.yml" \
 
 # EO-only epochs
 neurodags dataframe "$PIPELINES_DIR/step-1_features.yml" \
-    -d "$PIPELINES_DIR/datasets_conditions.yml" \
+    -d "$PIPELINES_DIR/step-1_datasets_conditions.yml" \
     --format wide \
     --n-jobs "$N_JOBS" \
     --output "$CSV_EO"
 
 # EC-only epochs
-# (datasets_conditions.yml defines both eo and ec datasets;
+# (step-1_datasets_conditions.yml defines both eo and ec datasets;
 #  neurodags dataframe assembles both — split post-hoc if needed)
 
 echo ""

@@ -26,7 +26,7 @@
 
 | Step | Original (`extract_descriptors.py`) | neurodags (`step-1_features.yml`) | Status |
 |------|-------------------------------------|-----------------------------------|--------|
-| Input | per-condition epochs (EO, EC run separately) | `*@BasicPrep.fif` by default; run with `-d datasets_conditions.yml` for per-condition | ⚠ see §3.1 |
+| Input | per-condition epochs (EO, EC run separately) | `*@BasicPrep.fif` by default; run with `-d step-1_datasets_conditions.yml` for per-condition | ⚠ see §3.1 |
 | Welch PSD | `fmin=1, fmax=45, n_fft=512, n_overlap=256` | same (`SpectrumWelch`) | ✓ |
 | FOOOF | `fixed`, `max_n_peaks=6`, `peak_width_limits=[1,12]`, `freq_range=[1,45]`, `freq_res=0.5` | same (`FooofFit`) | ✓ |
 | Bands | delta/theta/alpha/beta/gamma `[1-4/4-8/8-13/13-30/30-45]` | same | ✓ |
@@ -53,13 +53,13 @@
 
 **Original**: `extract_descriptors.py` runs once per condition (`--conditions EO EC`). Each condition produces its own output directory with `sensor_epoch_features.csv` for that condition's epochs only.
 
-**neurodags default**: `step-1_features.yml` with `datasets: datasets_preprocessed.yml` → `*@BasicPrep.fif` as input → all epochs regardless of condition.
+**neurodags default**: `step-1_features.yml` with `datasets: step-1_datasets_preprocessed.yml` → `*@BasicPrep.fif` as input → all epochs regardless of condition.
 
 **neurodags per-condition run**:
 ```bash
-neurodags run step-1_features.yml -d neurodags_pipelines/datasets_conditions.yml
+neurodags run step-1_features.yml -d neurodags_pipelines/step-1_datasets_conditions.yml
 ```
-`datasets_conditions.yml` defines two datasets: `synthetic_eeg_eo` (→ `*@ConditionEO.fif`) and `synthetic_eeg_ec` (→ `*@ConditionEC.fif`), writing features to separate `derivatives/features_conditions_eo/` and `features_conditions_ec/` paths.
+`step-1_datasets_conditions.yml` defines two datasets: `synthetic_eeg_eo` (→ `*@ConditionEO.fif`) and `synthetic_eeg_ec` (→ `*@ConditionEC.fif`), writing features to separate `derivatives/features_conditions_eo/` and `features_conditions_ec/` paths.
 
 **Status**: infrastructure exists; user must explicitly invoke per-condition run. Not yet documented in a single shell command.
 
@@ -200,6 +200,6 @@ Original computes `_compute_artifact_overlap(raw, new_annots)` — percentage of
 | U. Abs power extra stats | **by design** | neurodags computes more (Med+IQR); original mean only |
 | V. Run-aware aggregation | **open** | No recording_id grouping; post-hoc only |
 | W. Band ratio floor guard | **DONE** | Both guard near-zero (eps vs 0.0 floor; equivalent) |
-| X. Condition separation | **open (workflow)** | Default run uses all epochs; must pass `-d datasets_conditions.yml` |
+| X. Condition separation | **open (workflow)** | Default run uses all epochs; must pass `-d step-1_datasets_conditions.yml` |
 | Y. ZapLine n_removed in prov | **open (minor)** | Not tracked; config is in code/ snapshot |
 | Z. QC layer | **partial** | Complete failures: covered via `.error` + `neurodags status`. Intra-file NaN tracking + structured failure rows: missing; post-hoc scan needed |

@@ -38,7 +38,7 @@ neurodags run neurodags_pipelines/step-1_features.yml
 
 #    Per-condition (mirrors --conditions EO EC split):
 neurodags run neurodags_pipelines/step-1_features.yml \
-    -d neurodags_pipelines/datasets_conditions.yml
+    -d neurodags_pipelines/step-1_datasets_conditions.yml
 ```
 
 Steps 1–3 are idempotent (`overwrite: False`). Re-running skips already-computed files.
@@ -83,7 +83,7 @@ derivatives/features/
   features@SampleEntropy.nc
   ...
 
-derivatives/features_conditions_eo/ ← per-condition run (datasets_conditions.yml)
+derivatives/features_conditions_eo/ ← per-condition run (step-1_datasets_conditions.yml)
   features@AbsBandPower.nc          ← EO epochs only
   ...
 
@@ -134,7 +134,7 @@ neurodags dataframe neurodags_pipelines/step-1_features.yml \
 
 # Per-condition
 neurodags dataframe neurodags_pipelines/step-1_features.yml \
-    -d neurodags_pipelines/datasets_conditions.yml \
+    -d neurodags_pipelines/step-1_datasets_conditions.yml \
     --format wide \
     --output results/features_eo_wide.csv
 ```
@@ -240,7 +240,7 @@ derivatives/features@EntropyMultiscale.error   ← NumPy 2.0 issue
 | Gap | Severity | Workaround |
 |-----|----------|------------|
 | QC CSVs (failures.csv, feature_missingness.csv, flags.csv) | Significant | Use `--list-errors`; add post-hoc checks |
-| Per-epoch condition column in default run | Workflow | Use `-d datasets_conditions.yml` for split output |
+| Per-epoch condition column in default run | Workflow | Use `-d step-1_datasets_conditions.yml` for split output |
 | Run-aware aggregation (`recording_id = sub_ses_run`) | Minor | Post-hoc `groupby` on assembled CSV |
 | ZapLine `n_removed` not in provenance | Minor | Config snapshot in `code/` has method/params |
 | AR plot per chunk (vs combined) | Minor | Combined plot per condition is produced |

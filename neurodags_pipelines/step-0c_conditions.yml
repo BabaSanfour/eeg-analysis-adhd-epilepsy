@@ -22,7 +22,7 @@
 
 new_definitions:
   - nodes_preprocessing.py
-datasets: datasets_cleaned_raw.yml
+datasets: step-0c_datasets_cleaned_raw.yml
 mount_point: local
 
 DerivativeDefinitions:
