@@ -1,7 +1,7 @@
 eeg_adhd_epilepsy:
   name: eeg_adhd_epilepsy
   file_pattern:
-    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/**/*_eeg.vhdr"
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/BIDS/**/*_eeg.vhdr"
     fir: "/home/yorguin/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS/**/*_eeg.vhdr"
   derivatives_path:
     local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing"
