@@ -48,13 +48,6 @@ def _load_mne_raw(obj: Any):
         return next(iter(obj.artifacts.values())).item
     if isinstance(obj, (str, os.PathLike)):
         return load_meeg(obj)
-    # neurodags passes {"cached": [path, ...]} when parent has overwrite=True but sub-derivative is cached
-    if isinstance(obj, dict) and "cached" in obj:
-        paths = obj["cached"]
-        fif_paths = [p for p in paths if str(p).endswith(".fif")]
-        path = fif_paths[0] if fif_paths else (paths[0] if paths else None)
-        if path:
-            return load_meeg(path)
     return obj
 
 
@@ -70,12 +63,6 @@ def _load_json(obj: Any) -> dict:
                 return _load_json(v)
             return v
         raise ValueError("Cannot unwrap multi-artifact NodeResult as JSON")
-    # neurodags passes {"cached": [path, ...]} when parent has overwrite=True but sub-derivative is cached
-    if isinstance(obj, dict) and "cached" in obj:
-        paths = [p for p in obj["cached"] if str(p).endswith(".json")]
-        if paths:
-            with open(paths[0], encoding="utf-8") as fh:
-                return json.load(fh)
     return obj
 
 
