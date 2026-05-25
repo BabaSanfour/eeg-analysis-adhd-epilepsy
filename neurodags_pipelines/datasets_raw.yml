@@ -1,8 +1,16 @@
-synthetic_eeg:
-  name: synthetic_eeg
+eeg_adhd_epilepsy:
+  name: eeg_adhd_epilepsy
   file_pattern:
-    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/rawdata/**/*_eeg.vhdr"
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/**/*_eeg.vhdr"
     fir: "/home/yorguin/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS/**/*_eeg.vhdr"
   derivatives_path:
-    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/preprocessing"
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing"
     fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/"
+
+synthetic_eeg:
+  name: synthetic_eeg
+  skip: true
+  file_pattern:
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/rawdata/**/*_eeg.vhdr"
+  derivatives_path:
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/preprocessing"
