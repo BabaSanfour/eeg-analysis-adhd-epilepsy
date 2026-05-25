@@ -1,7 +1,7 @@
 # Feature extraction pipeline — conditions variant.
 #
-# Input: per-condition Epochs *@CleanedPrep.<condition>.fif from step-0_pipeline@preprocessing.
-#        epoch_by_condition (splitter) writes one file per BLOCK_* segment type.
+# Input: *@CleanedPrepRaw.fif from step-0_pipeline@preprocessing (annotated Raw).
+#        Condition epoching happens in-memory here (CleanedPrep, save: False).
 #
 # Workflow (run once per condition):
 #   1. Activate ONE condition entry in step-1_dataset.yml (others skip: true).
@@ -9,16 +9,18 @@
 #   3. neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
 #        --output features_conditions_<condition>.csv
 #
+# The condition is set via vars.condition_name in the active dataset entry —
+# no edits to this file are needed when switching conditions.
+#
 # Known conditions (from _segments.csv segment_type):
 #   EO: EO_baseline, HV_EO, PHOTO_EO, PostHV_EO
 #   EC: EC_baseline, HV_EC, PHOTO_EC, PostHV_EC
-#
-# Feature definitions: identical to step-1_pipeline@extraction.yml (SourceFile = condition epochs).
 
 new_definitions:
   - nodes_utils.py
   - nodes_aggregation.py
   - nodes_spatial.py
+  - nodes_preprocessing.py
 datasets: step-1_dataset.yml
 mount_point: local
 
@@ -46,6 +48,29 @@ _channel_groups: &CHANNEL_GROUPS
 DerivativeDefinitions:
 
   # ---------------------------------------------------------------------------
+  # Condition epoching — in-memory only (save: False).
+  # Slices CleanedPrepRaw into 2 s epochs for the active condition.
+  # Applies BAD_epoch_{condition} annotations from autoreject_annotate_blockwise.
+  # ---------------------------------------------------------------------------
+
+  CleanedPrep:
+    overwrite: False
+    save: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: extract_condition_epochs
+        args:
+          mne_object: id.0
+          condition_name: $condition_name
+          annotation_prefix: "BLOCK_"
+          epoch_duration: 2.0
+          epoch_overlap: 0.0
+          reject_by_annotation: "omit"
+
+  # ---------------------------------------------------------------------------
   # Shared intermediates: PSD (Welch) and FOOOF fit
   # Computed once and reused by all spectral consumers.
   # ---------------------------------------------------------------------------
@@ -55,7 +80,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: mne_spectrum_array
         args:
@@ -1484,7 +1509,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: antropy_sample_entropy
         args:
@@ -1543,7 +1568,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: antropy_app_entropy
         args:
@@ -1602,7 +1627,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: antropy_perm_entropy
         args:
@@ -1662,7 +1687,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: antropy_svd_entropy
         args:
@@ -1723,7 +1748,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: extract_sfreq_from_xarray
         args:
@@ -1789,7 +1814,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: antropy_hjorth_params
         args:
@@ -1929,7 +1954,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: meeg_to_xarray
         args:
@@ -1996,7 +2021,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: antropy_num_zerocross
         args:
@@ -2054,7 +2079,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: antropy_higuchi_fd
         args:
@@ -2112,7 +2137,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: antropy_katz_fd
         args:
@@ -2169,7 +2194,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: antropy_petrosian_fd
         args:
@@ -2226,7 +2251,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: antropy_detrended_fluctuation
         args:
@@ -2283,7 +2308,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: neurokit_entropy_multiscale
         args:
@@ -2359,7 +2384,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: neurokit_entropy_shannon
         args:
@@ -2432,7 +2457,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: neurokit_entropy_fuzzy
         args:
@@ -2505,7 +2530,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: neurokit_entropy_dispersion
         args:
@@ -2578,7 +2603,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: neurokit_fractal_hurst
         args:
@@ -2651,7 +2676,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: stats_kurtosis
         args:
@@ -2708,7 +2733,7 @@ DerivativeDefinitions:
     for_dataframe: False
     nodes:
       - id: 0
-        derivative: SourceFile
+        derivative: CleanedPrep.fif
       - id: 1
         node: stats_rms
         args:
@@ -2757,6 +2782,9 @@ DerivativeDefinitions:
           dim: epochs
 
 DerivativeList:
+  # Condition epoching (in-memory, not cached)
+  - CleanedPrep
+
   # Shared spectral intermediates (computed once, cached)
   - SpectrumWelch
   - FooofFit

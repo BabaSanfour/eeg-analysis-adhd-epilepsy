@@ -27,7 +27,7 @@ The key shift: neurodags is **file-in, file-out**. Each step reads its input der
 python neurodags_pipelines/generate_synthetic.py
 
 # 1. Preprocessing — equivalent to run_base_pipeline()
-#    Produces CleanedPrepRaw.fif (annotated Raw) + CleanedPrep.<cond>.fif (per-condition Epochs)
+#    Produces CleanedPrepRaw.fif (annotated Raw, one per recording).
 neurodags run neurodags_pipelines/step-0_pipeline@preprocessing.yml
 
 # 2. Feature extraction — equivalent to extract_descriptors.py
@@ -35,9 +35,6 @@ neurodags run neurodags_pipelines/step-0_pipeline@preprocessing.yml
 neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
 neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
     --output results/features_<condition>.csv
-
-#    All-epochs baseline (BasicPrep, no AR cleaning):
-neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
 ```
 
 Steps are idempotent (`overwrite: False`). Re-running skips already-computed files.
@@ -58,11 +55,9 @@ derivatives/preprocessing/sub-0/eeg/
   sub-0_run-0_eeg.vhdr@CleanedPrepRaw_prov.json        ← provenance (AR stats, config)
   sub-0_run-0_eeg.vhdr@CleanedPrepRaw_ar_plot_EO.png
   sub-0_run-0_eeg.vhdr@CleanedPrepRaw_ar_plot_EC.png
-  sub-0_run-0_eeg.vhdr@CleanedPrep.EO_baseline.fif     ← 2 s epochs, EO_baseline only
-  sub-0_run-0_eeg.vhdr@CleanedPrep.EC_baseline.fif     ← 2 s epochs, EC_baseline only
-  sub-0_run-0_eeg.vhdr@CleanedPrep.HV_EO.fif           ← (one file per BLOCK_* segment type)
-  ...
 ```
+
+No per-condition `.fif` files. Condition epoching happens in-memory in step-1 (`CleanedPrep`, `save: False`).
 
 **Naming convention**: `{source_basename}@{DerivativeName}.{ext}`
 

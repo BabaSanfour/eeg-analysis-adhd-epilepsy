@@ -1,7 +1,7 @@
 # Artifact-cleaned preprocessing pipeline.
 #
 # Port of eeg_adhd_epilepsy/preproc/base.py run_base_pipeline.
-# Produces TWO derivatives per source recording:
+# Produces ONE derivative per source recording:
 #
 #   CleanedPrepRaw — fully annotated continuous Raw:
 #     0. inject_block_annotations      : read *_segments.csv sidecar → inject BLOCK_* annotations
@@ -12,14 +12,11 @@
 #     5. apply_car                     : common average reference (bads excluded)
 #     6. autoreject_annotate_blockwise : per-condition AR → BAD_epoch_{cond} + BAD_{cond} annotations
 #
-#   CleanedPrep — per-condition 2 s Epochs splitter from CleanedPrepRaw:
-#     epoch_by_condition(segment_duration=2.0, ignore_annotations=True)
-#     One artifact per BLOCK_* segment type (e.g. .EO_baseline.fif, .EC_baseline.fif).
+# Condition epoching is done in step-1_pipeline@extraction.yml (in-memory, save: False).
+# No per-condition .fif files are written here.
 #
 # Output:
 #   {reference_base}@CleanedPrepRaw.fif         (MNE Raw, fully annotated)
-#   {reference_base}@CleanedPrep.EO_baseline.fif  (MNE Epochs, 2 s, one per condition)
-#   {reference_base}@CleanedPrep.EC_baseline.fif  (etc.)
 #
 # Usage:
 #   neurodags run neurodags_pipelines/step-0_pipeline@preprocessing.yml
@@ -107,25 +104,5 @@ DerivativeDefinitions:
           ar_max_chunk_minutes: 30.0
           n_jobs: 1
 
-  CleanedPrep:
-    overwrite: False
-    for_dataframe: False
-    nodes:
-      - id: 0
-        derivative: CleanedPrepRaw.fif
-
-      # Splitter: one artifact per BLOCK_* segment type.
-      # ignore_annotations=True matches original make_epochs_from_preproc_raw:
-      # BAD_ marks retained in metadata but epochs are not rejected here.
-      - id: 1
-        node: epoch_by_condition
-        args:
-          mne_object: id.0
-          annotation_prefix: "BLOCK_"
-          segment_duration: 2.0
-          overlap: 0.0
-          ignore_annotations: True
-
 DerivativeList:
   - CleanedPrepRaw
-  - CleanedPrep
