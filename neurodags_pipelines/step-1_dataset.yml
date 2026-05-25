@@ -1,12 +1,12 @@
-# Datasets for step-1_pipeline-conditions.yml — one entry per BLOCK_* segment type.
+# Datasets for step-1_pipeline@extraction.yml — one entry per BLOCK_* segment type.
 #
 # file_pattern: *@CleanedPrep.<condition>.fif — per-condition Epochs artifact from
-#   epoch_by_condition splitter in step-0b. Each entry points to its own condition file.
+#   epoch_by_condition splitter in step-0_pipeline@preprocessing. Each entry points to its own condition file.
 # derivatives_path: condition-specific output directory.
 #
 # Usage:
 #   1. Activate ONE condition entry (remove skip: true for that entry).
-#   2. neurodags run neurodags_pipelines/step-1_pipeline-conditions.yml
+#   2. neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
 
 # EO conditions ---------------------------------------------------------------
 

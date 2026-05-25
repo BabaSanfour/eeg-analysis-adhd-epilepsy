@@ -1,25 +1,25 @@
 # Feature extraction pipeline — conditions variant.
 #
-# Input: per-condition Epochs *@CleanedPrep.<condition>.fif from step-0b.
+# Input: per-condition Epochs *@CleanedPrep.<condition>.fif from step-0_pipeline@preprocessing.
 #        epoch_by_condition (splitter) writes one file per BLOCK_* segment type.
 #
 # Workflow (run once per condition):
-#   1. Activate ONE condition entry in step-1_dataset-conditions.yml (others skip: true).
-#   2. neurodags run  neurodags_pipelines/step-1_pipeline-conditions.yml
-#   3. neurodags dataframe neurodags_pipelines/step-1_pipeline-conditions.yml \
+#   1. Activate ONE condition entry in step-1_dataset.yml (others skip: true).
+#   2. neurodags run  neurodags_pipelines/step-1_pipeline@extraction.yml
+#   3. neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
 #        --output features_conditions_<condition>.csv
 #
 # Known conditions (from _segments.csv segment_type):
 #   EO: EO_baseline, HV_EO, PHOTO_EO, PostHV_EO
 #   EC: EC_baseline, HV_EC, PHOTO_EC, PostHV_EC
 #
-# Feature definitions: identical to step-1_pipeline-basic.yml (SourceFile = condition epochs).
+# Feature definitions: identical to step-1_pipeline@extraction.yml (SourceFile = condition epochs).
 
 new_definitions:
   - nodes_utils.py
   - nodes_aggregation.py
   - nodes_spatial.py
-datasets: step-1_dataset-conditions.yml
+datasets: step-1_dataset.yml
 mount_point: local
 
 # Shared band definition — matches configs/descriptors.yaml

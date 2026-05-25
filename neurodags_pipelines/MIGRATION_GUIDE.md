@@ -28,16 +28,16 @@ python neurodags_pipelines/generate_synthetic.py
 
 # 1. Preprocessing — equivalent to run_base_pipeline()
 #    Produces CleanedPrepRaw.fif (annotated Raw) + CleanedPrep.<cond>.fif (per-condition Epochs)
-neurodags run neurodags_pipelines/step-0_pipeline-cleaned.yml
+neurodags run neurodags_pipelines/step-0_pipeline@preprocessing.yml
 
 # 2. Feature extraction — equivalent to extract_descriptors.py
-#    Per-condition (activate one entry in step-1_dataset-conditions.yml, then run):
-neurodags run neurodags_pipelines/step-1_pipeline-conditions.yml
-neurodags dataframe neurodags_pipelines/step-1_pipeline-conditions.yml \
+#    Per-condition (activate one entry in step-1_dataset.yml, then run):
+neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
+neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
     --output results/features_<condition>.csv
 
 #    All-epochs baseline (BasicPrep, no AR cleaning):
-neurodags run neurodags_pipelines/step-1_pipeline-basic.yml
+neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
 ```
 
 Steps are idempotent (`overwrite: False`). Re-running skips already-computed files.
@@ -76,14 +76,14 @@ neurodags: one `.nc` (NetCDF) file per feature family, stored at the **dataset l
 
 ```
 derivatives/features/
-  features@AbsBandPower.nc          ← dims: (epochs, channels, freqbands)  [step-1_pipeline-basic.yml]
+  features@AbsBandPower.nc          ← dims: (epochs, channels, freqbands)  [step-1_pipeline@extraction.yml]
   features@AbsBandPowerAgg.nc       ← dims: (channels, freqbands) — epoch-mean
   features@AbsBandPowerPooled.nc    ← dims: (epochs, regions, freqbands)
   features@FooofFit.nc
   features@SampleEntropy.nc
   ...
 
-derivatives/features_conditions/EO_baseline/   ← per-condition run [step-1_pipeline-conditions.yml]
+derivatives/features_conditions/EO_baseline/   ← per-condition run [step-1_pipeline@extraction.yml]
   features@AbsBandPower.nc          ← EO_baseline epochs only
   ...
 
@@ -123,12 +123,12 @@ neurodags: assemble post-hoc with `neurodags dataframe`.
 
 ```bash
 # All-epochs wide CSV (BasicPrep, no condition split)
-neurodags dataframe neurodags_pipelines/step-1_pipeline-basic.yml \
+neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
     --format wide \
     --output results/features_wide.csv
 
-# Per-condition (after activating EO_baseline in step-1_dataset-conditions.yml)
-neurodags dataframe neurodags_pipelines/step-1_pipeline-conditions.yml \
+# Per-condition (after activating EO_baseline in step-1_dataset.yml)
+neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
     --format wide \
     --output results/features_EO_baseline_wide.csv
 ```
@@ -151,7 +151,7 @@ raw.set_eeg_reference("average")
 annotate_artifacts_blockwise(raw)   # per-condition AR
 ```
 
-### neurodags `step-0_pipeline-cleaned.yml` order
+### neurodags `step-0_pipeline@preprocessing.yml` order
 
 ```yaml
 id.1 inflate_bad_annotations
@@ -212,13 +212,13 @@ Also, on every `neurodags run`, the pipeline YAML + `custom_nodes.py` + datasets
 
 ```bash
 # How many files done / missing / errored per derivative?
-neurodags status neurodags_pipelines/step-0_pipeline-cleaned.yml
+neurodags status neurodags_pipelines/step-0_pipeline@preprocessing.yml
 
 # Show which files errored
-neurodags status neurodags_pipelines/step-1_pipeline-basic.yml --list-errors
+neurodags status neurodags_pipelines/step-1_pipeline@extraction.yml --list-errors
 
 # Per derivative
-neurodags status neurodags_pipelines/step-1_pipeline-basic.yml \
+neurodags status neurodags_pipelines/step-1_pipeline@extraction.yml \
     --derivative SpectralEntropy --derivative SampleEntropy
 ```
 
@@ -234,7 +234,7 @@ derivatives/features@EntropyMultiscale.error   ← NumPy 2.0 issue
 | Gap | Severity | Workaround |
 |-----|----------|------------|
 | QC CSVs (failures.csv, feature_missingness.csv, flags.csv) | Significant | Use `--list-errors`; add post-hoc checks |
-| Per-epoch condition column in default run | Workflow | Use `step-1_pipeline-conditions.yml` for split output |
+| Per-epoch condition column in default run | Workflow | Use `step-1_pipeline@extraction.yml` for split output |
 | Run-aware aggregation (`recording_id = sub_ses_run`) | Minor | Post-hoc `groupby` on assembled CSV |
 | ZapLine `n_removed` not in provenance | Minor | Config snapshot in `code/` has method/params |
 | AR plot per chunk (vs combined) | Minor | Combined plot per condition is produced |
