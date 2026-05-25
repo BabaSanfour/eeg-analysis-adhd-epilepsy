@@ -1,6 +1,6 @@
 # Feature extraction pipeline — neurodags equivalent of coco-pipe descriptors.
 #
-# Input: preprocessed epoch .fif files from step-0_preprocessing.yml
+# Input: preprocessed epoch .fif files from step-0_pipeline-raw.yml
 #        (SourceFile = *@BasicPrep.fif, dims: epochs × spaces × times, 256 Hz, 1–45 Hz)
 #
 # Bands (matching configs/descriptors.yaml):
@@ -31,14 +31,14 @@
 #   NOTE: synthetic data (EEG000-EEG007) won't produce pooled outputs — real data only.
 #
 # Usage:
-#   neurodags run  neurodags_pipelines/step-1_features.yml
-#   neurodags dataframe neurodags_pipelines/step-1_features.yml --output features.csv
+#   neurodags run  neurodags_pipelines/step-1_pipeline-basic.yml
+#   neurodags dataframe neurodags_pipelines/step-1_pipeline-basic.yml --output features.csv
 
 new_definitions:
   - nodes_utils.py
   - nodes_aggregation.py
   - nodes_spatial.py
-datasets: step-1_datasets_preprocessed.yml
+datasets: step-1_dataset-basic.yml
 mount_point: local
 
 # Shared band definition — matches configs/descriptors.yaml

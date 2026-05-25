@@ -1,6 +1,6 @@
 # Pipeline Comparison: original (`preproc/base.py` + `extract_descriptors.py`) vs neurodags
 
-*Last updated: 2026-05-25. Added §2.9 (BLOCK annotation source) and §2.10 (condition epoch extraction).*
+*Last updated: 2026-05-25. Reflects splitter refactor: step-0b now produces per-condition Epochs artifacts; step-0c deleted.*
 
 ---
 
@@ -8,8 +8,8 @@
 
 ### 1.1 Preprocessing
 
-| Step | Original (`base.py`) | neurodags (`step-0b`) | Status |
-|------|----------------------|-----------------------|--------|
+| Step | Original (`base.py`) | neurodags (`step-0_pipeline-cleaned`) | Status |
+|------|----------------------|---------------------------------------|--------|
 | BLOCK annotation source | `load_bids_raw` → `read_raw_bids` reads `_events.tsv` written by `to_bids.py` → BLOCK_* present on load | `load_meeg` → `read_raw_brainvision` reads `.vmrk` (hardware triggers only) → BLOCK_* absent; `inject_block_annotations` id=0 re-reads `_segments.csv` sidecar | ✓ see §2.9 |
 | Annotation inflation | `inflate_bad_annotations` (point → 3 s; major → 5 s) | `inflate_bad_annotations` id=2 (same defaults) | ✓ |
 | Resample | `raw.resample(target_sfreq)` — **before** bandpass | `preprocess_raw(resample_first=True)` — resample before bandpass | ✓ |
@@ -20,14 +20,14 @@
 | AR | per-condition, 1 s epochs, `min(10, n)` CV folds, `n_interpolate=[0]`, chunked at 30 min | `autoreject_annotate_blockwise` same params + `n_jobs=1` (YAML) | ✓ |
 | AR annotations | `BAD_epoch_{cond}` (whole-epoch) + `BAD_{cond}` (per-channel ch_names) | same | ✓ |
 | Output (continuous) | in-memory `Raw` | `@CleanedPrepRaw.fif` (float32 on disk) | ✓ (±float32) |
-| Output (epochs) | condition-specific epoch objects | `@CleanedPrep.fif` (all conditions, BAD omitted) | ✓ |
+| Output (epochs) | condition-specific epoch objects | `@CleanedPrep.{cond}.fif` per BLOCK_* segment type (splitter) | ✓ |
 | AR chunk floor | `max(1, int(...))` | `max(1, int(...))` | ✓ |
 
 ### 1.2 Feature extraction
 
-| Step | Original (`extract_descriptors.py`) | neurodags (`step-1_features.yml`) | Status |
-|------|-------------------------------------|-----------------------------------|--------|
-| Input | per-condition epochs (EO, EC run separately) | `*@BasicPrep.fif` by default; run with `-d step-1_datasets_conditions.yml` for per-condition | ⚠ see §3.1 |
+| Step | Original (`extract_descriptors.py`) | neurodags (`step-1_pipeline-basic.yml`) | Status |
+|------|-------------------------------------|---------------------------------------------|--------|
+| Input | per-condition epochs (EO, EC run separately) | `*@CleanedPrep.{cond}.fif` per-condition (step-1_pipeline-conditions.yml) | ✓ see §2.1 |
 | Welch PSD | `fmin=1, fmax=45, n_fft=512, n_overlap=256` | same (`SpectrumWelch`) | ✓ |
 | FOOOF | `fixed`, `max_n_peaks=6`, `peak_width_limits=[1,12]`, `freq_range=[1,45]`, `freq_res=0.5` | same (`FooofFit`) | ✓ |
 | Bands | delta/theta/alpha/beta/gamma `[1-4/4-8/8-13/13-30/30-45]` | same | ✓ |
@@ -50,19 +50,22 @@
 
 ## 2. Remaining open gaps
 
-### 2.1 Condition separation in feature extraction (§3.1)
+### 2.1 Condition separation in feature extraction
 
 **Original**: `extract_descriptors.py` runs once per condition (`--conditions EO EC`). Each condition produces its own output directory with `sensor_epoch_features.csv` for that condition's epochs only.
 
-**neurodags default**: `step-1_features.yml` with `datasets: step-1_datasets_preprocessed.yml` → `*@BasicPrep.fif` as input → all epochs regardless of condition.
+**neurodags**: `step-0_pipeline-cleaned.yml` runs `epoch_by_condition` as a splitter — one artifact per BLOCK_* segment type written to disk (`@CleanedPrep.EO_baseline.fif`, `@CleanedPrep.HV_EO.fif`, etc.). `step-1_pipeline-conditions.yml` uses these directly as source files via `step-1_dataset-conditions.yml`, with a condition-specific output path per run.
 
-**neurodags per-condition run**:
+Workflow (one run per condition):
 ```bash
-neurodags run step-1_features.yml -d neurodags_pipelines/step-1_datasets_conditions.yml
+# 1. Activate one entry in step-1_dataset-conditions.yml (remove skip: true)
+# 2. Run:
+neurodags run neurodags_pipelines/step-1_pipeline-conditions.yml
+neurodags dataframe neurodags_pipelines/step-1_pipeline-conditions.yml \
+    --output results/features_<condition>.csv
 ```
-`step-1_datasets_conditions.yml` defines two datasets: `synthetic_eeg_eo` (→ `*@ConditionEO.fif`) and `synthetic_eeg_ec` (→ `*@ConditionEC.fif`), writing features to separate `derivatives/features_conditions_eo/` and `features_conditions_ec/` paths.
 
-**Status**: infrastructure exists; user must explicitly invoke per-condition run. Not yet documented in a single shell command.
+**Status**: resolved — per-segment-type granularity matches original.
 
 ### 2.2 Run-aware aggregation
 
@@ -127,47 +130,29 @@ node would need to either call `read_raw_bids` (heavier) or parse the TSV manual
 
 ---
 
-### 2.10 Condition epoch extraction: per-segment-type vs pooled eye-state
+### 2.10 Condition epoch extraction: splitter approach
 
 **Original (`epochs.py → make_epochs_from_preproc_raw`)**: `build_block_events_by_condition`
-scans `BLOCK_*` annotations and groups by **exact** segment_type name. Each fine-grained
-condition (EO_baseline, HV_EO, PHOTO_EO, HV_EC, …) is a separate event_id in the resulting
-epoch file. No EO/EC pooling happens at preprocessing time.
+scans `BLOCK_*` annotations and groups by **exact** segment_type name (EO_baseline, HV_EO, etc.).
+Each segment type is a separate `event_id` in the resulting Epochs. No pooling.
+`ignore_annotations=True` by default — BAD_ rejection not applied at this stage.
 
-`extract_descriptors.py` runs `--conditions all` (or a specific list of exact condition names).
-It processes each fine-grained condition independently and writes separate feature shards per
-condition. EO/EC grouping is left to downstream analysis.
+**neurodags `step-0_pipeline-cleaned.yml`**: `epoch_by_condition` (splitter node) does the same:
+scans `BLOCK_*` annotations, groups by exact segment_type, builds one `mne.Epochs` per condition.
+Returns a `NodeResult` with one artifact per segment type (`.EO_baseline.fif`, `.HV_EO.fif`, …).
+`ignore_annotations=True` (default) matches original behavior.
+`step-1_pipeline-conditions.yml` consumes one artifact per run via source file selection.
 
-`ignore_annotations=True` by default — BAD_ annotation rejection is **not applied** when
-building the condition epoch file (the analyst controls this explicitly via CLI flag).
+**No cross-condition BAD_ bleeding concern**: each condition's Epochs object is built independently
+from the full Raw; no cross-window masking is needed.
 
-**neurodags step-0c**: `extract_condition_epochs(condition_name="EO")` uses **token matching**
-— any annotation where "EO" is an underscore-delimited token in the segment suffix. This pools
-EO_baseline + HV_EO + PostHV_EO + PHOTO_EO into a single `ConditionEO.fif`, and similarly for
-EC. Per-segment-type granularity is lost in this file.
-
-`reject_by_annotation: "omit"` is enabled: only `BAD_epoch_{cond}` annotations matching the
-current eye-state token cause rejection; per-channel AR spans (`BAD_{cond}` with `ch_names`)
-are excluded from epoch rejection to prevent cross-condition bleeding (see note below).
-
-**Cross-condition BAD_ bleeding**: AR per-channel span annotations (`BAD_EC_baseline` etc.)
-are created by `autoreject_annotate_blockwise` for epochs inside EC windows. Because consecutive
-bad-channel spans are merged by `_group_consecutive_indices`, a single span can extend to the
-edge of the EC window and overlap by up to `segment_duration` (1 s) into an adjacent EO window.
-`make_fixed_length_epochs` with `reject_by_annotation="omit"` would treat this as "EO epoch
-is bad" even though the BAD span belongs to the EC condition. The fix in
-`extract_condition_epochs` renames non-matching BAD_ annotations to `SKIP_` before epoching.
-
-**Status**: pooled EO/EC epoching works. If per-segment-type condition epochs are needed
-(matching original granularity), run feature extraction with `step-1_features.yml` directly
-on `CleanedPrep.fif` (has all segment_types as event_ids) or add a step-0c variant that
-extracts per-segment-type epochs.
+**Status**: resolved — per-segment-type granularity and `ignore_annotations` behavior match original.
 
 ---
 
 ### 2.4 Float32 precision on CleanedPrepRaw
 
-MNE saves `.fif` as float32 by default. `CleanedPrepRaw.fif` → reloaded by `step-0c_conditions.yml` introduces float32 round-trip. Original keeps Raw in memory (float64) for condition extraction.
+MNE saves `.fif` as float32 by default. `CleanedPrepRaw.fif` (float32 on disk) → reloaded by `CleanedPrep` derivative in the same pipeline run introduces a float32 round-trip for epoch extraction. Original keeps Raw in memory (float64). Effect below EEG noise floor. **Negligible.**
 
 Effect: ~7 significant digits vs ~15. Below EEG noise floor (~1 µV). **Negligible in practice.**
 
@@ -186,7 +171,7 @@ Original `prov.json` includes:
 ```
 neurodags `@CleanedPrepRaw_prov.json` does not include `zapline_stats` because ZapLine runs as a separate node (`zapline_denoise`) upstream of the AR node that writes the provenance. `n_removed_` attribute is not captured anywhere.
 
-**Status**: minor — config is in `code/step-0b_preproc_cleaned.yml` snapshot; n_removed not tracked.
+**Status**: minor — config is in `code/step-0_pipeline-cleaned.yml` snapshot; n_removed not tracked.
 
 ### 2.7 Provenance: manual_overlap_pct
 
@@ -274,9 +259,9 @@ Original computes `_compute_artifact_overlap(raw, new_annots)` — percentage of
 | U. Abs power extra stats | **by design** | neurodags computes more (Med+IQR); original mean only |
 | V. Run-aware aggregation | **open** | No recording_id grouping; post-hoc only |
 | W. Band ratio floor guard | **DONE** | Both guard near-zero (eps vs 0.0 floor; equivalent) |
-| X. Condition separation | **open (workflow)** | Default run uses all epochs; must pass `-d step-1_datasets_conditions.yml` |
+| X. Condition separation | **DONE** | `step-0_pipeline-cleaned` splitter + `step-1_pipeline-conditions.yml` per-segment-type |
 | Y. ZapLine n_removed in prov | **open (minor)** | Not tracked; config is in code/ snapshot |
 | Z. QC layer | **partial** | Complete failures: covered via `.error` + `neurodags status`. Intra-file NaN tracking + structured failure rows: missing; post-hoc scan needed |
 | AA. BLOCK annotation injection | **DONE** | `inject_block_annotations` reads `_segments.csv`; original uses `read_raw_bids` → `_events.tsv` (§2.9) |
-| AB. Condition epoch pooling | **DONE (design diff)** | neurodags pools by eye-state token (EO/EC); original preserves per-segment-type granularity (§2.10) |
-| AC. Cross-condition BAD_ bleeding fix | **DONE** | `extract_condition_epochs` renames non-matching BAD_ spans to `SKIP_` before epoching; not needed in original (in-memory, no cross-condition bleeding issue) |
+| AB. Condition epoch extraction | **DONE** | splitter produces per-segment-type Epochs artifacts; matches original granularity (§2.10) |
+| AC. Cross-condition BAD_ bleeding | **n/a** | splitter builds independent Epochs per condition from shared Raw; no cross-condition bleeding possible |

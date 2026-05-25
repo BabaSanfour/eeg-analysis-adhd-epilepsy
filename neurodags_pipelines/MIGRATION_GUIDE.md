@@ -1,6 +1,6 @@
 # Migration Guide: `base.py` + `extract_descriptors.py` → neurodags
 
-*Last updated: 2026-05-21.*
+*Last updated: 2026-05-25.*
 
 This guide is for researchers who know the original pipeline and want to understand the neurodags equivalent. For a full equivalence audit see `COMPARISON.md`.
 
@@ -27,21 +27,20 @@ The key shift: neurodags is **file-in, file-out**. Each step reads its input der
 python neurodags_pipelines/generate_synthetic.py
 
 # 1. Preprocessing — equivalent to run_base_pipeline()
-neurodags run neurodags_pipelines/step-0b_preproc_cleaned.yml
+#    Produces CleanedPrepRaw.fif (annotated Raw) + CleanedPrep.<cond>.fif (per-condition Epochs)
+neurodags run neurodags_pipelines/step-0_pipeline-cleaned.yml
 
-# 2. Condition epoch extraction — equivalent to loading clean raw and epoching per condition
-neurodags run neurodags_pipelines/step-0c_conditions.yml
+# 2. Feature extraction — equivalent to extract_descriptors.py
+#    Per-condition (activate one entry in step-1_dataset-conditions.yml, then run):
+neurodags run neurodags_pipelines/step-1_pipeline-conditions.yml
+neurodags dataframe neurodags_pipelines/step-1_pipeline-conditions.yml \
+    --output results/features_<condition>.csv
 
-# 3. Feature extraction — equivalent to extract_descriptors.py
-#    Default: all epochs regardless of condition
-neurodags run neurodags_pipelines/step-1_features.yml
-
-#    Per-condition (mirrors --conditions EO EC split):
-neurodags run neurodags_pipelines/step-1_features.yml \
-    -d neurodags_pipelines/step-1_datasets_conditions.yml
+#    All-epochs baseline (BasicPrep, no AR cleaning):
+neurodags run neurodags_pipelines/step-1_pipeline-basic.yml
 ```
 
-Steps 1–3 are idempotent (`overwrite: False`). Re-running skips already-computed files.
+Steps are idempotent (`overwrite: False`). Re-running skips already-computed files.
 
 ---
 
@@ -55,13 +54,14 @@ neurodags: written to `derivatives/preprocessing/<subject>/eeg/`.
 
 ```
 derivatives/preprocessing/sub-0/eeg/
-  sub-0_run-0_eeg.vhdr@CleanedPrepRaw.fif      ← fully annotated continuous Raw
-  sub-0_run-0_eeg.vhdr@CleanedPrepRaw_prov.json ← provenance (AR stats, config)
+  sub-0_run-0_eeg.vhdr@CleanedPrepRaw.fif             ← fully annotated continuous Raw
+  sub-0_run-0_eeg.vhdr@CleanedPrepRaw_prov.json        ← provenance (AR stats, config)
   sub-0_run-0_eeg.vhdr@CleanedPrepRaw_ar_plot_EO.png
   sub-0_run-0_eeg.vhdr@CleanedPrepRaw_ar_plot_EC.png
-  sub-0_run-0_eeg.vhdr@CleanedPrep.fif          ← fixed-length 2 s epochs, all conditions
-  sub-0_run-0_eeg.vhdr@ConditionEO.fif          ← 2 s epochs within BLOCK_EO windows
-  sub-0_run-0_eeg.vhdr@ConditionEC.fif          ← 2 s epochs within BLOCK_EC windows
+  sub-0_run-0_eeg.vhdr@CleanedPrep.EO_baseline.fif     ← 2 s epochs, EO_baseline only
+  sub-0_run-0_eeg.vhdr@CleanedPrep.EC_baseline.fif     ← 2 s epochs, EC_baseline only
+  sub-0_run-0_eeg.vhdr@CleanedPrep.HV_EO.fif           ← (one file per BLOCK_* segment type)
+  ...
 ```
 
 **Naming convention**: `{source_basename}@{DerivativeName}.{ext}`
@@ -76,19 +76,19 @@ neurodags: one `.nc` (NetCDF) file per feature family, stored at the **dataset l
 
 ```
 derivatives/features/
-  features@AbsBandPower.nc          ← dims: (epochs, channels, freqbands)
+  features@AbsBandPower.nc          ← dims: (epochs, channels, freqbands)  [step-1_pipeline-basic.yml]
   features@AbsBandPowerAgg.nc       ← dims: (channels, freqbands) — epoch-mean
   features@AbsBandPowerPooled.nc    ← dims: (epochs, regions, freqbands)
   features@FooofFit.nc
   features@SampleEntropy.nc
   ...
 
-derivatives/features_conditions_eo/ ← per-condition run (step-1_datasets_conditions.yml)
-  features@AbsBandPower.nc          ← EO epochs only
+derivatives/features_conditions/EO_baseline/   ← per-condition run [step-1_pipeline-conditions.yml]
+  features@AbsBandPower.nc          ← EO_baseline epochs only
   ...
 
-derivatives/features_conditions_ec/
-  features@AbsBandPower.nc          ← EC epochs only
+derivatives/features_conditions/EC_baseline/
+  features@AbsBandPower.nc          ← EC_baseline epochs only
   ...
 ```
 
@@ -122,21 +122,15 @@ Original: `extract_descriptors.py` writes `sensor_subject_features.csv` directly
 neurodags: assemble post-hoc with `neurodags dataframe`.
 
 ```bash
-# Wide format — one row per file, one column per feature
-neurodags dataframe neurodags_pipelines/step-1_features.yml \
+# All-epochs wide CSV (BasicPrep, no condition split)
+neurodags dataframe neurodags_pipelines/step-1_pipeline-basic.yml \
     --format wide \
     --output results/features_wide.csv
 
-# Long format
-neurodags dataframe neurodags_pipelines/step-1_features.yml \
-    --format long \
-    --output results/features_long.csv
-
-# Per-condition
-neurodags dataframe neurodags_pipelines/step-1_features.yml \
-    -d neurodags_pipelines/step-1_datasets_conditions.yml \
+# Per-condition (after activating EO_baseline in step-1_dataset-conditions.yml)
+neurodags dataframe neurodags_pipelines/step-1_pipeline-conditions.yml \
     --format wide \
-    --output results/features_eo_wide.csv
+    --output results/features_EO_baseline_wide.csv
 ```
 
 The assembled CSV has one row per source file (= one run). Subject/run identity comes from the source filename parsed by neurodags's BIDS-aware index.
@@ -157,7 +151,7 @@ raw.set_eeg_reference("average")
 annotate_artifacts_blockwise(raw)   # per-condition AR
 ```
 
-### neurodags `step-0b_preproc_cleaned.yml` order
+### neurodags `step-0_pipeline-cleaned.yml` order
 
 ```yaml
 id.1 inflate_bad_annotations
@@ -218,13 +212,13 @@ Also, on every `neurodags run`, the pipeline YAML + `custom_nodes.py` + datasets
 
 ```bash
 # How many files done / missing / errored per derivative?
-neurodags status neurodags_pipelines/step-0b_preproc_cleaned.yml
+neurodags status neurodags_pipelines/step-0_pipeline-cleaned.yml
 
 # Show which files errored
-neurodags status neurodags_pipelines/step-1_features.yml --list-errors
+neurodags status neurodags_pipelines/step-1_pipeline-basic.yml --list-errors
 
 # Per derivative
-neurodags status neurodags_pipelines/step-1_features.yml \
+neurodags status neurodags_pipelines/step-1_pipeline-basic.yml \
     --derivative SpectralEntropy --derivative SampleEntropy
 ```
 
@@ -240,7 +234,7 @@ derivatives/features@EntropyMultiscale.error   ← NumPy 2.0 issue
 | Gap | Severity | Workaround |
 |-----|----------|------------|
 | QC CSVs (failures.csv, feature_missingness.csv, flags.csv) | Significant | Use `--list-errors`; add post-hoc checks |
-| Per-epoch condition column in default run | Workflow | Use `-d step-1_datasets_conditions.yml` for split output |
+| Per-epoch condition column in default run | Workflow | Use `step-1_pipeline-conditions.yml` for split output |
 | Run-aware aggregation (`recording_id = sub_ses_run`) | Minor | Post-hoc `groupby` on assembled CSV |
 | ZapLine `n_removed` not in provenance | Minor | Config snapshot in `code/` has method/params |
 | AR plot per chunk (vs combined) | Minor | Combined plot per condition is produced |

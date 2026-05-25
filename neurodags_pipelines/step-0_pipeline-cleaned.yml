@@ -22,7 +22,7 @@
 #   {reference_base}@CleanedPrep.EC_baseline.fif  (etc.)
 #
 # Usage:
-#   neurodags run neurodags_pipelines/step-0b_preproc_cleaned.yml
+#   neurodags run neurodags_pipelines/step-0_pipeline-cleaned.yml
 
 new_definitions:
   - nodes_utils.py
@@ -32,7 +32,7 @@ new_definitions:
   - nodes_bad_channels.py
   - nodes_autoreject.py
   - nodes_ica.py
-datasets: step-0_datasets_raw.yml
+datasets: step-0_dataset-raw.yml
 mount_point: local
 
 DerivativeDefinitions:
