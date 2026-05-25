@@ -180,3 +180,108 @@ def extract_condition_epochs(
             )
         }
     )
+
+
+@register_node
+def epoch_by_condition(
+    mne_object,
+    annotation_prefix: str = "BLOCK_",
+    segment_duration: float = 2.0,
+    overlap: float = 0.0,
+    ignore_annotations: bool = True,
+) -> NodeResult:
+    """Create multi-condition fixed-length Epochs from BLOCK_* annotated Raw.
+
+    Port of make_epochs_from_preproc_raw: one event_id per BLOCK_* segment type,
+    all conditions in a single Epochs object. Matches original _desc-base_epo.fif.
+
+    ignore_annotations=True (default) matches original: BAD_ annotations are noted
+    but do not cause epoch rejection. Set False to omit bad spans.
+    """
+    import mne as _mne
+    import numpy as np
+    from neurodags.loaders import load_meeg
+
+    if isinstance(mne_object, NodeResult):
+        mne_object = mne_object.artifacts[".fif"].item
+    if isinstance(mne_object, (str, os.PathLike)):
+        mne_object = load_meeg(mne_object)
+
+    raw = mne_object
+    if not raw.preload:
+        raw = raw.load_data()
+
+    blocks: list[tuple[str, float, float]] = []
+    for annot in raw.annotations:
+        desc = str(annot["description"]).removeprefix("Comment/")
+        if desc.startswith(annotation_prefix):
+            onset = float(annot["onset"])
+            duration = float(annot["duration"])
+            if duration >= segment_duration:
+                condition = desc[len(annotation_prefix):]
+                blocks.append((condition, onset, onset + duration))
+
+    if not blocks:
+        raise ValueError(
+            f"No '{annotation_prefix}*' annotations found or all too short for "
+            f"{segment_duration}s epochs."
+        )
+
+    events_by_condition: dict[str, np.ndarray] = {}
+    for condition, onset, stop in blocks:
+        evs = _mne.make_fixed_length_events(
+            raw,
+            id=1,
+            start=onset,
+            stop=stop,
+            duration=segment_duration,
+            overlap=overlap,
+            first_samp=True,
+        )
+        if len(evs) == 0:
+            continue
+        if condition in events_by_condition:
+            events_by_condition[condition] = np.concatenate(
+                [events_by_condition[condition], evs]
+            )
+        else:
+            events_by_condition[condition] = evs
+
+    if not events_by_condition:
+        raise ValueError("No epochs could be constructed from block annotations.")
+
+    event_id = {
+        name: idx
+        for idx, name in enumerate(sorted(events_by_condition), start=1)
+    }
+    remapped = []
+    for name, evs in events_by_condition.items():
+        ec = evs.copy()
+        ec[:, 2] = event_id[name]
+        remapped.append(ec)
+    events = np.concatenate(remapped)
+    events = events[events[:, 0].argsort()]
+
+    epochs = _mne.Epochs(
+        raw,
+        events=events,
+        event_id=event_id,
+        tmin=0.0,
+        tmax=segment_duration,
+        baseline=None,
+        reject=None,
+        verbose="ERROR",
+        preload=True,
+        proj=False,
+        reject_by_annotation=not ignore_annotations,
+        event_repeated="drop",
+    )
+
+    artifacts = {}
+    for name in sorted(event_id.keys()):
+        cond_epochs = epochs[name]
+        artifacts[f".{name}.fif"] = Artifact(
+            item=cond_epochs,
+            writer=lambda path, e=cond_epochs: e.save(path, overwrite=True, verbose="ERROR"),
+        )
+    return NodeResult(artifacts=artifacts)

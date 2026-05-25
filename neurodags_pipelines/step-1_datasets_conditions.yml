@@ -1,33 +1,102 @@
-eeg_adhd_epilepsy_eo:
-  name: eeg_adhd_epilepsy_eo
-  file_pattern:
-    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@ConditionEO.fif"
-    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@ConditionEO.fif"
-  derivatives_path:
-    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/features_conditions_eo"
-    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/features_conditions_eo/"
+# Datasets for step-1_features_conditions.yml — one entry per BLOCK_* segment type.
+#
+# file_pattern: *@CleanedPrep.<condition>.fif — per-condition Epochs artifact from
+#   epoch_by_condition splitter in step-0b. Each entry points to its own condition file.
+# derivatives_path: condition-specific output directory.
+#
+# Usage:
+#   1. Activate ONE condition entry (remove skip: true for that entry).
+#   2. neurodags run neurodags_pipelines/step-1_features_conditions.yml
 
-eeg_adhd_epilepsy_ec:
-  name: eeg_adhd_epilepsy_ec
-  file_pattern:
-    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@ConditionEC.fif"
-    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@ConditionEC.fif"
-  derivatives_path:
-    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/features_conditions_ec"
-    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/features_conditions_ec/"
+# EO conditions ---------------------------------------------------------------
 
-synthetic_eeg_eo:
-  name: synthetic_eeg_eo
+eeg_adhd_epilepsy_EO_baseline:
+  name: eeg_adhd_epilepsy_EO_baseline
+  file_pattern:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrep.EO_baseline.fif"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrep.EO_baseline.fif"
+  derivatives_path:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/features_conditions/EO_baseline"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/features_conditions/EO_baseline"
+
+eeg_adhd_epilepsy_HV_EO:
+  name: eeg_adhd_epilepsy_HV_EO
   skip: true
   file_pattern:
-    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/preprocessing/**/*@ConditionEO.fif"
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrep.HV_EO.fif"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrep.HV_EO.fif"
   derivatives_path:
-    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/features_conditions_eo"
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/features_conditions/HV_EO"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/features_conditions/HV_EO"
 
-synthetic_eeg_ec:
-  name: synthetic_eeg_ec
+eeg_adhd_epilepsy_PHOTO_EO:
+  name: eeg_adhd_epilepsy_PHOTO_EO
   skip: true
   file_pattern:
-    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/preprocessing/**/*@ConditionEC.fif"
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrep.PHOTO_EO.fif"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrep.PHOTO_EO.fif"
   derivatives_path:
-    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/features_conditions_ec"
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/features_conditions/PHOTO_EO"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/features_conditions/PHOTO_EO"
+
+eeg_adhd_epilepsy_PostHV_EO:
+  name: eeg_adhd_epilepsy_PostHV_EO
+  skip: true
+  file_pattern:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrep.PostHV_EO.fif"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrep.PostHV_EO.fif"
+  derivatives_path:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/features_conditions/PostHV_EO"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/features_conditions/PostHV_EO"
+
+# EC conditions ---------------------------------------------------------------
+
+eeg_adhd_epilepsy_EC_baseline:
+  name: eeg_adhd_epilepsy_EC_baseline
+  skip: true
+  file_pattern:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrep.EC_baseline.fif"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrep.EC_baseline.fif"
+  derivatives_path:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/features_conditions/EC_baseline"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/features_conditions/EC_baseline"
+
+eeg_adhd_epilepsy_HV_EC:
+  name: eeg_adhd_epilepsy_HV_EC
+  skip: true
+  file_pattern:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrep.HV_EC.fif"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrep.HV_EC.fif"
+  derivatives_path:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/features_conditions/HV_EC"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/features_conditions/HV_EC"
+
+eeg_adhd_epilepsy_PHOTO_EC:
+  name: eeg_adhd_epilepsy_PHOTO_EC
+  skip: true
+  file_pattern:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrep.PHOTO_EC.fif"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrep.PHOTO_EC.fif"
+  derivatives_path:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/features_conditions/PHOTO_EC"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/features_conditions/PHOTO_EC"
+
+eeg_adhd_epilepsy_PostHV_EC:
+  name: eeg_adhd_epilepsy_PostHV_EC
+  skip: true
+  file_pattern:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrep.PostHV_EC.fif"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrep.PostHV_EC.fif"
+  derivatives_path:
+    local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/features_conditions/PostHV_EC"
+    fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/features_conditions/PostHV_EC"
+
+# Synthetic (skip) ------------------------------------------------------------
+
+synthetic_eeg_EO_baseline:
+  name: synthetic_eeg_EO_baseline
+  skip: true
+  file_pattern:
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/preprocessing/**/*@CleanedPrep.EO_baseline.fif"
+  derivatives_path:
+    local: "/home/yorguin/code/eeg-analysis-adhd-epilepsy/datasets/synthetic_eeg/derivatives/features_conditions/EO_baseline"
