@@ -1,6 +1,6 @@
 # Pipeline Comparison: original (`preproc/base.py` + `extract_descriptors.py`) vs neurodags
 
-*Last updated: 2026-05-21. All gaps re-audited from source.*
+*Last updated: 2026-05-25. Added §2.9 (BLOCK annotation source) and §2.10 (condition epoch extraction).*
 
 ---
 
@@ -10,7 +10,8 @@
 
 | Step | Original (`base.py`) | neurodags (`step-0b`) | Status |
 |------|----------------------|-----------------------|--------|
-| Annotation inflation | `inflate_bad_annotations` (point → 3 s; major → 5 s) | `inflate_bad_annotations` id=1 (same defaults) | ✓ |
+| BLOCK annotation source | `load_bids_raw` → `read_raw_bids` reads `_events.tsv` written by `to_bids.py` → BLOCK_* present on load | `load_meeg` → `read_raw_brainvision` reads `.vmrk` (hardware triggers only) → BLOCK_* absent; `inject_block_annotations` id=0 re-reads `_segments.csv` sidecar | ✓ see §2.9 |
+| Annotation inflation | `inflate_bad_annotations` (point → 3 s; major → 5 s) | `inflate_bad_annotations` id=2 (same defaults) | ✓ |
 | Resample | `raw.resample(target_sfreq)` — **before** bandpass | `preprocess_raw(resample_first=True)` — resample before bandpass | ✓ |
 | Bandpass | `raw.filter(0.1, min(100, nyquist-0.1))` | `filter_args: {l_freq: 0.1, h_freq: 100.0}` | ✓ |
 | Line noise | `ZapLine(sfreq, line_freq=60, adaptive=False).fit_transform(raw)` | `zapline_denoise(line_freq=60.0, adaptive=False)` | ✓ |
@@ -90,6 +91,79 @@ neurodags run step-1_features.yml -d neurodags_pipelines/step-1_datasets_conditi
 | Structured per-epoch/channel failure log | ✗ **missing** | No partial-failure ledger; neurodags either writes full derivative or `.error` |
 
 **Status**: complete-failure tracking covered. Intra-file missingness and structured failure rows require a post-hoc script that loads each `.nc` and counts NaN per feature/channel — not planned for current scope.
+
+### 2.9 BLOCK annotation source: BIDS conversion → `_events.tsv` vs `_segments.csv`
+
+**Origin of BLOCK annotations**: `to_bids.py` calls `extract_condition_segments(raw)` to derive
+condition windows from the hardware trigger log, then:
+1. Injects `BLOCK_{segment_type}` annotations into the raw **before** calling `write_raw_bids`.
+   `write_raw_bids` (MNE-BIDS) writes these to `_events.tsv` (BIDS standard).
+2. Saves the same segment table as `{stem}_segments.csv` sidecar (custom, non-BIDS).
+
+The `.vmrk` file **only contains hardware triggers** (`Stimulus/S XX`); BLOCK entries never
+reach the `.vmrk` because BrainVision format stores them as event types that MNE-BIDS routes
+to `_events.tsv` instead.
+
+**Original `base.py`**: uses `load_bids_raw` → `read_raw_bids` (MNE-BIDS), which reads
+`_events.tsv` and reconstructs all annotations including `BLOCK_*`. The annotations are
+available in the raw before any pipeline step runs. The code checks:
+```python
+n_blocks = len(bids._collect_block_windows(raw))
+if n_blocks == 0:
+    LOGGER.warning("No embedded BLOCK_* annotations found; ...")
+```
+
+**neurodags**: uses `neurodags.loaders.load_meeg` → `mne.io.read_raw_brainvision`, which reads
+only the `.vmrk` file (hardware triggers only). `_events.tsv` is not read. BLOCK annotations
+are absent. The `inject_block_annotations` node (step-0b id=0) bridges this gap by reading the
+`_segments.csv` sidecar directly — the same segment data, different file.
+
+**Why `_segments.csv` not `_events.tsv`**: both contain the same BLOCK windows. `_segments.csv`
+is simpler to parse (plain CSV with typed columns), already used by `load_segments_for_raw` in
+`io/bids.py`, and avoids coupling neurodags to MNE-BIDS. To switch to `_events.tsv`, the
+node would need to either call `read_raw_bids` (heavier) or parse the TSV manually.
+
+**Status**: resolved via `inject_block_annotations`. See `nodes_annotations.py`.
+
+---
+
+### 2.10 Condition epoch extraction: per-segment-type vs pooled eye-state
+
+**Original (`epochs.py → make_epochs_from_preproc_raw`)**: `build_block_events_by_condition`
+scans `BLOCK_*` annotations and groups by **exact** segment_type name. Each fine-grained
+condition (EO_baseline, HV_EO, PHOTO_EO, HV_EC, …) is a separate event_id in the resulting
+epoch file. No EO/EC pooling happens at preprocessing time.
+
+`extract_descriptors.py` runs `--conditions all` (or a specific list of exact condition names).
+It processes each fine-grained condition independently and writes separate feature shards per
+condition. EO/EC grouping is left to downstream analysis.
+
+`ignore_annotations=True` by default — BAD_ annotation rejection is **not applied** when
+building the condition epoch file (the analyst controls this explicitly via CLI flag).
+
+**neurodags step-0c**: `extract_condition_epochs(condition_name="EO")` uses **token matching**
+— any annotation where "EO" is an underscore-delimited token in the segment suffix. This pools
+EO_baseline + HV_EO + PostHV_EO + PHOTO_EO into a single `ConditionEO.fif`, and similarly for
+EC. Per-segment-type granularity is lost in this file.
+
+`reject_by_annotation: "omit"` is enabled: only `BAD_epoch_{cond}` annotations matching the
+current eye-state token cause rejection; per-channel AR spans (`BAD_{cond}` with `ch_names`)
+are excluded from epoch rejection to prevent cross-condition bleeding (see note below).
+
+**Cross-condition BAD_ bleeding**: AR per-channel span annotations (`BAD_EC_baseline` etc.)
+are created by `autoreject_annotate_blockwise` for epochs inside EC windows. Because consecutive
+bad-channel spans are merged by `_group_consecutive_indices`, a single span can extend to the
+edge of the EC window and overlap by up to `segment_duration` (1 s) into an adjacent EO window.
+`make_fixed_length_epochs` with `reject_by_annotation="omit"` would treat this as "EO epoch
+is bad" even though the BAD span belongs to the EC condition. The fix in
+`extract_condition_epochs` renames non-matching BAD_ annotations to `SKIP_` before epoching.
+
+**Status**: pooled EO/EC epoching works. If per-segment-type condition epochs are needed
+(matching original granularity), run feature extraction with `step-1_features.yml` directly
+on `CleanedPrep.fif` (has all segment_types as event_ids) or add a step-0c variant that
+extracts per-segment-type epochs.
+
+---
 
 ### 2.4 Float32 precision on CleanedPrepRaw
 
@@ -203,3 +277,6 @@ Original computes `_compute_artifact_overlap(raw, new_annots)` — percentage of
 | X. Condition separation | **open (workflow)** | Default run uses all epochs; must pass `-d step-1_datasets_conditions.yml` |
 | Y. ZapLine n_removed in prov | **open (minor)** | Not tracked; config is in code/ snapshot |
 | Z. QC layer | **partial** | Complete failures: covered via `.error` + `neurodags status`. Intra-file NaN tracking + structured failure rows: missing; post-hoc scan needed |
+| AA. BLOCK annotation injection | **DONE** | `inject_block_annotations` reads `_segments.csv`; original uses `read_raw_bids` → `_events.tsv` (§2.9) |
+| AB. Condition epoch pooling | **DONE (design diff)** | neurodags pools by eye-state token (EO/EC); original preserves per-segment-type granularity (§2.10) |
+| AC. Cross-condition BAD_ bleeding fix | **DONE** | `extract_condition_epochs` renames non-matching BAD_ spans to `SKIP_` before epoching; not needed in original (in-memory, no cross-condition bleeding issue) |
