@@ -58,6 +58,26 @@ def inject_block_annotations(mne_object) -> NodeResult:
             )
             raw.set_annotations(raw.annotations + block_annots)
 
+    # Apply channel positions from BIDS *_electrodes.tsv sidecar if present.
+    if raw.filenames and raw.filenames[0]:
+        import numpy as np
+        raw_path = Path(raw.filenames[0])
+        elec_candidates = sorted(raw_path.parent.glob("*_electrodes.tsv"))
+        if elec_candidates:
+            elec_df = pd.read_csv(elec_candidates[0], sep="\t")
+            if {"name", "x", "y", "z"}.issubset(elec_df.columns):
+                ch_pos = {
+                    row["name"]: [float(row["x"]), float(row["y"]), float(row["z"])]
+                    for _, row in elec_df.iterrows()
+                    if pd.notna(row["x"]) and pd.notna(row["y"]) and pd.notna(row["z"])
+                }
+                if ch_pos:
+                    montage = _mne.channels.make_dig_montage(ch_pos=ch_pos)
+                    try:
+                        raw.set_montage(montage, on_missing="ignore")
+                    except Exception:
+                        pass
+
     return NodeResult(artifacts={
         ".fif": Artifact(item=raw, writer=lambda path, r=raw: r.save(path, overwrite=True, verbose="ERROR"))
     })

@@ -438,6 +438,7 @@ def main() -> None:
         subject_col=args.subject_col,
     )
     available_subjects = list(coverage["present_subjects"])
+    meta_df = meta_df.dropna(subset=[args.subject_col]).copy()
     meta_df = meta_df[
         meta_df[args.subject_col]
         .map(lambda value: f"{int(value):04d}")

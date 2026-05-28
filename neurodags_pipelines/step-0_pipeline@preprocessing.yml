@@ -145,8 +145,94 @@ DerivativeDefinitions:
         args:
           qc_record: id.0
 
+  CorrectRaw:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CleanedPrepRaw.fif
+      - id: 1
+        node: ica_artifact_correction
+        args:
+          mne_object: id.0
+
+  CorrectQCRecord:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CorrectRaw.fif
+      - id: 1
+        derivative: RawQCMetrics._raw_qc.json
+      - id: 2
+        derivative: BaseQCRecord._base_qc.json
+      - id: 3
+        node: build_correct_qc_record
+        args:
+          mne_object: id.0
+          raw_metrics: id.1
+          base_qc_record: id.2
+
+  CorrectQCReport:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CorrectQCRecord._correct_qc.json
+      - id: 1
+        node: generate_correct_qc_report
+        args:
+          qc_record: id.0
+
+  DenoiseRaw:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CorrectRaw.fif
+      - id: 1
+        node: residual_denoise
+        args:
+          mne_object: id.0
+          transient_method: wiener
+          n_jobs: 1
+
+  DenoiseQCRecord:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: DenoiseRaw.fif
+      - id: 1
+        derivative: RawQCMetrics._raw_qc.json
+      - id: 2
+        derivative: CorrectQCRecord._correct_qc.json
+      - id: 3
+        node: build_denoise_qc_record
+        args:
+          mne_object: id.0
+          raw_metrics: id.1
+          correct_qc_record: id.2
+
+  DenoiseQCReport:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: DenoiseQCRecord._denoise_qc.json
+      - id: 1
+        node: generate_denoise_qc_report
+        args:
+          qc_record: id.0
+
 DerivativeList:
   - CleanedPrepRaw
   - RawQCMetrics
   - BaseQCRecord
   - BaseQCReport
+  - CorrectRaw
+  - CorrectQCRecord
+  - CorrectQCReport
+  - DenoiseRaw
+  - DenoiseQCRecord
+  - DenoiseQCReport

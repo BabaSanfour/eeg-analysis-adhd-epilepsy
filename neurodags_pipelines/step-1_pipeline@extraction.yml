@@ -21,6 +21,7 @@ new_definitions:
   - nodes_aggregation.py
   - nodes_spatial.py
   - nodes_preprocessing.py
+  - nodes_descriptor_qc.py
 datasets: step-1_dataset.yml
 mount_point: local
 
@@ -2781,6 +2782,24 @@ DerivativeDefinitions:
           xarray_data: id.0
           dim: epochs
 
+  # ---------------------------------------------------------------------------
+  # Descriptor QC — scan all NC files in the condition directory and generate
+  # per-subject per-condition HTML + JSON QC record.
+  # Uses AbsBandPower.nc as the reference file to locate the NC directory.
+  # ---------------------------------------------------------------------------
+
+  DescriptorQCRecord:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: AbsBandPower.nc
+      - id: 1
+        node: generate_descriptor_qc_record
+        args:
+          nc_file: id.0
+          condition_name: $condition_name
+
 DerivativeList:
   # Condition epoching (in-memory, not cached)
   - CleanedPrep
@@ -2971,3 +2990,6 @@ DerivativeList:
   - RMSMean
   - RMSMedian
   - RMSMAD
+
+  # Descriptor QC record
+  - DescriptorQCRecord

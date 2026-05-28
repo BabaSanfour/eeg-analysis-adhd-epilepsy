@@ -530,10 +530,6 @@ def _compute_post_clean_segment_metrics(
     else:
         pre_df = pd.DataFrame()
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            return pd.to_numeric(df[col], errors="coerce").groupby(df["segment_type"]).mean()
-
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         post_agg = post_rows_df.groupby("segment_type").agg(

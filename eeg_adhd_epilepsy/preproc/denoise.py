@@ -17,7 +17,7 @@ import numpy as np
 
 from meegkit import asr
 from mne_denoise.dss import IterativeDSS, WienerMaskDenoiser
-from mne_denoise.viz import plot_component_summary, plot_score_curve
+from mne_denoise.viz import plot_component_summary, plot_component_score_curve
 
 from eeg_adhd_epilepsy.io import bids
 from eeg_adhd_epilepsy.qc import preproc_qc
@@ -90,7 +90,10 @@ def _remove_transients_wiener(
         fig_dir = output_dir / "figures" / "dss_wiener"
         fig_dir.mkdir(parents=True, exist_ok=True)
 
-        fig_score = plot_score_curve(dss, show=False)
+        try:
+            fig_score = plot_component_score_curve(dss, show=False)
+        except (ValueError, AttributeError):
+            fig_score = None
         if fig_score is not None:
             score_path = fig_dir / f"{subject_id}_wiener_score.png"
             fig_score.savefig(score_path, dpi=150, bbox_inches="tight")
@@ -98,7 +101,7 @@ def _remove_transients_wiener(
             plot_paths["score_curve"] = str(score_path)
 
         n_samples_plot = min(data_2d.shape[1], int(sfreq * 60))
-        fig_comp = plot_component_summary(dss, data_2d[:, :n_samples_plot], n_components=3, show=False)
+        fig_comp = plot_component_summary(dss, data_2d[:, :n_samples_plot], n_components=3, sfreq=sfreq, show=False)
         if fig_comp is not None:
             comp_path = fig_dir / f"{subject_id}_wiener_comps.png"
             fig_comp.savefig(comp_path, dpi=150, bbox_inches="tight")
@@ -288,7 +291,7 @@ def _refine_autoreject(
         raw_for_ar,
         config=ar_conf_dict,
         figures_dir=figures_dir,
-        subject_id=subject_id,
+        record_label=subject_id,
         n_interpolate=[0, 1, 2, 4],  # Allow interpolation for Stage 2 repair
     )
 

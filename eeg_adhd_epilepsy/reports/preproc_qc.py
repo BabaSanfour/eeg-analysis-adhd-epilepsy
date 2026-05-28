@@ -104,7 +104,7 @@ def build_condition_comparison_table(segment_comparison: pd.DataFrame) -> pd.Dat
     if "n_usable_runs" in segment_comparison.columns:
         out["N Runs Usable"] = pd.to_numeric(segment_comparison["n_usable_runs"], errors="coerce").fillna(0).astype(int)
     if "total_duration_post_sec" in segment_comparison.columns:
-        out["Mean Dur (s)"] = _fmt(pd.to_numeric(segment_comparison["total_duration_post_sec"], errors="coerce").fillna(float("nan")), 1)
+        out["Total Dur (s)"] = _fmt(pd.to_numeric(segment_comparison["total_duration_post_sec"], errors="coerce").fillna(float("nan")), 1)
 
     for label, pre_col, post_col in [
         ("Ampl uV",      "mean_amplitude_pre",        "mean_amplitude_post"),

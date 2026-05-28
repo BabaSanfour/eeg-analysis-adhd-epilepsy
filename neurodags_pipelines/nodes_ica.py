@@ -33,6 +33,9 @@ def ica_artifact_correction(
 
     raw = mne_object.copy().load_data()
 
+    picks = _mne.pick_types(raw.info, eeg=True, exclude="bads")
+    n_components = min(n_components, len(picks))
+
     if isinstance(raw, _mne.BaseEpochs):
         raw_for_ica = raw.copy()
         filt = raw_for_ica.filter(1.0, 100.0, verbose=False)
