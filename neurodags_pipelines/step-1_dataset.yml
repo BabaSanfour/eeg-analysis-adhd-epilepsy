@@ -6,10 +6,10 @@
 # vars.condition_name: passed as $condition_name to extract_condition_epochs in the pipeline.
 #
 # Usage:
-#   1. Activate ONE condition entry (remove skip: true for that entry).
-#   2. neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
+#   neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
 #
 # No pipeline YAML edits needed — the active entry's vars.condition_name drives everything.
+# All 8 real conditions active. synthetic_eeg kept skipped (dev only).
 
 # EO conditions ---------------------------------------------------------------
 
@@ -26,7 +26,6 @@ eeg_adhd_epilepsy_EO_baseline:
 eeg_adhd_epilepsy_HV_EO:
   name: eeg_adhd_epilepsy_HV_EO
   vars: {condition_name: HV_EO}
-  skip: true
   file_pattern:
     local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrepRaw.fif"
     fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrepRaw.fif"
@@ -37,7 +36,6 @@ eeg_adhd_epilepsy_HV_EO:
 eeg_adhd_epilepsy_PHOTO_EO:
   name: eeg_adhd_epilepsy_PHOTO_EO
   vars: {condition_name: PHOTO_EO}
-  skip: true
   file_pattern:
     local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrepRaw.fif"
     fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrepRaw.fif"
@@ -48,7 +46,6 @@ eeg_adhd_epilepsy_PHOTO_EO:
 eeg_adhd_epilepsy_PostHV_EO:
   name: eeg_adhd_epilepsy_PostHV_EO
   vars: {condition_name: PostHV_EO}
-  skip: true
   file_pattern:
     local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrepRaw.fif"
     fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrepRaw.fif"
@@ -61,7 +58,6 @@ eeg_adhd_epilepsy_PostHV_EO:
 eeg_adhd_epilepsy_EC_baseline:
   name: eeg_adhd_epilepsy_EC_baseline
   vars: {condition_name: EC_baseline}
-  skip: true
   file_pattern:
     local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrepRaw.fif"
     fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrepRaw.fif"
@@ -72,7 +68,6 @@ eeg_adhd_epilepsy_EC_baseline:
 eeg_adhd_epilepsy_HV_EC:
   name: eeg_adhd_epilepsy_HV_EC
   vars: {condition_name: HV_EC}
-  skip: true
   file_pattern:
     local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrepRaw.fif"
     fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrepRaw.fif"
@@ -83,7 +78,6 @@ eeg_adhd_epilepsy_HV_EC:
 eeg_adhd_epilepsy_PHOTO_EC:
   name: eeg_adhd_epilepsy_PHOTO_EC
   vars: {condition_name: PHOTO_EC}
-  skip: true
   file_pattern:
     local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrepRaw.fif"
     fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrepRaw.fif"
@@ -94,7 +88,6 @@ eeg_adhd_epilepsy_PHOTO_EC:
 eeg_adhd_epilepsy_PostHV_EC:
   name: eeg_adhd_epilepsy_PostHV_EC
   vars: {condition_name: PostHV_EC}
-  skip: true
   file_pattern:
     local: "/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/preprocessing/**/*@CleanedPrepRaw.fif"
     fir: "/home/yorguin/scratch/real_scratch/eeg_adhd_outputs/preprocessing/**/*@CleanedPrepRaw.fif"
