@@ -7,6 +7,10 @@ but uses it only to locate the parent directory, then scans *all* NC files in th
 This is a workaround for neurodags lacking a gather/fan-in primitive — the proper architecture
 would be a explicit multi-input dependency declared in the YAML. Until neurodags supports that,
 this node couples itself to directory layout conventions instead of explicit DAG edges.
+
+TODO: NaN CSVs missing for the 27 DescriptorQCRecord artifacts that ran before the NaN CSV
+code was added (overwrite=False so they were skipped on re-run). To backfill: delete those
+.json artifacts and re-run the step-1 pipeline.
 """
 
 from __future__ import annotations

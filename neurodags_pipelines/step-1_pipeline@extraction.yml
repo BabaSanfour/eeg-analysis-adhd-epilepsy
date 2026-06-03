@@ -2960,10 +2960,11 @@ DerivativeList:
   - DetrendedFluctuationMAD
 
   # Complexity — neurokit2 (mean + median + MAD)
-  - EntropyMultiscale
-  - EntropyMultiscaleMean
-  - EntropyMultiscaleMedian
-  - EntropyMultiscaleMAD
+  # EntropyMultiscale skipped: NumPy 2.0 broke neurokit2 (np.trapz removed)
+  # - EntropyMultiscale
+  # - EntropyMultiscaleMean
+  # - EntropyMultiscaleMedian
+  # - EntropyMultiscaleMAD
   - EntropyShannon
   - EntropyShannonMean
   - EntropyShannonMedian
