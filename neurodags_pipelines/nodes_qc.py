@@ -4,6 +4,14 @@ Three nodes:
   compute_raw_qc_metrics  – signal QC on the unprocessed source file
   build_base_qc_record    – full QC on CleanedPrepRaw, deltas vs raw, channel diagnostics
   generate_base_qc_report – HTML report for a single run from the QC record JSON
+
+AGGREGATOR NODE NOTE
+--------------------
+``generate_base_qc_report``, ``generate_correct_qc_report``, and ``generate_denoise_qc_report``
+are partial aggregator nodes: they receive a QC record as primary input but also glob for AR
+plot PNGs from the parent directory of ``reference_base`` (see ``_reconstruct_qc_report_inputs``).
+This is a workaround for neurodags lacking a gather/fan-in primitive — ideally the AR plot paths
+would be explicit DAG inputs declared in the YAML rather than discovered at runtime via glob.
 """
 
 from __future__ import annotations

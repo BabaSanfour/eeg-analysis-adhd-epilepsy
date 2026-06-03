@@ -1,4 +1,13 @@
-"""Descriptor QC node: converts NC features to QC DataFrames and generates HTML report."""
+"""Descriptor QC node: converts NC features to QC DataFrames and generates HTML report.
+
+AGGREGATOR NODE NOTE
+--------------------
+``generate_descriptor_qc_record`` is an aggregator node: it receives one NC file as input
+but uses it only to locate the parent directory, then scans *all* NC files in that directory.
+This is a workaround for neurodags lacking a gather/fan-in primitive — the proper architecture
+would be a explicit multi-input dependency declared in the YAML. Until neurodags supports that,
+this node couples itself to directory layout conventions instead of explicit DAG edges.
+"""
 
 from __future__ import annotations
 
@@ -372,10 +381,37 @@ def generate_descriptor_qc_record(
     sensor_epoch_df, sensor_subject_df = _build_sensor_dfs(nc_dir)
     pooled_epoch_df, pooled_subject_df = _build_pooled_dfs(nc_dir)
 
-    # --- Write feature column JSON files to qc/ ---
+    # --- Write NaN rate CSV ---
     qc_dir = nc_dir / "qc"
     qc_dir.mkdir(parents=True, exist_ok=True)
 
+    nan_parts: list[pd.DataFrame] = []
+    if not sensor_epoch_df.empty:
+        s = sensor_epoch_df.isna().mean()
+        nan_parts.append(pd.DataFrame({
+            "source": "sensor",
+            "feature": s.index,
+            "nan_rate": s.values,
+            "n_nan": sensor_epoch_df.isna().sum().values,
+            "n_epochs": len(sensor_epoch_df),
+        }))
+    if pooled_epoch_df is not None and not pooled_epoch_df.empty:
+        p = pooled_epoch_df.isna().mean()
+        nan_parts.append(pd.DataFrame({
+            "source": "pooled",
+            "feature": p.index,
+            "nan_rate": p.values,
+            "n_nan": pooled_epoch_df.isna().sum().values,
+            "n_epochs": len(pooled_epoch_df),
+        }))
+    if nan_parts:
+        nan_df = pd.concat(nan_parts, ignore_index=True)
+        nan_df.to_csv(
+            qc_dir / f"sub-{subject}_ses-{session}_{condition_name}_nan_rates.csv",
+            index=False,
+        )
+
+    # --- Write feature column JSON files to qc/ ---
     se_cols = list(sensor_epoch_df.columns) if not sensor_epoch_df.empty else []
     ss_cols = list(sensor_subject_df.columns) if not sensor_subject_df.empty else []
     pe_cols = list(pooled_epoch_df.columns) if pooled_epoch_df is not None else []
