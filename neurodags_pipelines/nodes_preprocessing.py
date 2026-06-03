@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from neurodags.definitions import Artifact, NodeResult
+from neurodags.definitions import Artifact, NodeResult, SkipDerivative
 from neurodags.nodes import register_node
 
 
@@ -110,9 +110,10 @@ def extract_condition_epochs(
             str(a["description"]).removeprefix("Comment/")
             for a in mne_object.annotations
         })
-        raise ValueError(
-            f"No annotations matching '{target_desc}' found. "
-            f"Present descriptions (normalized): {normalized}"
+        raise SkipDerivative(
+            f"Condition '{condition_name}' not present in this recording "
+            f"(no annotations matching '{target_desc}'). "
+            f"Present descriptions: {normalized}"
         )
 
     epoch_chunks: list[_mne.BaseEpochs] = []
