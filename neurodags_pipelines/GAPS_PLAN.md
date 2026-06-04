@@ -248,7 +248,7 @@ That would require changes to extraction nodes themselves — out of scope for n
 
 ---
 
-## P5 — ZapLine `n_removed` in provenance `[ ]`
+## P5 — ZapLine `n_removed` in provenance `[x]`
 
 **Severity:** minor  
 **Ref:** `COMPARISON.md §2.6`, gap Y in §4 summary

@@ -446,6 +446,8 @@ def autoreject_annotate_blockwise(
     total_bad = sum(s["n_bad_epochs"] for s in condition_stats.values())
     provenance = {
         "bad_channels": bad_channels_prov,
+        # zapline runs as a separate upstream node (id.4); n_removed cannot be threaded here
+        "zapline_n_removed": None,
         "config": {
             "annotation_prefix": annotation_prefix,
             "segment_duration": segment_duration,
