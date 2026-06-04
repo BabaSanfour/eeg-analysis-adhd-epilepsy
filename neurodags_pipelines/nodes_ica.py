@@ -87,12 +87,22 @@ def source_correction(
     emg_method: str = "mwf",
     ica_n_components: int = 20,
     random_state: int = 42,
+    dss_n_components: int = 10,
+    dss_n_remove_eog: int = 1,
+    dss_n_remove_ecg: int = 1,
+    dss_n_remove_emg: int = 2,
+    mwf_n_components: int = 30,
 ) -> NodeResult:
     """DSS+MWF artifact correction (EOG/ECG via DSS, EMG via MWF).
 
     Port of eeg_adhd_epilepsy.preproc.correct.run_source_correction.
     Replaces basic find_bads_eog/ecg with profile-based DSS and adds MWF for EMG.
+
+    Auto-tuning: if @CleanedPrepRaw_prov.json exists alongside the input fif,
+    its integrity_stats are passed as artifact_profile to enable adaptive
+    component-count boosting when autoreject_bad_fraction > 0.15.
     """
+    import json
     from neurodags.loaders import load_meeg
     from eeg_adhd_epilepsy.preproc.correct import ArtifactCorrectionConfig, run_source_correction
 
@@ -105,6 +115,7 @@ def source_correction(
 
     subject_id = "unknown"
     output_dir = None
+    artifact_profile: dict = {}
     if raw.filenames and raw.filenames[0]:
         rec_path = Path(raw.filenames[0])
         subject_id = rec_path.stem
@@ -115,6 +126,14 @@ def source_correction(
         except Exception:
             pass
         output_dir = rec_path.parent
+        # Load CleanedPrepRaw provenance for auto-tuning (same dir, _prov.json suffix).
+        prov_path = rec_path.parent / (rec_path.stem + "_prov.json")
+        if prov_path.exists():
+            try:
+                prov = json.loads(prov_path.read_text(encoding="utf-8"))
+                artifact_profile = prov.get("integrity_stats", {})
+            except Exception:
+                pass
 
     config = ArtifactCorrectionConfig(
         eog_method=eog_method if eog_method != "none" else None,
@@ -122,6 +141,11 @@ def source_correction(
         emg_method=emg_method if emg_method != "none" else None,
         ica_n_components=ica_n_components,
         random_state=random_state,
+        dss_n_components=dss_n_components,
+        dss_n_remove_eog=dss_n_remove_eog,
+        dss_n_remove_ecg=dss_n_remove_ecg,
+        dss_n_remove_emg=dss_n_remove_emg,
+        mwf_n_components=mwf_n_components,
     )
 
     corrected_raw, _provenance = run_source_correction(
@@ -129,6 +153,7 @@ def source_correction(
         config,
         output_dir=output_dir,
         subject_id=subject_id,
+        artifact_profile=artifact_profile,
     )
 
     return NodeResult(
