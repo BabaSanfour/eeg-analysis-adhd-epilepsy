@@ -302,5 +302,5 @@ The framework handles caching, skipping, and dependency graph automatically.
 | Adding a processing step | 1 000+ line script edits | One function + one YAML entry |
 | Cluster scaling | Manual SLURM scripts per stage | `neurodags run` |
 | Dataset summary reports | Generated | Not yet implemented |
-| Descriptor QC all conditions | All 8 conditions | EO_baseline only (others not yet run) |
+| Descriptor QC all conditions | All 8 conditions | All 8 conditions active and running |
 | Colleague compatibility | Shared `eeg_adhd_epilepsy/` package | Needs commit 889f77c to be correct |

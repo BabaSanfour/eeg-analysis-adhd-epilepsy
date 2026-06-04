@@ -56,13 +56,13 @@
 
 **neurodags**: `step-1_pipeline@extraction.yml` defines `CleanedPrep` (`save: False`) that runs `extract_condition_epochs` on `CleanedPrepRaw.fif` in-memory. No per-condition files on disk. The condition name is set via `_condition_name` anchor in the pipeline YAML; the `derivatives_path` is selected via the active entry in `step-1_dataset.yml`.
 
-Workflow (one run per condition):
+Workflow (all 8 conditions active — one run covers all):
 ```bash
-# 1. Activate matching entry in step-1_dataset.yml (remove skip: true)
-# 2. Run:
 neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
 neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
-    --output results/features_<condition>.csv
+    --output results/features_all_conditions.csv
+# Split by condition post-hoc on the `dataset` column, or use --datasets
+# with a single-condition YAML to restrict to one condition.
 ```
 
 **Status**: resolved — in-memory epoching, no per-condition disk files.

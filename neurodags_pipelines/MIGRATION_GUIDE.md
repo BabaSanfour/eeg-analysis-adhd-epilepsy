@@ -31,10 +31,11 @@ python neurodags_pipelines/generate_synthetic.py
 neurodags run neurodags_pipelines/step-0_pipeline@preprocessing.yml
 
 # 2. Feature extraction — equivalent to extract_descriptors.py
-#    Per-condition (activate one entry in step-1_dataset.yml, then run):
+#    All 8 conditions active — one run covers all:
 neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
 neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
-    --output results/features_<condition>.csv
+    --output results/features_all_conditions.csv
+# Split by condition post-hoc on the `dataset` column.
 ```
 
 Steps are idempotent (`overwrite: False`). Re-running skips already-computed files.
@@ -117,13 +118,15 @@ Original: `extract_descriptors.py` writes `sensor_subject_features.csv` directly
 neurodags: assemble post-hoc with `neurodags dataframe`.
 
 ```bash
-# All-epochs wide CSV (BasicPrep, no condition split)
+# All conditions in one wide CSV (all 8 active in step-1_dataset.yml)
 neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
     --format wide \
-    --output results/features_wide.csv
+    --output results/features_all_conditions_wide.csv
 
-# Per-condition (after activating EO_baseline in step-1_dataset.yml)
+# Per-condition: filter post-hoc on `dataset` column, or pass a
+# single-condition dataset YAML override:
 neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
+    --datasets step-1_dataset_EO_baseline_only.yml \
     --format wide \
     --output results/features_EO_baseline_wide.csv
 ```

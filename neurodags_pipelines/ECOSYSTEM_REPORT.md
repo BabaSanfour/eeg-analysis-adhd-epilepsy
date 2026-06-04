@@ -103,7 +103,7 @@ ML is explicitly **out of scope** for neurodags and the neurodags pipeline. It l
 | Condition segment retention | ✗ missing | ✓ | improved |
 | Raw Duration display | ✗ always `0s` | ✓ | bug fixed |
 | Retained Duration accuracy | ✗ inflated by ch-BAD marks | ✓ | bug fixed |
-| Descriptor QC HTML | ✓ all conditions | ✓ all 8 conditions defined in `step-1_dataset.yml`; others have `skip: true` by design — activate one, run pipeline | on-demand (not a gap) |
+| Descriptor QC HTML | ✓ all conditions | ✓ all 8 conditions active in `step-1_dataset.yml`; run pipeline once | ✓ |
 
 ---
 
@@ -223,12 +223,13 @@ run_all("dataset/", stages=["preproc", "extract", "ml"])
 # Step 1: preprocess (once, heavy deps, CPU cluster)
 neurodags run pipelines/step-0_pipeline@preprocessing.yml
 
-# Step 2: extract features (once per condition, CPU)
+# Step 2: extract features (all conditions in one run, CPU)
 neurodags run pipelines/step-1_pipeline@extraction.yml
-neurodags dataframe pipelines/step-1_pipeline@extraction.yml --output features/EO_baseline.csv
+neurodags dataframe pipelines/step-1_pipeline@extraction.yml --output features/all_conditions.csv
 
 # Step 3: ML (many times, GPU optional, quick iteration)
-python analysis/run_ml.py --features features/EO_baseline.csv --config configs/ml_config.yml
+# Filter to target condition via `dataset` column or --datasets flag
+python analysis/run_ml.py --features features/all_conditions.csv --config configs/ml_config.yml
 ```
 
 Or wrapped as a single Makefile target / shell script for "one command" convenience:
@@ -293,7 +294,7 @@ The `inject_block_annotations` node is the main dataset-specific piece. For the 
 2. Edit `step-0_dataset.yml` (16 lines): new BIDS root, new subject list
 3. If annotation format differs: adapt `inject_block_annotations` in `nodes_annotations.py`
 4. Run `neurodags run step-0_pipeline@preprocessing.yml`
-5. Run `neurodags run step-1_pipeline@extraction.yml` per condition
+5. Run `neurodags run step-1_pipeline@extraction.yml` (all conditions in one run)
 6. Run `neurodags dataframe` to assemble CSV
 7. Run `python analysis/run_ml.py --features features.csv --config ml_config.yml`
 
@@ -311,9 +312,10 @@ run-all:
 	neurodags run pipelines/step-0_pipeline@preprocessing.yml
 	neurodags run pipelines/step-1_pipeline@extraction.yml
 	neurodags dataframe pipelines/step-1_pipeline@extraction.yml \
-	    --output features/$(CONDITION).csv
+	    --output features/all_conditions.csv
 	python analysis/run_ml.py \
-	    --features features/$(CONDITION).csv \
+	    --features features/all_conditions.csv \
+	    --condition $(CONDITION) \
 	    --config configs/ml_config.yml
 ```
 
@@ -332,7 +334,7 @@ This gives "one command runs everything" without collapsing the software boundar
 | Preprocessing correctness | ✗ channel positions NaN, retention wrong | ✓ all bugs fixed | **New** |
 | Preprocessing portability | Python code changes | YAML edit | **New** |
 | Preprocessing caching | manual | automatic | **New** |
-| Feature extraction completeness | ✓ all conditions run | all 8 defined; others on-demand via `skip: true`; not yet run | equivalent by design |
+| Feature extraction completeness | ✓ all conditions run | ✓ all 8 active in `step-1_dataset.yml`; one run covers all | ✓ equivalent |
 | Feature extraction shared PSD | ✓ `_PSDGroup` (band power + FOOOF only; complexity always recomputes) | ✓ `SpectrumWelch` (band power + FOOOF; complexity recomputes) | ✓ equivalent |
 | Failure logging | ✓ structured `failures.csv` | `neurodags status --list-errors`; gap: intra-file partial NaN only | narrow gap |
 | ML pipeline | ✓ full (sklearn + FM hub) | ✗ not present | Old (intended) |
