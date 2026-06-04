@@ -129,6 +129,11 @@ def inflate_bad_annotations(
             new_durations.append(major_duration)
         else:
             new_durations.append(max(duration, default_duration))
+        # Normalize to BAD_ prefix so MNE reject_by_annotation sees it.
+        # Matches old pipeline: bad_movement→BAD_movement, bad→BAD_manual.
+        if not desc.startswith("BAD_"):
+            clean = desc_lower.replace("bad_", "").replace("bad", "").strip("_").strip()
+            desc = "BAD_manual" if not clean else f"BAD_{clean}"
         new_onsets.append(onset)
         new_descs.append(desc)
 
