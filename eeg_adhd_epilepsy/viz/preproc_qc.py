@@ -488,8 +488,9 @@ def plot_removed_variance_topomap(
     var_before = np.var(data_before, axis=1)
     var_after = np.var(data_after, axis=1)
     var_removed = np.maximum(var_before - var_after, 0)
+    import mne as _mne_topo
     fig, ax = plt.subplots(figsize=(5, 4))
-    im, _ = mne.viz.plot_topomap(var_removed, eeg_before.info, axes=ax, show=False, cmap="Reds")
+    im, _ = _mne_topo.viz.plot_topomap(var_removed, eeg_before.info, axes=ax, show=False, cmap="Reds")
     plt.colorbar(im, ax=ax, shrink=0.7).set_label('Variance (V^2)')
     ax.set_title(title)
     plt.tight_layout()
@@ -550,8 +551,8 @@ def save_dss_pre_plots(
     from mne_denoise.viz import (
         plot_component_summary,
         plot_component_time_series,
-        plot_score_curve,
-        plot_spatial_patterns,
+        plot_component_score_curve as plot_score_curve,
+        plot_component_patterns as plot_spatial_patterns,
     )
     fig_dir.mkdir(parents=True, exist_ok=True)
     plot_paths: Dict[str, str] = {}
@@ -559,7 +560,10 @@ def save_dss_pre_plots(
     filters = getattr(estimator, "filters_", None)
     n_available = int(filters.shape[0]) if isinstance(filters, np.ndarray) and filters.ndim >= 2 else 0
     if include_score:
-        fig_score = plot_score_curve(estimator, show=False)
+        try:
+            fig_score = plot_score_curve(estimator, show=False)
+        except (ValueError, AttributeError):
+            fig_score = None
         if fig_score:
             score_path = fig_dir / f"{subject_id}_{file_prefix}_score.png"
             fig_score.savefig(score_path, dpi=150, bbox_inches="tight")
@@ -567,23 +571,32 @@ def save_dss_pre_plots(
             plot_paths["score_curve"] = str(score_path)
     if n_available > 0:
         if include_component_summary:
-            fig_comp = plot_component_summary(
-                estimator, fit_data_plot, info=eeg_info, n_components=min(summary_n_components, n_available), show=False
-            )
+            try:
+                fig_comp = plot_component_summary(
+                    estimator, fit_data_plot, info=eeg_info, n_components=min(summary_n_components, n_available), show=False
+                )
+            except Exception:
+                fig_comp = None
             if fig_comp:
                 comp_path = fig_dir / f"{subject_id}_{file_prefix}_comps.png"
                 fig_comp.savefig(comp_path, dpi=150, bbox_inches="tight")
                 plt.close(fig_comp)
                 plot_paths["component_summary"] = str(comp_path)
         if include_spatial_patterns:
-            fig_topo = plot_spatial_patterns(estimator, info=eeg_info, n_components=min(spatial_n_components, n_available), show=False)
+            try:
+                fig_topo = plot_spatial_patterns(estimator, info=eeg_info, n_components=min(spatial_n_components, n_available), show=False)
+            except Exception:
+                fig_topo = None
             if fig_topo:
                 topo_path = fig_dir / f"{subject_id}_{file_prefix}_topo.png"
                 fig_topo.savefig(topo_path, dpi=150, bbox_inches="tight")
                 plt.close(fig_topo)
                 plot_paths["spatial_patterns"] = str(topo_path)
         if include_component_time_series:
-            fig_ts = plot_component_time_series(estimator, fit_data_plot, n_components=min(time_series_n_components, n_available), show=False)
+            try:
+                fig_ts = plot_component_time_series(estimator, fit_data_plot, n_components=min(time_series_n_components, n_available), show=False)
+            except Exception:
+                fig_ts = None
             if fig_ts:
                 ts_path = fig_dir / f"{subject_id}_{file_prefix}_timeseries.png"
                 fig_ts.savefig(ts_path, dpi=150, bbox_inches="tight")
@@ -607,31 +620,45 @@ def save_dss_post_plots(
 ) -> Dict[str, str]:
     """Save shared post-cleaning DSS comparison plots."""
     from mne_denoise.viz import (
-        plot_overlay_comparison,
         plot_psd_comparison,
-        plot_time_course_comparison,
+        plot_signal_overlay,
+        plot_channel_time_course_comparison,
     )
     fig_dir.mkdir(parents=True, exist_ok=True)
     plot_paths: Dict[str, str] = {}
-    fig_psd = plot_psd_comparison(raw_before, raw_after, fmax=fmax, show=False)
+    try:
+        fig_psd = plot_psd_comparison(raw_before, raw_after, fmax=fmax, show=False)
+    except Exception:
+        fig_psd = None
     if fig_psd:
         psd_path = fig_dir / f"{subject_id}_{file_prefix}_psd.png"
         fig_psd.savefig(psd_path, dpi=150, bbox_inches="tight")
         plt.close(fig_psd)
         plot_paths["psd_comparison"] = str(psd_path)
-    fig_ov = plot_overlay_comparison(
-        raw_before, raw_after, start=start_seconds, stop=min(raw_before.times[-1], start_seconds + window_seconds), title=overlay_title, show=False
-    )
+    t_stop = min(float(raw_before.times[-1]), start_seconds + window_seconds)
+    try:
+        fig_ov = plot_signal_overlay(
+            raw_before, raw_after, raw_before.times,
+            pick=0, start=start_seconds, stop=t_stop,
+            title=overlay_title, show=False,
+        )
+    except Exception:
+        fig_ov = None
     if fig_ov:
         ov_path = fig_dir / f"{subject_id}_{file_prefix}_overlay.png"
         fig_ov.savefig(ov_path, dpi=150, bbox_inches="tight")
         plt.close(fig_ov)
         plot_paths["overlay_comparison"] = str(ov_path)
     if include_time_course:
-        sfreq = raw_before.info["sfreq"]
-        s_start = int(start_seconds * sfreq)
-        s_stop = int(min(raw_before.times[-1], start_seconds + window_seconds) * sfreq)
-        fig_tc = plot_time_course_comparison(raw_before, raw_after, start=s_start, stop=s_stop, show=False)
+        import mne as _mne
+        picks_tc = list(range(min(5, len(_mne.pick_types(raw_before.info, eeg=True)))))
+        try:
+            fig_tc = plot_channel_time_course_comparison(
+                raw_before, raw_after, picks=picks_tc, times=raw_before.times,
+                start=start_seconds, stop=t_stop, show=False,
+            )
+        except Exception:
+            fig_tc = None
         if fig_tc:
             tc_path = fig_dir / f"{subject_id}_{file_prefix}_timecourse.png"
             fig_tc.savefig(tc_path, dpi=150, bbox_inches="tight")
