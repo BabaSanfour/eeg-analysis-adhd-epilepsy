@@ -152,9 +152,14 @@ DerivativeDefinitions:
       - id: 0
         derivative: CleanedPrepRaw.fif
       - id: 1
-        node: ica_artifact_correction
+        node: source_correction
         args:
           mne_object: id.0
+          eog_method: dss
+          ecg_method: dss
+          emg_method: mwf
+          ica_n_components: 20
+          random_state: 42
 
   CorrectQCRecord:
     overwrite: False

@@ -10,7 +10,7 @@ Each gap is self-contained — a new Claude Code session can pick up any single 
 
 ---
 
-## P1 — ICA artifact correction method `[ ]`
+## P1 — ICA artifact correction method `[x]`
 
 **Severity:** significant  
 **Ref:** `COMPARISON.md §2.11`, gap AD in §4 summary

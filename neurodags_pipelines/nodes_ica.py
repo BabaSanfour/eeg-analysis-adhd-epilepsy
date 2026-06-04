@@ -1,8 +1,9 @@
-"""ICA artifact correction node."""
+"""ICA artifact correction nodes."""
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from neurodags.definitions import Artifact, NodeResult
 from neurodags.nodes import register_node
@@ -73,6 +74,68 @@ def ica_artifact_correction(
             ".fif": Artifact(
                 item=cleaned,
                 writer=lambda path, r=cleaned: r.save(path, overwrite=True, verbose="ERROR"),
+            )
+        }
+    )
+
+
+@register_node
+def source_correction(
+    mne_object,
+    eog_method: str = "dss",
+    ecg_method: str = "dss",
+    emg_method: str = "mwf",
+    ica_n_components: int = 20,
+    random_state: int = 42,
+) -> NodeResult:
+    """DSS+MWF artifact correction (EOG/ECG via DSS, EMG via MWF).
+
+    Port of eeg_adhd_epilepsy.preproc.correct.run_source_correction.
+    Replaces basic find_bads_eog/ecg with profile-based DSS and adds MWF for EMG.
+    """
+    from neurodags.loaders import load_meeg
+    from eeg_adhd_epilepsy.preproc.correct import ArtifactCorrectionConfig, run_source_correction
+
+    if isinstance(mne_object, NodeResult):
+        mne_object = mne_object.artifacts[".fif"].item
+    if isinstance(mne_object, (str, os.PathLike)):
+        mne_object = load_meeg(mne_object)
+
+    raw = mne_object.copy().load_data()
+
+    subject_id = "unknown"
+    output_dir = None
+    if raw.filenames and raw.filenames[0]:
+        rec_path = Path(raw.filenames[0])
+        subject_id = rec_path.stem
+        try:
+            from eeg_adhd_epilepsy.io import bids as bids_io
+            ids = bids_io.build_bids_report_ids(rec_path)
+            subject_id = str(ids["run_prefix"])
+        except Exception:
+            pass
+        output_dir = rec_path.parent
+
+    config = ArtifactCorrectionConfig(
+        eog_method=eog_method if eog_method != "none" else None,
+        ecg_method=ecg_method if ecg_method != "none" else None,
+        emg_method=emg_method if emg_method != "none" else None,
+        ica_n_components=ica_n_components,
+        random_state=random_state,
+    )
+
+    corrected_raw, _provenance = run_source_correction(
+        raw,
+        config,
+        output_dir=output_dir,
+        subject_id=subject_id,
+    )
+
+    return NodeResult(
+        artifacts={
+            ".fif": Artifact(
+                item=corrected_raw,
+                writer=lambda path, r=corrected_raw: r.save(path, overwrite=True, verbose="ERROR"),
             )
         }
     )
