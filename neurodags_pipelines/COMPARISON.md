@@ -272,7 +272,7 @@ Original computes `_compute_artifact_overlap(raw, new_annots)` — percentage of
 | S. Provenance richness | **DONE** | integrity_stats + by_block + config now in prov JSON |
 | T. AR plot granularity | **open (minor)** | Combined vs per-chunk for long recordings |
 | U. Abs power extra stats | **by design** | neurodags computes more (Med+IQR); original mean only |
-| V. Run-aware aggregation | **open** | No recording_id grouping; post-hoc only |
+| V. Run-aware aggregation | **done (post-hoc)** | `neurodags dataframe` produces one row per run (correct); subject-level aggregation via `groupby(["subject","session","condition"]).mean()` documented in `MIGRATION_GUIDE.md §4.1` |
 | W. Band ratio floor guard | **DONE** | Both guard near-zero (eps vs 0.0 floor; equivalent) |
 | X. Condition separation | **DONE** | `step-1_pipeline@extraction.yml` in-memory epoching via `CleanedPrep` (save: False) per condition |
 | Y. ZapLine n_removed in prov | **done (explicit null)** | `@CleanedPrepRaw_prov.json` includes `zapline_n_removed: null`; threading the actual int requires invasive YAML changes (zapline is upstream node id.4, autoreject is id.7) |

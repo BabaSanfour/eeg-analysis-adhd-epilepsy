@@ -284,7 +284,7 @@ If ZapLine doesn't expose this directly (likely — it's a DSS-based method), co
 
 ---
 
-## P6 — Run-aware aggregation utility `[ ]`
+## P6 — Run-aware aggregation utility `[x]`
 
 **Severity:** minor  
 **Ref:** `COMPARISON.md §2.2`, gap V in §4 summary

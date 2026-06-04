@@ -137,6 +137,26 @@ neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
 
 The assembled CSV has one row per source file (= one run). Subject/run identity comes from the source filename parsed by neurodags's BIDS-aware index.
 
+### 4.1 Aggregating runs to subject level
+
+For multi-run subjects, aggregate post-hoc with pandas:
+
+```python
+import pandas as pd
+
+df = pd.read_csv("results/features_all_conditions.csv")
+
+# One row per subject × session × condition (mean across runs)
+subject_df = (
+    df.groupby(["subject", "session", "condition"], dropna=False)
+    .mean(numeric_only=True)
+    .reset_index()
+)
+subject_df.to_csv("results/features_subject_level.csv", index=False)
+```
+
+Replace `.mean` with `.median` if preferred. Non-numeric columns (run, source file path) are dropped by `numeric_only=True` — keep them before groupby if needed.
+
 ---
 
 ## 5. Step-by-step preprocessing equivalence
