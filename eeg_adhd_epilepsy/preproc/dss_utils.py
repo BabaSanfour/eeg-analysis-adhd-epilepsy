@@ -421,7 +421,14 @@ def _run_dss_artifact(
     # 1. Build & Fit
     dss, extra_stats = _build_dss_estimator(config, profile, float(train_raw.info["sfreq"]))
     fit_data = fit_bundle["fit_data"]
-    dss.fit(fit_data)
+    # DSS expects (n_channels, n_times, n_epochs) but epoch .get_data() returns
+    # (n_epochs, n_channels, n_times). Transpose so channel axis is first.
+    fit_data_for_dss = (
+        fit_data.transpose(1, 2, 0)
+        if isinstance(fit_data, np.ndarray) and fit_data.ndim == 3
+        else fit_data
+    )
+    dss.fit(fit_data_for_dss)
 
     # 2. Diagnostic Plots (Pre-cleaning)
     plot_paths: Dict[str, str] = {}
