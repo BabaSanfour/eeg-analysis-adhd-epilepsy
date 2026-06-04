@@ -21,8 +21,11 @@ def ransac_bad_channels(
     Parameters
     ----------
     block_label
-        If set, RANSAC runs only on segments matching
-        ``{annotation_prefix}{block_label}`` annotations.  None = full recording.
+        If set, RANSAC runs only on segments whose annotation description
+        (after stripping ``annotation_prefix``) contains ``block_label``
+        as a case-insensitive substring.  e.g. ``block_label="baseline"``
+        matches ``BLOCK_EC_baseline``, ``BLOCK_EO_baseline``, ``BLOCK_RAW_baseline``.
+        None = full recording.
     annotation_prefix
         Prefix for block annotations (default ``"BLOCK_"``).
     """
@@ -49,13 +52,15 @@ def ransac_bad_channels(
 
     raw_for_ransac = raw
     if block_label is not None:
-        target = f"{annotation_prefix}{block_label}"
         crops: list = []
         for annot in raw.annotations:
             desc = str(annot["description"])
             if desc.startswith("Comment/"):
                 desc = desc[len("Comment/"):]
-            if desc == target:
+            # Strip annotation prefix then substring-match block_label (same logic as
+            # collect_baseline_windows in bids.py which uses "baseline" in block.name).
+            stripped = desc[len(annotation_prefix):] if desc.startswith(annotation_prefix) else desc
+            if block_label.lower() in stripped.lower():
                 onset = float(annot["onset"])
                 offset = onset + float(annot["duration"])
                 crop = raw.copy().crop(onset, min(offset, raw.times[-1] + raw.first_time))

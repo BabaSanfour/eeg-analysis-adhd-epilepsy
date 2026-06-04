@@ -80,13 +80,14 @@ DerivativeDefinitions:
           line_freq: 60.0
           adaptive: False
 
-      # 5. RANSAC: mark broken channels using EC (rest) windows only.
-      #    Biases bad-channel detection toward intrinsic quality, not task artifacts.
+      # 5. RANSAC: mark broken channels using baseline (rest) windows only.
+      #    Matches BLOCK_EC_baseline, BLOCK_EO_baseline, BLOCK_RAW_baseline — same
+      #    as old pipeline's collect_baseline_windows("baseline" in name).
       - id: 5
         node: ransac_bad_channels
         args:
           mne_object: id.4
-          block_label: EC
+          block_label: baseline
 
       # 6. CAR: common average reference (bads from step 5 are excluded)
       - id: 6

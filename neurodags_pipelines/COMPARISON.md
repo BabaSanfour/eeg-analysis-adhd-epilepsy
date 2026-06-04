@@ -15,7 +15,7 @@
 | Resample | `raw.resample(target_sfreq)` — **before** bandpass | `preprocess_raw(resample_first=True)` — resample before bandpass | ✓ |
 | Bandpass | `raw.filter(0.1, min(100, nyquist-0.1))` | `filter_args: {l_freq: 0.1, h_freq: 100.0}` | ✓ |
 | Line noise | `ZapLine(sfreq, line_freq=60, adaptive=False).fit_transform(raw)` | `zapline_denoise(line_freq=60.0, adaptive=False)` | ✓ |
-| Bad channels | RANSAC on EC windows only (`NoisyChannels`, `random_state=42`) | `ransac_bad_channels(block_label=EC)` | ✓ |
+| Bad channels | RANSAC on all "baseline" windows (`collect_baseline_windows`: EC_baseline + EO_baseline + RAW_baseline concatenated, `random_state=42`) | `ransac_bad_channels(block_label=baseline)` — substring match on stripped annotation name | ✓ |
 | Reference | `set_eeg_reference("average", projection=False)` | `apply_car` | ✓ |
 | AR | per-condition, 1 s epochs, `min(10, n)` CV folds, `n_interpolate=[0]`, chunked at 30 min | `autoreject_annotate_blockwise` same params + `n_jobs=1` (YAML) | ✓ |
 | AR annotations | `BAD_epoch_{cond}` (whole-epoch) + `BAD_{cond}` (per-channel ch_names) | same | ✓ |
@@ -254,7 +254,7 @@ Original computes `_compute_artifact_overlap(raw, new_annots)` — percentage of
 | A. CleanedPrepRaw chain | **DONE** | step-0 produces CleanedPrepRaw; step-1 epochs in-memory (CleanedPrep, save: False) |
 | B. Filter range step-0c | **DONE** | inherited 0.1–100 Hz |
 | C. AR scope | **DONE** | per-condition blockwise |
-| D. RANSAC rest-subset | **DONE** | `block_label: EC` |
+| D. RANSAC rest-subset | **DONE** | `block_label: baseline` — substring match on stripped annotation; old pipeline used `collect_baseline_windows` ("baseline" in name); was incorrectly documented as `block_label: EC` and was a no-op (exact match never fired) |
 | E. Per-channel span annotations | **DONE** | `BAD_{cond}` with `ch_names` |
 | F. AR chunking | **DONE** | `ar_max_chunk_minutes: 30.0` |
 | G. Epoch annotation labels | **DONE** | `BAD_epoch_{cond_name}` |
