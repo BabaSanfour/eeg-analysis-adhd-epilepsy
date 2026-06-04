@@ -629,3 +629,136 @@ def generate_denoise_qc_report(qc_record, reference_base=None) -> NodeResult:
         report_html_suffix="._denoise_qc_report.html",
         figures_suffix="._denoise_qc_report_figures",
     )
+
+
+# ---------------------------------------------------------------------------
+# Node 4: generate_preproc_dataset_qc_report
+# ---------------------------------------------------------------------------
+
+@register_node
+def generate_preproc_dataset_qc_report(qc_record_file) -> NodeResult:
+    """Dataset-level preprocessing QC report aggregating all subjects/runs.
+
+    AGGREGATOR NODE NOTE
+    --------------------
+    Receives one DenoiseQCRecord._denoise_qc.json as trigger, globs all
+    *@BaseQCRecord._base_qc.json, *@CorrectQCRecord._correct_qc.json, and
+    *@DenoiseQCRecord._denoise_qc.json under the preprocessing derivatives root.
+    Calls write_preproc_qc_aggregate_reports for each stage. This is a
+    workaround for neurodags lacking a gather/fan-in primitive.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+
+    from eeg_adhd_epilepsy.qc.preproc_qc import (
+        PREPROC_QC_PROFILES,
+        write_preproc_qc_aggregate_reports,
+    )
+
+    # --- Resolve path ---
+    if isinstance(qc_record_file, NodeResult):
+        item = next(iter(qc_record_file.artifacts.values())).item
+    else:
+        item = qc_record_file
+
+    qc_path = Path(str(item))
+
+    # --- Locate preprocessing root and reports root ---
+    parts = list(qc_path.parts)
+    if "preprocessing" in parts:
+        idx = parts.index("preprocessing")
+        preprocessing_root = Path(*parts[:idx + 1])
+    else:
+        preprocessing_root = qc_path.parents[4]
+
+    dataset_root = preprocessing_root.parent.parent
+    reports_root = dataset_root / "reports"
+    reports_root.mkdir(parents=True, exist_ok=True)
+
+    # --- Deserialize a JSON QC record for write_preproc_qc_aggregate_reports ---
+    def _load_qc_record(path: Path) -> dict:
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+        # Synthesize subject_session_key (needed for grouping in write_preproc_qc_aggregate_reports)
+        rec["subject_session_key"] = (str(rec.get("subject_id", "")), str(rec.get("session_id", "")))
+        # Reconstruct topomap_aggregates: {metric: {"channels": [...], "values": [...]}} → (channels, values, weight)
+        weight = float(rec.get("retained_duration_sec") or 1.0)
+        topo_raw = rec.get("topomap_aggregates") or {}
+        rec["topomap_aggregates"] = {
+            metric: (
+                data["channels"],
+                np.array(
+                    [float("nan") if v is None else float(v) for v in data["values"]],
+                    dtype=float,
+                ),
+                weight,
+            )
+            for metric, data in topo_raw.items()
+            if data and data.get("channels") and data.get("values")
+        }
+        # Reconstruct segment_comparison: list of dicts → DataFrame
+        seg_raw = rec.get("segment_comparison")
+        if seg_raw:
+            seg_df = pd.DataFrame(seg_raw)
+            for col in seg_df.columns:
+                if col != "segment_type":
+                    seg_df[col] = pd.to_numeric(seg_df[col], errors="coerce")
+            rec["segment_comparison"] = seg_df
+        # Reconstruct segments_df: list of dicts → DataFrame
+        segs_raw = rec.get("segments_df")
+        if segs_raw:
+            rec["segments_df"] = pd.DataFrame(segs_raw)
+        return rec
+
+    # --- Glob and load all QC records across all subjects ---
+    base_records = [
+        _load_qc_record(p)
+        for p in sorted(preprocessing_root.rglob("*@BaseQCRecord._base_qc.json"))
+    ]
+    correct_records = [
+        _load_qc_record(p)
+        for p in sorted(preprocessing_root.rglob("*@CorrectQCRecord._correct_qc.json"))
+    ]
+    denoise_records = [
+        _load_qc_record(p)
+        for p in sorted(preprocessing_root.rglob("*@DenoiseQCRecord._denoise_qc.json"))
+    ]
+
+    LOGGER.info(
+        "generate_preproc_dataset_qc_report: %d base, %d correct, %d denoise records",
+        len(base_records), len(correct_records), len(denoise_records),
+    )
+
+    # --- Generate dataset-level reports for each stage ---
+    if base_records:
+        write_preproc_qc_aggregate_reports(
+            reports_root, base_records,
+            profile=PREPROC_QC_PROFILES["base"], output_desc="base",
+        )
+    if correct_records:
+        write_preproc_qc_aggregate_reports(
+            reports_root, correct_records,
+            profile=PREPROC_QC_PROFILES["correct"], output_desc="correct",
+        )
+    if denoise_records:
+        write_preproc_qc_aggregate_reports(
+            reports_root, denoise_records,
+            profile=PREPROC_QC_PROFILES["denoise"], output_desc="denoise",
+        )
+
+    result = {
+        "n_base": len(base_records),
+        "n_correct": len(correct_records),
+        "n_denoise": len(denoise_records),
+        "reports_root": str(reports_root),
+    }
+    return NodeResult(
+        artifacts={
+            "._dataset_qc_done.json": Artifact(
+                item=result,
+                writer=lambda path, d=result: Path(path).write_text(
+                    json.dumps(d, indent=2), encoding="utf-8"
+                ),
+            )
+        }
+    )

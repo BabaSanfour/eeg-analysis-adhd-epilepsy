@@ -90,7 +90,7 @@ CorrectRaw:
 
 ---
 
-## P2 — Dataset-level preprocessing QC report `[ ]`
+## P2 — Dataset-level preprocessing QC report `[x]`
 
 **Severity:** significant  
 **Ref:** `ECOSYSTEM_REPORT.md §2.4`, `COMPARISON.md §2.3`

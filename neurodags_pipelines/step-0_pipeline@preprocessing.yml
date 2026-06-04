@@ -230,6 +230,17 @@ DerivativeDefinitions:
         args:
           qc_record: id.0
 
+  PreprocDatasetQCReport:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: DenoiseQCRecord._denoise_qc.json
+      - id: 1
+        node: generate_preproc_dataset_qc_report
+        args:
+          qc_record_file: id.0
+
 DerivativeList:
   - CleanedPrepRaw
   - RawQCMetrics
@@ -241,3 +252,4 @@ DerivativeList:
   - DenoiseRaw
   - DenoiseQCRecord
   - DenoiseQCReport
+  - PreprocDatasetQCReport
