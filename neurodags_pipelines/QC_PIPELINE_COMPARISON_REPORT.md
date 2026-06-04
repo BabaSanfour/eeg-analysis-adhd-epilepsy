@@ -296,6 +296,7 @@ The framework handles caching, skipping, and dependency graph automatically.
 | Multi-run subjects | Merged (incorrect) | Per-run, correctly aggregated |
 | Retained Duration accuracy | Inflated by channel-specific BAD_ marks | Correct |
 | ICA crash on small channel counts | Crashes | Clamped `min(n_components, len(picks))` |
+| ICA artifact correction method | DSS (EOG/ECG) + MWF (EMG), adaptive | Basic `find_bads_eog`/`find_bads_ecg`; no EMG; no adaptive tuning | open gap |
 | Annotations setter | `AttributeError` on BrainVision | Uses `set_annotations` |
 | Column label "Mean Dur (s)" | Wrong label | Fixed: "Total Dur (s)" |
 | Porting to new dataset | Python code changes | YAML edit only |

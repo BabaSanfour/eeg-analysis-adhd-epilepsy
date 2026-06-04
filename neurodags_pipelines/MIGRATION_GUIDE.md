@@ -231,6 +231,7 @@ derivatives/features@EntropyMultiscale.error   ← NumPy 2.0 issue
 
 | Gap | Severity | Workaround |
 |-----|----------|------------|
+| ICA method (DSS+MWF vs basic ICA) | Significant | Old: DSS for EOG/ECG + MWF for EMG. New: `find_bads_eog`/`find_bads_ecg`, no EMG. High-EMG subjects may be less clean. See `COMPARISON.md §2.11` |
 | QC CSVs (failures.csv, feature_missingness.csv, flags.csv) | Significant | Use `--list-errors`; add post-hoc checks |
 | Per-epoch condition column in default run | Workflow | Use `step-1_pipeline@extraction.yml` for split output |
 | Run-aware aggregation (`recording_id = sub_ses_run`) | Minor | Post-hoc `groupby` on assembled CSV |

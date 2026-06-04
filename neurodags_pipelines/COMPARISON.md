@@ -1,6 +1,6 @@
 # Pipeline Comparison: original (`preproc/base.py` + `extract_descriptors.py`) vs neurodags
 
-*Last updated: 2026-05-25. Reflects in-memory epoching: step-0 produces only CleanedPrepRaw; condition epoching happens in-memory in step-1 (save: False).*
+*Last updated: 2026-06-04. Reflects in-memory epoching: step-0 produces only CleanedPrepRaw; condition epoching happens in-memory in step-1 (save: False).*
 
 ---
 
@@ -22,6 +22,7 @@
 | Output (continuous) | in-memory `Raw` | `@CleanedPrepRaw.fif` (float32 on disk) | ✓ (±float32) |
 | Output (epochs) | condition-specific epoch objects | in-memory via `CleanedPrep` in step-1 (`save: False`; no disk file) | ✓ |
 | AR chunk floor | `max(1, int(...))` | `max(1, int(...))` | ✓ |
+| ICA artifact correction | `run_source_correction`: DSS for EOG/ECG (profile-based, auto-tuning + fallbacks to blind-DSS/quasiperiodic), MWF for EMG | `ica_artifact_correction`: basic `find_bads_eog` + `find_bads_ecg`; **no EMG handling** | ⚠ see §2.11 |
 
 ### 1.2 Feature extraction
 
@@ -148,6 +149,21 @@ BAD_ spans to `SKIP_` before epoching — only the active condition's BAD marks 
 
 ---
 
+### 2.11 ICA artifact correction method
+
+**Original (`correct.py` → `run_source_correction`)**: Uses DSS (Denoising Source Separation) for EOG and ECG removal, with profile-based auto-tuning and automatic fallbacks (blind-DSS if EOG DSS skipped; quasiperiodic denoiser if ECG DSS skipped). EMG artifacts removed via MWF (Multi-channel Wiener Filter). n_components and removal counts adapt dynamically based on detected muscle load.
+
+**neurodags (`nodes_ica.py` → `ica_artifact_correction`)**: Basic ICA with MNE's `find_bads_eog` + `find_bads_ecg`. No adaptive tuning, no fallbacks. **No EMG handling at all.**
+
+Key differences:
+- EOG/ECG: DSS (spatial decomposition, more robust) vs ICA `find_bads_*` (correlation-based)
+- EMG: MWF removes muscle artifacts in old pipeline; new pipeline has no equivalent
+- Aggressiveness: old auto-boosts if high muscle load detected; new uses fixed n_components
+
+**Status**: open (significant). ICA crash fix (`n_components` clamp) was addressed, but the underlying method difference was not. New pipeline may produce less clean data for subjects with significant EMG contamination.
+
+---
+
 ### 2.4 Float32 precision on CleanedPrepRaw
 
 MNE saves `.fif` as float32 by default. `CleanedPrepRaw.fif` (float32 on disk) → reloaded by step-1 introduces a float32 round-trip for epoch extraction. Original keeps Raw in memory (float64). Effect below EEG noise floor. **Negligible.**
@@ -263,3 +279,4 @@ Original computes `_compute_artifact_overlap(raw, new_annots)` — percentage of
 | AA. BLOCK annotation injection | **DONE** | `inject_block_annotations` reads `_segments.csv`; original uses `read_raw_bids` → `_events.tsv` (§2.9) |
 | AB. Condition epoch extraction | **DONE** | in-memory `extract_condition_epochs` per condition in step-1; BAD_epoch scoped correctly (§2.10) |
 | AC. Cross-condition BAD_ bleeding | **DONE** | `extract_condition_epochs` remaps foreign BAD_ spans to SKIP_ before epoching |
+| AD. ICA artifact correction method | **open (significant)** | Old: DSS (EOG/ECG) + MWF (EMG). New: basic `find_bads_eog`/`find_bads_ecg`; no EMG. See §2.11 |

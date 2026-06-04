@@ -52,7 +52,7 @@
 | RANSAC bad channels (EC only) | ✓ | ✓ | ✓ identical |
 | CAR | ✓ | ✓ | ✓ identical |
 | Condition-grouped AutoReject | ✓ (1s epochs, 30-min chunks) | ✓ (same params) | ✓ identical |
-| ICA correction | ✓ | ✓ | ✓ fixed crash (n_components clamp) |
+| ICA correction | ✓ DSS (EOG/ECG) + MWF (EMG), adaptive | ⚠ basic `find_bads_eog`/`find_bads_ecg`; no EMG; no adaptive tuning | **method differs — see COMPARISON.md §2.11** |
 | Wiener residual denoise | ✓ | ✓ | ✓ fixed crash (channel positions) |
 | Channel position loading | ✗ NaN — silent failure | ✓ loads `_electrodes.tsv` | **bug fixed** |
 | Multi-run per-subject | merged (wrong) | per-run (correct) | **bug fixed** |
@@ -132,7 +132,7 @@ ML is explicitly **out of scope** for neurodags and the neurodags pipeline. It l
 **Advantages:**
 - YAML-driven: portability to new datasets = edit `step-0_dataset.yml`
 - Automatic caching and incremental recomputation
-- All preprocessing bugs fixed (channel positions, retention, ICA, annotations)
+- Preprocessing bugs fixed (channel positions, retention, annotations, n_components clamp)
 - Per-run reports (correct multi-run handling)
 - Node functions are small, focused, independently testable
 - `neurodags dataframe` assembles per-file outputs into one CSV in a single command
