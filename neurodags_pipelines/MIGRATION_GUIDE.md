@@ -36,6 +36,10 @@ neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
 neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
     --output results/features_all_conditions.csv
 # Split by condition post-hoc on the `dataset` column.
+
+# 3. Merge descriptor shards + generate dataset QC report
+python -m eeg_adhd_epilepsy.analysis.merge_descriptors \
+    --bids_root /path/to/bids_root
 ```
 
 Steps are idempotent (`overwrite: False`). Re-running skips already-computed files.

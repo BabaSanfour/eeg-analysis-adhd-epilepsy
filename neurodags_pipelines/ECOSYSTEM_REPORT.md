@@ -99,7 +99,7 @@ ML is explicitly **out of scope** for neurodags and the neurodags pipeline. It l
 | Per-subject HTML report (base/correct/denoise) | ✓ | ✓ | ✓ |
 | Per-run reports | one merged report (wrong for multi-run) | one per run (correct) | improved |
 | Subject-level aggregated report (Per-Run Summary) | ✓ | not in neurodags (see §5.1 note) | intentional gap |
-| Dataset-level summary reports | ✓ | not yet implemented | open |
+| Dataset-level summary reports | ✓ | descriptor QC: ✓ via `merge_descriptors.py` (post-pipeline); preprocessing summary: open | partial |
 | Condition segment retention | ✗ missing | ✓ | improved |
 | Raw Duration display | ✗ always `0s` | ✓ | bug fixed |
 | Retained Duration accuracy | ✗ inflated by ch-BAD marks | ✓ | bug fixed |

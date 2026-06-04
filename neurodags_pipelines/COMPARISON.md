@@ -93,6 +93,7 @@ neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
 | `_SUCCESS` markers | ✓ **equivalent** | `neurodags status` scripting-friendly; no explicit file marker |
 | Partial NaN within a successful derivative | ✗ **missing** | `.nc` writes OK but may contain NaN for some epochs/channels (e.g. FOOOF fit failures); post-hoc scan needed |
 | Structured per-epoch/channel failure log | ✗ **missing** | No partial-failure ledger; neurodags either writes full derivative or `.error` |
+| Descriptor dataset QC report (all subjects × conditions) | ✓ **covered via external script** | `python -m eeg_adhd_epilepsy.analysis.merge_descriptors --bids_root <root>` — run after step-1; see `MIGRATION_GUIDE.md §2` step 3 |
 
 **Status**: complete-failure tracking covered. Intra-file missingness and structured failure rows require a post-hoc script that loads each `.nc` and counts NaN per feature/channel — not planned for current scope.
 

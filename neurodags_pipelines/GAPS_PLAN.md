@@ -155,7 +155,7 @@ Better: add a `skip_if_not_last: true` mechanism or accept the redundancy.
 
 ---
 
-## P3a — Dataset-level descriptor QC report (as node) `[ ]`
+## P3a — Dataset-level descriptor QC report (as node) `[x]`
 
 **Severity:** significant  
 **Ref:** `COMPARISON.md §2.3`, `ECOSYSTEM_REPORT.md §2.4`
