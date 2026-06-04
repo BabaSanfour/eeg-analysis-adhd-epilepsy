@@ -157,6 +157,7 @@ ML is explicitly **out of scope** for neurodags and the neurodags pipeline. It l
 |-----------|------------------|-------------|
 | `step-0_dataset.yml` | Yes | Edit 16 lines (paths, subjects) |
 | `step-0_pipeline@preprocessing.yml` | Mostly no | Adjust `annotation_prefix`, `line_freq`, `resample`, `l_freq`, `h_freq` via YAML args |
+| `step-0_pipeline@qc.yml` | No | Fully reusable; contains the cross-SourceFile aggregator (`PreprocDatasetQCReport`) |
 | `inject_block_annotations` node | Partially | Hardcoded to `_segments.csv` format; needs adapting for datasets without this sidecar |
 | `nodes_qc.py` | No | Fully reusable |
 | `nodes_autoreject.py`, `nodes_ica.py`, `nodes_preprocessing.py` | No | Pure MNE, no dataset-specific code |
@@ -174,6 +175,7 @@ The bottleneck for porting is `inject_block_annotations` (annotation source vari
 new-project/
   pipelines/
     step-0_pipeline@preprocessing.yml   # copy + adjust line_freq, resample, annotation_prefix
+    step-0_pipeline@qc.yml              # copy as-is (QC + aggregator node)
     step-0_dataset.yml                   # new dataset paths
     step-1_pipeline@extraction.yml       # copy + adjust condition names
     step-1_dataset.yml
@@ -220,14 +222,17 @@ run_all("dataset/", stages=["preproc", "extract", "ml"])
 ### Option B: Template script integrating separate packages (recommended)
 
 ```bash
-# Step 1: preprocess (once, heavy deps, CPU cluster)
+# Step 1: preprocess (once, heavy deps, CPU cluster) — pure per-SourceFile DAG
 neurodags run pipelines/step-0_pipeline@preprocessing.yml
 
-# Step 2: extract features (all conditions in one run, CPU)
+# Step 2: QC reports (per-subject HTML + dataset summary aggregator)
+neurodags run pipelines/step-0_pipeline@qc.yml
+
+# Step 3: extract features (all conditions in one run, CPU)
 neurodags run pipelines/step-1_pipeline@extraction.yml
 neurodags dataframe pipelines/step-1_pipeline@extraction.yml --output features/all_conditions.csv
 
-# Step 3: ML (many times, GPU optional, quick iteration)
+# Step 4: ML (many times, GPU optional, quick iteration)
 # Filter to target condition via `dataset` column or --datasets flag
 python analysis/run_ml.py --features features/all_conditions.csv --config configs/ml_config.yml
 ```
@@ -294,11 +299,12 @@ The `inject_block_annotations` node is the main dataset-specific piece. For the 
 2. Edit `step-0_dataset.yml` (16 lines): new BIDS root, new subject list
 3. If annotation format differs: adapt `inject_block_annotations` in `nodes_annotations.py`
 4. Run `neurodags run step-0_pipeline@preprocessing.yml`
-5. Run `neurodags run step-1_pipeline@extraction.yml` (all conditions in one run)
-6. Run `neurodags dataframe` to assemble CSV
-7. Run `python analysis/run_ml.py --features features.csv --config ml_config.yml`
+5. Run `neurodags run step-0_pipeline@qc.yml`
+6. Run `neurodags run step-1_pipeline@extraction.yml` (all conditions in one run)
+7. Run `neurodags dataframe` to assemble CSV
+8. Run `python analysis/run_ml.py --features features.csv --config ml_config.yml`
 
-Steps 4–7 are identical across all projects. Steps 1–3 are the only new-project work.
+Steps 4–8 are identical across all projects. Steps 1–3 are the only new-project work.
 
 ### One command to run everything?
 
@@ -310,6 +316,7 @@ CONDITION ?= EO_baseline
 
 run-all:
 	neurodags run pipelines/step-0_pipeline@preprocessing.yml
+	neurodags run pipelines/step-0_pipeline@qc.yml
 	neurodags run pipelines/step-1_pipeline@extraction.yml
 	neurodags dataframe pipelines/step-1_pipeline@extraction.yml \
 	    --output features/all_conditions.csv

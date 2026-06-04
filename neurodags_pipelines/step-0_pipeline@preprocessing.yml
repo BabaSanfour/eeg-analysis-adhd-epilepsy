@@ -1,7 +1,7 @@
 # Artifact-cleaned preprocessing pipeline.
 #
 # Port of eeg_adhd_epilepsy/preproc/base.py run_base_pipeline.
-# Produces the following derivatives per source recording:
+# Produces the following derivatives per source recording (pure per-SourceFile):
 #
 #   CleanedPrepRaw — fully annotated continuous Raw:
 #     0. inject_block_annotations      : read *_segments.csv sidecar → inject BLOCK_* annotations
@@ -12,14 +12,17 @@
 #     5. apply_car                     : common average reference (bads excluded)
 #     6. autoreject_annotate_blockwise : per-condition AR → BAD_epoch_{cond} + BAD_{cond} annotations
 #
-#   RawQCMetrics  — signal QC on the source file (pre-base baseline)
-#   BaseQCRecord  — full QC on CleanedPrepRaw with deltas vs raw, channel diagnostics
-#   BaseQCReport  — single-run HTML QC report (topomaps, temporal plots, AR figures)
+#   CorrectRaw  — ICA artifact correction (DSS for EOG/ECG, MWF for EMG)
+#   DenoiseRaw  — residual transient denoising (Wiener filter)
+#
+# QC records, HTML reports, and the dataset-level summary are in:
+#   step-0_pipeline@qc.yml  (run after this pipeline)
 #
 # Condition epoching is done in step-1_pipeline@extraction.yml (in-memory, save: False).
 #
 # Usage:
 #   neurodags run neurodags_pipelines/step-0_pipeline@preprocessing.yml
+#   neurodags run neurodags_pipelines/step-0_pipeline@qc.yml
 
 new_definitions:
   - nodes_utils.py
@@ -29,7 +32,6 @@ new_definitions:
   - nodes_bad_channels.py
   - nodes_autoreject.py
   - nodes_ica.py
-  - nodes_qc.py
 datasets: step-0_dataset.yml
 mount_point: local
 
@@ -105,46 +107,6 @@ DerivativeDefinitions:
           ar_max_chunk_minutes: 30.0
           n_jobs: 1
 
-  # ---------------------------------------------------------------------------
-  # QC derivatives — run after CleanedPrepRaw is computed
-  # ---------------------------------------------------------------------------
-
-  RawQCMetrics:
-    overwrite: False
-    for_dataframe: False
-    nodes:
-      - id: 0
-        derivative: SourceFile
-      - id: 1
-        node: compute_raw_qc_metrics
-        args:
-          mne_object: id.0
-
-  BaseQCRecord:
-    overwrite: False
-    for_dataframe: False
-    nodes:
-      - id: 0
-        derivative: CleanedPrepRaw.fif
-      - id: 1
-        derivative: RawQCMetrics._raw_qc.json
-      - id: 2
-        node: build_base_qc_record
-        args:
-          mne_object: id.0
-          raw_metrics: id.1
-
-  BaseQCReport:
-    overwrite: False
-    for_dataframe: False
-    nodes:
-      - id: 0
-        derivative: BaseQCRecord._base_qc.json
-      - id: 1
-        node: generate_base_qc_report
-        args:
-          qc_record: id.0
-
   CorrectRaw:
     overwrite: False
     for_dataframe: False
@@ -161,34 +123,6 @@ DerivativeDefinitions:
           ica_n_components: 20
           random_state: 42
 
-  CorrectQCRecord:
-    overwrite: False
-    for_dataframe: False
-    nodes:
-      - id: 0
-        derivative: CorrectRaw.fif
-      - id: 1
-        derivative: RawQCMetrics._raw_qc.json
-      - id: 2
-        derivative: BaseQCRecord._base_qc.json
-      - id: 3
-        node: build_correct_qc_record
-        args:
-          mne_object: id.0
-          raw_metrics: id.1
-          base_qc_record: id.2
-
-  CorrectQCReport:
-    overwrite: False
-    for_dataframe: False
-    nodes:
-      - id: 0
-        derivative: CorrectQCRecord._correct_qc.json
-      - id: 1
-        node: generate_correct_qc_report
-        args:
-          qc_record: id.0
-
   DenoiseRaw:
     overwrite: False
     for_dataframe: False
@@ -202,54 +136,7 @@ DerivativeDefinitions:
           transient_method: wiener
           n_jobs: 1
 
-  DenoiseQCRecord:
-    overwrite: False
-    for_dataframe: False
-    nodes:
-      - id: 0
-        derivative: DenoiseRaw.fif
-      - id: 1
-        derivative: RawQCMetrics._raw_qc.json
-      - id: 2
-        derivative: CorrectQCRecord._correct_qc.json
-      - id: 3
-        node: build_denoise_qc_record
-        args:
-          mne_object: id.0
-          raw_metrics: id.1
-          correct_qc_record: id.2
-
-  DenoiseQCReport:
-    overwrite: False
-    for_dataframe: False
-    nodes:
-      - id: 0
-        derivative: DenoiseQCRecord._denoise_qc.json
-      - id: 1
-        node: generate_denoise_qc_report
-        args:
-          qc_record: id.0
-
-  PreprocDatasetQCReport:
-    overwrite: False
-    for_dataframe: False
-    nodes:
-      - id: 0
-        derivative: DenoiseQCRecord._denoise_qc.json
-      - id: 1
-        node: generate_preproc_dataset_qc_report
-        args:
-          qc_record_file: id.0
-
 DerivativeList:
   - CleanedPrepRaw
-  - RawQCMetrics
-  - BaseQCRecord
-  - BaseQCReport
   - CorrectRaw
-  - CorrectQCRecord
-  - CorrectQCReport
   - DenoiseRaw
-  - DenoiseQCRecord
-  - DenoiseQCReport
-  - PreprocDatasetQCReport

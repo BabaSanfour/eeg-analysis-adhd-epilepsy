@@ -27,17 +27,23 @@ The key shift: neurodags is **file-in, file-out**. Each step reads its input der
 python neurodags_pipelines/generate_synthetic.py
 
 # 1. Preprocessing — equivalent to run_base_pipeline()
-#    Produces CleanedPrepRaw.fif (annotated Raw, one per recording).
+#    Produces CleanedPrepRaw.fif, CorrectRaw.fif, DenoiseRaw.fif (one per recording).
+#    Pure per-SourceFile DAG — no cross-subject operations.
 neurodags run neurodags_pipelines/step-0_pipeline@preprocessing.yml
 
-# 2. Feature extraction — equivalent to extract_descriptors.py
+# 2. Preprocessing QC — per-subject HTML reports + dataset-level summary.
+#    Reads derivatives written by step 1. Includes one aggregator node
+#    (PreprocDatasetQCReport) that crosses SourceFile boundaries.
+neurodags run neurodags_pipelines/step-0_pipeline@qc.yml
+
+# 3. Feature extraction — equivalent to extract_descriptors.py
 #    All 8 conditions active — one run covers all:
 neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
 neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
     --output results/features_all_conditions.csv
 # Split by condition post-hoc on the `dataset` column.
 
-# 3. Merge descriptor shards + generate dataset QC report
+# 4. Merge descriptor shards + generate dataset QC report
 python -m eeg_adhd_epilepsy.analysis.merge_descriptors \
     --bids_root /path/to/bids_root
 ```
@@ -235,6 +241,7 @@ Also, on every `neurodags run`, the pipeline YAML + `custom_nodes.py` + datasets
 ```bash
 # How many files done / missing / errored per derivative?
 neurodags status neurodags_pipelines/step-0_pipeline@preprocessing.yml
+neurodags status neurodags_pipelines/step-0_pipeline@qc.yml
 
 # Show which files errored
 neurodags status neurodags_pipelines/step-1_pipeline@extraction.yml --list-errors

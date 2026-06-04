@@ -1,0 +1,152 @@
+# Preprocessing QC pipeline.
+#
+# Run AFTER step-0_pipeline@preprocessing.yml.  Reads CleanedPrepRaw,
+# CorrectRaw, and DenoiseRaw derivatives from disk and produces:
+#
+#   Per-SourceFile derivatives (one per recording — standard neurodags):
+#     RawQCMetrics      — signal QC on the raw source file (pre-processing baseline)
+#     BaseQCRecord      — full QC on CleanedPrepRaw with deltas vs raw
+#     BaseQCReport      — single-run HTML QC report for the base stage
+#     CorrectQCRecord   — full QC on CorrectRaw with deltas vs base
+#     CorrectQCReport   — single-run HTML QC report for the correction stage
+#     DenoiseQCRecord   — full QC on DenoiseRaw with deltas vs correct
+#     DenoiseQCReport   — single-run HTML QC report for the denoise stage
+#
+#   Aggregator derivative (CROSSES source files — neurodags workaround):
+#     PreprocDatasetQCReport — dataset-level HTML summary across all subjects/runs.
+#       Triggered by one DenoiseQCRecord but rglobs all *@BaseQCRecord,
+#       *@CorrectQCRecord, *@DenoiseQCRecord JSON files under the preprocessing
+#       derivatives root. Re-runs once per subject but overwrites the same output
+#       (overwrite: False protects once the final subject runs). This is a workaround
+#       for neurodags lacking a gather/fan-in primitive.
+#
+# Usage:
+#   neurodags run neurodags_pipelines/step-0_pipeline@preprocessing.yml
+#   neurodags run neurodags_pipelines/step-0_pipeline@qc.yml
+
+new_definitions:
+  - nodes_qc.py
+datasets: step-0_dataset.yml
+mount_point: local
+
+DerivativeDefinitions:
+
+  RawQCMetrics:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: SourceFile
+      - id: 1
+        node: compute_raw_qc_metrics
+        args:
+          mne_object: id.0
+
+  BaseQCRecord:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CleanedPrepRaw.fif
+      - id: 1
+        derivative: RawQCMetrics._raw_qc.json
+      - id: 2
+        node: build_base_qc_record
+        args:
+          mne_object: id.0
+          raw_metrics: id.1
+
+  BaseQCReport:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: BaseQCRecord._base_qc.json
+      - id: 1
+        node: generate_base_qc_report
+        args:
+          qc_record: id.0
+
+  CorrectQCRecord:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CorrectRaw.fif
+      - id: 1
+        derivative: RawQCMetrics._raw_qc.json
+      - id: 2
+        derivative: BaseQCRecord._base_qc.json
+      - id: 3
+        node: build_correct_qc_record
+        args:
+          mne_object: id.0
+          raw_metrics: id.1
+          base_qc_record: id.2
+
+  CorrectQCReport:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: CorrectQCRecord._correct_qc.json
+      - id: 1
+        node: generate_correct_qc_report
+        args:
+          qc_record: id.0
+
+  DenoiseQCRecord:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: DenoiseRaw.fif
+      - id: 1
+        derivative: RawQCMetrics._raw_qc.json
+      - id: 2
+        derivative: CorrectQCRecord._correct_qc.json
+      - id: 3
+        node: build_denoise_qc_record
+        args:
+          mne_object: id.0
+          raw_metrics: id.1
+          correct_qc_record: id.2
+
+  DenoiseQCReport:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: DenoiseQCRecord._denoise_qc.json
+      - id: 1
+        node: generate_denoise_qc_report
+        args:
+          qc_record: id.0
+
+  # ---------------------------------------------------------------------------
+  # AGGREGATOR — crosses SourceFile boundary
+  # ---------------------------------------------------------------------------
+  # Receives one DenoiseQCRecord as trigger, rglobs all QC records across
+  # the entire preprocessing derivatives root to build the dataset-level report.
+  # Runs once per subject (neurodags scheduling) but produces the same report
+  # each time; overwrite: False means only the first completion is written.
+  PreprocDatasetQCReport:
+    overwrite: False
+    for_dataframe: False
+    nodes:
+      - id: 0
+        derivative: DenoiseQCRecord._denoise_qc.json
+      - id: 1
+        node: generate_preproc_dataset_qc_report
+        args:
+          qc_record_file: id.0
+
+DerivativeList:
+  - RawQCMetrics
+  - BaseQCRecord
+  - BaseQCReport
+  - CorrectQCRecord
+  - CorrectQCReport
+  - DenoiseQCRecord
+  - DenoiseQCReport
+  - PreprocDatasetQCReport
