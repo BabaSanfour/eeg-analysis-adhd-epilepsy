@@ -276,7 +276,7 @@ Original computes `_compute_artifact_overlap(raw, new_annots)` — percentage of
 | W. Band ratio floor guard | **DONE** | Both guard near-zero (eps vs 0.0 floor; equivalent) |
 | X. Condition separation | **DONE** | `step-1_pipeline@extraction.yml` in-memory epoching via `CleanedPrep` (save: False) per condition |
 | Y. ZapLine n_removed in prov | **open (minor)** | Not tracked; config is in code/ snapshot |
-| Z. QC layer | **partial** | Complete failures: covered via `.error` + `neurodags status`. Intra-file NaN tracking + structured failure rows: missing; post-hoc scan needed |
+| Z. QC layer | **partial** | Complete failures: covered via `.error` + `neurodags status`. All-NaN feature failures: covered via `*_failures.csv` per subject/condition. Per-epoch partial NaN (some epochs valid): still missing |
 | AA. BLOCK annotation injection | **DONE** | `inject_block_annotations` reads `_segments.csv`; original uses `read_raw_bids` → `_events.tsv` (§2.9) |
 | AB. Condition epoch extraction | **DONE** | in-memory `extract_condition_epochs` per condition in step-1; BAD_epoch scoped correctly (§2.10) |
 | AC. Cross-condition BAD_ bleeding | **DONE** | `extract_condition_epochs` remaps foreign BAD_ spans to SKIP_ before epoching |

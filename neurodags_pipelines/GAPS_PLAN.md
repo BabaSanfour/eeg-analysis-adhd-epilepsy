@@ -198,7 +198,7 @@ globs siblings, calls `run_descriptor_dataset_qc`.
 
 ---
 
-## P4 — Structured failure rows / intra-file NaN `[ ]`
+## P4 — Structured failure rows / intra-file NaN `[x]`
 
 **Severity:** significant  
 **Ref:** `COMPARISON.md §2.3`, gap Z in §4 summary

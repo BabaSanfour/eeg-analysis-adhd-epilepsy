@@ -441,9 +441,46 @@ def generate_descriptor_qc_record(
             "complexity": {"enabled": True},
         }
     }
-    failure_df = pd.DataFrame(
-        columns=["family", "channel_name", "exception_type", "condition"]
+
+    # --- Write failures CSV (all-NaN features per family) ---
+    from eeg_adhd_epilepsy.qc.descriptor_qc import compute_constant_feature_summary
+
+    _tol = 1e-10
+    failure_rows: list[dict] = []
+    for _df, _feat_cols in [
+        (sensor_epoch_df, list(sensor_epoch_df.columns) if not sensor_epoch_df.empty else []),
+        (
+            pooled_epoch_df,
+            list(pooled_epoch_df.columns)
+            if pooled_epoch_df is not None and not pooled_epoch_df.empty
+            else [],
+        ),
+    ]:
+        if not _feat_cols:
+            continue
+        _constant_df = compute_constant_feature_summary(_df, _feat_cols, _tol, config_snapshot)
+        for _, _row in _constant_df[_constant_df["is_all_nan"]].iterrows():
+            failure_rows.append(
+                {
+                    "condition": condition_name,
+                    "subject": subject,
+                    "channel_name": str(_row["column"]),
+                    "family": str(_row["family"]) if _row["family"] is not None else "unknown",
+                    "reason": "all_nan",
+                }
+            )
+
+    failures_df = pd.DataFrame(
+        failure_rows, columns=["condition", "subject", "channel_name", "family", "reason"]
     )
+    failures_df.to_csv(
+        qc_dir / f"sub-{subject}_ses-{session}_{condition_name}_failures.csv",
+        index=False,
+    )
+
+    failure_df = failures_df.assign(exception_type="all_nan")[
+        ["family", "channel_name", "exception_type", "condition"]
+    ]
 
     summary_row = run_descriptor_subject_qc(
         shard_root=nc_dir,
