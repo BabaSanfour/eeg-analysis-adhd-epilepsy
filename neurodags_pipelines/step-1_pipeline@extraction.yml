@@ -3,14 +3,14 @@
 # Input: *@CleanedPrepRaw.fif from step-0_pipeline@preprocessing (annotated Raw).
 #        Condition epoching happens in-memory here (CleanedPrep, save: False).
 #
-# Workflow (run once per condition):
-#   1. Activate ONE condition entry in step-1_dataset.yml (others skip: true).
-#   2. neurodags run  neurodags_pipelines/step-1_pipeline@extraction.yml
-#   3. neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
-#        --output features_conditions_<condition>.csv
+# Workflow (all 8 conditions active — run once covers all):
+#   1. neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
+#   2. neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
+#        --output features_all_conditions.csv
 #
-# The condition is set via vars.condition_name in the active dataset entry —
-# no edits to this file are needed when switching conditions.
+# The resulting CSV has a `dataset` column (e.g. eeg_adhd_epilepsy_EO_baseline)
+# that identifies the condition. Split post-hoc in pandas if needed.
+# Use --datasets with a single-condition YAML to restrict to one condition.
 #
 # Known conditions (from _segments.csv segment_type):
 #   EO: EO_baseline, HV_EO, PHOTO_EO, PostHV_EO
