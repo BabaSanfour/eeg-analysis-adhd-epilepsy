@@ -111,10 +111,14 @@ def source_correction(
     if isinstance(mne_object, (str, os.PathLike)):
         mne_object = load_meeg(mne_object)
 
+    import matplotlib
+    matplotlib.use("Agg")
+
     raw = mne_object.copy().load_data()
 
     subject_id = "unknown"
     output_dir = None
+    fig_dir = None
     artifact_profile: dict = {}
     if raw.filenames and raw.filenames[0]:
         rec_path = Path(raw.filenames[0])
@@ -126,6 +130,8 @@ def source_correction(
         except Exception:
             pass
         output_dir = rec_path.parent
+        fig_dir = output_dir / "figures"
+        fig_dir.mkdir(parents=True, exist_ok=True)
         # Load CleanedPrepRaw provenance for auto-tuning (same dir, _prov.json suffix).
         prov_path = rec_path.parent / (rec_path.stem + "_prov.json")
         if prov_path.exists():
@@ -134,6 +140,14 @@ def source_correction(
                 artifact_profile = prov.get("integrity_stats", {})
             except Exception:
                 pass
+
+    # Save pre-correction EEG snapshot (mirrors run_correction_pipeline).
+    from eeg_adhd_epilepsy.viz.preproc_qc import save_eeg_snapshot, plot_channel_variance_comparison
+    if fig_dir is not None:
+        try:
+            save_eeg_snapshot(raw, fig_dir, subject_id, "before_correction")
+        except Exception:
+            pass
 
     config = ArtifactCorrectionConfig(
         eog_method=eog_method if eog_method != "none" else None,
@@ -148,7 +162,7 @@ def source_correction(
         mwf_n_components=mwf_n_components,
     )
 
-    corrected_raw, _provenance = run_source_correction(
+    corrected_raw, provenance = run_source_correction(
         raw,
         config,
         output_dir=output_dir,
@@ -156,11 +170,31 @@ def source_correction(
         artifact_profile=artifact_profile,
     )
 
-    return NodeResult(
-        artifacts={
-            ".fif": Artifact(
-                item=corrected_raw,
-                writer=lambda path, r=corrected_raw: r.save(path, overwrite=True, verbose="ERROR"),
-            )
-        }
-    )
+    # Save variance comparison plot and provenance JSON.
+    artifacts: dict = {
+        ".fif": Artifact(
+            item=corrected_raw,
+            writer=lambda path, r=corrected_raw: r.save(path, overwrite=True, verbose="ERROR"),
+        ),
+        "_correct_prov.json": Artifact(
+            item=provenance,
+            writer=lambda path, d=provenance: Path(path).write_text(
+                json.dumps(d, indent=2, default=str), encoding="utf-8"
+            ),
+        ),
+    }
+    if fig_dir is not None:
+        try:
+            fig_var = plot_channel_variance_comparison(raw, corrected_raw, subject_id)
+            var_path = fig_dir / f"{subject_id}_variance_comparison.png"
+
+            def _save_var(path, fig=fig_var):
+                fig.savefig(path, dpi=150, bbox_inches="tight")
+                import matplotlib.pyplot as _plt
+                _plt.close(fig)
+
+            artifacts["_correct_variance_comparison.png"] = Artifact(item=fig_var, writer=_save_var)
+        except Exception:
+            pass
+
+    return NodeResult(artifacts=artifacts)
