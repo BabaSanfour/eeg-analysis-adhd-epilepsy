@@ -32,7 +32,11 @@ def iqr_across_dimension(xarray_data, dim: str) -> NodeResult:
         kwargs={"axis": -1},
         dask="parallelized",
     )
-    result = result.assign_coords({k: v for k, v in da.coords.items() if k != dim})
+    result_dims = set(result.dims)
+    result = result.assign_coords({
+        k: v for k, v in da.coords.items()
+        if k != dim and set(v.dims).issubset(result_dims)
+    })
     return NodeResult(artifacts={".nc": Artifact(item=result, writer=_to_nc_writer(result))})
 
 
@@ -53,5 +57,9 @@ def mad_across_dimension(xarray_data, dim: str) -> NodeResult:
         input_core_dims=[[dim]],
         dask="parallelized",
     )
-    result = result.assign_coords({k: v for k, v in da.coords.items() if k != dim})
+    result_dims = set(result.dims)
+    result = result.assign_coords({
+        k: v for k, v in da.coords.items()
+        if k != dim and set(v.dims).issubset(result_dims)
+    })
     return NodeResult(artifacts={".nc": Artifact(item=result, writer=_to_nc_writer(result))})
