@@ -326,6 +326,120 @@ df.groupby(["subject", "session", "condition"]).mean(numeric_only=True).reset_in
 
 ---
 
+## P7 — n_jobs for resample and filter `[ ]`
+
+**Severity:** minor (performance)  
+**Ref:** `COMPARISON.md §2.12`, gaps AE and AF in §4 summary
+
+### Problem
+
+`preprocess_raw` node (`nodes_preprocessing.py`) calls:
+```python
+raw.resample(float(resample), verbose=False)   # line 38 — no n_jobs
+raw.filter(**filter_args, verbose=False)        # line 40 — no n_jobs
+raw.resample(float(resample), verbose=False)   # line 42 — no n_jobs (second call)
+```
+
+Old `base.py` passes `n_jobs` (default `-1`, all cores) to both. On large recordings (60+ min, 64+ channels), single-threaded resample and filter can take 5–10× longer.
+
+### Approach
+
+Add `n_jobs: int = -1` param to `preprocess_raw` node. Pass to both `resample` calls and merge into `filter_args` dict before calling `raw.filter`:
+
+```python
+@register_node
+def preprocess_raw(
+    mne_object,
+    filter_args: dict | None = None,
+    resample: float | None = None,
+    resample_first: bool = True,
+    n_jobs: int = -1,
+) -> NodeResult:
+    ...
+    raw.resample(float(resample), n_jobs=n_jobs, verbose=False)
+    raw.filter(**filter_args, n_jobs=n_jobs, verbose=False)
+```
+
+Add to YAML:
+```yaml
+- id: 3
+  node: preprocess_raw
+  args:
+    ...
+    n_jobs: -1
+```
+
+### Key files
+
+- `neurodags_pipelines/nodes_preprocessing.py` — `preprocess_raw` function (lines 25–50)
+- `neurodags_pipelines/step-0_pipeline@preprocessing.yml` — add `n_jobs: -1` to step 3
+
+### Definition of done
+
+- `preprocess_raw` accepts and passes `n_jobs` to `resample` and `filter`
+- YAML updated with `n_jobs: -1`
+- `COMPARISON.md` gaps AE and AF updated to DONE
+
+---
+
+## P8 — Observability / logging `[ ]`
+
+**Severity:** significant (UX)  
+**Ref:** `COMPARISON.md §2.13`, gaps AG and AH in §4 summary
+
+### Problem
+
+All neurodags preprocessing nodes are completely silent. Old pipeline logs:
+- Step start/end + elapsed time
+- RANSAC: n bad channels found, elapsed, or skip reason
+- AR: per-condition n_epochs, n_folds, skip warning if too few epochs
+- AR: actual CV folds when clamped below requested
+- ZapLine: n components removed
+- Correction: provenance save path
+
+Without logging, slow runs look identical to stuck runs, and silent RANSAC failures are invisible.
+
+### Approach
+
+**Minimal viable**: add `logging.getLogger(__name__)` to each node file and log:
+1. `ransac_bad_channels`: bad channels found (or "RANSAC failed silently"), elapsed
+2. `autoreject_annotate_blockwise`: per-condition n_epochs and n_folds; skip warning
+3. `zapline_denoise`: n components removed (if accessible)
+4. `source_correction`: provenance save path, correction method summary
+5. `preprocess_raw`: resample from/to sfreq, filter range applied
+
+**Pattern** (copy from old `base.py`):
+```python
+import logging, time
+_log = logging.getLogger(__name__)
+
+# in node:
+t0 = time.time()
+...
+_log.info("ransac_bad_channels: %d bads found in %.1f s", len(bads), time.time() - t0)
+```
+
+For RANSAC silent failure (gap AH):
+```python
+except (ValueError, OSError) as exc:
+    _log.warning("RANSAC failed (%s) — no bads marked", exc)
+```
+
+### Key files
+
+- `neurodags_pipelines/nodes_bad_channels.py` — `ransac_bad_channels` (RANSAC fail + n_bads)
+- `neurodags_pipelines/nodes_preprocessing.py` — `preprocess_raw`, `zapline_denoise`
+- `neurodags_pipelines/nodes_autoreject.py` — `autoreject_annotate_blockwise` (skip warning, CV clamp warning)
+- `neurodags_pipelines/nodes_ica.py` — `source_correction` (prov path)
+
+### Definition of done
+
+- Each node logs at least: start, key metric (n_bads / n_components / n_epochs), warnings on skip/failure
+- RANSAC failure logs `WARNING` instead of silent pass
+- `COMPARISON.md` gaps AG and AH updated to DONE
+
+---
+
 ## Not planned
 
 | Gap | Reason |

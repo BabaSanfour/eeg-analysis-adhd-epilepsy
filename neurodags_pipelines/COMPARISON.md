@@ -154,14 +154,43 @@ BAD_ spans to `SKIP_` before epoching — only the active condition's BAD marks 
 
 **Original (`correct.py` → `run_source_correction`)**: Uses DSS (Denoising Source Separation) for EOG and ECG removal, with profile-based auto-tuning and automatic fallbacks (blind-DSS if EOG DSS skipped; quasiperiodic denoiser if ECG DSS skipped). EMG artifacts removed via MWF (Multi-channel Wiener Filter). n_components and removal counts adapt dynamically based on detected muscle load.
 
-**neurodags (`nodes_ica.py` → `ica_artifact_correction`)**: Basic ICA with MNE's `find_bads_eog` + `find_bads_ecg`. No adaptive tuning, no fallbacks. **No EMG handling at all.**
+**neurodags (`nodes_ica.py` → `source_correction`)**: Wraps `run_source_correction` directly (same function as original). DSS for EOG/ECG, MWF for EMG, all tuning params exposed as YAML args (`dss_n_components`, `dss_n_remove_eog/ecg/emg`, `mwf_n_components`). Auto-tuning from `@CleanedPrepRaw_prov.json` intact. Saves `_correct_prov.json` + `_correct_variance_comparison.png` artifacts. **Fully equivalent.**
 
-Key differences:
-- EOG/ECG: DSS (spatial decomposition, more robust) vs ICA `find_bads_*` (correlation-based)
-- EMG: MWF removes muscle artifacts in old pipeline; new pipeline has no equivalent
-- Aggressiveness: old auto-boosts if high muscle load detected; new uses fixed n_components
+**Status**: resolved. `CorrectRaw` derivative uses `source_correction` node; YAML default params match old pipeline defaults.
 
-**Status**: open (significant). ICA crash fix (`n_components` clamp) was addressed, but the underlying method difference was not. New pipeline may produce less clean data for subjects with significant EMG contamination.
+---
+
+### 2.12 Resample and filter: n_jobs not passed
+
+**Original (`base.py`)**: passes `n_jobs` to both `raw.resample(target_sfreq, n_jobs=n_jobs)` and `raw.filter(..., n_jobs=n_jobs)`, defaulting to `-1` (all CPU cores) for large datasets.
+
+**neurodags (`nodes_preprocessing.py → preprocess_raw`)**: calls `raw.resample(float(resample), verbose=False)` (lines 38, 42) and `raw.filter(**filter_args, verbose=False)` (line 40) without `n_jobs`. Defaults to MNE's default (1 thread). On large recordings, resample and filtering will be significantly slower.
+
+The `filter_args` dict passed from YAML does not include `n_jobs` by default. Adding it requires either: (a) exposing a `n_jobs` param on the `preprocess_raw` node, or (b) instructing users to add `n_jobs: -1` inside `filter_args` in the YAML. Resample has no equivalent passthrough — needs explicit node param.
+
+**Status**: open (minor — performance, not correctness). See P7 in GAPS_PLAN.md.
+
+---
+
+### 2.13 Observability and logging
+
+**Original (`base.py`, `correct.py`, `denoise.py`)**: Uses Python `logging` throughout. Examples:
+- `LOGGER.info("Starting %s", step_name)` before each step
+- `LOGGER.info("RANSAC: %d bad channels found in %.1f s", n_bad, elapsed)`
+- `LOGGER.warning("Skipping AR for condition %s — too few epochs (%d)", cond, n)`
+- `LOGGER.info("AR CV folds: %d (requested: %d)", actual_folds, requested_folds)`
+- `LOGGER.warning("ZapLine: adaptive disabled, using fixed n_components")`
+- `LOGGER.info("Correction provenance saved to %s", prov_path)`
+
+**neurodags nodes**: completely silent. Failures and exceptions are caught with bare `except: pass` or logged at best to stderr via `verbose="ERROR"`. No step-start messages, no timing, no counts, no skip warnings. `neurodags run` shows derivative-level progress (computing/done/error) but not intra-node progress.
+
+**Specific silent cases**:
+- `ransac_bad_channels`: catches `(ValueError, OSError)` and passes with no log — RANSAC failure is invisible (Gap AH)
+- `autoreject_annotate_blockwise`: AR skip due to `n_epochs < min_epochs` emits no warning to user
+- `source_correction`: DSS/MWF failures in sub-calls may be swallowed by inner try/except
+- `zapline_denoise`: no log of how many components were removed
+
+**Status**: open (significant UX gap). Users cannot distinguish slow runs from stuck runs, or know which conditions triggered AR skips. See P8 in GAPS_PLAN.md.
 
 ---
 
@@ -280,4 +309,9 @@ Original computes `_compute_artifact_overlap(raw, new_annots)` — percentage of
 | AA. BLOCK annotation injection | **DONE** | `inject_block_annotations` reads `_segments.csv`; original uses `read_raw_bids` → `_events.tsv` (§2.9) |
 | AB. Condition epoch extraction | **DONE** | in-memory `extract_condition_epochs` per condition in step-1; BAD_epoch scoped correctly (§2.10) |
 | AC. Cross-condition BAD_ bleeding | **DONE** | `extract_condition_epochs` remaps foreign BAD_ spans to SKIP_ before epoching |
-| AD. ICA artifact correction method | **open (significant)** | Old: DSS (EOG/ECG) + MWF (EMG). New: basic `find_bads_eog`/`find_bads_ecg`; no EMG. See §2.11 |
+| AD. ICA artifact correction method | **DONE** | `source_correction` node wraps `run_source_correction` directly; DSS+MWF+auto-tuning; all params YAML-accessible. See §2.11 |
+| AE. Resample n_jobs | **open (minor)** | `preprocess_raw` calls `raw.resample()` without `n_jobs`; defaults to 1 thread; slow on large recordings. See §2.12, P7 |
+| AF. Filter n_jobs | **open (minor)** | `preprocess_raw` calls `raw.filter(**filter_args)` without `n_jobs`; YAML `filter_args` dict does not include it. See §2.12, P7 |
+| AG. Observability / logging | **open (significant)** | All preprocessing nodes completely silent; old pipeline logs step progress, timing, counts, skip warnings. See §2.13, P8 |
+| AH. RANSAC silent failure | **open (minor)** | `ransac_bad_channels` catches `(ValueError, OSError)` with bare `pass`; failure invisible to user. Sub-case of AG; see §2.13, P8 |
+| AI. steps_completed provenance | **open (minor)** | Old `base.py` appends step names to `steps_completed` list in prov. New prov has no equivalent list. |

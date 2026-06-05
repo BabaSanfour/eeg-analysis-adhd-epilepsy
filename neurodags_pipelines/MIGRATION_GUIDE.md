@@ -1,6 +1,6 @@
 # Migration Guide: `base.py` + `extract_descriptors.py` → neurodags
 
-*Last updated: 2026-05-25.*
+*Last updated: 2026-06-04.*
 
 This guide is for researchers who know the original pipeline and want to understand the neurodags equivalent. For a full equivalence audit see `COMPARISON.md`.
 
@@ -185,7 +185,7 @@ annotate_artifacts_blockwise(raw)   # per-condition AR
 id.1 inflate_bad_annotations
 id.2 preprocess_raw          # resample_first: True → resample then bandpass
 id.3 zapline_denoise
-id.4 ransac_bad_channels     # block_label: EC
+id.4 ransac_bad_channels     # block_label: baseline
 id.5 apply_car
 id.6 autoreject_annotate_blockwise
 → writes @CleanedPrepRaw.fif + _prov.json + _ar_plot_{cond}.png
@@ -260,15 +260,17 @@ derivatives/features@EntropyMultiscale.error   ← NumPy 2.0 issue
 
 ## 8. Known gaps vs original
 
-| Gap | Severity | Workaround |
-|-----|----------|------------|
-| ICA method (DSS+MWF vs basic ICA) | Significant | Old: DSS for EOG/ECG + MWF for EMG. New: `find_bads_eog`/`find_bads_ecg`, no EMG. High-EMG subjects may be less clean. See `COMPARISON.md §2.11` |
-| QC CSVs (failures.csv, feature_missingness.csv, flags.csv) | Significant | Use `--list-errors`; add post-hoc checks |
-| Per-epoch condition column in default run | Workflow | Use `step-1_pipeline@extraction.yml` for split output |
-| Run-aware aggregation (`recording_id = sub_ses_run`) | Minor | Post-hoc `groupby` on assembled CSV |
-| ZapLine `n_removed` not in provenance | Minor | Config snapshot in `code/` has method/params |
-| AR plot per chunk (vs combined) | Minor | Combined plot per condition is produced |
-| Float32 on CleanedPrepRaw round-trip | Negligible | Below EEG noise floor (~1 µV) |
+| Gap | Severity | Status | Workaround |
+|-----|----------|--------|------------|
+| ICA method (DSS+MWF vs basic ICA) | Significant | **DONE** | `source_correction` node wraps `run_source_correction` directly; DSS+MWF+auto-tuning. See `COMPARISON.md §2.11` |
+| QC CSVs (failures.csv, feature_missingness.csv, flags.csv) | Significant | partial | Use `--list-errors`; per-family `_failures.csv` covers all-NaN features |
+| Resample / filter n_jobs | Minor | open | `preprocess_raw` defaults to 1 thread; add `n_jobs: -1` to YAML when fixed (gap AE/AF). See P7 in GAPS_PLAN.md |
+| Observability / logging | Significant | open | All nodes silent; monitor via `neurodags status`. See P8 in GAPS_PLAN.md |
+| Per-epoch condition column in default run | Workflow | resolved | Use `step-1_pipeline@extraction.yml` for split output |
+| Run-aware aggregation (`recording_id = sub_ses_run`) | Minor | resolved | Post-hoc `groupby` on assembled CSV — see §4.1 |
+| ZapLine `n_removed` not in provenance | Minor | partial | `@CleanedPrepRaw_prov.json` has `zapline_n_removed: null`; config snapshot in `code/` has params |
+| AR plot per chunk (vs combined) | Minor | open | Combined plot per condition is produced |
+| Float32 on CleanedPrepRaw round-trip | Negligible | open | Below EEG noise floor (~1 µV) |
 
 See `COMPARISON.md` for full details on each gap.
 

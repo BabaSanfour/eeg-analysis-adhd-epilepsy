@@ -52,7 +52,9 @@
 | RANSAC bad channels (EC only) | ✓ | ✓ | ✓ identical |
 | CAR | ✓ | ✓ | ✓ identical |
 | Condition-grouped AutoReject | ✓ (1s epochs, 30-min chunks) | ✓ (same params) | ✓ identical |
-| ICA correction | ✓ DSS (EOG/ECG) + MWF (EMG), adaptive | ⚠ basic `find_bads_eog`/`find_bads_ecg`; no EMG; no adaptive tuning | **method differs — see COMPARISON.md §2.11** |
+| ICA correction | ✓ DSS (EOG/ECG) + MWF (EMG), adaptive | ✓ `source_correction` wraps `run_source_correction` directly; DSS+MWF+auto-tuning; all params YAML-accessible | ✓ equivalent (see COMPARISON.md §2.11) |
+| Resample / filter n_jobs | ✓ passes `n_jobs` to both | ⚠ `preprocess_raw` omits `n_jobs`; defaults to 1 thread — slow on large recordings | open minor gap (AE, AF) |
+| Observability / logging | ✓ extensive logging per step | ⚠ all nodes completely silent; no step progress, no timing, no skip warnings | open significant gap (AG, AH) |
 | Wiener residual denoise | ✓ | ✓ | ✓ fixed crash (channel positions) |
 | Channel position loading | ✗ NaN — silent failure | ✓ loads `_electrodes.tsv` | **bug fixed** |
 | Multi-run per-subject | merged (wrong) | per-run (correct) | **bug fixed** |
@@ -142,10 +144,12 @@ ML is explicitly **out of scope** for neurodags and the neurodags pipeline. It l
 **Disadvantages:**
 - No cross-file operations mid-pipeline — subject-level aggregation (e.g., group ICA) requires post-processing outside the framework
 - Caching is existence-based — code changes don't invalidate cache; manual `overwrite: true` required
-- No structured failure log for intra-derivative partial NaN (only `.error` on complete failure; `neurodags status --list-errors` covers file-level failures)
+- No structured failure log for intra-derivative partial NaN (only `.error` on complete failure; `neurodags status --list-errors` covers file-level failures; per-family `_failures.csv` covers all-NaN features)
 - PSD shared via `SpectrumWelch` derivative for band power + FOOOF consumers (equivalent to coco-pipe `_PSDGroup`); entropy/complexity recompute internally in both pipelines
 - No ML layer — neurodags stops at features
-- Dataset summary reports not yet implemented
+- Dataset summary reports: descriptor QC covered via `merge_descriptors.py` (post-pipeline); preprocessing summary covered via `generate_preproc_dataset_qc_report` node in `step-0_pipeline@qc.yml`
+- All preprocessing nodes completely silent — no step progress, timing, counts, or skip warnings (observability gap AG/AH)
+- Resample and filter run single-threaded — `n_jobs` not passed to MNE calls (performance gap AE/AF)
 
 ---
 
@@ -343,9 +347,12 @@ This gives "one command runs everything" without collapsing the software boundar
 | Preprocessing caching | manual | automatic | **New** |
 | Feature extraction completeness | ✓ all conditions run | ✓ all 8 active in `step-1_dataset.yml`; one run covers all | ✓ equivalent |
 | Feature extraction shared PSD | ✓ `_PSDGroup` (band power + FOOOF only; complexity always recomputes) | ✓ `SpectrumWelch` (band power + FOOOF; complexity recomputes) | ✓ equivalent |
-| Failure logging | ✓ structured `failures.csv` | `neurodags status --list-errors`; gap: intra-file partial NaN only | narrow gap |
+| ICA correction method | ✓ DSS+MWF, adaptive | ✓ `source_correction` wraps `run_source_correction`; fully equivalent | ✓ equivalent |
+| Failure logging | ✓ structured `failures.csv` | `neurodags status --list-errors` + per-family `_failures.csv`; gap: per-epoch partial NaN only | narrow gap |
+| Observability / logging | ✓ per-step logging | ✗ all nodes silent | Old (open gap AG) |
+| Resample / filter n_jobs | ✓ parallel | ✗ single-threaded (n_jobs omitted) | Old (open gap AE/AF) |
 | ML pipeline | ✓ full (sklearn + FM hub) | ✗ not present | Old (intended) |
-| Dataset summary QC reports | ✓ | ✗ not yet | Old |
+| Dataset summary QC reports | ✓ | ✓ preprocessing: `step-0_pipeline@qc.yml`; descriptor: `merge_descriptors.py` | ✓ equivalent |
 | Portability to new datasets | hard (Python changes) | easy (YAML edit) | **New** |
 | Extensibility (new step) | 1000+ line edits | one function + YAML | **New** |
 | Collaboration (merge conflicts) | frequent (monolithic) | rare (independent nodes) | **New** |

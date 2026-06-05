@@ -41,12 +41,12 @@ neurodags_pipelines/
   step-0_pipeline@preprocessing.yml   ← 10 derivatives, caching automatic
   step-0_dataset.yml                  ← subject/session list (16 lines)
 
-  nodes_annotations.py    (144 lines)
-  nodes_preprocessing.py  (287 lines)
-  nodes_autoreject.py     (551 lines)
-  nodes_ica.py            ( 78 lines)
+  nodes_annotations.py    (149 lines)
+  nodes_preprocessing.py  (288 lines)
+  nodes_autoreject.py     (553 lines)
+  nodes_ica.py            (200 lines)   ← now wraps run_source_correction
   nodes_bad_channels.py   + nodes_denoise.py
-  nodes_qc.py             (623 lines)
+  nodes_qc.py             (764 lines)
 ```
 
 **Total preprocessing + QC code:** ~1 700 lines Python + YAML.
@@ -296,7 +296,9 @@ The framework handles caching, skipping, and dependency graph automatically.
 | Multi-run subjects | Merged (incorrect) | Per-run, correctly aggregated |
 | Retained Duration accuracy | Inflated by channel-specific BAD_ marks | Correct |
 | ICA crash on small channel counts | Crashes | Clamped `min(n_components, len(picks))` |
-| ICA artifact correction method | DSS (EOG/ECG) + MWF (EMG), adaptive | Basic `find_bads_eog`/`find_bads_ecg`; no EMG; no adaptive tuning | open gap |
+| ICA artifact correction method | DSS (EOG/ECG) + MWF (EMG), adaptive | `source_correction` wraps `run_source_correction`; DSS+MWF+auto-tuning; all params YAML-accessible | **fixed** |
+| Resample / filter n_jobs | passes `n_jobs` (parallel) | 1 thread — `n_jobs` not passed to `resample` / `filter` | open minor gap |
+| Observability / logging | per-step logging (RANSAC timing, AR skip warnings, etc.) | all nodes silent | open significant gap |
 | Annotations setter | `AttributeError` on BrainVision | Uses `set_annotations` |
 | Column label "Mean Dur (s)" | Wrong label | Fixed: "Total Dur (s)" |
 | Porting to new dataset | Python code changes | YAML edit only |
