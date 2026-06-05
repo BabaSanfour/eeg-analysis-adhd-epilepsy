@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # =============================================================================
 # Neurodags pipeline — full run from scratch to dataframe CSV.
-# Equivalent to the original:
-#   submit_base_cleaning.sh   → step-0b_preproc_cleaned.yml
-#   (epochs script)           → step-0c_conditions.yml
-#   submit_extract_descriptors_array.sh → step-1_features.yml
+#
+# Replaces the old separate scripts:
+#   submit_base_cleaning.sh              → step-0_pipeline@preprocessing.yml
+#   submit_epochs.sh                     → (no longer needed — epoching is in-memory in step-1)
+#   submit_extract_descriptors_array.sh  → step-1_pipeline@extraction.yml
+#
+# Pipeline files (all in neurodags_pipelines/):
+#   step-0_pipeline@preprocessing.yml  — per-subject preprocessing chain
+#   step-0_pipeline@qc.yml             — QC records + HTML reports (+ dataset summary)
+#   step-1_pipeline@extraction.yml     — feature extraction, all 8 conditions in one run
 #
 # USAGE — interactive job on Compute Canada (Narval/Béluga/Graham/Cedar):
 #
@@ -34,11 +40,9 @@ VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 # Parallelism: default to all CPUs allocated by SLURM, else 4
 N_JOBS=${N_JOBS:-${SLURM_CPUS_PER_TASK:-4}}
 
-# Output CSV paths
+# Output CSV path (one file; split by condition post-hoc on `dataset` column)
 OUTPUT_DIR=${OUTPUT_DIR:-$PROJECT_ROOT/results}
-CSV_ALL="$OUTPUT_DIR/features_all_wide.csv"
-CSV_EO="$OUTPUT_DIR/features_eo_wide.csv"
-CSV_EC="$OUTPUT_DIR/features_ec_wide.csv"
+CSV_ALL="$OUTPUT_DIR/features_all_conditions.csv"
 
 # ---------------------------------------------------------------------------
 # Sanity checks
@@ -89,106 +93,92 @@ echo "============================================================"
 # ---------------------------------------------------------------------------
 # STEP 1 — Preprocessing  [original: submit_base_cleaning.sh]
 #
-# For each source .vhdr:
-#   inflate_bad_annotations → resample+bandpass → zapline → RANSAC →
-#   CAR → autoreject_annotate_blockwise
+# For each source .vhdr file:
+#   inject_block_annotations  → inflate_bad_annotations → preprocess_raw
+#   → zapline_denoise → ransac_bad_channels → apply_car
+#   → autoreject_annotate_blockwise → source_correction → residual_denoise
 #
 # Writes per subject:
-#   @CleanedPrepRaw.fif           fully annotated continuous Raw
-#   @CleanedPrepRaw_prov.json     AR stats + config snapshot
-#   @CleanedPrepRaw_ar_plot_*.png reject-log plots per condition
-#   @CleanedPrep.fif              fixed-length 2 s epochs (all conditions)
+#   @CleanedPrepRaw.fif          fully annotated + cleaned continuous Raw
+#   @CleanedPrepRaw_prov.json    AR stats + config snapshot
+#   @CleanedPrepRaw_ar_plot_*.png  reject-log plots per condition
+#   @CorrectRaw.fif              ICA-corrected Raw (DSS+MWF)
+#   @DenoiseRaw.fif              residual-denoised Raw
+#
+# Note: condition epoching is in-memory in step-1 — no per-condition .fif written here.
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- STEP 1: preprocessing (step-0b) ---"
-neurodags run "$PIPELINES_DIR/step-0b_preproc_cleaned.yml" \
+echo "--- STEP 1: preprocessing ---"
+neurodags run "$PIPELINES_DIR/step-0_pipeline@preprocessing.yml" \
     --n-jobs "$N_JOBS"
 
 # ---------------------------------------------------------------------------
-# STEP 2 — Condition epoch extraction  [original: submit_epochs.sh]
+# STEP 2 — Preprocessing QC  [no original equivalent — new]
 #
-# Reads @CleanedPrepRaw.fif; no re-preprocessing.
-# Extracts 2 s epochs within BLOCK_EO / BLOCK_EC annotation windows,
-# omitting any BAD_epoch_* spans from AR.
+# Reads derivatives from step-1; produces per-subject HTML reports and a
+# dataset-level summary (PreprocDatasetQCReport aggregator node).
 #
 # Writes per subject:
-#   @ConditionEO.fif
-#   @ConditionEC.fif
+#   @CleanedPrepRaw_raw_qc.json / _base_qc.json / _correct_qc.json / _denoise_qc.json
+#   *_base_qc_report.html / *_correct_qc_report.html / *_denoise_qc_report.html
+# Writes dataset-level:
+#   preprocessing QC dataset summary HTML
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- STEP 2: condition epoch extraction (step-0c) ---"
-neurodags run "$PIPELINES_DIR/step-0c_conditions.yml" \
+echo "--- STEP 2: preprocessing QC reports ---"
+neurodags run "$PIPELINES_DIR/step-0_pipeline@qc.yml" \
     --n-jobs "$N_JOBS"
 
 # ---------------------------------------------------------------------------
-# STEP 3 — Feature extraction, all epochs  [original: extract_descriptors.py]
+# STEP 3 — Feature extraction  [original: submit_extract_descriptors_array.sh]
 #
-# Reads @BasicPrep.fif (all conditions pooled) by default.
-# Computes ~35 derivative families: PSD, FOOOF, band power, ratios,
-# antropy (14) and neurokit2 (4/5) complexity measures.
+# Reads @CleanedPrepRaw.fif; conditions epoched in-memory (no intermediate .fif).
+# All 8 conditions active in step-1_dataset.yml — one run covers all.
 #
-# Writes dataset-level .nc files:
-#   features@AbsBandPower.nc, features@SampleEntropy.nc, ...
-#   (one file per family covering all subjects × runs × epochs)
+# Writes dataset-level .nc files per feature family:
+#   derivatives/features_conditions/{condition}/features@AbsBandPower.nc
+#   derivatives/features_conditions/{condition}/features@SampleEntropy.nc
+#   ... (~35 families)
+#
+# Also writes per-subject descriptor QC records and HTML reports.
 # ---------------------------------------------------------------------------
 echo ""
-echo "--- STEP 3: feature extraction, all epochs (step-1) ---"
-neurodags run "$PIPELINES_DIR/step-1_features.yml" \
+echo "--- STEP 3: feature extraction ---"
+neurodags run "$PIPELINES_DIR/step-1_pipeline@extraction.yml" \
     --n-jobs "$N_JOBS"
 
 # ---------------------------------------------------------------------------
-# STEP 3b — Feature extraction, per condition (mirrors --conditions EO EC)
-#
-# Uses step-1_datasets_conditions.yml which points to @ConditionEO.fif /
-# @ConditionEC.fif. Writes to separate derivatives paths:
-#   features_conditions_eo/features@*.nc
-#   features_conditions_ec/features@*.nc
-# ---------------------------------------------------------------------------
-echo ""
-echo "--- STEP 3b: feature extraction, per condition ---"
-neurodags run "$PIPELINES_DIR/step-1_features.yml" \
-    -d "$PIPELINES_DIR/step-1_datasets_conditions.yml" \
-    --n-jobs "$N_JOBS"
-
-# ---------------------------------------------------------------------------
-# STEP 4 — Status check  [original: _SUCCESS markers + failures.csv]
+# STEP 4 — Status check
 #
 # Prints done/missing/errored counts per derivative family.
-# --list-errors prints paths of .error marker files.
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- STEP 4: pipeline status ---"
-neurodags status "$PIPELINES_DIR/step-1_features.yml" --list-errors || true
+neurodags status "$PIPELINES_DIR/step-0_pipeline@preprocessing.yml" || true
+neurodags status "$PIPELINES_DIR/step-1_pipeline@extraction.yml" --list-errors || true
 
 # ---------------------------------------------------------------------------
 # STEP 5 — Assemble flat CSV  [original: sensor_subject_features.csv]
 #
 # neurodags dataframe walks all .nc derivatives marked for_dataframe: True,
-# merges them into one row per source file, and writes a wide CSV.
+# merges them into one wide CSV with one row per source file.
+# The `dataset` column identifies the condition (e.g., EO_baseline, EC_baseline).
+# Split post-hoc with pandas: df[df["dataset"] == "EO_baseline"]
 # ---------------------------------------------------------------------------
 echo ""
 echo "--- STEP 5: assemble dataframe ---"
-
-# All epochs (default dataset)
-neurodags dataframe "$PIPELINES_DIR/step-1_features.yml" \
+neurodags dataframe "$PIPELINES_DIR/step-1_pipeline@extraction.yml" \
     --format wide \
     --n-jobs "$N_JOBS" \
     --output "$CSV_ALL"
 
-# EO-only epochs
-neurodags dataframe "$PIPELINES_DIR/step-1_features.yml" \
-    -d "$PIPELINES_DIR/step-1_datasets_conditions.yml" \
-    --format wide \
-    --n-jobs "$N_JOBS" \
-    --output "$CSV_EO"
-
-# EC-only epochs
-# (step-1_datasets_conditions.yml defines both eo and ec datasets;
-#  neurodags dataframe assembles both — split post-hoc if needed)
-
 echo ""
 echo "============================================================"
-echo " Done. Outputs:"
+echo " Done. Output:"
 echo "   $CSV_ALL"
-echo "   $CSV_EO"
+echo ""
+echo " Split by condition post-hoc:"
+echo "   df = pd.read_csv('$CSV_ALL')"
+echo "   eo = df[df['dataset'] == 'EO_baseline']"
+echo "   ec = df[df['dataset'] == 'EC_baseline']"
 echo "============================================================"

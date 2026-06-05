@@ -10,6 +10,7 @@ This repository contains the analysis code used for an EEG study of ADHD, epilep
 The codebase currently includes:
 
 - BIDS-oriented data handling and EEG preprocessing utilities
+- neurodags-based preprocessing and feature extraction pipeline (`neurodags_pipelines/`) — the current recommended approach
 - signal quality control and reporting tools
 - descriptor-based feature extraction using `coco-pipe.descriptors`
 - dimensionality reduction analysis using `coco-pipe.dim_reduction`
@@ -183,6 +184,84 @@ Run with:
 ### Outputs
 - Compiled descriptor shards strictly deposited in:
   - `BIDS/derivatives/signal_features/descriptors/sub-XXXX/ses-XX/eeg/*_desc-descriptors_eeg.parquet`
+
+## Neurodags Pipeline (current approach)
+
+The neurodags pipeline replaces the manual combination of `base.py` + `epochs.py` + `extract_descriptors.py` with a YAML-driven DAG. It is the recommended way to run preprocessing and feature extraction on this dataset.
+
+Pipeline files live in `neurodags_pipelines/`. Three YAMLs cover the full workflow:
+
+| File | Purpose |
+|---|---|
+| `step-0_pipeline@preprocessing.yml` | Per-subject preprocessing: inject annotations → bandpass/resample → ZapLine → RANSAC → CAR → AutoReject → ICA (DSS+MWF) → residual denoise |
+| `step-0_pipeline@qc.yml` | Per-subject QC records + HTML reports + dataset-level summary |
+| `step-1_pipeline@extraction.yml` | Feature extraction across all 8 conditions (epoching in-memory); writes `.nc` files per feature family |
+
+### Run sequence
+
+```bash
+# 1. Preprocessing — writes @CleanedPrepRaw.fif, @CorrectRaw.fif, @DenoiseRaw.fif per subject
+neurodags run neurodags_pipelines/step-0_pipeline@preprocessing.yml
+
+# 2. QC reports — per-subject HTML + dataset summary
+neurodags run neurodags_pipelines/step-0_pipeline@qc.yml
+
+# 3. Feature extraction — all 8 conditions, one run
+neurodags run neurodags_pipelines/step-1_pipeline@extraction.yml
+
+# 4. Assemble flat CSV (one row per source file; `dataset` column = condition)
+neurodags dataframe neurodags_pipelines/step-1_pipeline@extraction.yml \
+    --output results/features_all_conditions.csv
+```
+
+Add `--n-jobs N` to any `run` or `dataframe` call for parallelism. Steps are idempotent — re-running skips already-computed files.
+
+Check status at any point:
+
+```bash
+neurodags status neurodags_pipelines/step-0_pipeline@preprocessing.yml
+neurodags status neurodags_pipelines/step-1_pipeline@extraction.yml --list-errors
+```
+
+### Outputs
+
+Derivatives are written to `/home/yorguin/datasets/eeg-adhd-epilepsy/derivatives/`:
+
+```
+preprocessing/sub-*/eeg/
+  *@CleanedPrepRaw.fif           annotated + cleaned continuous Raw
+  *@CleanedPrepRaw_prov.json     provenance (AR stats, config snapshot)
+  *@CorrectRaw.fif               ICA-corrected Raw (DSS+MWF)
+  *@DenoiseRaw.fif               residual-denoised Raw
+  *@*_qc_report.html             per-subject QC reports (base / correct / denoise)
+
+features_conditions/{condition}/
+  features@AbsBandPower.nc       one .nc per feature family, covering all subjects
+  features@SampleEntropy.nc
+  ...
+```
+
+The `dataset` column in the assembled CSV identifies the condition (e.g., `EO_baseline`). Split post-hoc with pandas:
+
+```python
+df = pd.read_csv("results/features_all_conditions.csv")
+eo = df[df["dataset"] == "EO_baseline"]
+```
+
+### Cluster run
+
+For Compute Canada (Narval/Béluga/Graham/Cedar), use the cluster script:
+
+```bash
+salloc --time=4:00:00 --cpus-per-task=8 --mem=32G --account=def-<pi>
+bash cluster/compute_canada/run_neurodags_pipeline.sh
+```
+
+### Further reading
+
+- `neurodags_pipelines/MIGRATION_GUIDE.md` — step-by-step equivalence with old pipeline
+- `neurodags_pipelines/COMPARISON.md` — full gap audit (old vs new)
+- `neurodags_pipelines/ECOSYSTEM_REPORT.md` — architectural overview and portability notes
 
 ## Dimensionality Reduction Workflow
 
