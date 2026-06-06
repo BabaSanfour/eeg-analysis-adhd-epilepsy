@@ -12,7 +12,6 @@ import pandas as pd
 from coco_pipe.report.core import (
     Element,
     ImageElement,
-    InteractiveTableElement,
     PlotlyElement,
     Report,
     Section,
@@ -654,10 +653,9 @@ def generate_cohort_report(
         _add_optional_table(drug_resistant, source_overlap_df, "Cohort 1 vs Cohort 2 Overlap")
     if longitudinal_drug_resistant_patients_df is not None:
         drug_resistant.add_element(
-            InteractiveTableElement(
+            TableElement(
                 longitudinal_drug_resistant_patients_df,
                 title="Drug-Resistant Patients with First and Later Recordings",
-                page_size=5,
             )
         )
     report.add_section(drug_resistant)
