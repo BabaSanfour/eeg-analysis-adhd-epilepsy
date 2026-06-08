@@ -820,9 +820,6 @@ def process_record(
         return result
 
     stem = bids_path.fpath.stem[:-4] if bids_path.fpath.stem.endswith("_eeg") else bids_path.fpath.stem
-    segments_path = bids_path.fpath.parent / f"{stem}_segments.csv"
-    segments_df.to_csv(segments_path, index=False)
-    LOGGER.info("Wrote condition segments for %s run-%s to %s", subject_id, run, segments_path)
     if eeg_reports_dir is not None:
         ids = bids_io.build_bids_report_ids(bids_path.fpath)
         ids["filepath"] = str(bids_path.fpath)
@@ -915,8 +912,14 @@ def main() -> None:
         default="both",
         help="Raw QC analysis level when --with_raw_qc is used.",
     )
+    parser.add_argument(
+        "--reports_root",
+        type=Path,
+        default=None,
+        help="Custom root directory for reports (defaults to sibling of bids_root)",
+    )
     args = parser.parse_args()
-    reports_root = bids_io.get_reports_root(Path(args.bids_root))
+    reports_root = args.reports_root if args.reports_root else bids_io.get_reports_root(Path(args.bids_root))
     eeg_reports_dir = reports_root if args.with_eeg_reports else None
     raw_qc_reports_dir = reports_root if args.with_raw_qc else None
 

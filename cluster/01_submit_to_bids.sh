@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=to_bids
+#SBATCH --account=rrg-kjerbi
 #SBATCH --output=slurm-%x-%A_%a.out
 #SBATCH --error=slurm-%x-%A_%a.err
 #SBATCH --time=08:00:00
@@ -13,10 +14,10 @@ set -euo pipefail
 module purge
 module load gcc arrow/23.0.1 python/3.11
 
-PROJECT_ROOT=${PROJECT_ROOT:-/home/h/hamza97/links/eeg-analysis-adhd-epilepsy}
-BIDS_ROOT=${BIDS_ROOT:-/home/h/hamza97/links/scratch/eeg-epilepsy-adhd/BIDS}
-METADATA_PATH=${METADATA_PATH:-/home/h/hamza97/links/projects/aip-kjerbi/shared/eeg-epilepsy-adhd/csv/patients_metadata_clean.csv}
-RAW_ROOT=${RAW_ROOT:-/home/h/hamza97/links/projects/aip-kjerbi/shared/eeg-epilepsy-adhd/raw_data}
+PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
+METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
+RAW_ROOT=${RAW_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/raw_data}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 
 THREADS=${SLURM_CPUS_PER_TASK:-32}
@@ -31,11 +32,8 @@ mkdir -p "$BIDS_ROOT"
 cd "$PROJECT_ROOT"
 source "$VENV_PATH/bin/activate"
 
-# Prevent Python from importing stale packages from ~/.local before the venv.
 export PYTHONNOUSERSITE=1
 
-# Let joblib own parallelism across recordings; keep per-process BLAS/OpenMP
-# libraries single-threaded to avoid oversubscribing the SLURM allocation.
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1

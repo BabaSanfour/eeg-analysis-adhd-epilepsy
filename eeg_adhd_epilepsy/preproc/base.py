@@ -288,7 +288,7 @@ def run_base_pipeline(
 
     bids_root = Path(config.get("bids_root", Path.cwd())).expanduser()
     preproc_root = bids.get_preproc_root(bids_root)
-    reports_root = bids.get_reports_root(bids_root)
+    reports_root = Path(config.get("reports_root", bids.get_reports_root(bids_root))).expanduser()
 
     stage_name = preproc_qc.get_preproc_qc_stage_name("base", "base")
     subject_report_path = bids.get_subject_session_stage_report_path(
@@ -745,7 +745,10 @@ def run_base_record(
             record_label=record_label,
         )
         preproc_root = bids.get_preproc_root(Path(bids_root).expanduser())
-        reports_root = bids.get_reports_root(Path(bids_root).expanduser())
+        if reports_root is None:
+            reports_root = bids.get_reports_root(Path(bids_root).expanduser())
+        else:
+            reports_root = Path(reports_root).expanduser()
         output_path = bids.get_stage_output_path(
             subject_id=sid,
             preproc_root=preproc_root,
@@ -782,12 +785,13 @@ def main():
     parser.add_argument("--adaptive", action="store_true", help="Enable adaptive line noise removal (for ZapLine)")
     parser.add_argument("--subjects", nargs="+", help="List of specific subject IDs (e.g., sub-001 sub-002)")
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing stage outputs instead of skipping them")
+    parser.add_argument("--reports_root", type=str, default=None, help="Custom root directory for reports (defaults to sibling of bids_root)")
     
     args = parser.parse_args()
     
     bids_root = Path(args.bids_root).expanduser()
     preproc_root = bids.get_preproc_root(bids_root)
-    reports_root = bids.get_reports_root(bids_root)
+    reports_root = Path(args.reports_root).expanduser() if args.reports_root else bids.get_reports_root(bids_root)
     reports_root.mkdir(parents=True, exist_ok=True)
     
     # Setup logging

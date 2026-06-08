@@ -34,6 +34,7 @@ import mne
 import numpy as np
 import pandas as pd
 import yaml
+from scipy.stats import median_abs_deviation
 
 from coco_pipe.descriptors import DescriptorConfig, DescriptorPipeline
 from coco_pipe.io import DataContainer
@@ -212,6 +213,76 @@ def _build_feature_outputs(
     }
 
 
+def _apply_mad_rejection(
+    sensor_result: dict[str, Any],
+    metadata_df: pd.DataFrame,
+    condition: str,
+    subject: str,
+    mad_threshold: float = 10.0,
+    fraction_thresh: float = 0.05,
+    min_epochs: int = 5,
+) -> tuple[dict[str, Any], pd.DataFrame]:
+    """Identify and drop epochs where a fraction of features exceed MAD thresholds."""
+    X = sensor_result["X"]
+    if X.shape[0] == 0:
+        return sensor_result, metadata_df
+        
+    # Calculate Median and MAD across all epochs
+    medians = np.nanmedian(X, axis=0)
+    mads = median_abs_deviation(X, axis=0, nan_policy="omit", scale="normal")
+    
+    # Avoid div by zero for completely flat features
+    mads_safe = np.where(mads == 0, 1e-6, mads)
+    
+    # Calculate robust Z-score
+    robust_z = np.abs(X - medians) / mads_safe
+    
+    # Find epochs where > fraction_thresh of features exceed the threshold
+    exceeds_thresh = robust_z > mad_threshold
+    fraction_exceeding = np.mean(exceeds_thresh, axis=1)
+    bad_epochs_mask = fraction_exceeding > fraction_thresh
+    
+    bad_count = np.sum(bad_epochs_mask)
+    if bad_count > 0:
+        bad_indices = np.where(bad_epochs_mask)[0]
+        obs_ids = metadata_df["obs_id"].to_numpy()
+        for idx in bad_indices:
+            sensor_result.setdefault("failures", []).append({
+                "obs_id": obs_ids[idx],
+                "obs_index": int(idx),
+                "channel_index": -1,
+                "channel_name": "ALL",
+                "family": "MAD_Rejection",
+                "exception_type": "MADOutlierError",
+                "message": f"Epoch dropped: > {fraction_thresh*100:.1f}% of features exceeded {mad_threshold} MADs.",
+            })
+            
+        LOGGER.info(
+            "MAD Rejection: Dropped %d / %d epochs for %s / %s because > %.1f%% of features exceeded MAD=%.1f",
+            bad_count,
+            X.shape[0],
+            condition,
+            subject,
+            fraction_thresh * 100,
+            mad_threshold
+        )
+        
+    keep_mask = ~bad_epochs_mask
+    remaining_count = np.sum(keep_mask)
+    
+    if remaining_count < min_epochs:
+        raise RuntimeError(
+            f"Only {remaining_count} epochs remain after MAD rejection (requires at least {min_epochs})."
+        )
+        
+    # Filter X and metadata
+    sensor_result["X"] = X[keep_mask]
+    
+    # Filter failures if they are associated with dropped rows
+    # (Usually failures are already handled, but we ensure we don't break alignment)
+    return sensor_result, metadata_df[keep_mask].reset_index(drop=True)
+
+
 def _build_failure_df(
     result: dict[str, Any],
     metadata_df: pd.DataFrame,
@@ -345,6 +416,16 @@ def main() -> None:
         default=None,
         help="Optional canonical metadata column to also expose as container y during aggregation.",
     )
+    parser.add_argument(
+        "--derivative_root",
+        default=None,
+        help="Custom root directory for descriptor derivatives (defaults to bids_root/derivatives/signal_features/descriptors).",
+    )
+    parser.add_argument(
+        "--reports_root",
+        default=None,
+        help="Custom root directory for reports (defaults to sibling of bids_root).",
+    )
     args = parser.parse_args()
     if args.metadata_row is not None and args.subjects:
         raise ValueError("--metadata_row and --subjects are mutually exclusive.")
@@ -355,11 +436,15 @@ def main() -> None:
         level=logging.INFO,
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
-    bids_root = Path(args.bids_root)
-    reports_root = get_reports_root(bids_root)
-    metadata_path = Path(args.metadata)
-    config_path = Path(args.config)
-    derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
+    bids_root = Path(args.bids_root).expanduser()
+    reports_root = Path(args.reports_root).expanduser() if args.reports_root else get_reports_root(bids_root)
+    reports_root.mkdir(parents=True, exist_ok=True)
+    metadata_path = Path(args.metadata).expanduser()
+    config_path = Path(args.config).expanduser()
+    if args.derivative_root:
+        derivative_root = Path(args.derivative_root).expanduser()
+    else:
+        derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
 
     with config_path.open("r", encoding="utf-8") as handle:
         raw_config = yaml.safe_load(handle) or {}
@@ -581,6 +666,16 @@ def main() -> None:
                 sfreq=sfreq,
                 channel_names=channel_names,
             )
+            
+            try:
+                sensor_result, metadata_df = _apply_mad_rejection(
+                    sensor_result, metadata_df, condition, subject, 
+                    mad_threshold=10.0, fraction_thresh=0.05, min_epochs=5
+                )
+            except RuntimeError as error:
+                LOGGER.warning("Skipping %s / %s: %s", condition, subject, str(error))
+                continue
+
             sensor_outputs = _build_feature_outputs(
                 sensor_result,
                 metadata_df,

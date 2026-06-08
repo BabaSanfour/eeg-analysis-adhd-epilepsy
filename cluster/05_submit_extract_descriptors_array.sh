@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_desc
+#SBATCH --account=rrg-kjerbi
 #SBATCH --output=slurm-%x-%A_%a.out
 #SBATCH --error=slurm-%x-%A_%a.err
 #SBATCH --time=02:30:00
@@ -14,12 +15,13 @@ set -euo pipefail
 module purge
 module load gcc arrow/23.0.1 python/3.11
 
-PROJECT_ROOT=${PROJECT_ROOT:-/home/h/hamza97/links/eeg-analysis-adhd-epilepsy}
-BIDS_ROOT=${BIDS_ROOT:-/home/h/hamza97/links/scratch/eeg-epilepsy-adhd/BIDS}
-METADATA_PATH=${METADATA_PATH:-/home/h/hamza97/links/projects/aip-kjerbi/shared/eeg-epilepsy-adhd/csv/patients_metadata_clean.csv}
+PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
+SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
+METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 CONFIG_PATH=${CONFIG_PATH:-$PROJECT_ROOT/configs/descriptors.yaml}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/compute_canada/.descriptor_array_state}
+SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.descriptor_array_state}
 AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-0}
 FIRST_BATCH_SIZE=${FIRST_BATCH_SIZE:-1000}
 SECOND_BATCH_SIZE=${SECOND_BATCH_SIZE:-241}
@@ -49,10 +51,13 @@ mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 
 python -m eeg_adhd_epilepsy.analysis.extract_descriptors \
   --bids_root "$BIDS_ROOT" \
+  --derivative_root "$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors" \
+  --reports_root "$SCRATCH_ROOT/reports" \
   --metadata "$METADATA_PATH" \
   --config "$CONFIG_PATH" \
   --subject_col study_id \
-  --metadata_row "$METADATA_ROW"
+  --metadata_row "$METADATA_ROW" \
+  --conditions all
 
 if [[ "$AUTO_SUBMIT_NEXT" == "1" && "$ROW_OFFSET" == "0" ]]; then
   batch_state_dir="$SUBMIT_STATE_DIR/${SLURM_ARRAY_JOB_ID:-manual}"
