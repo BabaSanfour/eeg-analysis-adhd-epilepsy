@@ -48,7 +48,7 @@ cmd=(
   --desc base
   --segment_duration "$SEGMENT_DURATION"
   --overlap "$OVERLAP"
-  --no-ignore_annotations
+  --ignore_annotations
 )
 
 if [ "$OVERWRITE" = "1" ]; then
