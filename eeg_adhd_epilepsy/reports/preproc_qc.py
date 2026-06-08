@@ -7,7 +7,8 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 import pandas as pd
-from coco_pipe.report.core import ImageElement, Report, Section, TableElement
+from coco_pipe.report.core import Report, Section
+from coco_pipe.report.elements import ImageElement, TableElement
 
 from eeg_adhd_epilepsy.utils.formatting import format_duration_hms
 

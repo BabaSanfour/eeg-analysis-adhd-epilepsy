@@ -6,11 +6,10 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 import pandas as pd
-from coco_pipe.report.core import (
+from coco_pipe.report.core import Report, Section
+from coco_pipe.report.elements import (
     ImageElement,
     InteractiveTableElement,
-    Report,
-    Section,
     TableElement,
 )
 

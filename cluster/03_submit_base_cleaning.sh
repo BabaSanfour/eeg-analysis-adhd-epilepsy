@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=base_clean
 #SBATCH --account=rrg-kjerbi
-#SBATCH --output=slurm-%x-%A.out
-#SBATCH --error=slurm-%x-%A.err
+#SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.out
+#SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.err
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=64G

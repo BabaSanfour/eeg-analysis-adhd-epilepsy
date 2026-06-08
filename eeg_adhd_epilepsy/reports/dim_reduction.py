@@ -11,12 +11,11 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from coco_pipe.dim_reduction.core import DimReduction
-from coco_pipe.report.core import (
+from coco_pipe.report.core import Report, Section
+from coco_pipe.report.elements import (
     ImageElement,
     InteractiveTableElement,
     PlotlyElement,
-    Report,
-    Section,
     TableElement,
 )
 from coco_pipe.viz import dim_reduction as viz

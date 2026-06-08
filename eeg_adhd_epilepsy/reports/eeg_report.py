@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
-from coco_pipe.report.core import ImageElement, Report, Section, TableElement
+from coco_pipe.report.core import Report, Section
+from coco_pipe.report.elements import ImageElement, TableElement
 
 from eeg_adhd_epilepsy.io import bids as bids_io
 from eeg_adhd_epilepsy.utils.config import SEGMENT_COLUMNS
