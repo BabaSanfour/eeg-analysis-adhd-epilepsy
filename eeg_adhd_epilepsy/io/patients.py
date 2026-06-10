@@ -21,12 +21,6 @@ from eeg_adhd_epilepsy.utils.metadata_schema import (
     PSYCHOSTIMULANT_RAW_PAIR_TO_CATEGORY,
 )
 
-DEFAULT_CSV_DIR = Path(
-    "/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/"
-    "EEG_psychostimulants_2025-02/csv"
-)
-DEFAULT_ADHD_CSV = DEFAULT_CSV_DIR / "EEG_Psychostimulants_PatientList_08-2025.csv"
-DEFAULT_DRUG_RESISTANT_CSV = DEFAULT_CSV_DIR / "IRSC_data_final.csv"
 
 _AUDIT_OUTPUT_COLUMNS = [*PATIENTS_METADATA_AUDIT_COLUMNS, "drop_reason"]
 _RAW_MERGED_COLUMNS = [
@@ -66,19 +60,32 @@ def _normalize_binary_flag_series(series: pd.Series, allow_missing: bool) -> pd.
     return numeric.fillna(0).eq(1).astype(int)
 
 
+_AGE_PATTERN = re.compile(
+    r"(?:(?P<years>\d+)y)?(?:(?P<months>\d+)m)?(?:(?P<days>\d+)d)?$"
+)
+
+
 def _parse_age_years(value: object) -> float | None:
-    if pd.isna(value) or isinstance(value, (int, float)):
-        return value
+    """Parse an age value into fractional years.
+
+    Accepts plain numbers (returned as-is), strings like ``"8y3m"`` or
+    ``"1y6m12d"``, and ``NaN``/``None`` (returned as ``None``).  Strings that
+    do not match the pattern (e.g. ``"N/A"``, ``"adult"``) return ``None``
+    rather than raising.
+    """
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
 
     text = str(value).strip()
-    match = re.compile(
-        r"(?:(?P<years>\d+)y)?(?:(?P<months>\d+)m)?(?:(?P<days>\d+)d)?$"
-    ).match(text)
+    match = _AGE_PATTERN.match(text)
+    if match is None or not any(match.group(g) for g in ("years", "months", "days")):
+        return None
     years = int(match.group("years") or 0)
     months = int(match.group("months") or 0)
     days = int(match.group("days") or 0)
-    total_years = years + (months / 12.0) + (days / 365.25)
-    return round(total_years, 2)
+    return round(years + months / 12.0 + days / 365.25, 2)
 
 
 def _normalize_sex(value: object) -> str | None:
@@ -300,9 +307,9 @@ def _serialize_removed_rows(removed_rows: pd.DataFrame) -> list[dict[str, Any]]:
 
 
 def build_patients_metadata(
-    adhd_csv: Path = DEFAULT_ADHD_CSV,
-    drug_resistant_csv: Path = DEFAULT_DRUG_RESISTANT_CSV,
-    output_dir: Path = DEFAULT_CSV_DIR,
+    adhd_csv: Path,
+    drug_resistant_csv: Path,
+    output_dir: Path,
 ) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -418,9 +425,9 @@ def build_patients_metadata(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build canonical patient metadata tables.")
-    parser.add_argument("--adhd_csv", type=Path, default=DEFAULT_ADHD_CSV)
-    parser.add_argument("--drug_resistant_csv", type=Path, default=DEFAULT_DRUG_RESISTANT_CSV)
-    parser.add_argument("--output_dir", type=Path, default=DEFAULT_CSV_DIR)
+    parser.add_argument("--adhd_csv", type=Path, required=True)
+    parser.add_argument("--drug_resistant_csv", type=Path, required=True)
+    parser.add_argument("--output_dir", type=Path, required=True)
     args = parser.parse_args()
     build_patients_metadata(
         adhd_csv=args.adhd_csv,

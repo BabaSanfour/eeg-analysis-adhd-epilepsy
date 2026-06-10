@@ -3,22 +3,24 @@
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-This repository contains the analysis code used for an EEG study of ADHD, epilepsy, and medication exposure. It brings together data organization, preprocessing, quality control, feature extraction, modeling, and visualization in a single codebase.
+This repository contains the analysis code used for an EEG study of ADHD, epilepsy, and medication exposure. It brings together data organization, preprocessing, quality control, feature extraction, dimensionality reduction analysis, and visualization in a single codebase.
 
 ## Overview
 
 The codebase currently includes:
 
-- BIDS-oriented data handling and EEG preprocessing utilities
-- signal quality control and reporting tools
+- metadata and cohort-report tooling for tracking recruitment and clinical groups
+- BIDS-oriented data handling, EEG preprocessing, and pre/post-clean QC utilities
+- signal quality control and HTML reporting tools
 - descriptor-based feature extraction using `coco-pipe.descriptors`
 - dimensionality reduction analysis using `coco-pipe.dim_reduction`
-- machine learning and deep learning analysis modules using `coco-pipe.decoding`
-- visualization utilities for exploratory analysis and result inspection using `coco-pipe.viz` and `coco-pipe.report`
+- visualization and reporting utilities for exploratory analysis and result inspection using `coco-pipe.viz` and `coco-pipe.report`
+
+The active pipeline runs in this order: metadata → BIDS conversion/QC → preprocessing → epoching → descriptor extraction → dimensionality reduction. Cluster-ready SLURM scripts for each stage live in [cluster/](cluster/), numbered in pipeline order.
 
 ## Metadata Workflow
 
-Metadata currently starts from two CSV files collected by students William and Jeanne: `EEG_Psychostimulants_PatientList_08-2025.csv` and `IRSC_data_final.csv`. The builder in [eeg_adhd_epilepsy/qc/metadata.py](eeg_adhd_epilepsy/qc/metadata.py) merges them into one canonical schema, applies the agreed cleaning rules, assigns a generated `patient_group_id` for repeated recordings from the same patient, and writes:
+Metadata currently starts from two CSV files collected by students William and Jeanne: `EEG_Psychostimulants_PatientList_08-2025.csv` and `IRSC_data_final.csv`. The builder in [eeg_adhd_epilepsy/io/patients.py](eeg_adhd_epilepsy/io/patients.py) merges them into one canonical schema, applies the agreed cleaning rules, assigns a generated `patient_group_id` for repeated recordings from the same patient, and writes:
 
 - `patients_metadata.csv`
 - `patients_metadata_clean.csv`
@@ -34,7 +36,7 @@ The intended downstream entry point is `patients_metadata_clean.csv`.
 
 ## Cohort Report Workflow
 
-The cohort report starts from `patients_metadata_clean.csv` and optionally reads `patients_metadata_removed.json` for provenance. The builder in [eeg_adhd_epilepsy/qc/cohort_report.py](eeg_adhd_epilepsy/qc/cohort_report.py) can:
+The cohort report starts from `patients_metadata_clean.csv` and optionally reads `patients_metadata_removed.json` for provenance. The builder in [eeg_adhd_epilepsy/analysis/cohort.py](eeg_adhd_epilepsy/analysis/cohort.py) can:
 
 - build the full clean-cohort report directly
 - apply a cohort filter from a YAML file
@@ -98,7 +100,7 @@ Dataset summary outputs:
 
 ### Split of Responsibilities
 
-- `to_bids.py` handles conversion, canonical annotations, and orchestration. It calls [eeg_adhd_epilepsy/reports/eeg_report.py](eeg_adhd_epilepsy/reports/eeg_report.py) to generate the descriptive EEG report, [eeg_adhd_epilepsy/qc/raw_metrics.py](eeg_adhd_epilepsy/qc/raw_metrics.py) to compute and aggregate broad raw-QC metrics, and [eeg_adhd_epilepsy/reports/raw_qc.py](eeg_adhd_epilepsy/reports/raw_qc.py) to render the raw-QC report.
+- `to_bids.py` handles conversion, canonical annotations, and orchestration. It calls [eeg_adhd_epilepsy/reports/eeg_report.py](eeg_adhd_epilepsy/reports/eeg_report.py) to generate the descriptive EEG report, [eeg_adhd_epilepsy/qc/raw_qc.py](eeg_adhd_epilepsy/qc/raw_qc.py) to compute and aggregate broad raw-QC metrics, and [eeg_adhd_epilepsy/reports/raw_qc.py](eeg_adhd_epilepsy/reports/raw_qc.py) to render the raw-QC report.
 
 ## Preprocessing and Post-Clean QC Workflow
 
@@ -134,7 +136,7 @@ Like `to_bids.py`, use `--overwrite` to force reprocessing of files that have al
 ### Split of Responsibilities
 
 - `base.py` handles the pipeline orchestration, BIDS loading/saving, and mapping the core denoising algorithms.
-- `eeg_adhd_epilepsy/qc/preproc_qc.py` orchestrates the post-preprocessing QC validation. It explicitly delegates condition-level signal quality computation back to `qc/raw_metrics.py`, guaranteeing direct comparability between the "Raw" and "Clean" stages.
+- `eeg_adhd_epilepsy/qc/preproc_qc.py` orchestrates the post-preprocessing QC validation. It explicitly delegates condition-level signal quality computation back to `qc/raw_qc.py`, guaranteeing direct comparability between the "Raw" and "Clean" stages.
 - `eeg_adhd_epilepsy/reports/preproc_qc.py` is responsible for building the semantic blocks of the post-clean HTML reports, defining tables that compare retention metrics, residual artifact burdens, and Raw vs Cleaned signal quality summaries.
 - `eeg_adhd_epilepsy/viz/preproc_qc.py` composites the comparative visual artifacts (grouped histograms, distribution tables, side-by-side Topomaps) that populate the HTML reports.
 
@@ -186,13 +188,7 @@ Run with:
 
 ## Dimensionality Reduction Workflow
 
-The dimensionality reduction entry point is [eeg_adhd_epilepsy/analysis/dimensionality_reduction.py](eeg_adhd_epilepsy/analysis/dimensionality_reduction.py). It is the main analysis script for exploring low-dimensional structure in:
-
-- raw EEG
-- extracted descriptors
-- saved embeddings when supported by the current config
-
-It builds on `coco-pipe.dim_reduction` and supports multiple analysis styles, post-hoc evaluation targets, and report generation in one run.
+The dimensionality reduction entry point is [eeg_adhd_epilepsy/analysis/dimensionality_reduction.py](eeg_adhd_epilepsy/analysis/dimensionality_reduction.py). It is the main analysis script for exploring low-dimensional structure in raw EEG or extracted descriptors. It builds on `coco-pipe.dim_reduction` and supports multiple analysis styles, post-hoc evaluation targets, and report generation in one run.
 
 Run with:
 
@@ -215,7 +211,6 @@ Three arguments define what the script loads and what one “analysis unit” me
 - `--input_mode`
   - `raw`: load EEG from BIDS or saved derivatives
   - `descriptors`: load merged descriptor tables
-  - embedding modes remain config-dependent and should be used only when the saved artifacts exist
 - `--analysis_mode`
   - `flat`: one embedding per condition or pooled dataset
   - `sensor`: one independent analysis per sensor or channel-group
@@ -247,102 +242,18 @@ For descriptor analyses:
 - `--representation` is table-driven for descriptors: the script uses the descriptor table stem, such as `sensor_subject_features`, so separate tables get separate output/report variants
 - descriptor rows with selected finite feature values above `--descriptor_max_abs_value` are dropped before fitting; the default is `1e12`
 
-### Evals and Selection
+### Evals, Selection, Reports and Outputs
 
-The script separates:
+- The script reports both fit metrics from the reducer itself (`trustworthiness`, `continuity`, `shepard_correlation`) and post-hoc eval metrics from user-defined specs (e.g. logistic-regression balanced accuracy on clinical/demographic targets like `med_adhd_vs_ctrl`, `sex_separation`, `age_separation`, `condition_separation`).
+- Best-fit selection is driven by `selection_metric` (e.g. `separation_logreg_balanced_accuracy`) and, when you want fits ranked on one specific target, `selection_eval_name`. Set both explicitly for any serious comparison study, along with `output_group`, to keep report selection unambiguous and run variants separated on disk.
+- Outputs are separated by analysis variant under `BIDS/derivatives/dim_reduction/<output_group>/<dataset_name>/<input_mode>/<analysis_mode>__<representation>/`, with matching reports under `reports/summary/dim_reduction/.../<analysis_mode>__<representation>_dataset_summary.html`. This split matters whenever you vary `input_mode`, `analysis_mode`, or `representation`.
+- At the run root the script writes fit/eval inventories, per-fit artifacts, the dataset summary report, `run_summary.json`, and a terminal marker (`_RUN_SUCCESS`, `_RUN_PARTIAL`, or `_RUN_FAILED`) so you can see at a glance which variants completed, partially completed, or failed.
 
-- fit metrics from the reducer itself, such as:
-  - `trustworthiness`
-  - `continuity`
-  - `shepard_correlation`
-- post-hoc evaluation metrics from user-defined eval specs, such as:
-  - logistic-regression balanced accuracy for clinical or demographic targets
+### Parallelism and Practical Notes
 
-Each config can define multiple evals. Typical examples are:
-
-- the main clinical comparison, such as `med_adhd_vs_ctrl`
-- additional control analyses, such as `sex_separation`, `age_separation`, or `condition_separation`
-
-Best-fit selection is driven by:
-
-- `selection_metric`
-- optionally `selection_eval_name`
-
-Use:
-
-- `selection_metric: separation_logreg_balanced_accuracy`
-- `selection_eval_name: <main_eval_name>`
-
-when you want the report to rank fits by separation on one specific analysis target.
-
-The report can still show the additional evals, but the “best” rows and summary choices should usually be tied to one explicit primary eval.
-
-### Reports and Outputs
-
-Outputs are separated by analysis variant. The main derivative root is:
-
-- `BIDS/derivatives/dim_reduction/<output_group>/<dataset_name>/<input_mode>/<analysis_mode>__<representation>/`
-
-This separation is important when you run the same config with:
-
-- different `input_mode`
-- different `analysis_mode`
-- different `representation`
-
-Reports follow the same variant split under:
-
-- `reports/summary/dim_reduction/<output_group>/<dataset_name>/<input_mode>/<analysis_mode>__<representation>_dataset_summary.html`
-
-At the run root, the script writes:
-
-- fit and eval inventories
-- per-fit artifacts
-- the dataset summary report
-- `run_summary.json`
-- one terminal marker:
-  - `_RUN_SUCCESS`
-  - `_RUN_PARTIAL`
-  - `_RUN_FAILED`
-
-This makes it easier to see which variants completed cleanly, which are partial, and which should be rerun.
-
-### Parallelism and Runtime Notes
-
-The script supports outer-task parallelism through `--n_jobs`:
-
-- `1`: fully serial
-- `>1`: use that many outer workers
-- `-1`: use all available CPUs
-
-Parallelism is applied to:
-
-- independent fit tasks
-- independent eval tasks
-
-It does not currently parallelize inner CV folds inside the separation evaluation itself. In practice:
-
-- moderate `n_jobs` values are usually better for eval-heavy runs
-- `-1` can be too aggressive for large sensor analyses with many eval targets
-
-Recommended rule of thumb:
-
-- start with `--n_jobs 4` or `--n_jobs 6`
-- increase only after confirming memory and CPU behavior are acceptable
-
-### Practical Notes
-
-- `subject_flat` averages epochs within subject. Use this when you want one observation per subject.
-- PCA-like reducers are still limited by `min(n_samples, n_features)`, so subject-level runs with small cohorts cannot request very large `n_components`.
-- In raw sensor analyses, topomaps use the standard 10-20 montage and work only when sensor names match valid EEG channel labels.
-- In descriptor sensor analyses, the meaning of “sensor” depends on the input table:
-  - per-channel descriptor tables produce true electrodes like `Fz`
-  - pooled descriptor tables produce grouped regions like `front_left`
-- For any serious comparison study, explicitly set:
-  - `selection_metric`
-  - `selection_eval_name`
-  - `output_group`
-
-This avoids ambiguous report selection and keeps run variants separated on disk.
+- `--n_jobs` controls outer-task parallelism across independent fit/eval tasks (`1` = serial, `>1` = that many workers, `-1` = all CPUs). It does not parallelize inner CV folds, so moderate values (start with `4`–`6`) tend to work best for eval-heavy or large sensor runs — increase only after checking memory/CPU behavior.
+- `subject_flat` averages epochs within subject — use it for one observation per subject. PCA-like reducers remain bounded by `min(n_samples, n_features)`, so small subject-level cohorts can't request large `n_components`.
+- Raw-sensor topomaps use the standard 10-20 montage and need sensor names that match valid EEG channel labels. For descriptor sensor analyses, "sensor" depends on the table: per-channel tables give true electrodes (`Fz`), pooled tables give grouped regions (`front_left`).
 
 ## Installation
 
@@ -378,9 +289,14 @@ pip install -e '/Users/hamzaabdelhedi/Projects/packages/coco-pipe[descriptors]'
 
 ```text
 .
-├── eeg_adhd_epilepsy/     # Main Python package
+├── eeg_adhd_epilepsy/     # Main Python package (preproc, qc, analysis, viz, reports, io, utils, signal_quality)
+├── configs/               # YAML configs for descriptors, annotations, dimensionality reduction
+├── cluster/               # Numbered SLURM submission scripts, one per pipeline stage
+├── data/                  # Raw and BIDS-converted EEG data (not tracked in git)
+├── results/               # Generated analysis outputs (not tracked in git)
+├── reports/               # Generated HTML QC and summary reports (not tracked in git)
 ├── tests/                 # Automated tests
-├── pyproject.toml         # Project metadata and dependencies
+├── pyproject.toml         # Project metadata, dependencies, and CLI entry points
 ├── LICENSE                # Project license
 └── README.md              # Project overview
 ```

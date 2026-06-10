@@ -30,6 +30,7 @@ from .utils import (
     benchmark_step,
     NumpyEncoder,
     load_stage_artifacts,
+    select_subjects,
 )
 
 
@@ -108,31 +109,6 @@ def _default_denoise_desc(correct_desc: str) -> str:
         suffix = token[len("correct") :]
         return bids.validate_stage_desc(f"denoise{suffix}")
     return bids.validate_stage_desc(f"denoise{token[0].upper()}{token[1:]}")
-
-
-def _compute_band_power(raw: mne.io.BaseRaw, bands: Optional[Dict[str, Tuple[float, float]]] = None) -> Dict[str, float]:
-    """Compute average power in standard EEG frequency bands."""
-    if bands is None:
-        bands = {
-            "delta": (1, 4),
-            "theta": (4, 8),
-            "alpha": (8, 13),
-            "beta": (13, 30),
-            "gamma": (30, 45),
-        }
-
-    eeg_picks = mne.pick_types(raw.info, eeg=True, exclude="bads")
-    if len(eeg_picks) == 0:
-        return {name: 0.0 for name in bands}
-
-    results: Dict[str, float] = {}
-    for name, (fmin, fmax) in bands.items():
-        try:
-            psd = raw.compute_psd(fmin=fmin, fmax=fmax, picks=eeg_picks, verbose=False)
-            results[name] = float(np.mean(psd.get_data()))
-        except Exception:
-            results[name] = 0.0
-    return results
 
 
 def _compute_channel_correlation(raw_a: mne.io.BaseRaw, raw_b: mne.io.BaseRaw) -> Dict[str, float]:
@@ -377,22 +353,19 @@ def run_comparison(
                 spectral_metrics[name] = {
                     "alpha_peak": float(summary["alpha_peak"]),
                     "slope": float(summary["aperiodic_slope"]),
+                    "band_powers": {k: float(v) for k, v in summary.get("band_powers_mean", {}).items()},
                 }
             except Exception as exc:
                 LOGGER.warning("Spectral metrics failed for %s (%s): %s", subject_id, name, exc)
-                spectral_metrics[name] = {"alpha_peak": float("nan"), "slope": float("nan")}
-
-        bp_orig = _compute_band_power(raw_orig)
-        bp_dss = _compute_band_power(raw_dss)
-        bp_ica = _compute_band_power(raw_ica)
+                spectral_metrics[name] = {"alpha_peak": float("nan"), "slope": float("nan"), "band_powers": {}}
 
         corr_map = _compute_channel_correlation(raw_dss, raw_ica)
         mean_corr = float(np.mean(list(corr_map.values()))) if corr_map else float("nan")
 
         subject_rows: List[Dict[str, Any]] = []
-        for method_name, raw_method, bp_after in (
-            ("dss", raw_dss, bp_dss),
-            ("ica", raw_ica, bp_ica),
+        for method_name, raw_method in (
+            ("dss", raw_dss),
+            ("ica", raw_ica),
         ):
             prov_for_timing = method_provs.get(method_name, {})
             prov_for_metrics = metric_provs.get(method_name, {})
@@ -422,12 +395,14 @@ def run_comparison(
                 "source_desc": dss_compare_desc if method_name == "dss" else ica_compare_desc,
             }
 
-            for band_name, val in bp_after.items():
+            bp_method = spectral_metrics[method_name]["band_powers"]
+            bp_orig_bands = spectral_metrics["orig"]["band_powers"]
+            for band_name, val in bp_method.items():
                 row[f"power_{band_name}"] = float(val)
-            for band_name in bp_orig:
-                if bp_orig[band_name] > 0:
+            for band_name, orig_val in bp_orig_bands.items():
+                if orig_val > 0:
                     row[f"power_{band_name}_reduction_pct"] = (
-                        1.0 - bp_after.get(band_name, 0.0) / bp_orig[band_name]
+                        1.0 - bp_method.get(band_name, 0.0) / orig_val
                     ) * 100.0
                 else:
                     row[f"power_{band_name}_reduction_pct"] = 0.0
@@ -476,7 +451,11 @@ def run_comparison(
 
         try:
             subject_plot_paths["band_power"] = viz_qc.plot_compare_band_power(
-                bp_orig, bp_dss, bp_ica, subject_id, subject_plots_dir
+                spectral_metrics["orig"]["band_powers"],
+                spectral_metrics["dss"]["band_powers"],
+                spectral_metrics["ica"]["band_powers"],
+                subject_id,
+                subject_plots_dir,
             )
         except Exception as exc:
             LOGGER.warning("Band power plot failed for %s: %s", subject_id, exc)
@@ -702,27 +681,21 @@ def main() -> None:
     subjects_found = sorted({bids.parse_subject_id(f) for f in files})
     LOGGER.info("Found %d base subjects.", len(subjects_found))
 
-    if args.subjects:
-        subjects_to_process = {bids.normalize_subject_id(s) for s in args.subjects}
-    elif args.start_from:
-        start_sub = bids.normalize_subject_id(args.start_from)
-        subjects_to_process = {s for s in subjects_found if s >= start_sub}
-        if not subjects_to_process:
-            LOGGER.error("No subjects found starting from %s.", start_sub)
+    subjects_to_process = select_subjects(
+        subjects_found,
+        selected_subjects=args.subjects,
+        start_from=args.start_from,
+        use_test=args.test,
+        use_random_test=args.random,
+        use_all=args.all,
+    )
+    if not subjects_to_process:
+        if args.start_from:
+            LOGGER.error("No subjects found starting from %s.", bids.normalize_subject_id(args.start_from))
             sys.exit(1)
-    elif args.test:
-        import random
-
-        if args.random:
-            random.seed(42)
-            subjects_to_process = set(random.sample(subjects_found, min(5, len(subjects_found))))
-        else:
-            subjects_to_process = set(subjects_found[:5])
-    elif args.all:
-        subjects_to_process = set(subjects_found)
-    else:
         parser.print_help()
         sys.exit(0)
+    subjects_to_process = set(subjects_to_process)
 
     subjects_sorted = sorted(subjects_to_process)
     LOGGER.info("Running compare (%s) for %d subjects: %s", compare_mode, len(subjects_sorted), subjects_sorted)

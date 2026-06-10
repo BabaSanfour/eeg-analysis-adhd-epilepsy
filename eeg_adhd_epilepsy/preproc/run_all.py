@@ -7,7 +7,7 @@ import json
 import logging
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional
 from collections import defaultdict
 
 from eeg_adhd_epilepsy.io import bids
@@ -18,12 +18,9 @@ from .base import DEFAULT_HIGHPASS_HZ, DEFAULT_LOWPASS_HZ, run_base_record
 from .compare import run_comparison
 from .correct import ArtifactCorrectionConfig, run_correction_pipeline
 from .denoise import ArtifactDenoisingConfig, run_denoising_pipeline
+from .utils import select_subjects
 
 LOGGER = logging.getLogger("preproc_run_all")
-
-
-def _normalize_subject_list(subjects: Sequence[str]) -> List[str]:
-    return sorted({bids.normalize_subject_id(s) for s in subjects})
 
 
 def _discover_input_files(bids_root: Path) -> List[Path]:
@@ -31,43 +28,8 @@ def _discover_input_files(bids_root: Path) -> List[Path]:
     return bids.discover_bids_files(bids_root, suffix="eeg", extension=".vhdr")
 
 
-def _select_subjects(
-    subjects_found: Sequence[str],
-    selected_subjects: Optional[Sequence[str]] = None,
-    start_from: Optional[str] = None,
-    use_test: bool = False,
-    use_random_test: bool = False,
-    use_all: bool = False,
-) -> List[str]:
-    """Apply standard subject selection logic."""
-    found_sorted = sorted(set(subjects_found))
-    if selected_subjects:
-        return _normalize_subject_list(selected_subjects)
-
-    if start_from:
-        start_sid = bids.normalize_subject_id(start_from)
-        chosen = [sid for sid in found_sorted if sid >= start_sid]
-        return chosen
-
-    if use_test:
-        if use_random_test:
-            import random
-
-            random.seed(42)
-            return sorted(random.sample(found_sorted, min(5, len(found_sorted))))
-        return found_sorted[:5]
-
-    if use_all:
-        return found_sorted
-
-    return []
-
-
 def _build_base_config(
     *,
-    bids_root: Path,
-    preproc_root: Path,
-    reports_root: Path,
     n_jobs: int,
     highpass: float,
     lowpass: float,
@@ -86,9 +48,6 @@ def _build_base_config(
 
     return {
         "n_jobs": int(n_jobs),
-        "bids_root": str(bids_root),
-        "preproc_root": str(preproc_root),
-        "reports_root": str(reports_root),
         "processing": processing_cfg,
         "line_noise": {
             "line_freq": line_freq,
@@ -263,7 +222,7 @@ def main() -> None:
         sys.exit(1)
 
     subjects_found = sorted({bids.parse_subject_id(path) for path in input_files})
-    subjects_sorted = _select_subjects(
+    subjects_sorted = select_subjects(
         subjects_found=subjects_found,
         selected_subjects=args.subjects,
         start_from=args.start_from,
@@ -300,9 +259,6 @@ def main() -> None:
     task_token = args.condition if args.condition else None
 
     base_config = _build_base_config(
-        bids_root=bids_root,
-        preproc_root=preproc_root,
-        reports_root=reports_root,
         n_jobs=args.n_jobs,
         highpass=args.highpass,
         lowpass=args.lowpass,

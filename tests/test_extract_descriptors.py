@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -41,14 +42,55 @@ def _demo_container() -> DataContainer:
 
 
 def _demo_container_for_subjects(subjects: list[str] | None = None) -> DataContainer:
-    container = _demo_container()
+    """Return a container with ≥5 epochs per subject so MAD rejection passes.
+
+    Subject "0001" uses alternating runs (01 / 02) to produce two distinct
+    recording-level aggregated rows; subject "0002" uses a single run ("01")
+    to produce one aggregated row.  The combined subject-level table therefore
+    has exactly 3 rows — matching the expectations of the merge tests.
+    """
+    rng = np.random.default_rng(42)
+    n_per_subject = 10
+    subject_ids = ["0001", "0002"]
+    all_subjects = [s for s in subject_ids for _ in range(n_per_subject)]
+    n_total = len(all_subjects)
+    X = rng.normal(size=(n_total, 2, 64))
+    time = np.linspace(0, 1, 64, endpoint=False)
+    X[:, 0, :] += np.sin(2 * np.pi * 10 * time)
+    X[:, 1, :] += np.sin(2 * np.pi * 6 * time)
+    ep_ids = [f"{s}_ep{i}" for s in subject_ids for i in range(n_per_subject)]
+    sessions = ["01"] * n_total
+    # "0001" alternates between run-01 and run-02; "0002" stays on run-01
+    runs = (
+        [f"{(i % 2) + 1:02d}" for i in range(n_per_subject)]   # 0001: 01,02,01,...
+        + ["01"] * n_per_subject                                  # 0002: all run-01
+    )
+    labels = ["Control"] * n_per_subject + ["ADHD"] * n_per_subject
+    container = DataContainer(
+        X=X,
+        y=np.array(labels, dtype=object),
+        ids=np.array(ep_ids, dtype=object),
+        dims=("obs", "channel", "time"),
+        coords={
+            "obs": np.array(ep_ids, dtype=object),
+            "channel": np.array(["Fz", "Cz"], dtype=object),
+            "time": time,
+            "study_id": np.array(all_subjects, dtype=object),
+            "session": np.array(sessions, dtype=object),
+            "run": np.array(runs, dtype=object),
+            "combined_diagnosis": np.array(labels, dtype=object),
+            "age": np.array([10] * n_per_subject + [13] * n_per_subject, dtype=object),
+            "sex": np.array(["F"] * n_per_subject + ["M"] * n_per_subject, dtype=object),
+        },
+        meta={"sfreq": 64.0},
+    )
     if not subjects:
         return container
-    requested = {str(subject) for subject in subjects}
+    requested = {str(s) for s in subjects}
     obs_indices = [
         idx
-        for idx, subject in enumerate(np.asarray(container.coords["study_id"], dtype=object))
-        if str(subject) in requested
+        for idx, s in enumerate(np.asarray(container.coords["study_id"], dtype=object))
+        if str(s) in requested
     ]
     return container.isel(obs=obs_indices)
 
@@ -387,9 +429,11 @@ aggregation:
     sensor_agg_df = pd.read_csv(subject_one_root / "sensor_subject_features.csv")
     pooled_epoch_df = pd.read_csv(subject_one_root / "pooled_epoch_features.csv")
     pooled_agg_df = pd.read_csv(subject_one_root / "pooled_subject_features.csv")
-    assert len(sensor_epoch_df) == 2
+    # The fixture has 10 epochs/subject; MAD rejection may drop ~1, so at least 5 survive.
+    assert len(sensor_epoch_df) >= 5
+    # Subject 0001 alternates between run-01 and run-02 → always 2 recording rows.
     assert len(sensor_agg_df) == 2
-    assert len(pooled_epoch_df) == 2
+    assert len(pooled_epoch_df) >= 5
     assert len(pooled_agg_df) == 2
     assert "band_abs_delta_ch-Fz" in sensor_epoch_df.columns
     assert not any("chgrp-" in column for column in sensor_epoch_df.columns)
@@ -398,8 +442,8 @@ aggregation:
     assert "epoch_count" in sensor_agg_df.columns
     assert "run" in sensor_agg_df.columns
     assert "recording_id" in sensor_agg_df.columns
-    assert sensor_agg_df["epoch_count"].tolist() == [1, 1]
-    assert pooled_agg_df["epoch_count"].tolist() == [1, 1]
+    assert (sensor_agg_df["epoch_count"] >= 1).all()
+    assert (pooled_agg_df["epoch_count"] >= 1).all()
     assert any(column.startswith("mean_") for column in sensor_agg_df.columns)
     assert any(column.startswith("mean_band_log_abs_") for column in sensor_agg_df.columns)
     assert not any(column.startswith("mean_band_abs_") for column in sensor_agg_df.columns)
@@ -518,9 +562,11 @@ aggregation:
     combined_pooled_epoch_df = pd.read_csv(combined_root / "pooled_epoch_features.csv")
     combined_pooled_agg_df = pd.read_csv(combined_root / "pooled_subject_features.csv")
 
-    assert len(combined_sensor_epoch_df) == 4
+    # 2 subjects × ≥5 surviving epochs each → at least 10 combined epoch rows.
+    assert len(combined_sensor_epoch_df) >= 10
+    # 0001 has 2 runs, 0002 has 1 run → always 3 recording-level rows after merge.
     assert len(combined_sensor_agg_df) == 3
-    assert len(combined_pooled_epoch_df) == 4
+    assert len(combined_pooled_epoch_df) >= 10
     assert len(combined_pooled_agg_df) == 3
     assert any(
         column.startswith("agg_band_ratio_") for column in combined_sensor_agg_df.columns
@@ -552,6 +598,14 @@ aggregation:
     assert (
         reports_root / "summary" / "descriptor_qc" / "descriptor_qc_dataset_summary.html"
     ).exists()
+
+    manifest_path = combined_root / "merge_manifest.json"
+    assert manifest_path.exists()
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["n_shards_merged"] == manifest["n_shards_discovered"]
+    assert manifest["n_shards_excluded"] == 0
+    assert len(manifest["merged_shards"]) == manifest["n_shards_merged"]
+    assert manifest["n_sensor_epoch_rows"] == len(combined_sensor_epoch_df)
 
 
 def test_extract_descriptors_cli_skips_missing_subject_condition(

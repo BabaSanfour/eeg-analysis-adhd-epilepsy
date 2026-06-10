@@ -23,6 +23,7 @@ METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhd
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/medicated_adhd_vs_controls}
 REPORTS_ROOT="${BIDS_ROOT%/*}/reports"
+OVERWRITE=${OVERWRITE:-1}
 
 # Descriptor Data Paths
 DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
@@ -90,13 +91,20 @@ if [[ -f "$report_path" ]]; then
     exit 0
 fi
 
-python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
-    --bids_root "$BIDS_ROOT" \
-    --metadata "$METADATA_PATH" \
-    --config "$config" \
-    --input_mode "$input_mode" \
-    --descriptor_table_path "$TABLE_PATH" \
-    --descriptor_feature_columns_path "$COLUMNS_PATH" \
-    --analysis_mode "$mode" \
-    --n_jobs "$THREADS" \
-    --overwrite
+cmd=(
+    python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction
+    --bids_root "$BIDS_ROOT"
+    --metadata "$METADATA_PATH"
+    --config "$config"
+    --input_mode "$input_mode"
+    --descriptor_table_path "$TABLE_PATH"
+    --descriptor_feature_columns_path "$COLUMNS_PATH"
+    --analysis_mode "$mode"
+    --n_jobs "$THREADS"
+)
+
+if [ "$OVERWRITE" = "1" ]; then
+    cmd+=(--overwrite)
+fi
+
+"${cmd[@]}"

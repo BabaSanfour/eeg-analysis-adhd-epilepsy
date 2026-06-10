@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from coco_pipe.viz import plot_bar, plot_histogram
 import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
 from eeg_adhd_epilepsy.viz import utils
 
@@ -42,16 +43,16 @@ def plot_total_duration_by_segment(df: pd.DataFrame, fig_dir: Path) -> Path | No
     group = df.groupby("segment_type", dropna=False)["duration"].sum().sort_values(ascending=True)
     if group.empty:
         return None
-    fig, ax = plt.subplots(figsize=(7, max(3, len(group) * 0.35)))
-    labels = group.index.astype(str).tolist()
-    positions = np.arange(len(labels))
-    ax.barh(positions, group.values, color="#4C72B0")
-    ax.set_yticks(positions)
-    ax.set_yticklabels(labels)
-    ax.set_xlabel("Total Duration (s)")
-    ax.set_title("Total Duration by Segment Type")
+    fig, ax = plot_bar(
+        group,
+        sort=False,
+        orientation="horizontal",
+        color="#4C72B0",
+        title="Total Duration by Segment Type",
+        xlabel="Total Duration (s)",
+        figsize=(7, max(3, len(group) * 0.35)),
+    )
     ax.grid(True, axis="x", alpha=0.2)
-    plt.tight_layout()
     return utils.save_fig(fig, fig_dir / FIGURE_FILENAMES["segment_duration"])
 
 
@@ -85,15 +86,16 @@ def plot_photo_frequency_durations(df: pd.DataFrame, fig_dir: Path) -> Path | No
     group = photo.dropna(subset=["freq_hz"]).groupby("freq_hz")["duration"].sum().sort_index()
     if group.empty:
         return None
-    fig, ax = plt.subplots(figsize=(7, 4))
-    freqs = group.index.to_numpy(dtype=float)
-    ax.bar(freqs, group.values, color="#8172B2", width=0.8)
-    ax.set_xlabel("PHOTO Frequency (Hz)")
-    ax.set_ylabel("Total Duration (s)")
-    ax.set_title("PHOTO Block Duration by Frequency")
-    ax.set_xticks(freqs)
+    fig, ax = plot_bar(
+        group,
+        sort=False,
+        color="#8172B2",
+        title="PHOTO Block Duration by Frequency",
+        xlabel="PHOTO Frequency (Hz)",
+        ylabel="Total Duration (s)",
+        figsize=(7, 4),
+    )
     ax.grid(True, axis="y", alpha=0.2)
-    plt.tight_layout()
     return utils.save_fig(fig, fig_dir / FIGURE_FILENAMES["photo_frequency"])
 
 
@@ -234,17 +236,17 @@ def save_eeg_report_figures(df: pd.DataFrame, fig_dir: Path) -> Dict[str, Path]:
 def _plot_bar(values: pd.Series, title: str, xlabel: str, ylabel: str, out_path: Path) -> Path | None:
     if values.empty:
         return None
-    fig, ax = plt.subplots(figsize=(8, max(4, len(values) * 0.45)))
-    labels = values.index.astype(str).tolist()
-    positions = np.arange(len(labels))
-    ax.barh(positions, values.values, color="#4C72B0")
-    ax.set_yticks(positions)
-    ax.set_yticklabels(labels)
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel(ylabel)
+    fig, ax = plot_bar(
+        values,
+        sort=False,
+        orientation="horizontal",
+        color="#4C72B0",
+        title=title,
+        xlabel=xlabel,
+        ylabel=ylabel,
+        figsize=(8, max(4, len(values) * 0.45)),
+    )
     ax.grid(True, axis="x", alpha=0.2)
-    plt.tight_layout()
     return utils.save_fig(fig, out_path)
 
 
@@ -269,15 +271,16 @@ def plot_recording_start_hour_distribution(runs_df: pd.DataFrame, output_dir: Pa
     if starts.empty:
         return None
     hours = starts.dt.hour.value_counts().reindex(range(24), fill_value=0)
-    fig, ax = plt.subplots(figsize=(10, 4))
-    positions = hours.index.to_numpy(dtype=int)
-    ax.bar(positions, hours.values, color="#55A868", width=0.8)
-    ax.set_title("Recording Start Hour Distribution")
-    ax.set_xlabel("Hour of Day")
-    ax.set_ylabel("Runs")
-    ax.set_xticks(positions)
+    fig, ax = plot_bar(
+        hours,
+        sort=False,
+        color="#55A868",
+        title="Recording Start Hour Distribution",
+        xlabel="Hour of Day",
+        ylabel="Runs",
+        figsize=(10, 4),
+    )
     ax.grid(True, axis="y", alpha=0.2)
-    plt.tight_layout()
     return utils.save_fig(fig, output_dir / FIGURE_FILENAMES["recording_start_hour_distribution"])
 
 
@@ -290,16 +293,20 @@ def plot_run_duration_distribution(runs_df: pd.DataFrame, output_dir: Path) -> P
     counts, _ = np.histogram(capped, bins=bins)
     labels = [f"{start}-{start + 5}" for start in bins[:-2]] + [">50"]
     counts[-1] = int((durations > 50).sum())
-    fig, ax = plt.subplots(figsize=(9, 4.5))
-    positions = np.arange(len(labels))
-    ax.bar(positions, counts, color="#4C72B0", edgecolor="white", linewidth=0.8)
-    ax.set_title("Run Duration Distribution")
-    ax.set_xlabel("Duration (minutes)")
-    ax.set_ylabel("Runs")
+    series = pd.Series(counts, index=labels)
+    fig, ax = plot_bar(
+        series,
+        sort=False,
+        color="#4C72B0",
+        title="Run Duration Distribution",
+        xlabel="Duration (minutes)",
+        ylabel="Runs",
+        figsize=(9, 4.5),
+    )
     ax.grid(True, axis="y", alpha=0.2)
-    ax.set_xticks(positions)
-    ax.set_xticklabels(labels, rotation=35, ha="right")
-    plt.tight_layout()
+    ax.tick_params(axis="x", rotation=35)
+    for label in ax.get_xticklabels():
+        label.set_ha("right")
     return utils.save_fig(fig, output_dir / FIGURE_FILENAMES["run_duration_distribution"])
 
 
@@ -364,10 +371,15 @@ def _plot_event_distribution_matrix(event_counts_map: Mapping[str, np.ndarray], 
     fig, axes = plt.subplots(rows, cols, figsize=(6 * cols, 3.5 * rows))
     axes = np.atleast_1d(axes).flatten()
     for ax_idx, (label, data) in enumerate(zip(labels, values)):
-        axes[ax_idx].hist(data, bins=min(20, max(3, int(np.sqrt(len(data))))), color="#4C72B0", alpha=0.85, edgecolor="black")
-        axes[ax_idx].set_title(label)
-        axes[ax_idx].set_xlabel(xlabel)
-        axes[ax_idx].set_ylabel("Runs")
+        plot_histogram(
+            data,
+            bins=min(20, max(3, int(np.sqrt(len(data))))),
+            color="#4C72B0",
+            title=label,
+            xlabel=xlabel,
+            ylabel="Runs",
+            ax=axes[ax_idx],
+        )
         axes[ax_idx].grid(True, axis="y", alpha=0.2)
     for extra_ax in axes[len(labels):]:
         extra_ax.axis("off")

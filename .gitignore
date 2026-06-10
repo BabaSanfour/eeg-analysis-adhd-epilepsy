@@ -12,20 +12,6 @@ plots/
 results/
 venv/
 
-# Ignore everything in dl/ except cbramod/
-dl/*
-!dl/cbramod/
-
-# Ignore everything in data/results/dl/ except embeddings/
-data/results/dl/*
-!data/results/dl/embeddings/
-
-# Explicitly ignore files we don't want to track even in whitelisted folders
-# Explicitly ignore files we don't want to track even in whitelisted folders
-eeg_adhd_epilepsy_psychostimulant/dl/cbramod/check_results.py
-eeg_adhd_epilepsy_psychostimulant/check_results.py
-eeg_adhd_epilepsy_psychostimulant/dl/cbramod/cbramod_embed.py
-eeg_adhd_epilepsy_psychostimulant/data/results/dl/embeddings/cbramod_embeddings.csv
 results*/
 .old
 analysis_*/

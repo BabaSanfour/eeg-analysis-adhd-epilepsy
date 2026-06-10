@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import logging
 import warnings
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Sequence
+from typing import Mapping, Sequence
 
 import mne
 import numpy as np
@@ -17,18 +17,25 @@ import eeg_adhd_epilepsy.io.bids as bids_io
 import eeg_adhd_epilepsy.reports.preproc_qc as report_preproc_qc
 import eeg_adhd_epilepsy.signal_quality.metrics as signal_quality
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_preproc_qc
+from eeg_adhd_epilepsy.qc.utils import (
+    DEFAULT_SIGNAL_THRESHOLDS,
+    MAX_METRICS,
+    TOPOMAP_METRIC_KEYS,
+    SignalQCThresholds,
+    _BASE_WEIGHTED_METRICS,
+    _build_channel_diagnostics,
+    _build_topomap_aggregates,
+    _clean_scalar,
+    _combine_weighted_topomaps,
+    compute_qc_score,
+    evaluate_signal_qc_flag,
+)
 
 LOGGER = logging.getLogger(__name__)
 
 
-TOPOMAP_METRIC_KEYS = ("amplitude_ptp_uv", "line_noise_ratio", "hf_lf_ratio")
 WEIGHTED_METRICS = (
-    "amplitude_mean_uv",
-    "pct_bad_channels",
-    "line_noise_ratio",
-    "hf_lf_ratio",
-    "alpha_peak_hz",
-    "aperiodic_slope",
+    *_BASE_WEIGHTED_METRICS,
     "duration_retention_pct",
     "condition_coverage_retention_pct",
     # Amplitude delta keys keep _uv suffix — consistent with signal_quality output naming.
@@ -47,7 +54,6 @@ WEIGHTED_METRICS = (
     "aperiodic_slope_delta_prev",
     "aperiodic_slope_delta_raw",
 )
-MAX_METRICS = ("amplitude_max_uv", "n_flat_channels", "n_noisy_channels")
 
 # Metrics to compute deltas for — must match keys returned by compute_signal_qc_metrics.
 _DELTA_METRICS = (
@@ -108,10 +114,6 @@ def get_preproc_qc_stage_name(stage: str, output_desc: str | None = None) -> str
     if output_desc and output_desc != profile.default_output_desc:
         return bids_io.normalize_stage_name(f"{stage}_{output_desc}_qc")
     return bids_io.normalize_stage_name(f"{stage}_qc")
-
-
-def _clean_scalar(value: object) -> object:
-    return None if pd.isna(value) else value
 
 
 def load_stage_run_lookup(
@@ -231,94 +233,6 @@ def compute_usable_condition_coverage(raw: mne.io.BaseRaw) -> float:
     return total
 
 
-def _evaluate_preproc_qc_flag(metrics_row: Mapping[str, object]) -> tuple[str, list[str]]:
-    reasons: list[str] = []
-    n_bad = float(metrics_row.get("n_flat_channels", 0) or 0) + float(metrics_row.get("n_noisy_channels", 0) or 0)
-    if n_bad >= 7:
-        reasons.append("too_many_bad_channels")
-    elif n_bad >= 4:
-        reasons.append("many_bad_channels")
-    amp_max = pd.to_numeric(metrics_row.get("amplitude_max_uv"), errors="coerce")
-    if np.isfinite(amp_max) and float(amp_max) > 800.0:
-        reasons.append("amplitude_above_threshold")
-    line_noise = pd.to_numeric(metrics_row.get("line_noise_ratio"), errors="coerce")
-    if np.isfinite(line_noise) and float(line_noise) > 5.0:
-        reasons.append("line_noise_residual")
-    hf_lf_ratio = pd.to_numeric(metrics_row.get("hf_lf_ratio"), errors="coerce")
-    if np.isfinite(hf_lf_ratio) and float(hf_lf_ratio) > 0.5:
-        reasons.append("high_hf_ratio")
-    duration_retention = pd.to_numeric(metrics_row.get("duration_retention_pct"), errors="coerce")
-    if np.isfinite(duration_retention) and float(duration_retention) < 50.0:
-        reasons.append("low_duration_retention")
-    coverage_retention = pd.to_numeric(metrics_row.get("condition_coverage_retention_pct"), errors="coerce")
-    if np.isfinite(coverage_retention) and float(coverage_retention) < 80.0:
-        reasons.append("low_condition_retention")
-
-    if "too_many_bad_channels" in reasons or "amplitude_above_threshold" in reasons or "low_duration_retention" in reasons:
-        return "unusable", reasons
-    if reasons:
-        return "borderline", reasons
-    return "usable", []
-
-
-def _build_topomap_aggregates(metrics: Mapping[str, object], *, channel_names: Sequence[str], weight: float) -> dict[str, tuple[list[str], np.ndarray, float]]:
-    per_channel_metrics = metrics.get("per_channel_metrics") or {}
-    topomaps: dict[str, tuple[list[str], np.ndarray, float]] = {}
-    for metric_key in TOPOMAP_METRIC_KEYS:
-        values = per_channel_metrics.get(metric_key)
-        arr = np.asarray(values, dtype=float) if values is not None else np.array([])
-        if arr.size == 0 or len(channel_names) != arr.size:
-            continue
-        topomaps[metric_key] = (list(channel_names), arr, float(weight))
-    return topomaps
-
-
-def _combine_weighted_topomaps(mappings: Iterable[Mapping[str, tuple[Sequence[str], np.ndarray, float]]]) -> dict[str, tuple[list[str], np.ndarray]]:
-    combined: dict[str, dict[str, tuple[float, float]]] = defaultdict(dict)
-    for mapping in mappings:
-        for metric, (channels, values, weight) in mapping.items():
-            arr = np.asarray(values, dtype=float)
-            if arr.size == 0 or len(channels) != arr.size or weight <= 0:
-                continue
-            metric_store = combined.setdefault(metric, {})
-            for channel, value in zip(channels, arr):
-                if not np.isfinite(value):
-                    continue
-                total, total_weight = metric_store.get(channel, (0.0, 0.0))
-                metric_store[channel] = (total + float(value) * float(weight), total_weight + float(weight))
-
-    output: dict[str, tuple[list[str], np.ndarray]] = {}
-    for metric, channel_store in combined.items():
-        channels = sorted(channel_store)
-        if not channels:
-            continue
-        values = []
-        for channel in channels:
-            total, total_weight = channel_store[channel]
-            values.append(total / total_weight if total_weight > 0 else np.nan)
-        output[metric] = (channels, np.asarray(values, dtype=float))
-    return output
-
-
-def _build_channel_diagnostics(metrics: Mapping[str, object], *, channel_names: Sequence[str]) -> dict[str, object]:
-    per_channel_metrics = metrics.get("per_channel_metrics") or {}
-    amplitude = np.asarray(per_channel_metrics.get("amplitude_ptp_uv", np.array([])), dtype=float)
-    line_noise = np.asarray(per_channel_metrics.get("line_noise_ratio", np.array([])), dtype=float)
-    top_amplitude = []
-    top_line_noise = []
-    if amplitude.size == len(channel_names):
-        amp_pairs = sorted(zip(channel_names, amplitude), key=lambda item: item[1], reverse=True)
-        top_amplitude = [(channel, float(value)) for channel, value in amp_pairs[:5] if np.isfinite(value)]
-    if line_noise.size == len(channel_names):
-        line_pairs = sorted(zip(channel_names, line_noise), key=lambda item: item[1], reverse=True)
-        top_line_noise = [(channel, float(value)) for channel, value in line_pairs[:5] if np.isfinite(value)]
-    return {
-        "flat_channels": list(metrics.get("flat_channels", [])),
-        "noisy_channels": list(metrics.get("noisy_channels", [])),
-        "top_amplitude_channels": top_amplitude,
-        "top_line_noise_channels": top_line_noise,
-    }
-
 
 def _delta(current_value: object, reference_value: object) -> float:
     current = pd.to_numeric(current_value, errors="coerce")
@@ -344,13 +258,15 @@ def build_preproc_qc_run_record(
     raw_lookup: Mapping[str, Mapping[str, object]] | None = None,
     previous_lookup: Mapping[str, Mapping[str, object]] | None = None,
     pipeline_warnings: Sequence[str] | None = None,
+    line_freq: float = 60.0,
+    thresholds: SignalQCThresholds | None = None,
 ) -> dict[str, object]:
     ids = bids_io.build_bids_report_ids(current_filepath)
     prepared_raw, picks = _prepare_signal(current_raw)
     metrics = signal_quality.compute_signal_qc_metrics(
         prepared_raw,
         picks=picks,
-        line_freq=60.0,
+        line_freq=line_freq,
         include_channel_metrics=True,
     )
     retained_duration_sec = compute_clean_duration(prepared_raw)
@@ -430,7 +346,7 @@ def build_preproc_qc_run_record(
         run_metrics[f"{metric}_delta_prev"] = _delta(metrics.get(metric), prev_metrics.get(metric))
         run_metrics[f"{metric}_delta_raw"] = _delta(metrics.get(metric), _reference_metric(raw_reference, metric))
 
-    qc_flag, qc_reasons = _evaluate_preproc_qc_flag(run_metrics)
+    qc_flag, qc_reasons = evaluate_signal_qc_flag(run_metrics, thresholds, check_retention=True)
     run_metrics["qc_flag"] = qc_flag
     run_metrics["qc_flag_reasons"] = ";".join(qc_reasons)
     
@@ -447,8 +363,11 @@ def build_preproc_qc_run_record(
     )
     return {
         **run_metrics,
+        "qc_score": compute_qc_score(run_metrics, thresholds=thresholds),
         "channel_diagnostics": _build_channel_diagnostics(metrics, channel_names=picks),
-        "topomap_aggregates": _build_topomap_aggregates(metrics, channel_names=picks, weight=max(retained_duration_sec, 1.0)),
+        "topomap_aggregates": _build_topomap_aggregates(
+            metrics, channel_names=picks, weight=max(retained_duration_sec, 1.0)
+        ),
         "segment_comparison": segment_comparison,
         "segments_df": segments_df,
     }
@@ -465,7 +384,7 @@ def _compute_post_clean_segment_metrics(
 ) -> pd.DataFrame:
     """Compute per-condition segment QC metrics on the cleaned output and compare to pre-base.
 
-    Delegates per-segment computation to raw_metrics._build_segment_qc_rows — the same
+    Delegates per-segment computation to raw_qc._build_segment_qc_rows — the same
     function used for the pre-base stage — so pre vs post values are on the same basis
     (full segment window, no BAD sub-interval splitting).
 
@@ -516,21 +435,21 @@ def _compute_post_clean_segment_metrics(
     if post_rows_df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    # Load pre-base segment rows from the raw_qc_segments CSV (written by raw_metrics stage).
+    # Load pre-base segment rows from the raw_qc_segments CSV (written by raw_qc stage).
     raw_qc_csv = bids_io.get_stage_summary_dir(reports_root, "raw_qc_pre_base", create_dir=False) / "raw_qc_segments.csv"
     if raw_qc_csv.exists():
         try:
             pre_all = pd.read_csv(raw_qc_csv)
-            pre_df = pre_all[pre_all.get("run_prefix", pd.Series(dtype=str)) == run_prefix] if "run_prefix" in pre_all.columns else pd.DataFrame()
+            pre_df = (
+                pre_all[pre_all["run_prefix"] == run_prefix]
+                if "run_prefix" in pre_all.columns
+                else pd.DataFrame()
+            )
         except Exception as exc:
             LOGGER.warning("Could not load raw QC segments CSV: %s", exc)
             pre_df = pd.DataFrame()
     else:
         pre_df = pd.DataFrame()
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            return pd.to_numeric(df[col], errors="coerce").groupby(df["segment_type"]).mean()
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
@@ -584,6 +503,8 @@ def collect_existing_preproc_qc_record(
     previous_output_desc: str | None = None,
     raw_lookup: Mapping[str, Mapping[str, object]] | None = None,
     previous_lookup: Mapping[str, Mapping[str, object]] | None = None,
+    line_freq: float = 60.0,
+    thresholds: SignalQCThresholds | None = None,
 ) -> dict[str, object]:
     current_raw = mne.io.read_raw_fif(filepath, preload=True, verbose="ERROR")
     return build_preproc_qc_run_record(
@@ -596,6 +517,8 @@ def collect_existing_preproc_qc_record(
         raw_lookup=raw_lookup,
         previous_lookup=previous_lookup,
         pipeline_warnings=None,
+        line_freq=line_freq,
+        thresholds=thresholds,
     )
 
 
@@ -632,8 +555,12 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
     for record in records:
         reasons.extend([reason for reason in str(record.get("qc_flag_reasons", "")).split(";") if reason])
     aggregate["qc_flag_reasons"] = ";".join(sorted(set(reasons)))
-    aggregate["topomap_aggregates"] = _combine_weighted_topomaps(record.get("topomap_aggregates", {}) for record in records)
+    aggregate["topomap_aggregates"] = _combine_weighted_topomaps(
+        record.get("topomap_aggregates", {}) for record in records
+    )
     aggregate["channel_diagnostics"] = records[0].get("channel_diagnostics", {})
+    from eeg_adhd_epilepsy.qc.utils import compute_channel_failure_rates
+    aggregate["channel_failure_rates"] = compute_channel_failure_rates(records)
 
     # Combine per-condition segment comparisons across runs: average numeric columns
     # per segment_type so multi-run subjects don't get duplicate condition rows.

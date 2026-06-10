@@ -11,7 +11,7 @@ from eeg_adhd_epilepsy.utils.metadata_schema import (
     PATIENTS_METADATA_AUDIT_COLUMNS,
     PATIENTS_METADATA_COLUMNS,
 )
-from eeg_adhd_epilepsy.qc.metadata import (
+from eeg_adhd_epilepsy.io.patients import (
     _normalize_binary_flag_series,
     _normalize_merged_metadata,
     _rename_adhd_source,

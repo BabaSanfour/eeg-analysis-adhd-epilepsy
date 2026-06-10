@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=to_bids
 #SBATCH --account=rrg-kjerbi
-#SBATCH --output=slurm-%x-%A_%a.out
-#SBATCH --error=slurm-%x-%A_%a.err
+#SBATCH --output=slurm-%x-%A.out
+#SBATCH --error=slurm-%x-%A.err
 #SBATCH --time=08:00:00
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=32G
@@ -19,6 +19,7 @@ BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilep
 METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 RAW_ROOT=${RAW_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/raw_data}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
+OVERWRITE=${OVERWRITE:-1}
 
 THREADS=${SLURM_CPUS_PER_TASK:-32}
 
@@ -44,12 +45,19 @@ export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
 export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
 mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 
-python -m eeg_adhd_epilepsy.preproc.to_bids \
-  --raw_root "$RAW_ROOT" \
-  --bids_root "$BIDS_ROOT" \
-  --metadata_csv "$METADATA_PATH" \
-  --with_eeg_reports \
-  --with_raw_qc \
-  --raw_qc_analysis_level both \
-  --n_jobs "$THREADS" \
-  --overwrite
+cmd=(
+  python -m eeg_adhd_epilepsy.preproc.to_bids
+  --raw_root "$RAW_ROOT"
+  --bids_root "$BIDS_ROOT"
+  --metadata_csv "$METADATA_PATH"
+  --with_eeg_reports
+  --with_raw_qc
+  --raw_qc_analysis_level both
+  --n_jobs "$THREADS"
+)
+
+if [ "$OVERWRITE" = "1" ]; then
+  cmd+=(--overwrite)
+fi
+
+"${cmd[@]}"

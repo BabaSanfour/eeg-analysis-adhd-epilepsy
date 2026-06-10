@@ -7,6 +7,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from coco_pipe.viz import plot_bar, plot_distribution_groups, plot_heatmap
 from eeg_adhd_epilepsy.viz import utils
 import seaborn as sns
 
@@ -66,11 +67,14 @@ def plot_source_dataset_counts(df: pd.DataFrame, out_path: Path) -> None:
         .reset_index(name="count")
     )
 
-    fig, ax = plt.subplots(figsize=(7, 4))
-    sns.barplot(data=counts, x="source_dataset", y="count", ax=ax, palette="crest")
-    ax.set_title("Source Dataset Counts")
-    ax.set_xlabel("")
-    ax.set_ylabel("Rows")
+    fig, ax = plot_bar(
+        counts.set_index("source_dataset")["count"],
+        sort=False,
+        cmap="crest",
+        title="Source Dataset Counts",
+        ylabel="Rows",
+        figsize=(7, 4),
+    )
     for patch in ax.patches:
         height = patch.get_height()
         ax.annotate(
@@ -81,7 +85,7 @@ def plot_source_dataset_counts(df: pd.DataFrame, out_path: Path) -> None:
             xytext=(0, 4),
             textcoords="offset points",
         )
-    sns.despine()
+    sns.despine(ax=ax)
     utils.save_fig(fig, out_path, dpi=300)
 
 
@@ -104,17 +108,15 @@ def plot_diagnosis_prevalence(df: pd.DataFrame, out_path: Path) -> None:
     if summary.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-    sns.barplot(
-        data=summary.sort_values("prevalence_pct", ascending=False),
-        x="diagnosis",
-        y="prevalence_pct",
-        ax=ax,
-        palette="viridis",
+    fig, ax = plot_bar(
+        summary.set_index("diagnosis")["prevalence_pct"],
+        sort=True,
+        ascending=False,
+        cmap="viridis",
+        title="Diagnosis Prevalence",
+        ylabel="Prevalence (%)",
+        figsize=(8, 4.5),
     )
-    ax.set_title("Diagnosis Prevalence")
-    ax.set_xlabel("")
-    ax.set_ylabel("Prevalence (%)")
     ax.set_ylim(0, 100)
     for patch in ax.patches:
         height = patch.get_height()
@@ -126,7 +128,7 @@ def plot_diagnosis_prevalence(df: pd.DataFrame, out_path: Path) -> None:
             xytext=(0, 4),
             textcoords="offset points",
         )
-    sns.despine()
+    sns.despine(ax=ax)
     utils.save_fig(fig, out_path, dpi=300)
 
 
@@ -140,19 +142,17 @@ def plot_combined_diagnosis_counts(df: pd.DataFrame, out_path: Path) -> None:
     if counts.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(11, 5))
-    sns.barplot(
-        data=counts,
-        x="combined_diagnosis",
-        y="count",
-        ax=ax,
-        palette="rocket",
+    fig, ax = plot_bar(
+        counts.set_index("combined_diagnosis")["count"],
+        sort=True,
+        ascending=False,
+        cmap="rocket",
+        title="Combined Diagnosis Counts",
+        ylabel="Rows",
+        figsize=(11, 5),
     )
-    ax.set_title("Combined Diagnosis Counts")
-    ax.set_xlabel("")
-    ax.set_ylabel("Rows")
     ax.tick_params(axis="x", rotation=35)
-    sns.despine()
+    sns.despine(ax=ax)
     utils.save_fig(fig, out_path, dpi=300)
 
 
@@ -172,11 +172,18 @@ def plot_sex_age_heatmap(df: pd.DataFrame, out_path: Path) -> None:
     if matrix.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(8, 4.5))
-    sns.heatmap(matrix, annot=True, fmt="d", cmap="Blues", cbar=False, ax=ax)
-    ax.set_title("Sex by Age Group")
-    ax.set_xlabel("Age Group")
-    ax.set_ylabel("Sex")
+    fig, ax = plot_heatmap(
+        matrix.astype(int),
+        cmap="Blues",
+        annotate=True,
+        annotation_format=".0f",
+        colorbar=False,
+        title="Sex by Age Group",
+        xlabel="Age Group",
+        ylabel="Sex",
+        xtick_rotation=0,
+        figsize=(8, 4.5),
+    )
     utils.save_fig(fig, out_path, dpi=300)
 
 
@@ -185,21 +192,18 @@ def plot_age_by_diagnosis(df: pd.DataFrame, out_path: Path) -> None:
     if plot_df.empty:
         return
     order = plot_df["combined_diagnosis"].value_counts().index.tolist()
+    groups = [plot_df.loc[plot_df["combined_diagnosis"] == label, "age"] for label in order]
 
-    fig, ax = plt.subplots(figsize=(11, 5.5))
-    sns.boxplot(
-        data=plot_df,
-        x="combined_diagnosis",
-        y="age",
-        order=order,
-        ax=ax,
-        palette="Set2",
+    fig, ax = plot_distribution_groups(
+        groups,
+        order,
+        kind="box",
+        title="Age by Combined Diagnosis",
+        ylabel="Age (Years)",
+        xtick_rotation=35,
+        figsize=(11, 5.5),
     )
-    ax.set_title("Age by Combined Diagnosis")
-    ax.set_xlabel("")
-    ax.set_ylabel("Age (Years)")
-    ax.tick_params(axis="x", rotation=35)
-    sns.despine()
+    sns.despine(ax=ax)
     utils.save_fig(fig, out_path, dpi=300)
 
 
@@ -214,19 +218,16 @@ def plot_psychostimulant_category_counts(df: pd.DataFrame, out_path: Path) -> No
     if counts["count"].sum() == 0:
         return
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    sns.barplot(
-        data=counts,
-        x="psychostimulant_category",
-        y="count",
-        ax=ax,
-        palette="mako",
+    fig, ax = plot_bar(
+        counts.set_index("psychostimulant_category")["count"],
+        sort=False,
+        cmap="mako",
+        title="Psychostimulant Categories",
+        ylabel="Rows",
+        figsize=(10, 5),
     )
-    ax.set_title("Psychostimulant Categories")
-    ax.set_xlabel("")
-    ax.set_ylabel("Rows")
     ax.tick_params(axis="x", rotation=35)
-    sns.despine()
+    sns.despine(ax=ax)
     utils.save_fig(fig, out_path, dpi=300)
 
 
@@ -244,13 +245,17 @@ def plot_asm_exposure_counts(df: pd.DataFrame, out_path: Path) -> None:
     if counts.empty:
         return
 
-    fig, ax = plt.subplots(figsize=(10, 5))
-    sns.barplot(data=counts, x="asm_name", y="count", ax=ax, palette="flare")
-    ax.set_title("ASM Exposure Counts")
-    ax.set_xlabel("")
-    ax.set_ylabel("Rows")
+    fig, ax = plot_bar(
+        counts.set_index("asm_name")["count"],
+        sort=True,
+        ascending=False,
+        cmap="flare",
+        title="ASM Exposure Counts",
+        ylabel="Rows",
+        figsize=(10, 5),
+    )
     ax.tick_params(axis="x", rotation=35)
-    sns.despine()
+    sns.despine(ax=ax)
     utils.save_fig(fig, out_path, dpi=300)
 
 
@@ -258,13 +263,20 @@ def plot_medication_overlap(df: pd.DataFrame, out_path: Path) -> None:
     matrix = pd.crosstab(df["asm"], df["psychostimulant"])
     matrix = matrix.reindex(index=[0, 1], columns=[0, 1], fill_value=0)
 
-    fig, ax = plt.subplots(figsize=(5.5, 4.5))
-    sns.heatmap(matrix, annot=True, fmt="d", cmap="PuBu", cbar=False, ax=ax)
-    ax.set_title("Psychostimulant vs ASM Exposure")
-    ax.set_xlabel("Psychostimulant")
-    ax.set_ylabel("ASM")
-    ax.set_xticklabels(["0", "1"])
-    ax.set_yticklabels(["0", "1"], rotation=0)
+    fig, ax = plot_heatmap(
+        matrix.astype(int),
+        x_labels=["0", "1"],
+        y_labels=["0", "1"],
+        cmap="PuBu",
+        annotate=True,
+        annotation_format=".0f",
+        colorbar=False,
+        title="Psychostimulant vs ASM Exposure",
+        xlabel="Psychostimulant",
+        ylabel="ASM",
+        xtick_rotation=0,
+        figsize=(5.5, 4.5),
+    )
     utils.save_fig(fig, out_path, dpi=300)
 
 

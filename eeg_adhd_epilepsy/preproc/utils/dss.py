@@ -18,7 +18,7 @@ from mne_denoise.dss import (
 )
 
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
-from . import thresholds
+from . import thresholds  # within utils package
 
 
 LOGGER = logging.getLogger(__name__)

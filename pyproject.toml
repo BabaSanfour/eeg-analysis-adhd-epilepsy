@@ -5,14 +5,14 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "eeg-analysis-adhd-epilepsy"
 version = "0.1.0"
-description = "EEG analysis, ML/DL pipelines, and visualization for ADHD/Epilepsy psychostimulant study."
+description = "EEG preprocessing, descriptor extraction, dimensionality reduction, and visualization for ADHD/Epilepsy psychostimulant study."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
   { name = "Hamza Abdelhedi" }
 ]
-keywords = ["EEG", "ADHD", "Epilepsy", "psychostimulant", "machine-learning", "deep-learning"]
+keywords = ["EEG", "ADHD", "Epilepsy", "psychostimulant"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: OS Independent",
@@ -40,12 +40,11 @@ Homepage = "https://github.com/"
 
 [project.scripts]
 eeg-dim-reduce = "eeg_adhd_epilepsy.analysis.dimensionality_reduction:main"
-eeg-ml-run = "eeg_adhd_epilepsy.ml.run_ml_pipe:main"
 eeg-save-epochs = "eeg_adhd_epilepsy.preproc.epochs:main"
 eeg-descriptors = "eeg_adhd_epilepsy.analysis.extract_descriptors:main"
 eeg-merge-descriptors = "eeg_adhd_epilepsy.analysis.merge_descriptors:main"
-eeg-build-patients-metadata = "eeg_adhd_epilepsy.qc.metadata:main"
-eeg-cohort-report = "eeg_adhd_epilepsy.qc.cohort_report:main"
+eeg-build-patients-metadata = "eeg_adhd_epilepsy.io.patients:main"
+eeg-cohort-report = "eeg_adhd_epilepsy.analysis.cohort:main"
 
 [tool.setuptools]
 packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy*"], exclude = ["tests*"] } }

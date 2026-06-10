@@ -12,6 +12,7 @@ import numpy as np
 import mne
 import plotly.graph_objects as go
 
+from coco_pipe.viz import plot_topomap as coco_plot_topomap
 from eeg_adhd_epilepsy.viz.utils import save_fig
 
 LOGGER = logging.getLogger(__name__)
@@ -58,17 +59,27 @@ def plot_topomap_from_channel_values(
         info.set_montage(montage, on_missing="raise")
     except Exception:
         return None
-        
-    fig, ax = plt.subplots(figsize=(4.0, 3.2))
-    
-    # 1. Plot the topomap
+
+    # Delegate the actual topomap rendering to coco_pipe's generic helper,
+    # which handles MNE info-based layouts, symmetric color limits, and the
+    # colorbar/title styling.
     try:
-        im, _ = mne.viz.plot_topomap(kept_values, info, axes=ax, show=False, cmap=cmap)
+        fig, ax = coco_plot_topomap(
+            values=kept_values,
+            index=kept_names,
+            info=info,
+            cmap=cmap,
+            symmetric=False,
+            title=title,
+            cbar=True,
+            cbar_label=unit,
+            figsize=(4.0, 3.2),
+        )
     except Exception:
-        plt.close(fig)
         return None
-    
-    # 2. Mark Bad Channels with X (if provided)
+
+    # Mark bad channels with an 'X', as the generic helper has no concept of
+    # this project's "bad channel" annotation.
     if bad_channels:
         picks = mne.pick_types(info, eeg=True, exclude=[])
         pos = mne.channels.layout._find_topomap_coords(info, picks)
@@ -76,13 +87,6 @@ def plot_topomap_from_channel_values(
             if ch in bad_channels:
                 ax.plot(pos[i, 0], pos[i, 1], "kx", markersize=8, markeredgewidth=1.5)
 
-    # 3. Add Colorbar
-    cbar = plt.colorbar(im, ax=ax, shrink=0.75)
-    if unit:
-        cbar.set_label(unit)
-        
-    ax.set_title(title)
-    plt.tight_layout()
     return fig
 
 

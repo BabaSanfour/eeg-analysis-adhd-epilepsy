@@ -12,6 +12,7 @@ import numpy as np
 from tqdm import tqdm
 
 from eeg_adhd_epilepsy.io import bids as bids_io
+from eeg_adhd_epilepsy.utils.logs import setup_logging
 
 logger = logging.getLogger(__name__)
 
@@ -118,10 +119,11 @@ def main() -> None:
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing epoch files")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
     bids_root = Path(args.bids_root)
     preproc_root = bids_io.get_preproc_root(bids_root)
+    log_file = bids_io.get_reports_root(bids_root) / "logs" / "epochs.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    setup_logging(log_file, "INFO")
 
     logger.info(f"Discovering preprocessed files in {preproc_root}")
     found_files = list(preproc_root.rglob(f"*desc-{args.desc}_eeg.fif"))

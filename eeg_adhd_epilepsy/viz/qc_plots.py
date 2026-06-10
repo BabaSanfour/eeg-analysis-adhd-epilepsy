@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from coco_pipe.viz import plot_histogram
 from eeg_adhd_epilepsy.viz.utils import save_fig
 
 
@@ -50,10 +51,14 @@ def plot_segment_metric_distribution_by_type(
         if series.empty:
             ax.axis("off")
             continue
-        ax.hist(series, bins=20, edgecolor="black", alpha=0.8, color=palette.get(seg_type, "#4C72B0"))
-        ax.set_title(seg_type)
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel("Count")
+        plot_histogram(
+            series,
+            bins=20,
+            color=palette.get(seg_type, "#4C72B0"),
+            title=seg_type,
+            xlabel=xlabel,
+            ax=ax,
+        )
         ax.grid(True, alpha=0.3)
         
     for extra_ax in axes_arr[len(segment_types):]:

@@ -1,10 +1,10 @@
-"""In-memory raw QC builders for the pre-base stage."""
+"""Raw signal QC builders for the pre-base stage."""
 
 from __future__ import annotations
 
-from collections import Counter, defaultdict
+from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Iterable, Mapping, Sequence
+from typing import Dict, Mapping, Sequence
 
 import mne
 import numpy as np
@@ -17,27 +17,21 @@ import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
 import eeg_adhd_epilepsy.reports.raw_qc as report_raw_qc
 import eeg_adhd_epilepsy.viz.raw_qc as viz_raw_qc
 from eeg_adhd_epilepsy.utils.events import crop_raw_to_recording_start
-
-
-TOPOMAP_METRIC_KEYS = ("amplitude_ptp_uv", "line_noise_ratio", "hf_lf_ratio")
-WEIGHTED_METRICS = (
-    "amplitude_mean_uv",
-    "pct_bad_channels",
-    "line_noise_ratio",
-    "hf_lf_ratio",
-    "alpha_peak_hz",
-    "aperiodic_slope",
-    "coverage_pct",
-)
-MAX_METRICS = (
-    "amplitude_max_uv",
-    "n_flat_channels",
-    "n_noisy_channels",
+from eeg_adhd_epilepsy.qc.utils import (
+    DEFAULT_SIGNAL_THRESHOLDS,
+    MAX_METRICS,
+    TOPOMAP_METRIC_KEYS,
+    SignalQCThresholds,
+    _BASE_WEIGHTED_METRICS,
+    _build_channel_diagnostics,
+    _build_topomap_aggregates,
+    _clean_scalar,
+    _combine_weighted_topomaps,
+    evaluate_signal_qc_flag,
 )
 
 
-def _clean_scalar(value: object) -> object:
-    return None if pd.isna(value) else value
+WEIGHTED_METRICS = (*_BASE_WEIGHTED_METRICS, "coverage_pct")
 
 
 def _prepare_analysis_raw(
@@ -76,99 +70,6 @@ def _build_run_metric_row(
         "aperiodic_slope": metrics.get("aperiodic_slope"),
     }
 
-
-def _evaluate_raw_qc_flag(metrics_row: Mapping[str, object]) -> tuple[str, list[str]]:
-    reasons: list[str] = []
-    n_bad = float(metrics_row.get("n_flat_channels", 0) or 0) + float(metrics_row.get("n_noisy_channels", 0) or 0)
-    if n_bad >= 7:
-        reasons.append("too_many_bad_channels")
-    elif n_bad >= 4:
-        reasons.append("many_bad_channels")
-    amp_max = pd.to_numeric(metrics_row.get("amplitude_max_uv"), errors="coerce")
-    if np.isfinite(amp_max) and float(amp_max) > 800.0:
-        reasons.append("amplitude_above_threshold")
-    line_noise = pd.to_numeric(metrics_row.get("line_noise_ratio"), errors="coerce")
-    if np.isfinite(line_noise) and float(line_noise) > 5.0:
-        reasons.append("line_noise_residual")
-    hf_lf_ratio = pd.to_numeric(metrics_row.get("hf_lf_ratio"), errors="coerce")
-    if np.isfinite(hf_lf_ratio) and float(hf_lf_ratio) > 0.5:
-        reasons.append("high_hf_ratio")
-
-    if "too_many_bad_channels" in reasons or "amplitude_above_threshold" in reasons:
-        return "unusable", reasons
-    if reasons:
-        return "borderline", reasons
-    return "usable", []
-
-
-def _build_topomap_aggregates(
-    metrics: Mapping[str, object],
-    *,
-    channel_names: Sequence[str],
-    weight: float,
-) -> Dict[str, tuple[list[str], np.ndarray, float]]:
-    per_channel_metrics = metrics.get("per_channel_metrics") or {}
-    topomaps: Dict[str, tuple[list[str], np.ndarray, float]] = {}
-    for metric_key in TOPOMAP_METRIC_KEYS:
-        values = per_channel_metrics.get(metric_key)
-        arr = np.asarray(values, dtype=float) if values is not None else np.array([])
-        if arr.size == 0 or len(channel_names) != arr.size:
-            continue
-        topomaps[metric_key] = (list(channel_names), arr, float(weight))
-    return topomaps
-
-
-def _combine_weighted_topomaps(
-    mappings: Iterable[Mapping[str, tuple[Sequence[str], np.ndarray, float]]],
-) -> Dict[str, tuple[list[str], np.ndarray]]:
-    combined: dict[str, dict[str, tuple[float, float]]] = defaultdict(dict)
-    for mapping in mappings:
-        for metric, (channels, values, weight) in mapping.items():
-            arr = np.asarray(values, dtype=float)
-            if arr.size == 0 or len(channels) != arr.size or weight <= 0:
-                continue
-            metric_store = combined.setdefault(metric, {})
-            for channel, value in zip(channels, arr):
-                if not np.isfinite(value):
-                    continue
-                total, total_weight = metric_store.get(channel, (0.0, 0.0))
-                metric_store[channel] = (total + float(value) * float(weight), total_weight + float(weight))
-
-    output: Dict[str, tuple[list[str], np.ndarray]] = {}
-    for metric, channel_store in combined.items():
-        channels = sorted(channel_store)
-        if not channels:
-            continue
-        values = []
-        for channel in channels:
-            total, total_weight = channel_store[channel]
-            values.append(total / total_weight if total_weight > 0 else np.nan)
-        output[metric] = (channels, np.asarray(values, dtype=float))
-    return output
-
-
-def _build_channel_diagnostics(
-    metrics: Mapping[str, object],
-    *,
-    channel_names: Sequence[str],
-) -> dict[str, object]:
-    per_channel_metrics = metrics.get("per_channel_metrics") or {}
-    amplitude = np.asarray(per_channel_metrics.get("amplitude_ptp_uv", np.array([])), dtype=float)
-    line_noise = np.asarray(per_channel_metrics.get("line_noise_ratio", np.array([])), dtype=float)
-    top_amplitude = []
-    top_line_noise = []
-    if amplitude.size == len(channel_names):
-        amp_pairs = sorted(zip(channel_names, amplitude), key=lambda item: item[1], reverse=True)
-        top_amplitude = [(channel, float(value)) for channel, value in amp_pairs[:5] if np.isfinite(value)]
-    if line_noise.size == len(channel_names):
-        line_pairs = sorted(zip(channel_names, line_noise), key=lambda item: item[1], reverse=True)
-        top_line_noise = [(channel, float(value)) for channel, value in line_pairs[:5] if np.isfinite(value)]
-    return {
-        "flat_channels": list(metrics.get("flat_channels", [])),
-        "noisy_channels": list(metrics.get("noisy_channels", [])),
-        "top_amplitude_channels": top_amplitude,
-        "top_line_noise_channels": top_line_noise,
-    }
 
 
 def _build_segment_qc_rows(
@@ -266,6 +167,7 @@ def build_raw_qc_run_record(
     line_freq: float = 60.0,
     highpass: float = 0.5,
     min_segment_duration: float = 5.0,
+    thresholds: SignalQCThresholds | None = None,
 ) -> dict[str, object]:
     metadata = metadata or {}
     filepath = str(bids_path.fpath)
@@ -296,7 +198,7 @@ def build_raw_qc_run_record(
         run_metrics.update(
             _build_run_metric_row(computed_metrics)
         )
-        subject_flag, reasons = _evaluate_raw_qc_flag(run_metrics)
+        subject_flag, reasons = evaluate_signal_qc_flag(run_metrics, thresholds)
         run_metrics["subject_flag"] = subject_flag
         run_metrics["subject_flag_reasons"] = ";".join(reasons)
         file_topomaps = _build_topomap_aggregates(
@@ -359,6 +261,8 @@ def build_raw_qc_run_record(
         "channel_diagnostics": channel_diagnostics,
         **run_metrics,
     }
+    from eeg_adhd_epilepsy.qc.utils import compute_qc_score
+    record["qc_score"] = compute_qc_score(run_metrics, thresholds=thresholds)
     record["summary_row"] = _build_run_summary_row(record)
     return record
 
@@ -372,6 +276,7 @@ def collect_existing_raw_qc_record(
     line_freq: float = 60.0,
     highpass: float = 0.5,
     min_segment_duration: float = 5.0,
+    thresholds: SignalQCThresholds | None = None,
 ) -> dict[str, object]:
     raw = bids_io.load_bids_raw(filepath=bids_path.fpath, bids_root=bids_root)
     condition_segments_df = bids_io.load_segments_for_raw(raw)
@@ -386,6 +291,7 @@ def collect_existing_raw_qc_record(
         line_freq=line_freq,
         highpass=highpass,
         min_segment_duration=min_segment_duration,
+        thresholds=thresholds,
     )
 
 

@@ -35,7 +35,6 @@ _default_data_dir = os.path.abspath(
 data_dir = _get_env_path("EEG_DATA_DIR", _default_data_dir)
 
 # Subdirectories with sensible defaults that can also be overridden
-embeddings_dir = _get_env_path("EEG_EMBEDDINGS_DIR", os.path.join(data_dir, "embeddings"))
 results_dir = _get_env_path("EEG_RESULTS_DIR", os.path.join(data_dir, "results"))
 csv_dir = _get_env_path("EEG_CSV_DIR", os.path.join(data_dir, "csv"))
 bids_dir = _get_env_path("EEG_BIDS_DIR", os.path.join(data_dir, "BIDS"))

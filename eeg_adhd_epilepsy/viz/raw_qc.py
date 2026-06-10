@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from coco_pipe.viz import plot_bar, plot_histogram
 from eeg_adhd_epilepsy.viz import topo, utils, qc_plots
 
 matplotlib.use("Agg")
@@ -69,14 +70,17 @@ def _plot_histogram(
     clean = pd.to_numeric(values, errors="coerce").dropna()
     if clean.empty:
         return None
-    fig, ax = plt.subplots(figsize=(7, 4))
     bins = min(20, max(5, int(np.sqrt(len(clean)))))
-    ax.hist(clean, bins=bins, color="#4C72B0", edgecolor="white", linewidth=0.8)
-    ax.set_title(title)
-    ax.set_xlabel(xlabel)
-    ax.set_ylabel("Runs")
+    fig, ax = plot_histogram(
+        clean,
+        bins=bins,
+        color="#4C72B0",
+        title=title,
+        xlabel=xlabel,
+        ylabel="Runs",
+        figsize=(7, 4),
+    )
     ax.grid(True, axis="y", alpha=0.2)
-    plt.tight_layout()
     return utils.save_fig(fig, out_path)
 
 
@@ -88,16 +92,16 @@ def _plot_flag_status_distribution(runs_df: pd.DataFrame, output_dir: Path) -> P
         return None
     order = [status for status in ("usable", "borderline", "unusable", "unknown") if status in counts.index]
     counts = counts.reindex(order)
-    fig, ax = plt.subplots(figsize=(6, 4))
-    positions = np.arange(len(counts))
     colors = ["#55A868", "#DD8452", "#C44E52", "#8172B2"][: len(counts)]
-    ax.bar(positions, counts.values, color=colors, edgecolor="white", linewidth=0.8)
-    ax.set_xticks(positions)
-    ax.set_xticklabels(counts.index)
-    ax.set_title("Run QC Status Distribution")
-    ax.set_ylabel("Runs")
+    fig, ax = plot_bar(
+        counts,
+        sort=False,
+        color=colors,
+        title="Run QC Status Distribution",
+        ylabel="Runs",
+        figsize=(6, 4),
+    )
     ax.grid(True, axis="y", alpha=0.2)
-    plt.tight_layout()
     return utils.save_fig(fig, output_dir / FIGURE_FILENAMES["flag_status"])
 
 
@@ -112,16 +116,17 @@ def _plot_flag_reason_counts(runs_df: pd.DataFrame, output_dir: Path) -> Path | 
                 counts[reason] = counts.get(reason, 0) + 1
     if not counts:
         return None
-    ordered = pd.Series(counts).sort_values(ascending=True)
-    positions = np.arange(len(ordered))
-    fig, ax = plt.subplots(figsize=(8, max(3, len(ordered) * 0.4)))
-    ax.barh(positions, ordered.values, color="#C44E52")
-    ax.set_yticks(positions)
-    ax.set_yticklabels(ordered.index)
-    ax.set_title("QC Flag Reasons")
-    ax.set_xlabel("Runs")
+    ordered = pd.Series(counts)
+    fig, ax = plot_bar(
+        ordered,
+        ascending=True,
+        orientation="horizontal",
+        color="#C44E52",
+        title="QC Flag Reasons",
+        xlabel="Runs",
+        figsize=(8, max(3, len(ordered) * 0.4)),
+    )
     ax.grid(True, axis="x", alpha=0.2)
-    plt.tight_layout()
     return utils.save_fig(fig, output_dir / FIGURE_FILENAMES["flag_reasons"])
 
 

@@ -24,19 +24,14 @@ from tqdm import tqdm
 
 from eeg_adhd_epilepsy.io import ingest
 from eeg_adhd_epilepsy.io import bids as bids_io
-import eeg_adhd_epilepsy.qc.raw_metrics as qc_raw
+import eeg_adhd_epilepsy.qc.raw_qc as qc_raw
 import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
 from eeg_adhd_epilepsy.utils import config
 import eeg_adhd_epilepsy.utils.events as utils_events
 from eeg_adhd_epilepsy.utils.formatting import format_clock_time, format_duration_hms
-from eeg_adhd_epilepsy.utils.logs import tqdm_joblib
+from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 import eeg_adhd_epilepsy.viz.eeg_report as viz_eeg
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
 LOGGER = logging.getLogger(__name__)
 SEGMENT_COLUMNS = list(config.SEGMENT_COLUMNS)
 
@@ -922,6 +917,10 @@ def main() -> None:
     reports_root = args.reports_root if args.reports_root else bids_io.get_reports_root(Path(args.bids_root))
     eeg_reports_dir = reports_root if args.with_eeg_reports else None
     raw_qc_reports_dir = reports_root if args.with_raw_qc else None
+
+    log_file = reports_root / "logs" / "to_bids.log"
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+    setup_logging(log_file, "INFO")
 
     metadata_df = pd.read_csv(args.metadata_csv)
     metadata_df["study_id"] = pd.to_numeric(metadata_df["study_id"], errors="coerce").astype("Int64")

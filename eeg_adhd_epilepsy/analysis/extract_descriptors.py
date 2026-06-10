@@ -34,10 +34,9 @@ import mne
 import numpy as np
 import pandas as pd
 import yaml
-from scipy.stats import median_abs_deviation
-
 from coco_pipe.descriptors import DescriptorConfig, DescriptorPipeline
 from coco_pipe.io import DataContainer
+from coco_pipe.io.quality import compute_row_outlier_scores
 from eeg_adhd_epilepsy.io.bids import (
     get_reports_root,
     get_subject_session_stage_report_path,
@@ -46,6 +45,7 @@ from eeg_adhd_epilepsy.io.bids import (
     parse_bids_components,
     validate_bids_coverage,
 )
+from eeg_adhd_epilepsy.io.descriptor_layout import required_descriptor_files
 from eeg_adhd_epilepsy.io.table import load, save
 from eeg_adhd_epilepsy.qc.descriptor_qc import run_descriptor_subject_qc
 from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS
@@ -64,21 +64,10 @@ def _shard_complete(
     condition: str,
 ) -> bool:
     required_paths = [
-        shard_root / "_SUCCESS",
-        shard_root / "sensor_descriptor_bundle.npz",
-        shard_root / "sensor_epoch_features.csv",
-        shard_root / "sensor_epoch_features.parquet",
-        shard_root / "sensor_epoch_features_feature_columns.json",
-        shard_root / "sensor_subject_features.csv",
-        shard_root / "sensor_subject_features.parquet",
-        shard_root / "sensor_subject_features_feature_columns.json",
-        shard_root / "failures.csv",
-        shard_root / "qc" / "summary_row.csv",
-        shard_root / "qc" / "summary_metrics.csv",
-        shard_root / "qc" / "flags.csv",
-        shard_root / "qc" / "failure_summary.csv",
-        shard_root / "qc" / "feature_missingness.csv",
-        shard_root / "qc" / "family_summary.csv",
+        shard_root / relative_path
+        for relative_path in required_descriptor_files(include_pooled, include_qc=True)
+    ]
+    required_paths.append(
         get_subject_session_stage_report_path(
             reports_root=reports_root,
             subject_id=subject,
@@ -86,19 +75,8 @@ def _shard_complete(
             stage="descriptor_qc",
             report_stem=f"sub-{subject}_ses-{session}_{condition}",
             create_dir=False,
-        ),
-    ]
-    if include_pooled:
-        required_paths.extend(
-            [
-                shard_root / "pooled_epoch_features.csv",
-                shard_root / "pooled_epoch_features.parquet",
-                shard_root / "pooled_epoch_features_feature_columns.json",
-                shard_root / "pooled_subject_features.csv",
-                shard_root / "pooled_subject_features.parquet",
-                shard_root / "pooled_subject_features_feature_columns.json",
-            ]
         )
+    )
     return all(path.exists() for path in required_paths)
 
 
@@ -222,31 +200,30 @@ def _apply_mad_rejection(
     fraction_thresh: float = 0.05,
     min_epochs: int = 5,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
-    """Identify and drop epochs where a fraction of features exceed MAD thresholds."""
+    """Drop epochs where too large a fraction of features are MAD outliers.
+
+    Delegates the per-row outlier scoring to
+    :func:`coco_pipe.io.quality.compute_row_outlier_scores`, which uses the
+    same 1.4826-scaled MAD robust z-score.  An epoch is dropped when its
+    outlier feature fraction exceeds ``fraction_thresh``.  A
+    ``RuntimeError`` is raised if fewer than ``min_epochs`` would survive.
+    """
     X = sensor_result["X"]
     if X.shape[0] == 0:
         return sensor_result, metadata_df
-        
-    # Calculate Median and MAD across all epochs
-    medians = np.nanmedian(X, axis=0)
-    mads = median_abs_deviation(X, axis=0, nan_policy="omit", scale="normal")
-    
-    # Avoid div by zero for completely flat features
-    mads_safe = np.where(mads == 0, 1e-6, mads)
-    
-    # Calculate robust Z-score
-    robust_z = np.abs(X - medians) / mads_safe
-    
-    # Find epochs where > fraction_thresh of features exceed the threshold
-    exceeds_thresh = robust_z > mad_threshold
-    fraction_exceeding = np.mean(exceeds_thresh, axis=1)
-    bad_epochs_mask = fraction_exceeding > fraction_thresh
-    
-    bad_count = np.sum(bad_epochs_mask)
+
+    feature_names = [str(i) for i in range(X.shape[1])]
+    scores = compute_row_outlier_scores(
+        pd.DataFrame(X, columns=feature_names),
+        feature_names,
+        z_threshold=mad_threshold,
+    )
+    bad_epochs_mask = scores["outlier_fraction"].to_numpy() > fraction_thresh
+
+    bad_count = int(bad_epochs_mask.sum())
     if bad_count > 0:
-        bad_indices = np.where(bad_epochs_mask)[0]
         obs_ids = metadata_df["obs_id"].to_numpy()
-        for idx in bad_indices:
+        for idx in np.where(bad_epochs_mask)[0]:
             sensor_result.setdefault("failures", []).append({
                 "obs_id": obs_ids[idx],
                 "obs_index": int(idx),
@@ -254,32 +231,27 @@ def _apply_mad_rejection(
                 "channel_name": "ALL",
                 "family": "MAD_Rejection",
                 "exception_type": "MADOutlierError",
-                "message": f"Epoch dropped: > {fraction_thresh*100:.1f}% of features exceeded {mad_threshold} MADs.",
+                "message": (
+                    f"Epoch dropped: > {fraction_thresh * 100:.1f}% of features "
+                    f"exceeded {mad_threshold} MADs."
+                ),
             })
-            
         LOGGER.info(
-            "MAD Rejection: Dropped %d / %d epochs for %s / %s because > %.1f%% of features exceeded MAD=%.1f",
-            bad_count,
-            X.shape[0],
-            condition,
-            subject,
-            fraction_thresh * 100,
-            mad_threshold
+            "MAD Rejection: dropped %d / %d epochs for %s / %s "
+            "(> %.1f%% of features exceeded MAD=%.1f)",
+            bad_count, X.shape[0], condition, subject,
+            fraction_thresh * 100, mad_threshold,
         )
-        
+
     keep_mask = ~bad_epochs_mask
-    remaining_count = np.sum(keep_mask)
-    
+    remaining_count = int(keep_mask.sum())
     if remaining_count < min_epochs:
         raise RuntimeError(
-            f"Only {remaining_count} epochs remain after MAD rejection (requires at least {min_epochs})."
+            f"Only {remaining_count} epoch(s) remain after MAD rejection "
+            f"(minimum required: {min_epochs})."
         )
-        
-    # Filter X and metadata
+
     sensor_result["X"] = X[keep_mask]
-    
-    # Filter failures if they are associated with dropped rows
-    # (Usually failures are already handled, but we ensure we don't break alignment)
     return sensor_result, metadata_df[keep_mask].reset_index(drop=True)
 
 

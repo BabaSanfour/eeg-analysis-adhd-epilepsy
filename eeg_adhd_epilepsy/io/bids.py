@@ -535,19 +535,6 @@ def load_bids_raw(
     if not processing:
         processing = comps.get("processing") or comps.get("proc")
     
-    # If parse_bids_components is limited, we might need a quick check for run/acq etc.
-    if not run and "run" not in comps:
-        match = re.search(r"run-([A-Za-z0-9]+)", filepath.name)
-        if match: run = match.group(1)
-    
-    if not acquisition and "acq" not in comps:
-        match = re.search(r"acq-([A-Za-z0-9]+)", filepath.name)
-        if match: acquisition = match.group(1)
-        
-    if not processing and "proc" not in comps:
-        match = re.search(r"proc-([A-Za-z0-9]+)", filepath.name)
-        if match: processing = match.group(1)
-        
     subject_clean = parse_subject_id(filepath).replace("sub-", "")
     
     bids_path = BIDSPath(
@@ -566,6 +553,68 @@ def load_bids_raw(
     if preload:
         raw.load_data()
     return raw
+
+
+def load_stage_artifacts(
+    subject_id: str,
+    preproc_root: Path,
+    desc: str,
+    task: Optional[str] = None,
+) -> Tuple[Optional[mne.io.BaseRaw], Dict[str, Any], List[str]]:
+    """Load a preprocessed stage FIF and its provenance JSON for one subject.
+
+    This is the read-side complement to the per-stage save logic in
+    ``run_base_record`` / ``run_correction_pipeline`` / ``run_denoising_pipeline``.
+
+    Parameters
+    ----------
+    subject_id:
+        Normalised subject ID (e.g. ``"sub-0001"``).
+    preproc_root:
+        Root directory that holds per-subject stage outputs.
+    desc:
+        BIDS ``desc-`` entity identifying the stage (e.g. ``"base"``,
+        ``"correct"``, ``"denoise"``).
+    task:
+        Optional BIDS ``task-`` entity to disambiguate when a subject has
+        multiple task-specific outputs.
+
+    Returns
+    -------
+    Tuple of ``(raw_obj, provenance_dict, issues_list)``.
+    ``raw_obj`` is ``None`` and ``issues_list`` is non-empty when loading fails.
+    """
+    import json as _json
+
+    issues: List[str] = []
+    out_path = get_stage_output_path(
+        subject_id=subject_id, preproc_root=preproc_root, desc=desc, task=task
+    )
+    prov_path = get_stage_provenance_path(
+        subject_id=subject_id, preproc_root=preproc_root, desc=desc, task=task
+    )
+
+    raw_obj: Optional[mne.io.BaseRaw] = None
+    prov: Dict[str, Any] = {}
+
+    if not out_path.exists():
+        issues.append(f"missing_raw:{out_path}")
+    else:
+        try:
+            raw_obj = mne.io.read_raw_fif(out_path, preload=True, verbose="ERROR")
+        except Exception as exc:
+            issues.append(f"bad_raw:{out_path}:{exc}")
+
+    if not prov_path.exists():
+        issues.append(f"missing_provenance:{prov_path}")
+    else:
+        try:
+            with open(prov_path, "r", encoding="utf-8") as fh:
+                prov = _json.load(fh)
+        except Exception as exc:
+            issues.append(f"bad_provenance:{prov_path}:{exc}")
+
+    return raw_obj, prov, issues
 
 
 def validate_bids_coverage(

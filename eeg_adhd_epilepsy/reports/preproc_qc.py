@@ -3,37 +3,25 @@
 from __future__ import annotations
 
 import math
+from functools import partial
 from pathlib import Path
 from typing import Mapping, Sequence
 
 import pandas as pd
-from coco_pipe.report.core import ImageElement, Report, Section, TableElement
+from coco_pipe.report.core import ImageElement, Report, Section
 
+from eeg_adhd_epilepsy.reports._common import (
+    add_optional_table as _add_optional_table,
+    build_dataset_mean_metric_table,
+    build_flag_reason_table as _build_flag_reason_table,
+    build_record_metric_table,
+    format_value as _format_value,
+)
+from eeg_adhd_epilepsy.reports._common import add_images as _add_images_base
 from eeg_adhd_epilepsy.utils.formatting import format_duration_hms
 
-
-def _format_value(value: object, digits: int = 2, suffix: str = "") -> str:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return ""
-    if not math.isfinite(numeric):
-        return ""
-    return f"{numeric:.{digits}f}{suffix}"
-
-
-def _add_images(section: Section, figures: Mapping[str, Path], ordered_keys: Sequence[str]) -> None:
-    seen_paths = set()
-    for key in ordered_keys:
-        path = figures.get(key)
-        if path and path.exists() and path not in seen_paths:
-            seen_paths.add(path)
-            section.add_element(ImageElement(str(path)))
-
-
-def _add_optional_table(section: Section, data: pd.DataFrame, title: str) -> None:
-    if data is not None and not data.empty:
-        section.add_element(TableElement(data, title=title))
+# preproc_qc figures are not individually captioned (unlike raw_qc/eeg_report).
+_add_images = partial(_add_images_base, caption_from_key=False)
 
 
 def build_stage_overview_table(record: Mapping[str, object], *, stage_display_name: str, previous_stage_label: str) -> pd.DataFrame:
@@ -122,7 +110,7 @@ def build_condition_comparison_table(segment_comparison: pd.DataFrame) -> pd.Dat
 
 
 def build_delta_table(record: Mapping[str, object], *, suffix: str, reference_label: str) -> pd.DataFrame:
-    metrics = [
+    specs = (
         ("Mean amplitude", f"amplitude_mean_uv_delta_{suffix}", " uV"),
         ("Max amplitude", f"amplitude_max_uv_delta_{suffix}", " uV"),
         ("Bad channels", f"pct_bad_channels_delta_{suffix}", "%"),
@@ -130,18 +118,14 @@ def build_delta_table(record: Mapping[str, object], *, suffix: str, reference_la
         ("HF/LF ratio", f"hf_lf_ratio_delta_{suffix}", ""),
         ("Alpha peak", f"alpha_peak_hz_delta_{suffix}", " Hz"),
         ("Aperiodic slope", f"aperiodic_slope_delta_{suffix}", ""),
-    ]
-    rows = []
-    for label, key, suffix_text in metrics:
-        value = _format_value(record.get(key), suffix=suffix_text)
-        if value:
-            rows.append({"Metric": label, f"Delta vs {reference_label}": value})
-    return pd.DataFrame(rows)
+    )
+    return build_record_metric_table(
+        record, specs, value_col=f"Delta vs {reference_label}", skip_empty=True
+    )
 
 
 def build_retention_table(record: Mapping[str, object]) -> pd.DataFrame:
-    """Retention table — condition-segment level only.
-    """
+    """Retention table — condition-segment level only."""
     return pd.DataFrame(
         [
             {
@@ -167,20 +151,33 @@ def build_residual_metrics_table(
     noisy_names = ", ".join(
         str(ch) for ch in ((channel_diagnostics or {}).get("noisy_channels") or [])
     ) or "None"
-    return pd.DataFrame(
+    base = build_record_metric_table(
+        record,
+        (
+            ("Mean amplitude", "amplitude_mean_uv", " uV"),
+            ("Max amplitude", "amplitude_max_uv", " uV"),
+        ),
+    )
+    extra = pd.DataFrame(
         [
-            {"Metric": "Mean amplitude", "Value": _format_value(record.get("amplitude_mean_uv"), suffix=" uV")},
-            {"Metric": "Max amplitude", "Value": _format_value(record.get("amplitude_max_uv"), suffix=" uV")},
             {"Metric": "Flat channels", "Value": f"{int(record.get('n_flat_channels', 0) or 0)}  \u2192  {flat_names}"},
             {"Metric": "Noisy channels", "Value": f"{int(record.get('n_noisy_channels', 0) or 0)}  \u2192  {noisy_names}"},
-            {"Metric": "Bad channels (%)", "Value": _format_value(record.get("pct_bad_channels"), suffix="%")},
-            {"Metric": "Line-noise ratio", "Value": _format_value(record.get("line_noise_ratio"))},
-            {"Metric": "HF/LF ratio", "Value": _format_value(record.get("hf_lf_ratio"))},
-            {"Metric": "Alpha peak", "Value": _format_value(record.get("alpha_peak_hz"), suffix=" Hz")},
-            {"Metric": "Aperiodic slope", "Value": _format_value(record.get("aperiodic_slope"))},
-            {"Metric": "Flag reasons", "Value": record.get("qc_flag_reasons", "") or "None"},
         ]
     )
+    rest = build_record_metric_table(
+        record,
+        (
+            ("Bad channels (%)", "pct_bad_channels", "%"),
+            ("Line-noise ratio", "line_noise_ratio", ""),
+            ("HF/LF ratio", "hf_lf_ratio", ""),
+            ("Alpha peak", "alpha_peak_hz", " Hz"),
+            ("Aperiodic slope", "aperiodic_slope", ""),
+        ),
+    )
+    flag_reasons = pd.DataFrame(
+        [{"Metric": "Flag reasons", "Value": record.get("qc_flag_reasons", "") or "None"}]
+    )
+    return pd.concat([base, extra, rest, flag_reasons], ignore_index=True)
 
 
 def build_run_summary_table(records: Sequence[Mapping[str, object]]) -> pd.DataFrame:
@@ -221,8 +218,7 @@ def build_dataset_summary_table(
 
 
 def build_dataset_effect_table(runs_df: pd.DataFrame, *, suffix: str, reference_label: str) -> pd.DataFrame:
-    rows = []
-    for label, column, suffix_text in (
+    specs = (
         ("Mean amplitude", f"amplitude_mean_delta_{suffix}", " uV"),
         ("Max amplitude", f"amplitude_max_delta_{suffix}", " uV"),
         ("Bad channels", f"pct_bad_channels_delta_{suffix}", "%"),
@@ -230,10 +226,8 @@ def build_dataset_effect_table(runs_df: pd.DataFrame, *, suffix: str, reference_
         ("HF/LF ratio", f"hf_lf_ratio_delta_{suffix}", ""),
         ("Alpha peak", f"alpha_peak_hz_delta_{suffix}", " Hz"),
         ("Aperiodic slope", f"aperiodic_slope_delta_{suffix}", ""),
-    ):
-        series = pd.to_numeric(runs_df.get(column), errors="coerce")
-        rows.append({"Metric": label, f"Mean delta vs {reference_label}": _format_value(series.mean(), suffix=suffix_text)})
-    return pd.DataFrame(rows)
+    )
+    return build_dataset_mean_metric_table(runs_df, specs, value_col=f"Mean delta vs {reference_label}")
 
 
 def build_dataset_retention_table(runs_df: pd.DataFrame) -> pd.DataFrame:
@@ -250,8 +244,7 @@ def build_dataset_retention_table(runs_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_dataset_residual_metrics_table(runs_df: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for label, column, suffix in (
+    specs = (
         ("Mean amplitude", "amplitude_mean_uv", " uV"),
         ("Max amplitude", "amplitude_max_uv", " uV"),
         ("Bad channels", "pct_bad_channels", "%"),
@@ -259,21 +252,12 @@ def build_dataset_residual_metrics_table(runs_df: pd.DataFrame) -> pd.DataFrame:
         ("HF/LF ratio", "hf_lf_ratio", ""),
         ("Alpha peak", "alpha_peak_hz", " Hz"),
         ("Aperiodic slope", "aperiodic_slope", ""),
-    ):
-        series = pd.to_numeric(runs_df.get(column), errors="coerce")
-        rows.append({"Metric": label, "Mean": _format_value(series.mean(), suffix=suffix)})
-    return pd.DataFrame(rows)
+    )
+    return build_dataset_mean_metric_table(runs_df, specs, value_col="Mean")
 
 
 def build_flag_reason_table(runs_df: pd.DataFrame) -> pd.DataFrame:
-    counts: dict[str, int] = {}
-    for reasons in runs_df.get("qc_flag_reasons", pd.Series(dtype=str)).fillna(""):
-        for reason in str(reasons).split(";"):
-            reason = reason.strip()
-            if reason:
-                counts[reason] = counts.get(reason, 0) + 1
-    rows = [{"Reason": reason, "Records": count} for reason, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)]
-    return pd.DataFrame(rows)
+    return _build_flag_reason_table(runs_df, reasons_column="qc_flag_reasons", count_label="Records")
 
 
 def generate_subject_report(

@@ -57,7 +57,6 @@ def apply_ica_artifact(
         labels=labels,
         target_labels=target_labels,
         exclude_probability=exclude_probability,
-        adaptive=True
     )
     
     probas = [float(labels["y_pred_proba"][i]) for i in exclude_idx]

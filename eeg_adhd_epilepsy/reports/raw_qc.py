@@ -2,53 +2,20 @@
 
 from __future__ import annotations
 
-import math
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
-from coco_pipe.report.core import ImageElement, Report, Section, TableElement
+from coco_pipe.report.core import Report, Section
 
-from eeg_adhd_epilepsy.utils.formatting import format_duration_hms
-
-
-def _add_images(section: Section, figures: Mapping[str, Path], ordered_keys: Sequence[str]) -> None:
-    for key in ordered_keys:
-        path = figures.get(key)
-        if path and path.exists():
-            section.add_element(ImageElement(str(path), caption=key.replace("_", " ").title()))
-
-
-def _add_optional_table(section: Section, data: pd.DataFrame, title: str) -> None:
-    if data is not None and not data.empty:
-        section.add_element(TableElement(data, title=title))
-
-
-def _format_value(value: object, digits: int = 2, suffix: str = "") -> str:
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return ""
-    if not math.isfinite(numeric):
-        return ""
-    return f"{numeric:.{digits}f}{suffix}"
-
-
-def build_subject_overview_table(record: Mapping[str, object]) -> pd.DataFrame:
-    return pd.DataFrame(
-        [
-            {
-                "Subject": record.get("subject_id", ""),
-                "Session": record.get("session_id", ""),
-                "Runs": int(record.get("n_runs", 0) or 0),
-                "Source Dataset": record.get("source_dataset", ""),
-                "Total Duration": format_duration_hms(record.get("raw_duration", 0.0)),
-                "Age Group": record.get("age_group", ""),
-                "Sex": record.get("sex", ""),
-                "Combined Diagnosis": record.get("combined_diagnosis", ""),
-            }
-        ]
-    )
+from eeg_adhd_epilepsy.reports._common import (
+    add_images as _add_images,
+    add_optional_table as _add_optional_table,
+    build_dataset_mean_metric_table,
+    build_flag_reason_table as _build_flag_reason_table,
+    build_subject_overview_table,
+    format_value as _format_value,
+)
 
 
 def build_usability_table(record: Mapping[str, object]) -> pd.DataFrame:
@@ -133,30 +100,22 @@ def build_dataset_summary_table(runs_df: pd.DataFrame, subjects_df: pd.DataFrame
 
 
 def build_noise_metrics_table(runs_df: pd.DataFrame) -> pd.DataFrame:
-    rows = []
-    for label, column, suffix in (
-        ("Mean bad channels", "pct_bad_channels", "%"),
-        ("Mean amplitude", "amplitude_mean_uv", " uV"),
-        ("Mean max amplitude", "amplitude_max_uv", " uV"),
-        ("Mean line-noise ratio", "line_noise_ratio", ""),
-        ("Mean HF/LF ratio", "hf_lf_ratio", ""),
-        ("Mean alpha peak", "alpha_peak_hz", " Hz"),
-        ("Mean aperiodic slope", "aperiodic_slope", ""),
-    ):
-        series = pd.to_numeric(runs_df.get(column), errors="coerce")
-        rows.append({"Metric": label, "Value": _format_value(series.mean(), suffix=suffix)})
-    return pd.DataFrame(rows)
+    return build_dataset_mean_metric_table(
+        runs_df,
+        (
+            ("Mean bad channels", "pct_bad_channels", "%"),
+            ("Mean amplitude", "amplitude_mean_uv", " uV"),
+            ("Mean max amplitude", "amplitude_max_uv", " uV"),
+            ("Mean line-noise ratio", "line_noise_ratio", ""),
+            ("Mean HF/LF ratio", "hf_lf_ratio", ""),
+            ("Mean alpha peak", "alpha_peak_hz", " Hz"),
+            ("Mean aperiodic slope", "aperiodic_slope", ""),
+        ),
+    )
 
 
 def build_flag_reason_table(runs_df: pd.DataFrame) -> pd.DataFrame:
-    counts: dict[str, int] = {}
-    for reasons in runs_df.get("subject_flag_reasons", pd.Series(dtype=str)).fillna(""):
-        for reason in str(reasons).split(";"):
-            reason = reason.strip()
-            if reason:
-                counts[reason] = counts.get(reason, 0) + 1
-    rows = [{"Reason": reason, "Runs": count} for reason, count in sorted(counts.items(), key=lambda item: item[1], reverse=True)]
-    return pd.DataFrame(rows)
+    return _build_flag_reason_table(runs_df, reasons_column="subject_flag_reasons", count_label="Runs")
 
 
 def build_dataset_report_tables(

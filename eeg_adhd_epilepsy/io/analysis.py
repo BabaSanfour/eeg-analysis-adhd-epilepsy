@@ -9,10 +9,12 @@ from typing import Optional, Sequence
 import numpy as np
 import pandas as pd
 from coco_pipe.io.structures import DataContainer
+from coco_pipe.io.quality import run_qc
+from coco_pipe.descriptors._constants import KNOWN_FAMILY_TOKENS
+from coco_pipe.descriptors.qc import aggregate_family_qc
 
-from eeg_adhd_epilepsy.dl import load_temp_dl_data
 from eeg_adhd_epilepsy.io.bids import load_eeg_data
-from eeg_adhd_epilepsy.io.table import load_tabular_data
+from coco_pipe.io.descriptors import load_descriptor_table
 
 
 def _infer_bids_entity_from_text(value: object, entity: str) -> str | None:
@@ -123,66 +125,6 @@ def _to_epoch_scalar_mean(container: DataContainer) -> DataContainer:
     )
 
 
-def concat_containers(containers: Sequence[DataContainer]) -> DataContainer:
-    if not containers:
-        raise ValueError("Need at least one container to concatenate.")
-
-    base = containers[0]
-    if any(container.dims != base.dims for container in containers[1:]):
-        raise ValueError("All pooled containers must have matching dims.")
-    if any(container.X.shape[1:] != base.X.shape[1:] for container in containers[1:]):
-        raise ValueError("All pooled containers must have matching non-observation dimensions.")
-
-    coords: dict[str, np.ndarray] = {}
-    for dim_name in base.dims:
-        if dim_name == "obs":
-            continue
-        if dim_name in base.coords:
-            coords[dim_name] = np.asarray(base.coords[dim_name])
-    if "feature_family" in base.coords:
-        coords["feature_family"] = np.asarray(base.coords["feature_family"])
-
-    obs_keys = set()
-    for container in containers:
-        obs_len = container.X.shape[0]
-        for key, values in container.coords.items():
-            arr = np.asarray(values)
-            if arr.ndim == 1 and len(arr) == obs_len and key != "feature":
-                obs_keys.add(key)
-
-    for key in sorted(obs_keys):
-        coords[key] = np.concatenate(
-            [np.asarray(container.coords[key]) for container in containers],
-            axis=0,
-        )
-
-    if "condition" not in coords:
-        coords["condition"] = np.concatenate(
-            [
-                np.full(container.X.shape[0], container.meta.get("condition"), dtype=object)
-                for container in containers
-            ],
-            axis=0,
-        )
-
-    y_values = [container.y for container in containers if container.y is not None]
-    y = np.concatenate(y_values, axis=0) if len(y_values) == len(containers) else None
-    ids_values = [container.ids for container in containers if container.ids is not None]
-    ids = np.concatenate(ids_values, axis=0) if len(ids_values) == len(containers) else None
-
-    return DataContainer(
-        X=np.concatenate([np.asarray(container.X) for container in containers], axis=0),
-        dims=base.dims,
-        coords=coords,
-        y=y,
-        ids=ids,
-        meta={
-            "source": "pooled",
-            "conditions": [container.meta.get("condition") for container in containers],
-        },
-    )
-
-
 def load_container(
     args,
     subjects: Sequence[str] | None,
@@ -207,9 +149,10 @@ def load_container(
             condition=condition,
         )
     elif input_mode == "descriptors":
-        container = load_tabular_data(
+        container = load_descriptor_table(
             table_path=Path(args.descriptor_table_path),
             feature_columns_path=Path(args.descriptor_feature_columns_path),
+            known_families=KNOWN_FAMILY_TOKENS,
             condition=condition,
             target_col=target_col,
             subjects=subjects,
@@ -218,22 +161,44 @@ def load_container(
             descriptor_families=getattr(args, "descriptor_families", None),
             descriptor_max_abs_value=getattr(args, "descriptor_max_abs_value", None),
         )
-    elif input_mode == "embeddings":
-        container = load_temp_dl_data(
-            embeddings_root=Path(args.embeddings_root),
-            segments_root=Path(args.segments_root or args.bids_root),
-            model=args.embedding_model,
-            desc=args.embedding_desc,
-            subjects=subjects,
-            metadata_df=meta_df,
-            subject_col=args.subject_col,
-            target_col=target_col,
-            conditions=[condition],
-            min_overlap_fraction=float(args.embedding_min_overlap_fraction),
-            reve_segment_duration=float(args.reve_segment_duration),
-            cbramod_sampling_rate=float(args.cbramod_sampling_rate),
-            drop_unassigned=True,
+        scoring_container = (
+            container
+            if container.dims == ("obs", "feature")
+            else container.flatten(preserve="obs")
         )
+        clean_scoring, qc_result = run_qc(
+            scoring_container,
+            subject_col=args.subject_col,
+        )
+        if container.dims == ("obs", "feature"):
+            feature_names = np.asarray(
+                clean_scoring.coords.get("feature", []),
+                dtype=object,
+            ).astype(str).tolist()
+        else:
+            sensors = np.asarray(container.coords["sensor"], dtype=object)
+            features = np.asarray(container.coords["feature"], dtype=object)
+            families = np.asarray(
+                container.coords["feature_family"],
+                dtype=object,
+            )
+            feature_names = [
+                f"{family}_{feature}_ch-{sensor}"
+                for sensor in sensors
+                for family, feature in zip(families, features)
+            ]
+        qc_result.family_qc = aggregate_family_qc(
+            pd.DataFrame(clean_scoring.X, columns=feature_names),
+            feature_names,
+            known_families=KNOWN_FAMILY_TOKENS,
+        )
+        if clean_scoring.ids is not None and container.ids is not None:
+            keep_ids = set(np.asarray(clean_scoring.ids).astype(str))
+            keep_indices = np.flatnonzero(
+                np.isin(np.asarray(container.ids).astype(str), list(keep_ids))
+            )
+            container = container.isel(obs=keep_indices)
+        container.meta = {**dict(container.meta), "qc_result": qc_result}
     else:
         raise ValueError(f"Unsupported input mode '{input_mode}'.")
     group_filters = getattr(args, "group_filters", None)
@@ -296,18 +261,6 @@ def load_container(
             raise ValueError(
                 f"Unsupported raw representation '{args.representation}' for analysis_mode='{analysis_mode}'."
             )
-    elif input_mode == "embeddings":
-        if container.X.ndim != 2:
-            container = container.flatten(preserve="obs")
-        if args.representation == "subject_flat":
-            represented = container.aggregate(by=args.subject_col, stats="mean")
-        elif args.representation == "epoch_flat":
-            represented = container
-        else:
-            raise ValueError(
-                "Embeddings mode currently supports only 'epoch_flat' and 'subject_flat'."
-            )
-
     represented.meta = dict(represented.meta)
     represented.meta.update(
         {

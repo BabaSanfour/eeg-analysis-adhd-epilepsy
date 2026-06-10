@@ -24,7 +24,7 @@ from eeg_adhd_epilepsy.qc import preproc_qc
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 
 from .base import annotate_artifacts_blockwise
-from .utils import NumpyEncoder, benchmark_step
+from .utils import NumpyEncoder, benchmark_step, select_subjects
 
 LOGGER = logging.getLogger(__name__)
 
@@ -392,8 +392,14 @@ def run_denoising_pipeline(
         output_desc = bids.validate_stage_desc(output_desc)
         bids_root = Path(bids_root).expanduser()
 
-        preproc_root = bids.get_preproc_root(bids_root)
-        reports_root = bids.get_reports_root(bids_root)
+        if preproc_root is None:
+            preproc_root = bids.get_preproc_root(bids_root)
+        else:
+            preproc_root = Path(preproc_root).expanduser()
+        if reports_root is None:
+            reports_root = bids.get_reports_root(bids_root)
+        else:
+            reports_root = Path(reports_root).expanduser()
 
         if input_path is None:
             input_path = bids.get_stage_output_path(
@@ -406,7 +412,6 @@ def run_denoising_pipeline(
         input_ids = bids.build_bids_report_ids(input_path)
         input_comps = bids.parse_bids_components(input_path)
         session_id = input_comps.get("session")
-        input_task = input_comps.get("task")
         run_id = input_comps.get("run")
         record_label = str(input_ids["run_prefix"])
         if not input_path.exists():
@@ -436,7 +441,7 @@ def run_denoising_pipeline(
             subject_id=record_label,
         )
 
-        task_token = condition_name if condition_name else input_task
+        task_token = condition_name if condition_name else input_comps.get("task")
         out_path = bids.get_stage_output_path(
             subject_id=subject_id,
             preproc_root=preproc_root,
@@ -580,28 +585,23 @@ def main() -> None:
     subjects_found = sorted({bids.parse_subject_id(f) for f in files})
     LOGGER.info("Found %d stage-1 runs across %d subjects.", len(files), len(subjects_found))
 
-    if args.subjects:
-        subjects_to_process = {bids.normalize_subject_id(s) for s in args.subjects}
-    elif args.start_from:
-        start_sub = bids.normalize_subject_id(args.start_from)
-        subjects_to_process = {s for s in subjects_found if s >= start_sub}
-        if not subjects_to_process:
-            LOGGER.error("No subjects found starting from %s.", start_sub)
+    subjects_to_process = select_subjects(
+        subjects_found,
+        selected_subjects=args.subjects,
+        start_from=args.start_from,
+        use_test=args.test,
+        use_random_test=args.random,
+        use_all=args.all,
+    )
+    if not subjects_to_process:
+        if args.start_from:
+            LOGGER.error("No subjects found starting from %s.", bids.normalize_subject_id(args.start_from))
             sys.exit(1)
-    elif args.test:
-        import random
-
-        if args.random:
-            random.seed(42)
-            subjects_to_process = set(random.sample(subjects_found, min(5, len(subjects_found))))
-        else:
-            subjects_to_process = set(subjects_found[:5])
-    elif args.all:
-        subjects_to_process = set(subjects_found)
-    else:
         LOGGER.warning("No selection criteria provided (use --all, --test, --subjects, or --start-from).")
         parser.print_help()
         sys.exit(0)
+    subjects_to_process = set(subjects_to_process)
+    LOGGER.info("Selected %d subjects to process.", len(subjects_to_process))
 
     profile = preproc_qc.get_preproc_qc_profile("denoise")
     raw_lookup = preproc_qc.load_raw_pre_base_lookup(reports_root)

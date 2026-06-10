@@ -8,9 +8,14 @@ from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import pandas as pd
-from coco_pipe.report.core import ImageElement, Report, Section, TableElement
+from coco_pipe.report.core import Report, Section
 
 from eeg_adhd_epilepsy.io import bids as bids_io
+from eeg_adhd_epilepsy.reports._common import (
+    add_images as _add_images,
+    add_optional_table as _add_optional_table,
+    build_subject_overview_table,
+)
 from eeg_adhd_epilepsy.utils.config import SEGMENT_COLUMNS
 from eeg_adhd_epilepsy.utils.formatting import format_clock_time, format_duration_hms
 
@@ -24,19 +29,6 @@ IGNORE_EVENT_PATTERNS = [
 ]
 
 MULTI_RUN_SUBJECT_THRESHOLD = 2
-
-
-def _add_images(section: Section, figures: Mapping[str, Path], ordered_keys: Sequence[str]) -> None:
-    for key in ordered_keys:
-        path = figures.get(key)
-        if path and path.exists():
-            caption = key.replace("_", " ").title()
-            section.add_element(ImageElement(str(path), caption=caption))
-
-
-def _add_optional_table(section: Section, data: pd.DataFrame, title: str) -> None:
-    if data is not None and not data.empty:
-        section.add_element(TableElement(data, title=title))
 
 
 def _is_ignored_event(label: str) -> bool:
@@ -118,20 +110,6 @@ def build_event_counts_table(event_counts: Mapping[str, int] | None) -> pd.DataF
         if int(count) > 0 and not _is_ignored_event(str(label))
     ]
     return pd.DataFrame(rows, columns=["Event", "Count"])
-
-
-def build_subject_overview_table(record: Mapping[str, object]) -> pd.DataFrame:
-    row = {
-        "Subject": record.get("subject_id", ""),
-        "Session": record.get("session_id", ""),
-        "Runs": int(record.get("n_runs", 0) or 0),
-        "Source Dataset": record.get("source_dataset", ""),
-        "Total Duration": format_duration_hms(record.get("raw_duration", 0.0)),
-        "Age Group": record.get("age_group", ""),
-        "Sex": record.get("sex", ""),
-        "Combined Diagnosis": record.get("combined_diagnosis", ""),
-    }
-    return pd.DataFrame([row])
 
 
 def build_condition_summary_table(summary: Mapping[str, object], raw_duration: float | None = None) -> pd.DataFrame:
@@ -234,10 +212,26 @@ def build_recording_timing_table(runs_df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["Metric", "Value"])
 
 
+def _build_condition_check_table(
+    records_df: pd.DataFrame,
+    label_col: str,
+    unit_label: str,
+    checks: Sequence[tuple[str, pd.Series]],
+) -> pd.DataFrame:
+    columns = [label_col, unit_label, "%"]
+    if records_df.empty:
+        return pd.DataFrame(columns=columns)
+    n_records = len(records_df)
+    rows = []
+    for label, mask in checks:
+        count = int(mask.fillna(False).sum())
+        rows.append({label_col: label, unit_label: count, "%": f"{(count / n_records) * 100.0:.1f}%" if n_records else "0.0%"})
+    return pd.DataFrame(rows, columns=columns)
+
+
 def build_missingness_table(records_df: pd.DataFrame, unit_label: str) -> pd.DataFrame:
     if records_df.empty:
         return pd.DataFrame(columns=["Metric", unit_label, "%"])
-    rows = []
     checks = [
         ("No conditions (only raw)", (records_df["total_eyes_open_duration"] <= 0) & (records_df["total_eyes_closed_duration"] <= 0) & (records_df["hv_block_count"] == 0) & (records_df["photo_block_count"] == 0)),
         ("No eyes open", records_df["total_eyes_open_duration"] <= 0),
@@ -247,17 +241,12 @@ def build_missingness_table(records_df: pd.DataFrame, unit_label: str) -> pd.Dat
         ("No HV", records_df["hv_block_count"] == 0),
         ("No PHOTO", records_df["photo_block_count"] == 0),
     ]
-    n_records = len(records_df)
-    for label, mask in checks:
-        count = int(mask.fillna(False).sum())
-        rows.append({"Metric": label, unit_label: count, "%": f"{(count / n_records) * 100.0:.1f}%" if n_records else "0.0%"})
-    return pd.DataFrame(rows, columns=["Metric", unit_label, "%"])
+    return _build_condition_check_table(records_df, "Metric", unit_label, checks)
 
 
 def build_condition_availability_table(records_df: pd.DataFrame, unit_label: str) -> pd.DataFrame:
     if records_df.empty:
         return pd.DataFrame(columns=["Condition", unit_label, "%"])
-    n_records = len(records_df)
     checks = [
         ("Eyes open", records_df["total_eyes_open_duration"] > 0),
         ("Eyes closed", records_df["total_eyes_closed_duration"] > 0),
@@ -267,11 +256,7 @@ def build_condition_availability_table(records_df: pd.DataFrame, unit_label: str
         ("Post-HV", records_df["post_hv_block_count"] > 0),
         ("PHOTO", records_df["photo_block_count"] > 0),
     ]
-    rows = []
-    for label, mask in checks:
-        count = int(mask.fillna(False).sum())
-        rows.append({"Condition": label, unit_label: count, "%": f"{(count / n_records) * 100.0:.1f}%" if n_records else "0.0%"})
-    return pd.DataFrame(rows, columns=["Condition", unit_label, "%"])
+    return _build_condition_check_table(records_df, "Condition", unit_label, checks)
 
 
 def build_event_rates_table(records: Sequence[Mapping[str, Any]], unit_label: str) -> pd.DataFrame:

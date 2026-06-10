@@ -1,4 +1,15 @@
-"""Cohort report generation over cleaned patient metadata."""
+"""Cohort-level patient analysis and report generation.
+
+Reads ``patients_metadata_clean.csv`` (produced by ``eeg-build-patients-metadata``)
+and generates:
+
+- a full HTML cohort report with demographics, diagnosis, and medication breakdowns
+- analysis-opportunity tables (all combinations + valid-only filtered)
+- optional recruitment-milestone projections
+
+This module is a study-level analysis script; it has no generic re-usable API.
+Run via ``eeg-cohort-report`` or ``python -m eeg_adhd_epilepsy.analysis.cohort``.
+"""
 
 from __future__ import annotations
 
@@ -36,7 +47,6 @@ from eeg_adhd_epilepsy.viz.patients import (
 )
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 DEFAULT_COHORT_NAME = "full_cohort"
 DEFAULT_REPORT_TITLE = "Clean Metadata Cohort Report"
@@ -208,11 +218,8 @@ SINGLE_STIMULANT_CATEGORY_CONSTRAINTS = {
     "Lisdexamfetamine",
 }
 DROP_REASON_DISPLAY = {
-    "potential_diagnosis": "Non-confirmed diagnosis",
     "non_confirmed_diagnosis": "Non-confirmed diagnosis",
-    "invalid_eeg_date": "No EEG files",
     "no_eeg_files": "No EEG files",
-    "missing_adhd_or_autism": "Missing diagnosis",
     "missing_diagnosis": "Missing diagnosis",
     "duplicate_same_source_patient_id": "Duplicate same-source patient",
     "medication_mismatch": "Medication mismatch",
@@ -1420,6 +1427,7 @@ def _create_figures(df: pd.DataFrame, figure_dir: Path) -> dict[str, list[tuple[
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
     parser = argparse.ArgumentParser(description="Generate a cohort report over cleaned patient metadata.")
     parser.add_argument("--metadata_csv", type=Path, required=True, help="Path to patients_metadata_clean.csv")
     parser.add_argument(

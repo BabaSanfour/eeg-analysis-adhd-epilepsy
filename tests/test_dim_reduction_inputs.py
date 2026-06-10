@@ -7,13 +7,11 @@ import numpy as np
 import pandas as pd
 from coco_pipe.io.structures import DataContainer
 
-from eeg_adhd_epilepsy.analysis.dimensionality_reduction import (
-    _resolve_subjects,
-    _valid_component_sweep,
-    run_eval,
-)
-from eeg_adhd_epilepsy.io.analysis import _ensure_recording_id
-from eeg_adhd_epilepsy.io.table import load_tabular_data
+from coco_pipe.dim_reduction.pipeline import _valid_component_sweep, run_eval
+
+from eeg_adhd_epilepsy.analysis.dimensionality_reduction import _resolve_subjects
+from eeg_adhd_epilepsy.io.analysis import _ensure_recording_id, load_container
+from coco_pipe.io.descriptors import load_descriptor_table
 
 
 def test_descriptor_loader_filters_subjects(tmp_path):
@@ -30,7 +28,7 @@ def test_descriptor_loader_filters_subjects(tmp_path):
     ).to_csv(table_path, index=False)
     feature_columns_path.write_text(json.dumps([feature_column]), encoding="utf-8")
 
-    container = load_tabular_data(
+    container = load_descriptor_table(
         table_path=table_path,
         feature_columns_path=feature_columns_path,
         condition="EO_baseline",
@@ -41,6 +39,93 @@ def test_descriptor_loader_filters_subjects(tmp_path):
     assert container.X.shape == (1, 1)
     assert container.coords["study_id"].tolist() == [2]
     assert container.ids.tolist() == ["0002_ses-01_run-01"]
+
+
+def test_descriptor_analysis_attaches_family_qc(tmp_path):
+    feature_column = "mean_band_log_abs_alpha_chgrp-midline"
+    table_path = tmp_path / "features.csv"
+    feature_columns_path = tmp_path / "feature_columns.json"
+    pd.DataFrame(
+        {
+            "study_id": ["0001", "0002", "0003", "0004"],
+            "condition": ["EO_baseline"] * 4,
+            "recording_id": [f"{subject}_ses-01_run-01" for subject in range(1, 5)],
+            feature_column: [0.9, 1.0, 1.1, 1.05],
+        }
+    ).to_csv(table_path, index=False)
+    feature_columns_path.write_text(json.dumps([feature_column]), encoding="utf-8")
+    args = SimpleNamespace(
+        input_mode="descriptors",
+        analysis_mode="flat",
+        descriptor_table_path=str(table_path),
+        descriptor_feature_columns_path=str(feature_columns_path),
+        descriptor_families=None,
+        descriptor_max_abs_value=None,
+        subject_col="study_id",
+        group_filters=None,
+        filter_col=[],
+        filter_val=[],
+        balance_target=None,
+        aggregation_unit=None,
+    )
+
+    container = load_container(
+        args,
+        subjects=None,
+        meta_df=None,
+        condition="EO_baseline",
+    )
+
+    qc_result = container.meta["qc_result"]
+    assert qc_result.family_qc is not None
+    assert qc_result.family_qc["family"].tolist() == ["band"]
+    assert qc_result.n_rows_entering_qc == 4
+
+
+def test_sensor_descriptor_analysis_attaches_family_qc(tmp_path):
+    feature_columns = [
+        "band_log_abs_alpha_ch-Fz",
+        "complexity_sample_entropy_ch-Fz",
+        "band_log_abs_alpha_ch-Cz",
+        "complexity_sample_entropy_ch-Cz",
+    ]
+    table_path = tmp_path / "features.csv"
+    feature_columns_path = tmp_path / "feature_columns.json"
+    table = {
+        "study_id": [f"{subject:04d}" for subject in range(1, 5)],
+        "condition": ["EO_baseline"] * 4,
+        "recording_id": [f"{subject:04d}_ses-01_run-01" for subject in range(1, 5)],
+    }
+    for offset, column in enumerate(feature_columns):
+        table[column] = [offset + value for value in (0.9, 1.0, 1.1, 1.05)]
+    pd.DataFrame(table).to_csv(table_path, index=False)
+    feature_columns_path.write_text(json.dumps(feature_columns), encoding="utf-8")
+    args = SimpleNamespace(
+        input_mode="descriptors",
+        analysis_mode="sensor",
+        descriptor_table_path=str(table_path),
+        descriptor_feature_columns_path=str(feature_columns_path),
+        descriptor_families=None,
+        descriptor_max_abs_value=None,
+        subject_col="study_id",
+        group_filters=None,
+        filter_col=[],
+        filter_val=[],
+        balance_target=None,
+        aggregation_unit=None,
+    )
+
+    container = load_container(
+        args,
+        subjects=None,
+        meta_df=None,
+        condition="EO_baseline",
+    )
+
+    assert container.dims == ("obs", "sensor", "feature")
+    qc_result = container.meta["qc_result"]
+    assert qc_result.family_qc is not None
+    assert qc_result.family_qc["family"].tolist() == ["band", "complexity"]
 
 
 def test_run_aware_recording_id_is_added_from_ids():
@@ -109,7 +194,7 @@ def test_separation_eval_passes_patient_groups(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr(
-        "eeg_adhd_epilepsy.analysis.dimensionality_reduction.evaluate_embedding",
+        "coco_pipe.dim_reduction.pipeline.evaluate_embedding",
         fake_evaluate_embedding,
     )
     container = DataContainer(

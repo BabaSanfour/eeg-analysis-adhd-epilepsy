@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from coco_pipe.viz import plot_bar, plot_histogram
 from eeg_adhd_epilepsy.viz import topo, utils, qc_plots
 
 matplotlib.use("Agg")
@@ -61,16 +62,16 @@ def _plot_flag_status_distribution(runs_df: pd.DataFrame, output_dir: Path) -> P
         return None
     order = [status for status in ("usable", "borderline", "unusable", "unknown") if status in counts.index]
     counts = counts.reindex(order)
-    fig, ax = plt.subplots(figsize=(6, 4))
-    positions = np.arange(len(counts))
     colors = ["#55A868", "#DD8452", "#C44E52", "#8172B2"][: len(counts)]
-    ax.bar(positions, counts.values, color=colors, edgecolor="white", linewidth=0.8)
-    ax.set_xticks(positions)
-    ax.set_xticklabels(counts.index)
-    ax.set_title("QC Status Distribution")
-    ax.set_ylabel("Records")
+    fig, ax = plot_bar(
+        counts,
+        sort=False,
+        color=colors,
+        title="QC Status Distribution",
+        ylabel="Records",
+        figsize=(6, 4),
+    )
     ax.grid(True, axis="y", alpha=0.2)
-    plt.tight_layout()
     return utils.save_fig(fig, output_dir / "qc_flag.png")
 
 
@@ -83,16 +84,17 @@ def _plot_flag_reason_counts(runs_df: pd.DataFrame, output_dir: Path) -> Path | 
                 counts[reason] = counts.get(reason, 0) + 1
     if not counts:
         return None
-    ordered = pd.Series(counts).sort_values(ascending=True)
-    positions = np.arange(len(ordered))
-    fig, ax = plt.subplots(figsize=(8, max(3, len(ordered) * 0.4)))
-    ax.barh(positions, ordered.values, color="#C44E52")
-    ax.set_yticks(positions)
-    ax.set_yticklabels(ordered.index)
-    ax.set_title("QC Flag Reasons")
-    ax.set_xlabel("Records")
+    ordered = pd.Series(counts)
+    fig, ax = plot_bar(
+        ordered,
+        ascending=True,
+        orientation="horizontal",
+        color="#C44E52",
+        title="QC Flag Reasons",
+        xlabel="Records",
+        figsize=(8, max(3, len(ordered) * 0.4)),
+    )
     ax.grid(True, axis="x", alpha=0.2)
-    plt.tight_layout()
     return utils.save_fig(fig, output_dir / "qc_flag_reasons.png")
 
 
@@ -229,10 +231,18 @@ def save_dataset_preproc_qc_figures(
             
         for ax, (column, title, xlabel, clean_series) in zip(axes, pair):
             bins = min(20, max(5, int(np.sqrt(len(clean_series)))))
-            ax.hist(clean_series, bins=bins, color="#4C72B0", edgecolor="white", linewidth=0.8)
-            ax.set_title(title, fontsize=9)
-            ax.set_xlabel(xlabel, fontsize=8)
-            ax.set_ylabel("Records", fontsize=8)
+            plot_histogram(
+                clean_series,
+                bins=bins,
+                color="#4C72B0",
+                title=title,
+                xlabel=xlabel,
+                ylabel="Records",
+                ax=ax,
+            )
+            ax.title.set_fontsize(9)
+            ax.xaxis.label.set_fontsize(8)
+            ax.yaxis.label.set_fontsize(8)
             ax.tick_params(labelsize=7)
             ax.grid(True, axis="y", alpha=0.2)
             

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=tar_raw_data
 #SBATCH --account=rrg-kjerbi
-#SBATCH --output=slurm-%x-%A_%a.out
-#SBATCH --error=slurm-%x-%A_%a.err
+#SBATCH --output=slurm-%x-%A.out
+#SBATCH --error=slurm-%x-%A.err
 #SBATCH --time=06:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G

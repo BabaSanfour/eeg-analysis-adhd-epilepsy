@@ -18,33 +18,31 @@ during artifact rejection and using extensive logging and provenance tracking.
 
 from __future__ import annotations
 
+import argparse
+import json
 import logging
+import sys
 from collections import defaultdict
 from pathlib import Path
-from typing import Dict, Tuple, Optional, Any, List, Mapping
-import json
-import numpy as np
+from typing import Any, Dict, List, Mapping, Optional, Tuple
+
 import mne
-
-from pyprep.find_noisy_channels import NoisyChannels
-from autoreject import AutoReject 
-
-from eeg_adhd_epilepsy.preproc.utils import (
-    PreprocConfig,
-    benchmark_step,
-    _compute_artifact_overlap,
-    inflate_bad_annotations,
-    NumpyEncoder,
-)
-from eeg_adhd_epilepsy.preproc.epochs import (
-    build_block_events_by_condition,
-)
-import sys
-import argparse
-from eeg_adhd_epilepsy.io import bids
-from eeg_adhd_epilepsy.qc import preproc_qc
+import numpy as np
+from autoreject import AutoReject
 from joblib import Parallel, delayed
+from pyprep.find_noisy_channels import NoisyChannels
 from tqdm import tqdm
+
+from eeg_adhd_epilepsy.io import bids
+from eeg_adhd_epilepsy.preproc.epochs import build_block_events_by_condition
+from eeg_adhd_epilepsy.preproc.utils import (
+    NumpyEncoder,
+    PreprocConfig,
+    _compute_artifact_overlap,
+    benchmark_step,
+    inflate_bad_annotations,
+)
+from eeg_adhd_epilepsy.qc import preproc_qc
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 
 
@@ -262,6 +260,51 @@ def _run_autoreject_chunk(
     )
 
 
+def _compute_clean_stats(raw: mne.io.BaseRaw) -> Dict[str, float]:
+    """Compute clean-data fraction and per-type bad fractions from raw annotations.
+
+    Iterates over global (channel-less) BAD_ annotations and categorises them as
+    autoreject-generated (`BAD_epoch_*`) or manual (`BAD_movement`, `BAD_yawn`,
+    etc.), ignoring technical ones (`BAD_ACQ_SKIP`, `BAD_boundary`).
+
+    Returns:
+        Dict with keys ``clean_duration_s``, ``clean_fraction``,
+        ``manual_bad_fraction``, ``autoreject_bad_fraction``.
+    """
+    total_samples = raw.n_times
+    mask_all_bad = np.zeros(total_samples, dtype=bool)
+    mask_manual = np.zeros(total_samples, dtype=bool)
+    mask_autoreject = np.zeros(total_samples, dtype=bool)
+
+    for annot in raw.annotations:
+        desc = annot["description"]
+        if not desc.startswith("BAD_"):
+            continue
+        if annot.get("ch_names", []):
+            continue  # channel-specific span — skip for global stats
+
+        start_idx = max(0, raw.time_as_index(annot["onset"])[0])
+        end_idx = min(total_samples, raw.time_as_index(annot["onset"] + annot["duration"])[0])
+        if end_idx <= start_idx:
+            continue
+
+        mask_all_bad[start_idx:end_idx] = True
+        if desc.startswith("BAD_epoch_"):
+            mask_autoreject[start_idx:end_idx] = True
+        elif desc.startswith(("BAD_ACQ_SKIP", "BAD_boundary")):
+            pass  # technical — don't count as manual or autoreject
+        else:
+            mask_manual[start_idx:end_idx] = True
+
+    clean_samples = total_samples - int(mask_all_bad.sum())
+    return {
+        "clean_duration_s": float(clean_samples / raw.info["sfreq"]),
+        "clean_fraction": float(clean_samples / total_samples) if total_samples > 0 else 0.0,
+        "manual_bad_fraction": float(mask_manual.sum() / total_samples) if total_samples > 0 else 0.0,
+        "autoreject_bad_fraction": float(mask_autoreject.sum() / total_samples) if total_samples > 0 else 0.0,
+    }
+
+
 def run_base_pipeline(
     raw: mne.io.BaseRaw,
     config: PreprocConfig,
@@ -270,13 +313,19 @@ def run_base_pipeline(
     task: str | None = None,
     run_id: str | None = None,
     record_label: str | None = None,
+    figures_dir: Optional[Path] = None,
 ) -> Tuple[mne.io.BaseRaw, Dict]:
     """Run the shared preprocessing trunk and return cleaned raw + provenance.
+
+    Pure transform — applies preprocessing steps and returns ``(cleaned_raw,
+    provenance)``.  All I/O (path construction, file saving, report directory
+    setup) is the responsibility of the caller (see :func:`run_base_record`).
 
     Args:
         raw: The raw MNE object to process.
         config: Configuration dictionary defining preprocessing parameters.
         subject_id: Identifier for the subject (used in logging/filenames).
+        figures_dir: Optional directory for saving per-stage diagnostic figures.
 
     Returns:
         A tuple containing:
@@ -286,23 +335,7 @@ def run_base_pipeline(
     subject_id = bids.normalize_subject_id(subject_id)
     record_label = record_label or subject_id
 
-    bids_root = Path(config.get("bids_root", Path.cwd())).expanduser()
-    preproc_root = bids.get_preproc_root(bids_root)
-    reports_root = Path(config.get("reports_root", bids.get_reports_root(bids_root))).expanduser()
-
-    stage_name = preproc_qc.get_preproc_qc_stage_name("base", "base")
-    subject_report_path = bids.get_subject_session_stage_report_path(
-        reports_root=reports_root,
-        subject_id=subject_id,
-        session_id=session_id,
-        stage=stage_name,
-        report_stem=record_label,
-        create_dir=True,
-    )
-    figures_dir = subject_report_path.parent / "figures" / record_label
-    figures_dir.mkdir(parents=True, exist_ok=True)
-    
-    LOGGER.info(f"Starting base pipeline for {record_label}")
+    LOGGER.info("Starting base pipeline for %s", record_label)
 
     provenance: Dict[str, Any] = {
         "subject_id": subject_id,
@@ -322,7 +355,7 @@ def run_base_pipeline(
     
     # 1b. Inflate Manual Annotations (Major -> 5s, Common -> 3s)
     raw = inflate_bad_annotations(raw)
-    LOGGER.info(f"Inflated manual annotations: {len(raw.annotations)}")
+    LOGGER.info("Inflated manual annotations: %d", len(raw.annotations))
     
     provenance["steps_completed"].append("embedded_blocks")
 
@@ -347,7 +380,7 @@ def run_base_pipeline(
         h_f = min(lp_hz, nyquist - 0.1) if lp_hz else None
         n_jobs = int(config.get("n_jobs", 1))
         
-        LOGGER.info(f"Applying Bandpass filter: {hp_hz}-{h_f} Hz (n_jobs={n_jobs})")
+        LOGGER.info("Applying Bandpass filter: %s-%s Hz (n_jobs=%d)", hp_hz, h_f, n_jobs)
         raw.filter(l_freq=hp_hz, h_freq=h_f, verbose="ERROR", n_jobs=n_jobs)
         provenance["steps_completed"].append("bandpass_filter")
         
@@ -355,7 +388,7 @@ def run_base_pipeline(
         adaptive = line_noise_cfg.get("adaptive", False)
         
         from mne_denoise.zapline import ZapLine
-        LOGGER.info(f"Applying ZapLine ({line_freq} Hz, adaptive={adaptive})...")
+        LOGGER.info("Applying ZapLine (%s Hz, adaptive=%s)...", line_freq, adaptive)
         
         # ZapLine Class Usage
         zapline_obj = ZapLine(
@@ -382,7 +415,7 @@ def run_base_pipeline(
             provenance["pipeline_warnings"].append(ransac_warning)
         provenance["steps_completed"].append("detect_global_bads")
 
-    LOGGER.info(f"Global bad channels ({len(raw.info['bads'])}): {raw.info['bads']}")
+    LOGGER.info("Global bad channels (%d): %s", len(raw.info["bads"]), raw.info["bads"])
 
     # 6. Common Average Reference (CAR)
     # Applied after excluding global bads to avoid contamination.
@@ -404,86 +437,10 @@ def run_base_pipeline(
     provenance["steps_completed"].append("block_artifact_annotation")
 
     # Clean Data Duration & Detailed Artifact Stats
-    total_samples = raw.n_times
-    
-    # Masks for different bad types (Global Only)
-    mask_all_bad = np.zeros(total_samples, dtype=bool)
-    mask_manual = np.zeros(total_samples, dtype=bool)
-    mask_autoreject = np.zeros(total_samples, dtype=bool)
-    
-    for annot in raw.annotations:
-        desc = annot['description'] 
-        if not desc.startswith('BAD_'):
-            continue
-            
-        ch_names = annot.get('ch_names', [])
-        if ch_names:
-            continue
-            
-        start_idx = raw.time_as_index(annot['onset'])[0]
-        start_idx = max(0, start_idx)
-        duration = annot['duration']
-        end_idx = raw.time_as_index(annot['onset'] + duration)[0]
-        end_idx = min(total_samples, end_idx)
-        
-        if end_idx > start_idx:
-            # Union mask for total clean data
-            mask_all_bad[start_idx:end_idx] = True
-            
-            # Categorize
-            if desc.startswith('BAD_epoch_'):
-                mask_autoreject[start_idx:end_idx] = True
-            elif desc.startswith('BAD_ACQ_SKIP') or desc.startswith('BAD_boundary'):
-                pass # Technical
-            else:
-                # Assumed Manual (BAD_movement, BAD_yawn, etc.)
-                mask_manual[start_idx:end_idx] = True
-    
-    bad_samples = mask_all_bad.sum()
-    clean_samples = total_samples - bad_samples
-    clean_duration_s = clean_samples / raw.info['sfreq']
-    clean_fraction = clean_samples / total_samples if total_samples > 0 else 0.0
-    
-    # Compute fractions for specific types
-    manual_bad_fraction = mask_manual.sum() / total_samples if total_samples > 0 else 0.0
-    autoreject_bad_fraction = mask_autoreject.sum() / total_samples if total_samples > 0 else 0.0
-
-    provenance["integrity_stats"] = {
-        "clean_duration_s": float(clean_duration_s),
-        "clean_fraction": float(clean_fraction),
-        "manual_bad_fraction": float(manual_bad_fraction),
-        "autoreject_bad_fraction": float(autoreject_bad_fraction)
-    }
-
+    provenance["integrity_stats"] = _compute_clean_stats(raw)
     provenance["artifact_stats"]["artifacts_count"] = len(raw.annotations)
-    
-    # Save Provenance to Derivatives
-    out_path = bids.get_stage_output_path(
-        subject_id=subject_id,
-        preproc_root=preproc_root,
-        desc="base",
-        session=session_id,
-        task=task,
-        run=run_id,
-        create_dir=True,
-    )
-    prov_path = bids.get_stage_provenance_path(
-        subject_id=subject_id,
-        preproc_root=preproc_root,
-        desc="base",
-        session=session_id,
-        task=task,
-        run=run_id,
-        create_dir=True,
-    )
-    
-    with open(prov_path, "w") as f:
-        json.dump(provenance, f, cls=NumpyEncoder, indent=4)
 
-    raw.save(out_path, overwrite=True, verbose="ERROR")
-    
-    LOGGER.info(f"Pipeline completed for {record_label}. Output: {out_path}")
-
+    LOGGER.info("Base pipeline completed for %s.", record_label)
     return raw, provenance
 
 
@@ -535,7 +492,7 @@ def detect_global_bads_ransac(
 
 
     duration_s = raw_for_ransac.n_times / raw_for_ransac.info["sfreq"]
-    LOGGER.info(f"Running RANSAC on {duration_s:.1f}s of EEG data...")
+    LOGGER.info("Running RANSAC on %.1fs of EEG data...", duration_s)
 
     nc = NoisyChannels(raw_for_ransac, random_state=42)
     try:
@@ -617,9 +574,7 @@ def annotate_artifacts_blockwise(
     chunk_minutes = max(1.0, chunk_minutes)
     condition_inputs = _prepare_condition_epoch_inputs(raw, segment_duration=seg_len)
 
-    LOGGER.info(
-        f"Running condition-wise artifact annotation on {len(condition_inputs)} conditions..."
-    )
+    LOGGER.info("Running condition-wise artifact annotation on %d conditions...", len(condition_inputs))
 
     new_annots: List[Tuple[float, float, str, Tuple[str, ...]]] = []
 
@@ -733,6 +688,25 @@ def run_base_record(
         record_label = str(ids["run_prefix"])
         LOGGER.info("Processing %s (Record: %s)...", source_path.name, record_label)
 
+        # Resolve roots and setup report/figures directories
+        preproc_root = bids.get_preproc_root(Path(bids_root).expanduser())
+        if reports_root is None:
+            reports_root = bids.get_reports_root(Path(bids_root).expanduser())
+        else:
+            reports_root = Path(reports_root).expanduser()
+
+        stage_name = preproc_qc.get_preproc_qc_stage_name("base", "base")
+        subject_report_path = bids.get_subject_session_stage_report_path(
+            reports_root=reports_root,
+            subject_id=sid,
+            session_id=session_id,
+            stage=stage_name,
+            report_stem=record_label,
+            create_dir=True,
+        )
+        figures_dir = subject_report_path.parent / "figures" / record_label
+        figures_dir.mkdir(parents=True, exist_ok=True)
+
         raw = bids.load_bids_raw(source_path, bids_root=Path(bids_root))
 
         cleaned_raw, _provenance = run_base_pipeline(
@@ -743,25 +717,38 @@ def run_base_record(
             task=task,
             run_id=run_id,
             record_label=record_label,
+            figures_dir=figures_dir,
         )
-        preproc_root = bids.get_preproc_root(Path(bids_root).expanduser())
-        if reports_root is None:
-            reports_root = bids.get_reports_root(Path(bids_root).expanduser())
-        else:
-            reports_root = Path(reports_root).expanduser()
-        output_path = bids.get_stage_output_path(
+
+        # Build output paths and persist results
+        out_path = bids.get_stage_output_path(
             subject_id=sid,
             preproc_root=preproc_root,
             desc="base",
             session=session_id,
             task=task,
             run=run_id,
+            create_dir=True,
         )
+        prov_path = bids.get_stage_provenance_path(
+            subject_id=sid,
+            preproc_root=preproc_root,
+            desc="base",
+            session=session_id,
+            task=task,
+            run=run_id,
+            create_dir=True,
+        )
+        with open(prov_path, "w") as f:
+            json.dump(_provenance, f, cls=NumpyEncoder, indent=4)
+        cleaned_raw.save(out_path, overwrite=True, verbose="ERROR")
+        LOGGER.info("Base pipeline output saved: %s", out_path)
+
         result["qc_record"] = preproc_qc.build_preproc_qc_run_record(
             profile=preproc_qc.get_preproc_qc_profile("base"),
             reports_root=reports_root,
             current_raw=cleaned_raw,
-            current_filepath=output_path,
+            current_filepath=out_path,
             output_desc="base",
             raw_lookup=raw_lookup,
             pipeline_warnings=_provenance.get("pipeline_warnings", []),
@@ -776,7 +763,7 @@ def run_base_record(
 
 def main():
     parser = argparse.ArgumentParser(description="Run EEG Preprocessing Pipeline on BIDS Dataset")
-    parser.add_argument("--bids_root", type=str, default="/Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS", help="Path to BIDS dataset root")
+    parser.add_argument("--bids_root", type=str, required=True, help="Path to BIDS dataset root")
     parser.add_argument("--n_jobs", type=int, default=1, help="Number of parallel jobs (default: 1)")
     parser.add_argument("--lowpass", type=float, default=DEFAULT_LOWPASS_HZ, help=f"Lowpass filter cutoff Hz (default: {DEFAULT_LOWPASS_HZ})")
     parser.add_argument("--highpass", type=float, default=DEFAULT_HIGHPASS_HZ, help=f"Highpass filter cutoff Hz (default: {DEFAULT_HIGHPASS_HZ})")
@@ -799,7 +786,7 @@ def main():
     setup_logging(log_file, "INFO")
     
     if not bids_root.exists():
-        LOGGER.error(f"BIDS root not found: {bids_root}")
+        LOGGER.error("BIDS root not found: %s", bids_root)
         sys.exit(1)
         
     files_found = bids.discover_bids_files(bids_root, suffix="eeg", extension=".vhdr")
@@ -809,15 +796,15 @@ def main():
         sys.exit(1)
 
     subjects_found = sorted({bids.parse_subject_id(path) for path in files_found})
-    LOGGER.info(f"Found {len(files_found)} EEG runs across {len(subjects_found)} subjects in BIDS directory.")
+    LOGGER.info("Found %d EEG runs across %d subjects in BIDS directory.", len(files_found), len(subjects_found))
 
     if args.subjects:
         normalized_subjects = [bids.normalize_subject_id(s) for s in args.subjects]
         subjects_to_process = set(normalized_subjects)
-        LOGGER.info(f"Selected specific subjects: {normalized_subjects}")
+        LOGGER.info("Selected specific subjects: %s", normalized_subjects)
     else:
         subjects_to_process = set(subjects_found)
-        LOGGER.info(f"Processing all {len(subjects_found)} subjects.")
+        LOGGER.info("Processing all %d subjects.", len(subjects_found))
         
     profile = preproc_qc.get_preproc_qc_profile("base")
     qc_run_records: list[dict[str, object]] = []
@@ -930,16 +917,16 @@ def main():
             else:
                 short_files.append(f)
         except Exception as e:
-            LOGGER.warning(f"Could not read duration for {f.name}, treating as long file. Error: {e}")
+            LOGGER.warning("Could not read duration for %s, treating as long file. Error: %s", f.name, e)
             long_files.append(f)
 
-    LOGGER.info(f"Optimization Strategy: {len(short_files)} short files (<30m), {len(long_files)} long files (>=30m)")
+    LOGGER.info("Optimization Strategy: %d short files (<30m), %d long files (>=30m)", len(short_files), len(long_files))
 
     # ---------------------------------------------------------
     # Phase 1: Process Short Files (Parallel Subjects)
     # ---------------------------------------------------------
     if short_files:
-        LOGGER.info(f"--- Phase 1: Processing {len(short_files)} short files in parallel (n_jobs={args.n_jobs}) ---")
+        LOGGER.info("--- Phase 1: Processing %d short files in parallel (n_jobs=%d) ---", len(short_files), args.n_jobs)
         
         pipeline_config_short = {
             "n_jobs": 1,  # 1 core per subject internally
@@ -977,7 +964,7 @@ def main():
     # Phase 2: Process Long Files (Sequential Subjects, Parallel Internal)
     # ---------------------------------------------------------
     if long_files:
-        LOGGER.info(f"--- Phase 2: Processing {len(long_files)} long files sequentially (internal n_jobs={args.n_jobs}) ---")
+        LOGGER.info("--- Phase 2: Processing %d long files sequentially (internal n_jobs=%d) ---", len(long_files), args.n_jobs)
         
         pipeline_config_long = {
             "n_jobs": args.n_jobs, # Full power per subject
@@ -1017,13 +1004,13 @@ def main():
     skipped_count = len(skipped_ids)
     fail_count = len(failed_ids)
 
-    LOGGER.info(f"Batch processing complete. Success: {success_count}, Skipped: {skipped_count}, Failed: {fail_count}")
+    LOGGER.info("Batch processing complete. Success: %d, Skipped: %d, Failed: %d", success_count, skipped_count, fail_count)
     if success_ids:
-        LOGGER.info(f"Succeeded subjects: {success_ids}")
+        LOGGER.info("Succeeded subjects: %s", success_ids)
     if skipped_ids:
-        LOGGER.info(f"Skipped (already processed) subjects: {skipped_ids}")
+        LOGGER.info("Skipped (already processed) subjects: %s", skipped_ids)
     if failed_ids:
-        LOGGER.info(f"Failed subjects: {failed_ids}")
+        LOGGER.info("Failed subjects: %s", failed_ids)
     
     LOGGER.info("Generating shared base QC dataset report...")
     preproc_qc.write_preproc_qc_aggregate_reports(

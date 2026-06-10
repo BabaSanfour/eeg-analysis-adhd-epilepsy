@@ -1,14 +1,19 @@
-"""Descriptor QC visualization helpers."""
+"""Descriptor QC visualization helpers.
+
+Thin wrappers around the generic :mod:`coco_pipe.viz` plotting primitives
+(:func:`coco_pipe.viz.plot_bar`, :func:`coco_pipe.viz.plot_histogram`) that
+turn descriptor-QC dataframes into the figure set used by the subject- and
+dataset-level QC reports.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Mapping
 
 import matplotlib.pyplot as plt
 import pandas as pd
 
-from eeg_adhd_epilepsy.viz.utils import save_fig
+from coco_pipe.viz import plot_bar, plot_histogram, save_figure
 
 
 def _bar_plot(
@@ -23,21 +28,22 @@ def _bar_plot(
 ) -> Path | None:
     if df is None or df.empty or x not in df.columns or y not in df.columns:
         return None
-    plot_df = df.copy()
-    if top_n is not None:
-        plot_df = plot_df.nlargest(top_n, y)
-    plot_df = plot_df.reset_index(drop=True)
-    labels = plot_df[x].astype(str).tolist()
-    positions = list(range(len(plot_df)))
-    fig_width = 12 if len(plot_df) > 10 else 8
-    fig, ax = plt.subplots(figsize=(fig_width, 4))
-    ax.bar(positions, plot_df[y].astype(float), color=color)
-    ax.set_title(title)
-    ax.set_ylabel(y.replace("_", " ").title())
-    ax.set_xticks(positions)
-    ax.set_xticklabels(labels, rotation=45, ha="right")
-    fig.tight_layout()
-    return save_fig(fig, output_path)
+    series = pd.to_numeric(df[y], errors="coerce")
+    series.index = df[x].astype(str)
+    series = series.dropna()
+    if series.empty:
+        return None
+    fig, _ax = plot_bar(
+        series,
+        top_n=top_n,
+        color=color,
+        title=title,
+        ylabel=y.replace("_", " ").title(),
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    save_figure(fig, str(output_path))
+    plt.close(fig)
+    return output_path
 
 
 def _hist_plot(
@@ -50,11 +56,14 @@ def _hist_plot(
     clean = pd.to_numeric(series, errors="coerce").dropna()
     if clean.empty:
         return None
-    fig, ax = plt.subplots(figsize=(6, 4))
-    ax.hist(clean, bins=min(30, max(5, clean.shape[0])), color=color, edgecolor="white")
-    ax.set_title(title)
-    fig.tight_layout()
-    return save_fig(fig, output_path)
+    try:
+        fig, _ax = plot_histogram(clean, color=color, title=title)
+    except ValueError:
+        return None
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    save_figure(fig, str(output_path))
+    plt.close(fig)
+    return output_path
 
 
 def save_subject_descriptor_qc_figures(

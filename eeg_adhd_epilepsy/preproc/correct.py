@@ -24,9 +24,9 @@ import matplotlib.pyplot as plt
 
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
 
-from .utils import benchmark_step, NumpyEncoder
-from .dss_utils import _get_dss_profile, _run_dss_artifact
-from .ica_utils import fit_ica_context, apply_ica_artifact
+from .utils import benchmark_step, NumpyEncoder, select_subjects
+from .utils.dss import _get_dss_profile, _run_dss_artifact
+from .utils.ica import fit_ica_context, apply_ica_artifact
 from eeg_adhd_epilepsy.qc import preproc_qc
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 from eeg_adhd_epilepsy.io import bids
@@ -116,7 +116,7 @@ def run_source_correction(
         # Check if muscle was frequently detected in Base stage
         muscle_load = artifact_profile.get("autoreject_bad_fraction", 0) 
         if muscle_load > 0.15:
-            LOGGER.info(f"Significant artifact load detected ({muscle_load:.1%}). Boosting correction aggression.")
+            LOGGER.info("Significant artifact load detected (%.1f%%). Boosting correction aggression.", muscle_load * 100)
             # Increase DSS removal if defaults were used
             if config.emg_method == "mwf" and config.mwf_n_components < 40:
                 config.mwf_n_components = 40
@@ -138,25 +138,25 @@ def run_source_correction(
     
     # 1. Determine Target Data (Data to be Corrected)
     if condition_name:
-        LOGGER.info(f" Selecting data for condition: {condition_name}")
+        LOGGER.info("Selecting data for condition: %s", condition_name)
         all_blocks = bids._collect_block_windows(raw)
         cond_blocks = [b for b in all_blocks if b.name == condition_name]
         
         if not cond_blocks:
-            LOGGER.warning(f"No blocks found for condition '{condition_name}'. Returning original raw.")
+            LOGGER.warning("No blocks found for condition %r. Returning original raw.", condition_name)
             return raw, provenance
-        
+
         crops = []
         for b in cond_blocks:
              if b.stop > b.onset:
                 crops.append(raw.copy().crop(b.onset, b.stop, include_tmax=False))
-        
+
         if not crops:
-             LOGGER.warning(f"No valid data found for condition '{condition_name}'.")
+             LOGGER.warning("No valid data found for condition %r.", condition_name)
              return raw, provenance
-             
+
         corrected_raw = mne.concatenate_raws(crops) # This is a copy
-        LOGGER.info(f"Created concatenated raw for '{condition_name}': {corrected_raw.times[-1]:.2f}s")
+        LOGGER.info("Created concatenated raw for %r: %.2fs", condition_name, corrected_raw.times[-1])
     else:
         # Work on full raw (copy for safety)
         corrected_raw = raw.copy()
@@ -178,7 +178,7 @@ def run_source_correction(
             
         if fit_crops:
             raw_fit = mne.concatenate_raws(fit_crops)
-            LOGGER.info(f"Created training raw from {len(fit_segments)} segments ({raw_fit.times[-1]:.2f}s)")
+            LOGGER.info("Created training raw from %d segments (%.2fs)", len(fit_segments), raw_fit.times[-1])
         else:
             LOGGER.warning("fit_segments provided but no valid data extracted. Fallback to target data.")
             raw_fit = None # Will fallback to corrected_raw inside functions
@@ -212,7 +212,7 @@ def run_source_correction(
 
         raw_before = corrected_raw.copy()
         with benchmark_step(f"{art_type}_removal", provenance):
-            LOGGER.info(f"--- Running {art_type.upper()} removal using {method} ---")
+            LOGGER.info("--- Running %s removal using %s ---", art_type.upper(), method)
             stats = {}
             
             if method == "ica":
@@ -257,7 +257,7 @@ def run_source_correction(
             elif art_type == "emg" and method == "wica":
                 corrected_raw, stats = _remove_emg_wica(corrected_raw, config, bad_segments, raw_fit, output_dir, subject_id)
             else:
-                LOGGER.warning(f"Unknown {art_type} method '{method}'; skipping.")
+                LOGGER.warning("Unknown %s method %r; skipping.", art_type, method)
                 stats = {"skipped": True, "reason": "unknown_method", "method": method}
 
             provenance["correction_stats"][art_type] = stats
@@ -426,8 +426,14 @@ def run_correction_pipeline(
         output_desc = bids.validate_stage_desc(output_desc)
         bids_root = Path(bids_root).expanduser()
 
-        preproc_root = bids.get_preproc_root(bids_root)
-        reports_root = bids.get_reports_root(bids_root)
+        if preproc_root is None:
+            preproc_root = bids.get_preproc_root(bids_root)
+        else:
+            preproc_root = Path(preproc_root).expanduser()
+        if reports_root is None:
+            reports_root = bids.get_reports_root(bids_root)
+        else:
+            reports_root = Path(reports_root).expanduser()
 
         if input_path is None:
             input_path = bids.get_stage_output_path(
@@ -440,16 +446,15 @@ def run_correction_pipeline(
         input_ids = bids.build_bids_report_ids(input_path)
         input_comps = bids.parse_bids_components(input_path)
         session_id = input_comps.get("session")
-        input_task = input_comps.get("task")
         run_id = input_comps.get("run")
         record_label = str(input_ids["run_prefix"])
         
         if not input_path.exists():
-            LOGGER.error(f"Input file not found: {input_path}")
+            LOGGER.error("Input file not found: %s", input_path)
             result["error"] = f"Input file not found: {input_path}"
             return result
             
-        LOGGER.info(f"Loading base pipeline output: {input_path}")
+        LOGGER.info("Loading base pipeline output: %s", input_path)
         raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
 
         stage_name = preproc_qc.get_preproc_qc_stage_name("correct", output_desc)
@@ -474,21 +479,21 @@ def run_correction_pipeline(
         # 1. Resolve Train Condition (Fit Segments)
         fit_segments = None
         if train_condition:
-            LOGGER.info(f"Extracting training segments from condition: {train_condition}")
+            LOGGER.info("Extracting training segments from condition: %s", train_condition)
             windows = bids._collect_block_windows(raw)
             train_blocks = [b for b in windows if b.name == train_condition]
             if train_blocks:
                 fit_segments = [(b.onset, b.duration) for b in train_blocks]
-                LOGGER.info(f"Found {len(fit_segments)} segments for training.")
+                LOGGER.info("Found %d segments for training.", len(fit_segments))
             else:
-                LOGGER.warning(f"Train condition '{train_condition}' not found. Fitting on target data.")
+                LOGGER.warning("Train condition %r not found. Fitting on target data.", train_condition)
 
         # 1b. Load Base Artifact Profile for Auto-Tuning
         base_prov = _load_base_provenance(input_path, preproc_root)
         artifact_profile = {}
         if base_prov:
             artifact_profile = base_prov.get("integrity_stats", {})
-            LOGGER.info(f"Loaded Base stage artifact profile for {record_label}")
+            LOGGER.info("Loaded Base stage artifact profile for %s", record_label)
 
         # 2. Run Correction
         LOGGER.info("Starting artifact correction orchestration...")
@@ -506,7 +511,7 @@ def run_correction_pipeline(
         provenance.setdefault("eeg_snapshots", {}).update(eeg_snapshots)
         provenance.setdefault("artifact_comparisons", {}).update(artifact_comparisons)
         
-        task_token = condition_name if condition_name else input_task
+        task_token = condition_name if condition_name else input_comps.get("task")
         out_path = bids.get_stage_output_path(
             subject_id=subject_id,
             preproc_root=preproc_root,
@@ -553,7 +558,7 @@ def run_correction_pipeline(
         provenance.setdefault("artifact_comparisons", {})["variance_comparison"] = str(var_path)
 
         # 4. Save Outputs
-        LOGGER.info(f"Saving corrected raw to {out_path}")
+        LOGGER.info("Saving corrected raw to %s", out_path)
         corrected_raw.save(out_path, overwrite=True, verbose="ERROR")
         
         with open(prov_path, "w", encoding="utf-8") as f:
@@ -574,7 +579,7 @@ def run_correction_pipeline(
         return result
 
     except Exception as e:
-        LOGGER.error(f"Failed correction for {subject_id}: {e}", exc_info=True)
+        LOGGER.error("Failed correction for %s: %s", subject_id, e, exc_info=True)
         result["error"] = str(e)
         return result
 
@@ -673,7 +678,7 @@ def main():
     setup_logging(log_file, "INFO")
     
     if not bids_root.exists():
-        LOGGER.error(f"BIDS root not found: {bids_root}")
+        LOGGER.error("BIDS root not found: %s", bids_root)
         sys.exit(1)
         
     # Load/Create Config
@@ -692,60 +697,44 @@ def main():
             dss_n_remove_eog=args.dss_n_remove_eog,
         )
     
-    LOGGER.info(f"Running Correction with Config: {config}")
+    LOGGER.info("Running Correction with Config: %s", config)
 
     # Discover files (Stage 0 Output) to find subjects
     LOGGER.info("Scanning preproc directory for available subjects...")
     preproc_dir = preproc_root
     
     if not preproc_dir.exists():
-        LOGGER.error(f"Preproc directory not found: {preproc_dir}")
+        LOGGER.error("Preproc directory not found: %s", preproc_dir)
         sys.exit(1)
 
     # Only use Stage 0 outputs as Stage 1 inputs.
     files = sorted(preproc_dir.rglob("*_desc-base_eeg.fif"))
     
     if not files:
-        LOGGER.error(f"No Stage 0 FIF files found in {preproc_dir} (pattern: *_desc-base_eeg.fif).")
+        LOGGER.error("No Stage 0 FIF files found in %s (pattern: *_desc-base_eeg.fif).", preproc_dir)
         sys.exit(1)
         
     subjects_found = sorted({bids.parse_subject_id(f) for f in files})
-    LOGGER.info(f"Found {len(files)} base-stage runs across {len(subjects_found)} subjects.")
+    LOGGER.info("Found %d base-stage runs across %d subjects.", len(files), len(subjects_found))
     
     # Filter Logic
-    subjects_to_process = set()
-    
-    if args.subjects:
-        normalized_subjects = [bids.normalize_subject_id(s) for s in args.subjects]
-        subjects_to_process = set(normalized_subjects)
-        LOGGER.info(f"Selected specific subjects: {normalized_subjects}")
-        
-    elif args.start_from:
-        start_sub = bids.normalize_subject_id(args.start_from)
-        subjects_to_process = {s for s in subjects_found if s >= start_sub}
-        if not subjects_to_process:
-            LOGGER.error(f"No subjects found starting from {start_sub}.")
+    subjects_to_process = select_subjects(
+        subjects_found,
+        selected_subjects=args.subjects,
+        start_from=args.start_from,
+        use_test=args.test,
+        use_random_test=args.random,
+        use_all=args.all,
+    )
+    if not subjects_to_process:
+        if args.start_from:
+            LOGGER.error("No subjects found starting from %s.", bids.normalize_subject_id(args.start_from))
             sys.exit(1)
-        LOGGER.info(f"Resuming from {start_sub}, selected {len(subjects_to_process)} subjects.")
-            
-    elif args.test:
-        import random
-        if args.random:
-            random.seed(42)
-            subjects_to_process = set(random.sample(subjects_found, min(5, len(subjects_found))))
-            LOGGER.info(f"Test mode: selected 5 random subjects: {sorted(subjects_to_process)}")
-        else:
-            subjects_to_process = set(subjects_found[:5])
-            LOGGER.info(f"Test mode: selected first 5 subjects.")
-        
-    elif args.all:
-        subjects_to_process = set(subjects_found)
-        LOGGER.info(f"Processing all {len(subjects_found)} subjects.")
-        
-    else:
         LOGGER.warning("No selection criteria provided (use --all, --test, --subjects, or --start-from).")
         parser.print_help()
         sys.exit(0)
+    subjects_to_process = set(subjects_to_process)
+    LOGGER.info("Selected %d subjects to process.", len(subjects_to_process))
         
     profile = preproc_qc.get_preproc_qc_profile("correct")
     raw_lookup = preproc_qc.load_raw_pre_base_lookup(reports_root)
@@ -818,7 +807,7 @@ def main():
         LOGGER.warning("No subjects left to process.")
         sys.exit(0)
         
-    LOGGER.info(f"Starting processing for {len(files_to_process)} runs...")
+    LOGGER.info("Starting processing for %d runs...", len(files_to_process))
     
     # Processing Loop
     success_count = 0
@@ -848,7 +837,7 @@ def main():
     for input_file in files_to_process:
         sid = bids.parse_subject_id(input_file)
         run_label = str(bids.build_bids_report_ids(input_file)["run_prefix"])
-        LOGGER.info(f"Processing {run_label}...")
+        LOGGER.info("Processing %s...", run_label)
         try:
             result = run_correction_pipeline(
                 subject_id=sid,
@@ -878,13 +867,13 @@ def main():
             else:
                 fail_count += 1
                 failed_ids.append(run_label)
-                LOGGER.error(f"Failed processing {run_label}")
+                LOGGER.error("Failed processing %s", run_label)
         except Exception as e:
-            LOGGER.error(f"Exception processing {run_label}: {e}")
+            LOGGER.error("Exception processing %s: %s", run_label, e)
             fail_count += 1
             failed_ids.append(run_label)
             
-    LOGGER.info(f"Batch processing complete. Success: {success_count}, Failed: {fail_count}")
+    LOGGER.info("Batch processing complete. Success: %d, Failed: %d", success_count, fail_count)
     LOGGER.info("Succeeded subjects: %s", sorted(success_ids))
     LOGGER.info("Failed subjects: %s", sorted(failed_ids))
     
