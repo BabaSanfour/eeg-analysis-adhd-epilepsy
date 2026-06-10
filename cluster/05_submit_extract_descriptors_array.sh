@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_desc
 #SBATCH --account=rrg-kjerbi
-#SBATCH --output=slurm-%x-%A_%a.out
-#SBATCH --error=slurm-%x-%A_%a.err
+#SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.out
+#SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.err
 #SBATCH --time=02:30:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
@@ -22,7 +22,7 @@ METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhd
 CONFIG_PATH=${CONFIG_PATH:-$PROJECT_ROOT/configs/descriptors.yaml}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.descriptor_array_state}
-AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-0}
+AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-1}
 FIRST_BATCH_SIZE=${FIRST_BATCH_SIZE:-1000}
 SECOND_BATCH_SIZE=${SECOND_BATCH_SIZE:-241}
 

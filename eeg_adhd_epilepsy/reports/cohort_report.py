@@ -6,14 +6,14 @@ from pathlib import Path
 from typing import Mapping, Sequence
 
 import pandas as pd
-from coco_pipe.report.core import (
+from coco_pipe.report.core import Report, Section
+
+from coco_pipe.report.elements import (
     ImageElement,
     PlotlyElement,
-    Report,
-    Section,
     TableElement,
+    InteractiveTableElement, 
 )
-from coco_pipe.report.elements import InteractiveTableElement
 
 from eeg_adhd_epilepsy.reports._common import add_image_list as _add_images
 from eeg_adhd_epilepsy.reports._common import add_optional_table as _add_optional_table

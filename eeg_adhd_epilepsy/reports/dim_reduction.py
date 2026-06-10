@@ -17,11 +17,10 @@ from coco_pipe.dim_reduction.artifacts import (
     load_fit_runs,
 )
 from coco_pipe.dim_reduction.core import DimReduction
-from coco_pipe.report.core import (
+from coco_pipe.report.core import Report, Section
+from coco_pipe.report.elements import (
     ImageElement,
     PlotlyElement,
-    Report,
-    Section,
     TableElement,
 )
 from coco_pipe.report.elements import InteractiveTableElement
