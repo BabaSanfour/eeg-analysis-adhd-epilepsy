@@ -21,6 +21,13 @@ from eeg_adhd_epilepsy.utils.metadata_schema import (
     PSYCHOSTIMULANT_RAW_PAIR_TO_CATEGORY,
 )
 
+# Known subjects missing physical EEG files or lacking 19 canonical channels
+EXCLUDED_STUDY_IDS = {
+    1019, 1023, 1094, 1101, 1163, 1187, 1196, 1198, 1199, 1200, 1201, 
+    1202, 1203, 1204, 1205, 1206, 1207, 1208, 1209, 1210, 1234, 1235, 1241
+}
+DEFAULT_ADHD_CSV = DEFAULT_CSV_DIR / "EEG_Psychostimulants_PatientList_08-2025.csv"
+DEFAULT_DRUG_RESISTANT_CSV = DEFAULT_CSV_DIR / "IRSC_data_final.csv"
 
 _AUDIT_OUTPUT_COLUMNS = [*PATIENTS_METADATA_AUDIT_COLUMNS, "drop_reason"]
 _RAW_MERGED_COLUMNS = [
@@ -348,6 +355,12 @@ def build_patients_metadata(
         .str.upper()
         .isin({"NO EEG", "SEEG"}),
         "no_eeg_files",
+    )
+    working = _append_removed(
+        removed_frames,
+        working,
+        working["study_id"].isin(EXCLUDED_STUDY_IDS),
+        "missing_or_corrupt_eeg_file",
     )
     working = _append_removed(
         removed_frames,
