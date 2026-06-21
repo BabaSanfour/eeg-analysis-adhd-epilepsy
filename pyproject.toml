@@ -18,12 +18,12 @@ classifiers = [
   "Operating System :: OS Independent",
 ]
 dependencies = [
-  "numpy",
-  "pandas",
+  "numpy<2.4",
+  "pandas<3.0.0",
   "mne",
   "mne-bids",
   "pybv>=0.7.3",
-  "coco-pipe[decoding,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@dev",
+  "coco-pipe @ git+https://github.com/BabaSanfour/coco-pipe.git@dev",
   "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",

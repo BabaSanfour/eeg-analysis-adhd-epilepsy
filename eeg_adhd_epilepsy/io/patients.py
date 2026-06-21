@@ -46,6 +46,7 @@ EXCLUDED_STUDY_IDS = {
     1235,
     1241,
 }
+
 _AUDIT_OUTPUT_COLUMNS = [*PATIENTS_METADATA_AUDIT_COLUMNS, "drop_reason"]
 _RAW_MERGED_COLUMNS = [
     "source_dataset",
