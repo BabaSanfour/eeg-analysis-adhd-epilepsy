@@ -15,8 +15,43 @@ The codebase currently includes:
 - descriptor-based feature extraction using `coco-pipe.descriptors`
 - dimensionality reduction analysis using `coco-pipe.dim_reduction`
 - visualization and reporting utilities for exploratory analysis and result inspection using `coco-pipe.viz` and `coco-pipe.report`
+- reusable foundation-model embeddings and grouped decoding with CBraMod, LaBraM, REVE, and LUNA
 
 The active pipeline runs in this order: metadata → BIDS conversion/QC → preprocessing → epoching → descriptor extraction → dimensionality reduction. Cluster-ready SLURM scripts for each stage live in [cluster/](cluster/), numbered in pipeline order.
+
+## Foundation Models and Decoding
+
+The foundation and classical decoding entry points rely on `coco-pipe`; the
+project only supplies study-specific loading, targets, BIDS paths, and reports:
+
+```bash
+eeg-foundation-embeddings --config configs/foundation_embeddings.example.yaml
+eeg-decode --config configs/decoding.example.yaml
+eeg-foundation-decode --config configs/foundation_decoding.example.yaml
+```
+
+Install the project with the `coco-pipe[decoding,foundation]` dependency from
+`pyproject.toml`. Foundation backends require PyTorch and Braindecode 1.5 or
+newer. Fine-tuning is practical on a CUDA GPU; CPU runs are intended for small
+validation jobs. REVE is gated on Hugging Face: accept its model terms and set
+`HF_TOKEN` before running it. Saved configs are redacted so tokens are not
+written to derivatives or reports.
+
+Each model declares its own EEG window requirements. The example configs use
+10-second derivative epochs for CBraMod, REVE, and LUNA. MNE's inclusive final
+sample is removed explicitly so these become exact half-open 2000-sample model
+windows. LaBraM requires exactly 3000 samples at 200 Hz; because the current
+clean cohort derivatives are 10 seconds, the example config explicitly skips
+LaBraM cohort runs until 15-second clean derivatives are generated.
+`window_mismatch_policy` is one of `error`, `skip`, or `re_epoch`; no workflow
+silently pads or arbitrarily crops incompatible windows.
+
+Embedding extraction writes BIDS-shaped derivatives with NPZ data, JSON
+sidecars, a run manifest, dataset description, config provenance, and an
+offline HTML summary. Classical and foundation decoding write fold predictions,
+metrics, selected features or model artifacts, statistics, capability records,
+and offline reports. Grouped CV uses `patient_group_id`, and scaling, reduction,
+selection, and model fitting occur inside each training fold.
 
 ## Metadata Workflow
 
@@ -211,11 +246,18 @@ Three arguments define what the script loads and what one “analysis unit” me
 - `--input_mode`
   - `raw`: load EEG from BIDS or saved derivatives
   - `descriptors`: load merged descriptor tables
+  - `foundation_embeddings`: load a model-specific embedding derivative
 - `--analysis_mode`
   - `flat`: one embedding per condition or pooled dataset
   - `sensor`: one independent analysis per sensor or channel-group
   - `family`: one independent analysis per descriptor family
+  - `subfamily`: one independent analysis per descriptor subfamily
   - `sensor_within_family`: one independent sensor analysis inside each family
+  - `sensor_within_subfamily`: one sensor analysis inside each subfamily
+  - `feature`: one descriptor feature across sensors
+  - `feature_within_family`: one descriptor feature inside each family
+  - `descriptor`: one descriptor, retaining all of its aggregation statistics
+  - `descriptor_sensor`: one descriptor at one sensor
 - `--representation`
   - `epoch_flat`: keep each epoch/window as one observation
   - `subject_flat`: average epochs within each subject, then flatten the feature space to `subjects x features`
@@ -238,7 +280,9 @@ For descriptor analyses:
 - `flat` compares the full selected descriptor space
 - `sensor` compares sensors or channel-groups against each other
 - `family` compares descriptor families against each other
+- `subfamily`, `feature`, and `descriptor` expose progressively finer descriptor units
 - `sensor_within_family` compares sensors inside each requested family
+- `sensor_within_subfamily` and `descriptor_sensor` provide the corresponding fine-grained sensor analyses
 - `--representation` is table-driven for descriptors: the script uses the descriptor table stem, such as `sensor_subject_features`, so separate tables get separate output/report variants
 - descriptor rows with selected finite feature values above `--descriptor_max_abs_value` are dropped before fitting; the default is `1e12`
 
@@ -246,8 +290,8 @@ For descriptor analyses:
 
 - The script reports both fit metrics from the reducer itself (`trustworthiness`, `continuity`, `shepard_correlation`) and post-hoc eval metrics from user-defined specs (e.g. logistic-regression balanced accuracy on clinical/demographic targets like `med_adhd_vs_ctrl`, `sex_separation`, `age_separation`, `condition_separation`).
 - Best-fit selection is driven by `selection_metric` (e.g. `separation_logreg_balanced_accuracy`) and, when you want fits ranked on one specific target, `selection_eval_name`. Set both explicitly for any serious comparison study, along with `output_group`, to keep report selection unambiguous and run variants separated on disk.
-- Outputs are separated by analysis variant under `BIDS/derivatives/dim_reduction/<output_group>/<dataset_name>/<input_mode>/<analysis_mode>__<representation>/`, with matching reports under `reports/summary/dim_reduction/.../<analysis_mode>__<representation>_dataset_summary.html`. This split matters whenever you vary `input_mode`, `analysis_mode`, or `representation`.
-- At the run root the script writes fit/eval inventories, per-fit artifacts, the dataset summary report, `run_summary.json`, and a terminal marker (`_RUN_SUCCESS`, `_RUN_PARTIAL`, or `_RUN_FAILED`) so you can see at a glance which variants completed, partially completed, or failed.
+- Outputs are separated by analysis variant under `BIDS/derivatives/dim_reduction/<output_group>/<dataset_name>/<analysis_mode>_<input_mode>_<representation-label>_cfg-<hash>/`. The configuration hash isolates cohorts, QC, filters, reducers, evaluation targets, and model-specific embedding spaces. Raw labels drop duplicated layout suffixes (`epoch_flat` -> `epoch`, `recording_flat` -> `recording`); `subject_*` variants aggregated by recording add an explicit suffix.
+- Each run root contains invocation-scoped `runs/fit_runs.json`, `runs/eval_runs.json`, `runs/run_summary.json`, checkpoint artifacts under `artifacts/fits/` and `artifacts/evals/`, and a terminal marker (`_RUN_SUCCESS`, `_RUN_PARTIAL`, or `_RUN_FAILED`). Matching reports use the same hashed variant under `reports/summary/dim_reduction/.../<dataset_name>/`. Re-running rebuilds the inventories from reusable checkpoint artifacts, preventing stale experiments from entering the current report.
 
 ### Parallelism and Practical Notes
 

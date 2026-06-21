@@ -7,15 +7,15 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
-from coco_pipe.viz import plot_bar, plot_distribution_groups, plot_heatmap
-from eeg_adhd_epilepsy.viz import utils
 import seaborn as sns
+from coco_pipe.viz import plot_bar, plot_distribution_groups, plot_heatmap
 
 from eeg_adhd_epilepsy.utils.metadata_schema import (
     EPILEPSY_MED_COLS,
     NORMALIZED_PSYCHOSTIMULANT_CATEGORIES,
     SOURCE_DATASETS,
 )
+from eeg_adhd_epilepsy.viz import utils
 
 logger = logging.getLogger(__name__)
 

@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Dict, List, Mapping
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
 from coco_pipe.viz import plot_bar, plot_histogram
+
 import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
 from eeg_adhd_epilepsy.viz import utils
 
@@ -57,7 +57,11 @@ def plot_total_duration_by_segment(df: pd.DataFrame, fig_dir: Path) -> Path | No
 
 
 def plot_eye_state_breakdown(df: pd.DataFrame, fig_dir: Path) -> Path | None:
-    group = df.groupby(["segment_type", "eye_state"], dropna=False)["duration"].sum().unstack(fill_value=0.0)
+    group = (
+        df.groupby(["segment_type", "eye_state"], dropna=False)["duration"]
+        .sum()
+        .unstack(fill_value=0.0)
+    )
     if group.empty:
         return None
     if "eo" in group.columns:
@@ -121,7 +125,10 @@ def plot_block_eye_states(df: pd.DataFrame, block_type: str, fig_dir: Path) -> P
         (float(row.t_start), float(row.t_stop)): idx
         for idx, row in enumerate(intervals.itertuples(index=False), start=1)
     }
-    block_df["block_id"] = [block_ids.get((float(start), float(stop))) for start, stop in zip(block_df["t_start"], block_df["t_stop"])]
+    block_df["block_id"] = [
+        block_ids.get((float(start), float(stop)))
+        for start, stop in zip(block_df["t_start"], block_df["t_stop"])
+    ]
     block_df = block_df.dropna(subset=["block_id"]).copy()
     block_df["block_id"] = block_df["block_id"].astype(int)
     block_df["eye_state"] = block_df["eye_state"].fillna("unknown").astype(str).str.upper()
@@ -132,12 +139,21 @@ def plot_block_eye_states(df: pd.DataFrame, block_type: str, fig_dir: Path) -> P
     positions = np.arange(len(labels))
     eo_vals = grouped.get("EO", pd.Series(0.0, index=grouped.index))
     ec_vals = grouped.get("EC", pd.Series(0.0, index=grouped.index))
-    unknown_vals = grouped.drop(columns=[c for c in grouped.columns if c in {"EO", "EC"}], errors="ignore").sum(axis=1)
+    unknown_vals = grouped.drop(
+        columns=[c for c in grouped.columns if c in {"EO", "EC"}], errors="ignore"
+    ).sum(axis=1)
     fig, ax = plt.subplots(figsize=(7, max(3, len(grouped) * 0.4)))
     ax.barh(positions, eo_vals, label="Eyes Open", color="#55A868")
     ax.barh(positions, ec_vals, left=eo_vals, label="Eyes Closed", color="#C44E52")
     if not (unknown_vals == 0).all():
-        ax.barh(positions, unknown_vals, left=eo_vals + ec_vals, label="Unknown", color="#8172B2", alpha=0.7)
+        ax.barh(
+            positions,
+            unknown_vals,
+            left=eo_vals + ec_vals,
+            label="Unknown",
+            color="#8172B2",
+            alpha=0.7,
+        )
     ax.set_yticks(positions)
     ax.set_yticklabels(labels)
     ax.set_xlabel("Duration (s)")
@@ -174,7 +190,9 @@ def plot_segment_timeline(df: pd.DataFrame, fig_dir: Path) -> Path | None:
             stop = float(row["t_stop"])
             if not np.isfinite(start) or not np.isfinite(stop):
                 continue
-            ax.plot([start, stop], [y, y], linewidth=8, solid_capstyle="butt", color=cmap(y % cmap.N))
+            ax.plot(
+                [start, stop], [y, y], linewidth=8, solid_capstyle="butt", color=cmap(y % cmap.N)
+            )
         ax.set_yticks(list(type_to_y.values()))
         ax.set_yticklabels(segment_types)
         ax.set_xlabel("Time (s)")
@@ -201,7 +219,9 @@ def plot_segment_timeline(df: pd.DataFrame, fig_dir: Path) -> Path | None:
             stop = float(row["t_stop"])
             if not np.isfinite(start) or not np.isfinite(stop):
                 continue
-            ax.plot([start, stop], [y, y], linewidth=8, solid_capstyle="butt", color=cmap(y % cmap.N))
+            ax.plot(
+                [start, stop], [y, y], linewidth=8, solid_capstyle="butt", color=cmap(y % cmap.N)
+            )
         ax.set_title(f"Condition Timeline - Run {run_id}")
         ax.grid(True, axis="x", alpha=0.2)
         ax.set_xlabel("Time within run (s)")
@@ -211,10 +231,10 @@ def plot_segment_timeline(df: pd.DataFrame, fig_dir: Path) -> Path | None:
     return utils.save_fig(fig, fig_dir / FIGURE_FILENAMES["timeline"])
 
 
-def save_eeg_report_figures(df: pd.DataFrame, fig_dir: Path) -> Dict[str, Path]:
+def save_eeg_report_figures(df: pd.DataFrame, fig_dir: Path) -> dict[str, Path]:
     fig_dir = Path(fig_dir)
     fig_dir.mkdir(parents=True, exist_ok=True)
-    figure_paths: Dict[str, Path] = {}
+    figure_paths: dict[str, Path] = {}
     for key, func in (
         ("segment_duration", plot_total_duration_by_segment),
         ("eye_state_breakdown", plot_eye_state_breakdown),
@@ -233,7 +253,9 @@ def save_eeg_report_figures(df: pd.DataFrame, fig_dir: Path) -> Dict[str, Path]:
     return figure_paths
 
 
-def _plot_bar(values: pd.Series, title: str, xlabel: str, ylabel: str, out_path: Path) -> Path | None:
+def _plot_bar(
+    values: pd.Series, title: str, xlabel: str, ylabel: str, out_path: Path
+) -> Path | None:
     if values.empty:
         return None
     fig, ax = plot_bar(
@@ -254,7 +276,9 @@ def plot_runs_per_subject(runs_df: pd.DataFrame, output_dir: Path) -> Path | Non
     if runs_df.empty or "subject_id" not in runs_df:
         return None
     counts = runs_df.groupby("subject_id")["run_id"].nunique()
-    counts = counts.loc[counts.ge(report_eeg.MULTI_RUN_SUBJECT_THRESHOLD)].sort_values(ascending=True)
+    counts = counts.loc[counts.ge(report_eeg.MULTI_RUN_SUBJECT_THRESHOLD)].sort_values(
+        ascending=True
+    )
     if counts.empty:
         return None
     return _plot_bar(
@@ -310,17 +334,29 @@ def plot_run_duration_distribution(runs_df: pd.DataFrame, output_dir: Path) -> P
     return utils.save_fig(fig, output_dir / FIGURE_FILENAMES["run_duration_distribution"])
 
 
-def _plot_condition_availability_by_group(runs_df: pd.DataFrame, group_col: str, output_dir: Path, out_key: str) -> Path | None:
+def _plot_condition_availability_by_group(
+    runs_df: pd.DataFrame, group_col: str, output_dir: Path, out_key: str
+) -> Path | None:
     if runs_df.empty or group_col not in runs_df.columns:
         return None
     grouped = runs_df.copy()
     grouped[group_col] = grouped[group_col].fillna("Unknown").replace("", "Unknown")
-    summary = pd.DataFrame({
-        "Eyes Open": grouped.groupby(group_col)["total_eyes_open_duration"].apply(lambda s: s.gt(0).mean() * 100.0),
-        "Eyes Closed": grouped.groupby(group_col)["total_eyes_closed_duration"].apply(lambda s: s.gt(0).mean() * 100.0),
-        "HV": grouped.groupby(group_col)["hv_block_count"].apply(lambda s: s.gt(0).mean() * 100.0),
-        "PHOTO": grouped.groupby(group_col)["photo_block_count"].apply(lambda s: s.gt(0).mean() * 100.0),
-    })
+    summary = pd.DataFrame(
+        {
+            "Eyes Open": grouped.groupby(group_col)["total_eyes_open_duration"].apply(
+                lambda s: s.gt(0).mean() * 100.0
+            ),
+            "Eyes Closed": grouped.groupby(group_col)["total_eyes_closed_duration"].apply(
+                lambda s: s.gt(0).mean() * 100.0
+            ),
+            "HV": grouped.groupby(group_col)["hv_block_count"].apply(
+                lambda s: s.gt(0).mean() * 100.0
+            ),
+            "PHOTO": grouped.groupby(group_col)["photo_block_count"].apply(
+                lambda s: s.gt(0).mean() * 100.0
+            ),
+        }
+    )
     if summary.empty:
         return None
     fig, ax = plt.subplots(figsize=(10, max(4, len(summary) * 0.5)))
@@ -334,14 +370,22 @@ def _plot_condition_availability_by_group(runs_df: pd.DataFrame, group_col: str,
     return utils.save_fig(fig, output_dir / FIGURE_FILENAMES[out_key])
 
 
-def _plot_duration_by_group(runs_df: pd.DataFrame, group_col: str, output_dir: Path, out_key: str) -> Path | None:
+def _plot_duration_by_group(
+    runs_df: pd.DataFrame, group_col: str, output_dir: Path, out_key: str
+) -> Path | None:
     if runs_df.empty or group_col not in runs_df.columns:
         return None
     grouped = runs_df.copy()
     grouped[group_col] = grouped[group_col].fillna("Unknown").replace("", "Unknown")
     summary = grouped.groupby(group_col).agg(
-        raw_duration_min=("raw_duration", lambda s: pd.to_numeric(s, errors="coerce").mean() / 60.0),
-        analysis_duration_min=("total_duration", lambda s: pd.to_numeric(s, errors="coerce").mean() / 60.0),
+        raw_duration_min=(
+            "raw_duration",
+            lambda s: pd.to_numeric(s, errors="coerce").mean() / 60.0,
+        ),
+        analysis_duration_min=(
+            "total_duration",
+            lambda s: pd.to_numeric(s, errors="coerce").mean() / 60.0,
+        ),
     )
     if summary.empty:
         return None
@@ -356,7 +400,9 @@ def _plot_duration_by_group(runs_df: pd.DataFrame, group_col: str, output_dir: P
     return utils.save_fig(fig, output_dir / FIGURE_FILENAMES[out_key])
 
 
-def _plot_event_distribution_matrix(event_counts_map: Mapping[str, np.ndarray], title: str, xlabel: str, out_path: Path) -> Path | None:
+def _plot_event_distribution_matrix(
+    event_counts_map: Mapping[str, np.ndarray], title: str, xlabel: str, out_path: Path
+) -> Path | None:
     if not event_counts_map:
         return None
     labels = list(event_counts_map.keys())
@@ -381,14 +427,16 @@ def _plot_event_distribution_matrix(event_counts_map: Mapping[str, np.ndarray], 
             ax=axes[ax_idx],
         )
         axes[ax_idx].grid(True, axis="y", alpha=0.2)
-    for extra_ax in axes[len(labels):]:
+    for extra_ax in axes[len(labels) :]:
         extra_ax.axis("off")
     fig.suptitle(title, fontsize=14)
     fig.tight_layout(rect=[0, 0, 1, 0.97])
     return utils.save_fig(fig, out_path)
 
 
-def save_dataset_event_distributions(event_counts_list: List[Dict[str, int]], output_dir: Path) -> Dict[str, Path]:
+def save_dataset_event_distributions(
+    event_counts_list: list[dict[str, int]], output_dir: Path
+) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     if not event_counts_list:
         return {}
@@ -399,8 +447,10 @@ def save_dataset_event_distributions(event_counts_list: List[Dict[str, int]], ou
             agg_data[key][idx] = float(value)
 
     condition_map = {key: agg_data[key] for key in CONDITION_EVENT_LABELS if key in agg_data}
-    clinical_map = {key: values for key, values in agg_data.items() if key not in CONDITION_EVENT_LABELS}
-    figure_paths: Dict[str, Path] = {}
+    clinical_map = {
+        key: values for key, values in agg_data.items() if key not in CONDITION_EVENT_LABELS
+    }
+    figure_paths: dict[str, Path] = {}
     cond_path = _plot_event_distribution_matrix(
         condition_map,
         "Condition Event Counts (EO/EC/HV/Photo)",
@@ -420,17 +470,42 @@ def save_dataset_event_distributions(event_counts_list: List[Dict[str, int]], ou
     return figure_paths
 
 
-def save_dataset_eeg_figures(runs_df: pd.DataFrame, event_counts_list: List[Dict[str, int]], output_dir: Path) -> Dict[str, Path]:
+def save_dataset_eeg_figures(
+    runs_df: pd.DataFrame, event_counts_list: list[dict[str, int]], output_dir: Path
+) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    figure_paths: Dict[str, Path] = {}
+    figure_paths: dict[str, Path] = {}
     for key, path in (
         ("runs_per_subject", plot_runs_per_subject(runs_df, output_dir)),
-        ("recording_start_hour_distribution", plot_recording_start_hour_distribution(runs_df, output_dir)),
+        (
+            "recording_start_hour_distribution",
+            plot_recording_start_hour_distribution(runs_df, output_dir),
+        ),
         ("run_duration_distribution", plot_run_duration_distribution(runs_df, output_dir)),
-        ("availability_by_source_dataset", _plot_condition_availability_by_group(runs_df, "source_dataset", output_dir, "availability_by_source_dataset")),
-        ("availability_by_combined_diagnosis", _plot_condition_availability_by_group(runs_df, "combined_diagnosis", output_dir, "availability_by_combined_diagnosis")),
-        ("duration_by_source_dataset", _plot_duration_by_group(runs_df, "source_dataset", output_dir, "duration_by_source_dataset")),
-        ("duration_by_combined_diagnosis", _plot_duration_by_group(runs_df, "combined_diagnosis", output_dir, "duration_by_combined_diagnosis")),
+        (
+            "availability_by_source_dataset",
+            _plot_condition_availability_by_group(
+                runs_df, "source_dataset", output_dir, "availability_by_source_dataset"
+            ),
+        ),
+        (
+            "availability_by_combined_diagnosis",
+            _plot_condition_availability_by_group(
+                runs_df, "combined_diagnosis", output_dir, "availability_by_combined_diagnosis"
+            ),
+        ),
+        (
+            "duration_by_source_dataset",
+            _plot_duration_by_group(
+                runs_df, "source_dataset", output_dir, "duration_by_source_dataset"
+            ),
+        ),
+        (
+            "duration_by_combined_diagnosis",
+            _plot_duration_by_group(
+                runs_df, "combined_diagnosis", output_dir, "duration_by_combined_diagnosis"
+            ),
+        ),
     ):
         if path:
             figure_paths[key] = path

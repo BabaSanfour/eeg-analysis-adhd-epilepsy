@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Mapping, Tuple
+from collections.abc import Mapping
 
-import numpy as np
 import mne
-
+import numpy as np
 from specparam import SpectralGroupModel
 
-from eeg_adhd_epilepsy.utils.config import BAND_LIMITS
+from eeg_adhd_epilepsy.utils.constants import BAND_LIMITS
 
 EPS = np.finfo(float).eps
 
@@ -17,10 +16,10 @@ EPS = np.finfo(float).eps
 def _integrate_power(
     psd: np.ndarray,
     freqs: np.ndarray,
-    band_limits: Mapping[str, Tuple[float, float]],
-) -> Dict[str, np.ndarray]:
+    band_limits: Mapping[str, tuple[float, float]],
+) -> dict[str, np.ndarray]:
     """Calculate band powers using trapezoidal integration (vectorized)."""
-    powers: Dict[str, np.ndarray] = {}
+    powers: dict[str, np.ndarray] = {}
     for band, (low, high) in band_limits.items():
         mask = (freqs >= low) & (freqs <= high)
         if not mask.any():
@@ -33,11 +32,11 @@ def _integrate_power(
 
 def compute_spectral_metrics(
     data: mne.io.BaseRaw | mne.Epochs | None,
-    picks: List[str] | None,
+    picks: list[str] | None,
     fmin: float = 1.0,
     fmax: float = 60.0,
-    band_limits: Mapping[str, Tuple[float, float]] | None = None,
-) -> Tuple[np.ndarray, np.ndarray, float, Dict[str, float]]:
+    band_limits: Mapping[str, tuple[float, float]] | None = None,
+) -> tuple[np.ndarray, np.ndarray, float, dict[str, float]]:
     """
     Compute PSD-derived summary metrics for the maintained QC/preproc path.
 
@@ -54,18 +53,18 @@ def compute_spectral_metrics(
 
     # Auto-pick EEG channels if picks is None or empty
     if picks is None or len(picks) == 0:
-        picks = mne.pick_types(data.info, eeg=True, meg=False, exclude='bads')
+        picks = mne.pick_types(data.info, eeg=True, meg=False, exclude="bads")
         if len(picks) == 0:
             empty = np.array([])
             return empty, empty, float("nan"), {k: float("nan") for k in band_limits}
 
     spec = data.compute_psd(picks=picks, fmin=fmin, fmax=fmax, verbose="ERROR")
     psd, freqs = spec.get_data(return_freqs=True)
-    
+
     # Calculate alpha peak using Alpha band limits (default or overrides)
     alpha_band = band_limits.get("alpha", (8.0, 13.0))
     alpha_mask = (freqs >= alpha_band[0]) & (freqs <= alpha_band[1])
-    
+
     if alpha_mask.any():
         # Alpha peak from mean PSD across channels
         mean_psd_alpha = np.nanmean(psd[:, alpha_mask], axis=0)
@@ -75,7 +74,7 @@ def compute_spectral_metrics(
         alpha_peak = float("nan")
 
     band_powers_by_channel = _integrate_power(psd, freqs, band_limits)
-    band_powers_mean: Dict[str, float] = {
+    band_powers_mean: dict[str, float] = {
         band: float(np.nanmean(values)) for band, values in band_powers_by_channel.items()
     }
 
@@ -84,13 +83,13 @@ def compute_spectral_metrics(
 
 def compute_stage_spectral_summary(
     data: mne.io.BaseRaw | mne.Epochs | None,
-    picks: List[str] | None = None,
+    picks: list[str] | None = None,
     *,
     fmin: float = 0.5,
     fmax: float = 60.0,
-    band_limits: Mapping[str, Tuple[float, float]] | None = None,
+    band_limits: Mapping[str, tuple[float, float]] | None = None,
     reference_psd: np.ndarray | None = None,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Compute the stage spectral summary used in provenance and stage QC."""
     psd, freqs, alpha_peak, band_powers_mean = compute_spectral_metrics(
         data=data,
@@ -106,7 +105,12 @@ def compute_stage_spectral_summary(
         fmax=30.0,
     )
     lsd = float("nan")
-    if reference_psd is not None and psd.size > 0 and reference_psd.size > 0 and psd.shape == reference_psd.shape:
+    if (
+        reference_psd is not None
+        and psd.size > 0
+        and reference_psd.size > 0
+        and psd.shape == reference_psd.shape
+    ):
         lsd = compute_lsd(psd, reference_psd)
     return {
         "psd": psd,
@@ -125,15 +129,14 @@ def compute_line_noise_index(
     line_freq: float = 60.0,
     band_width: float = 1.0,
     neighbor_width: float = 2.0,
-) -> Tuple[float, np.ndarray]:
+) -> tuple[float, np.ndarray]:
     """Residual line noise ratio comparing the target bin to nearby bins."""
     if psd.size == 0 or freqs.size == 0:
         return float("nan"), np.array([])
     center_mask = (freqs >= line_freq - band_width) & (freqs <= line_freq + band_width)
     neighbor_mask = (
-        ((freqs >= line_freq - band_width - neighbor_width) & (freqs < line_freq - band_width))
-        | ((freqs > line_freq + band_width) & (freqs <= line_freq + band_width + neighbor_width))
-    )
+        (freqs >= line_freq - band_width - neighbor_width) & (freqs < line_freq - band_width)
+    ) | ((freqs > line_freq + band_width) & (freqs <= line_freq + band_width + neighbor_width))
     if not center_mask.any() or not neighbor_mask.any():
         return float("nan"), np.array([])
     center_power = np.nanmean(psd[:, center_mask], axis=1)
@@ -145,20 +148,20 @@ def compute_line_noise_index(
 def compute_hf_lf_ratio(
     psd: np.ndarray,
     freqs: np.ndarray,
-    hf_band: Tuple[float, float] = (30.0, 100.0),
-    lf_band: Tuple[float, float] = (1.0, 30.0),
-) -> Tuple[float, float, np.ndarray]:
+    hf_band: tuple[float, float] = (30.0, 100.0),
+    lf_band: tuple[float, float] = (1.0, 30.0),
+) -> tuple[float, float, np.ndarray]:
     """High-frequency / low-frequency power ratio."""
     if psd.size == 0 or freqs.size == 0:
         return float("nan"), float("nan"), np.array([])
-    
+
     bands = {"hf": hf_band, "lf": lf_band}
     powers = _integrate_power(psd, freqs, bands)
-    
+
     hf_power = powers["hf"]
     lf_power = powers["lf"] + EPS
-    
-    ratios = hf_power / lf_power 
+
+    ratios = hf_power / lf_power
     return float(np.nanmean(ratios)), float(np.nanmax(ratios)), ratios
 
 
@@ -167,7 +170,7 @@ def compute_aperiodic_slope(
     freqs: np.ndarray,
     fmin: float = 1.0,
     fmax: float = 30.0,
-) -> Tuple[float, float, float, np.ndarray]:
+) -> tuple[float, float, float, np.ndarray]:
     """Fit 1/f slope using specparam."""
     if psd.size == 0 or freqs.size == 0:
         return float("nan"), float("nan"), float("nan"), np.array([])
@@ -221,9 +224,9 @@ def compute_lsd(psd_clean: np.ndarray, psd_raw: np.ndarray, eps: float = 1e-20) 
     """
     if psd_clean.shape != psd_raw.shape:
         return float("nan")
-        
+
     log_clean = 10 * np.log10(psd_clean + eps)
     log_raw = 10 * np.log10(psd_raw + eps)
-    
+
     diff_sq = (log_clean - log_raw) ** 2
     return float(np.sqrt(np.nanmean(diff_sq)))

@@ -5,15 +5,14 @@ Build canonical patient metadata tables from the ADHD and drug-resistant CSVs.
 from __future__ import annotations
 
 import argparse
-import json
 import re
 from collections import Counter
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from coco_pipe.io import read_table, write_json
 
-from eeg_adhd_epilepsy.io.table import load
 from eeg_adhd_epilepsy.utils.metadata_schema import (
     EPILEPSY_MED_COLS,
     PATIENTS_METADATA_AUDIT_COLUMNS,
@@ -23,12 +22,30 @@ from eeg_adhd_epilepsy.utils.metadata_schema import (
 
 # Known subjects missing physical EEG files or lacking 19 canonical channels
 EXCLUDED_STUDY_IDS = {
-    1019, 1023, 1094, 1101, 1163, 1187, 1196, 1198, 1199, 1200, 1201, 
-    1202, 1203, 1204, 1205, 1206, 1207, 1208, 1209, 1210, 1234, 1235, 1241
+    1019,
+    1023,
+    1094,
+    1101,
+    1163,
+    1187,
+    1196,
+    1198,
+    1199,
+    1200,
+    1201,
+    1202,
+    1203,
+    1204,
+    1205,
+    1206,
+    1207,
+    1208,
+    1209,
+    1210,
+    1234,
+    1235,
+    1241,
 }
-DEFAULT_ADHD_CSV = DEFAULT_CSV_DIR / "EEG_Psychostimulants_PatientList_08-2025.csv"
-DEFAULT_DRUG_RESISTANT_CSV = DEFAULT_CSV_DIR / "IRSC_data_final.csv"
-
 _AUDIT_OUTPUT_COLUMNS = [*PATIENTS_METADATA_AUDIT_COLUMNS, "drop_reason"]
 _RAW_MERGED_COLUMNS = [
     "source_dataset",
@@ -67,9 +84,7 @@ def _normalize_binary_flag_series(series: pd.Series, allow_missing: bool) -> pd.
     return numeric.fillna(0).eq(1).astype(int)
 
 
-_AGE_PATTERN = re.compile(
-    r"(?:(?P<years>\d+)y)?(?:(?P<months>\d+)m)?(?:(?P<days>\d+)d)?$"
-)
+_AGE_PATTERN = re.compile(r"(?:(?P<years>\d+)y)?(?:(?P<months>\d+)m)?(?:(?P<days>\d+)d)?$")
 
 
 def _parse_age_years(value: object) -> float | None:
@@ -114,8 +129,7 @@ def _build_psychostimulant_fields(
 
         if key not in PSYCHOSTIMULANT_RAW_PAIR_TO_CATEGORY:
             raise ValueError(
-                "Unknown psychostimulant mapping "
-                f"for description={label!r}, category={category!r}"
+                f"Unknown psychostimulant mapping for description={label!r}, category={category!r}"
             )
 
         categories.append(PSYCHOSTIMULANT_RAW_PAIR_TO_CATEGORY[key])
@@ -279,9 +293,7 @@ def _normalize_merged_metadata(df: pd.DataFrame) -> pd.DataFrame:
     )
     out["psychostimulant"] = psychostimulant
     out["psychostimulant_category"] = category
-    out["asm"] = (
-        out[EPILEPSY_MED_COLS].sum(axis=1).gt(0) | out["other_asm"].eq(1)
-    ).astype(int)
+    out["asm"] = (out[EPILEPSY_MED_COLS].sum(axis=1).gt(0) | out["other_asm"].eq(1)).astype(int)
 
     return _add_metadata_derived_columns(_add_patient_group_ids(out))
 
@@ -320,16 +332,18 @@ def build_patients_metadata(
 ) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    raw_adhd = load(str(adhd_csv), sep=None)
-    raw_drug_resistant = load(str(drug_resistant_csv), sep=None)
+    raw_adhd = read_table(adhd_csv, sep=None)
+    raw_drug_resistant = read_table(drug_resistant_csv, sep=None)
 
     merged_raw = pd.concat(
         [_rename_adhd_source(raw_adhd), _rename_drug_resistant_source(raw_drug_resistant)],
         ignore_index=True,
     )
-    potential_mask = merged_raw[["adhd", "autism", "epilepsy"]].apply(
-        lambda column: column.astype(str).str.match(POTENTIAL_PATTERN)
-    ).any(axis=1)
+    potential_mask = (
+        merged_raw[["adhd", "autism", "epilepsy"]]
+        .apply(lambda column: column.astype(str).str.match(POTENTIAL_PATTERN))
+        .any(axis=1)
+    )
     merged_normalized = _normalize_merged_metadata(merged_raw)
 
     raw_output = output_dir / "patients_metadata.csv"
@@ -348,12 +362,7 @@ def build_patients_metadata(
     working = _append_removed(
         removed_frames,
         working,
-        working["eeg_date"]
-        .fillna("")
-        .astype(str)
-        .str.strip()
-        .str.upper()
-        .isin({"NO EEG", "SEEG"}),
+        working["eeg_date"].fillna("").astype(str).str.strip().str.upper().isin({"NO EEG", "SEEG"}),
         "no_eeg_files",
     )
     working = _append_removed(
@@ -410,23 +419,18 @@ def build_patients_metadata(
         "clean_rows": int(len(clean_df)),
         "removed_rows": int(len(removed_rows)),
         "drop_reason_counts": {
-            key: int(value)
-            for key, value in Counter(removed_rows["drop_reason"]).items()
+            key: int(value) for key, value in Counter(removed_rows["drop_reason"]).items()
         },
         "source_dataset_counts": {
-            key: int(value)
-            for key, value in Counter(removed_rows["source_dataset"]).items()
+            key: int(value) for key, value in Counter(removed_rows["source_dataset"]).items()
         },
     }
-    removed_output.write_text(
-        json.dumps(
-            {
-                "summary": summary,
-                "removed_rows": _serialize_removed_rows(removed_rows),
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
+    write_json(
+        removed_output,
+        {
+            "summary": summary,
+            "removed_rows": _serialize_removed_rows(removed_rows),
+        },
     )
 
     return {

@@ -12,46 +12,46 @@ import re
 import shutil
 import unicodedata
 from collections import Counter, defaultdict
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import mne
 import numpy as np
 import pandas as pd
-from mne_bids import BIDSPath, write_raw_bids
 from joblib import Parallel, cpu_count, delayed
+from mne_bids import BIDSPath, write_raw_bids
 from tqdm import tqdm
 
-from eeg_adhd_epilepsy.io import ingest
-from eeg_adhd_epilepsy.io import bids as bids_io
 import eeg_adhd_epilepsy.qc.raw_qc as qc_raw
 import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
-from eeg_adhd_epilepsy.utils import config
 import eeg_adhd_epilepsy.utils.events as utils_events
+import eeg_adhd_epilepsy.viz.eeg_report as viz_eeg
+from eeg_adhd_epilepsy.io import bids as bids_io
+from eeg_adhd_epilepsy.io import ingest
+from eeg_adhd_epilepsy.utils import constants
 from eeg_adhd_epilepsy.utils.formatting import format_clock_time, format_duration_hms
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
-import eeg_adhd_epilepsy.viz.eeg_report as viz_eeg
 
 LOGGER = logging.getLogger(__name__)
-SEGMENT_COLUMNS = list(config.SEGMENT_COLUMNS)
+SEGMENT_COLUMNS = list(constants.SEGMENT_COLUMNS)
 
 
 def _slug_label(label: str) -> str:
     return label.lower().replace(" - ", "_").replace("/", "_").replace(" ", "_").replace("-", "_")
 
 
-IGNORE_LABEL_PATTERNS = (*config.IGNORE_PATTERNS, *config.IGNORED_LABELS)
-SENSOR_LABEL_PATTERNS = (*config.SENSOR_ARTEFACT_KEYWORDS, *config.SENSOR_ACTION_KEYWORDS)
+IGNORE_LABEL_PATTERNS = (*constants.IGNORE_PATTERNS, *constants.IGNORED_LABELS)
+SENSOR_LABEL_PATTERNS = (*constants.SENSOR_ARTEFACT_KEYWORDS, *constants.SENSOR_ACTION_KEYWORDS)
 BAD_INTEREST_LABELS = tuple(
     (pattern, f"BAD_{_slug_label(category)}")
-    for category, patterns in config.ANNOTATION_INTEREST_MAP.items()
+    for category, patterns in constants.ANNOTATION_INTEREST_MAP.items()
     if _slug_label(category) not in {"eyes_open", "eyes_closed", "hv", "post_hv", "photo"}
     for pattern in patterns
     if pattern
 )
 CLINICAL_LABELS = tuple(
     (pattern, _slug_label(category))
-    for category, patterns in config.CLINICAL_COMMENT_LABELS.items()
+    for category, patterns in constants.CLINICAL_COMMENT_LABELS.items()
     for pattern in patterns
     if pattern
 )
@@ -87,24 +87,26 @@ def canonicalize_annotations(raw: mne.io.BaseRaw) -> mne.io.BaseRaw:
             continue
         elif _matches_any(normalized, IGNORE_LABEL_PATTERNS):
             continue
-        elif normalized == config.RECORDING_START_LABEL:
+        elif normalized == constants.RECORDING_START_LABEL:
             standardized = "recording_start"
-        elif _matches_any(normalized, config.BASIC_1020_CHANNELS) and _matches_any(normalized, SENSOR_LABEL_PATTERNS):
+        elif _matches_any(normalized, constants.BASIC_1020_CHANNELS) and _matches_any(
+            normalized, SENSOR_LABEL_PATTERNS
+        ):
             standardized = "BAD_sensor_artefact"
-        elif _matches_any(normalized, config.EYES_OPEN_LABELS):
+        elif _matches_any(normalized, constants.EYES_OPEN_LABELS):
             standardized = "eyes_open"
-        elif _matches_any(normalized, config.EYES_CLOSED_LABELS):
+        elif _matches_any(normalized, constants.EYES_CLOSED_LABELS):
             standardized = "eyes_closed"
-        elif _matches_any(normalized, config.POST_HV_LABELS):
+        elif _matches_any(normalized, constants.POST_HV_LABELS):
             standardized = "post_hv"
-        elif _matches_any(normalized, config.HV_LABELS):
+        elif _matches_any(normalized, constants.HV_LABELS):
             if "start" in normalized or "debut" in normalized:
                 standardized = "hv_start"
             elif "end" in normalized or re.search(r"\bfin\b", normalized):
                 standardized = "hv_end"
             else:
                 standardized = None
-        elif _matches_any(normalized, config.PHOTO_LABELS):
+        elif _matches_any(normalized, constants.PHOTO_LABELS):
             freq = get_photo_freq(original)
             standardized = "photo" if freq is None else f"photo_{freq}hz"
         else:
@@ -140,7 +142,7 @@ def canonicalize_annotations(raw: mne.io.BaseRaw) -> mne.io.BaseRaw:
 def get_photo_freq(desc: str | None) -> int | None:
     if not desc:
         return None
-    match = config.PHOTO_FREQ_PATTERN.search(desc)
+    match = constants.PHOTO_FREQ_PATTERN.search(desc)
     if not match:
         return None
     try:
@@ -207,7 +209,9 @@ def _find_hv_blocks(entries: Sequence[dict[str, object]]) -> list[dict[str, obje
     return hv_blocks
 
 
-def _find_photo_blocks(entries: Sequence[dict[str, object]], raw_end: float) -> list[dict[str, object]]:
+def _find_photo_blocks(
+    entries: Sequence[dict[str, object]], raw_end: float
+) -> list[dict[str, object]]:
     photo_entries = [
         entry
         for entry in entries
@@ -217,7 +221,9 @@ def _find_photo_blocks(entries: Sequence[dict[str, object]], raw_end: float) -> 
     for pos, entry in enumerate(photo_entries):
         onset = float(entry["onset"])
         description = str(entry["description"])
-        next_start = float(photo_entries[pos + 1]["onset"]) if pos + 1 < len(photo_entries) else raw_end
+        next_start = (
+            float(photo_entries[pos + 1]["onset"]) if pos + 1 < len(photo_entries) else raw_end
+        )
         if next_start <= onset:
             continue
         blocks.append(
@@ -236,10 +242,16 @@ def _compute_post_hv_blocks(
     entries: Sequence[dict[str, object]],
     raw_end: float,
 ) -> list[dict[str, object]]:
-    post_hv_markers = [float(entry["onset"]) for entry in entries if str(entry["description"]) == "post_hv"]
+    post_hv_markers = [
+        float(entry["onset"]) for entry in entries if str(entry["description"]) == "post_hv"
+    ]
     post_blocks: list[dict[str, object]] = []
     constraints = sorted(
-        [float(block["t_start"]) for block in hv_blocks + photo_blocks if float(block["t_start"]) > 0.0]
+        [
+            float(block["t_start"])
+            for block in hv_blocks + photo_blocks
+            if float(block["t_start"]) > 0.0
+        ]
         + [raw_end]
     )
     for hv_block in hv_blocks:
@@ -301,7 +313,9 @@ def _segment_eye_states_within_interval(
             freq_hz=freq_hz,
         )
         for state_start, state_stop, state in eye_states
-        if state_stop > start and state_start < stop and min(stop, state_stop) > max(start, state_start)
+        if state_stop > start
+        and state_start < stop
+        and min(stop, state_stop) > max(start, state_start)
     ]
     if segments or stop <= start:
         return segments
@@ -338,11 +352,13 @@ def extract_condition_segments(raw: mne.io.BaseRaw) -> pd.DataFrame:
     hv_blocks = _find_hv_blocks(entries)
     photo_blocks = _find_photo_blocks(entries, raw_end)
     post_hv_blocks = _compute_post_hv_blocks(hv_blocks, photo_blocks, entries, raw_end)
-    exclusion_intervals = bids_io.merge_intervals([
-        (block["t_start"], block["t_stop"])
-        for block in (*hv_blocks, *post_hv_blocks, *photo_blocks)
-        if block["t_stop"] > block["t_start"]
-    ])
+    exclusion_intervals = bids_io.merge_intervals(
+        [
+            (block["t_start"], block["t_stop"])
+            for block in (*hv_blocks, *post_hv_blocks, *photo_blocks)
+            if block["t_stop"] > block["t_start"]
+        ]
+    )
     block_specs = (
         ("HV", "hv", hv_blocks),
         ("PostHV", "post_hv", post_hv_blocks),
@@ -388,9 +404,11 @@ def extract_condition_segments(raw: mne.io.BaseRaw) -> pd.DataFrame:
                 )
             )
 
-    return pd.DataFrame.from_records(records, columns=SEGMENT_COLUMNS).sort_values(
-        by=["t_start", "segment_type"]
-    ).reset_index(drop=True)
+    return (
+        pd.DataFrame.from_records(records, columns=SEGMENT_COLUMNS)
+        .sort_values(by=["t_start", "segment_type"])
+        .reset_index(drop=True)
+    )
 
 
 def _eeg_event_counts(
@@ -414,7 +432,8 @@ def _eeg_event_counts(
     for desc, count in raw_counts.items():
         clean_desc = str(desc).strip().lower()
         if (
-            clean_desc in {"eyes_open", "eyes_closed", "hv_start", "hv_end", "post_hv", "recording_start"}
+            clean_desc
+            in {"eyes_open", "eyes_closed", "hv_start", "hv_end", "post_hv", "recording_start"}
             or clean_desc == "photo"
             or clean_desc.startswith("photo_")
             or str(desc).startswith("BLOCK_")
@@ -486,7 +505,8 @@ def _build_eeg_report_record(
     eeg_record = {
         **ids,
         "study_id": int(_record_value(record, "study_id")),
-        "source_dataset": _clean_scalar(metadata.get("source_dataset")) or _clean_scalar(_record_value(record, "source_dataset")),
+        "source_dataset": _clean_scalar(metadata.get("source_dataset"))
+        or _clean_scalar(_record_value(record, "source_dataset")),
         "record_date": _clean_scalar(_record_value(record, "record_date")),
         "meas_datetime": _clean_scalar(_record_value(record, "meas_datetime")),
         "filepath": str(ids.get("filepath") or ""),
@@ -631,7 +651,9 @@ def _write_subject_eeg_report(
     )
     report_eeg.generate_eeg_subject_report(
         record=subject_record,
-        run_inventory_df=run_inventory_df.sort_values("Run") if len(records) > 1 else pd.DataFrame(),
+        run_inventory_df=run_inventory_df.sort_values("Run")
+        if len(records) > 1
+        else pd.DataFrame(),
         run_summary_df=run_summary_df.sort_values("Run") if len(records) > 1 else pd.DataFrame(),
         figure_paths=figure_paths,
         output_path=report_path,
@@ -672,7 +694,9 @@ def _write_eeg_aggregate_reports(
     subjects_df.to_csv(summary_dir / "eeg_subjects.csv", index=False)
 
     dataset_tables = report_eeg.build_dataset_report_tables(runs_df, subjects_df, run_records)
-    dataset_tables["dataset_summary_df"].to_csv(summary_dir / "eeg_dataset_summary.csv", index=False)
+    dataset_tables["dataset_summary_df"].to_csv(
+        summary_dir / "eeg_dataset_summary.csv", index=False
+    )
     figure_paths = viz_eeg.save_dataset_eeg_figures(
         runs_df,
         [record["event_counts"] for record in run_records],
@@ -696,6 +720,7 @@ def _write_eeg_aggregate_reports(
     }
     with open(summary_dir / "eeg_missingness.json", "w") as f:
         json.dump(missing_export, f, indent=2)
+
 
 def process_record(
     record,
@@ -742,7 +767,9 @@ def process_record(
                     metadata=metadata,
                 )
             except Exception as exc:
-                LOGGER.warning("Could not gather existing EEG report record for %s: %s", subject_id, exc)
+                LOGGER.warning(
+                    "Could not gather existing EEG report record for %s: %s", subject_id, exc
+                )
         if raw_qc_reports_dir is not None:
             try:
                 result["raw_qc_record"] = qc_raw.collect_existing_raw_qc_record(
@@ -752,7 +779,9 @@ def process_record(
                     analysis_level=raw_qc_analysis_level,
                 )
             except Exception as exc:
-                LOGGER.warning("Could not gather existing raw QC record for %s: %s", subject_id, exc)
+                LOGGER.warning(
+                    "Could not gather existing raw QC record for %s: %s", subject_id, exc
+                )
         return result
 
     try:
@@ -782,14 +811,18 @@ def process_record(
             )
         )
 
-    available_targets = [channel for channel in config.BASIC_1020_CHANNELS if channel in raw.ch_names]
-    if len(available_targets) < len(config.BASIC_1020_CHANNELS):
-        missing_targets = [channel for channel in config.BASIC_1020_CHANNELS if channel not in raw.ch_names]
+    available_targets = [
+        channel for channel in constants.BASIC_1020_CHANNELS if channel in raw.ch_names
+    ]
+    if len(available_targets) < len(constants.BASIC_1020_CHANNELS):
+        missing_targets = [
+            channel for channel in constants.BASIC_1020_CHANNELS if channel not in raw.ch_names
+        ]
         LOGGER.warning(
             "Skipping %s run-%s: expected %d canonical channels, found %d. Missing: %s",
             subject_id,
             run,
-            len(config.BASIC_1020_CHANNELS),
+            len(constants.BASIC_1020_CHANNELS),
             len(available_targets),
             missing_targets,
         )
@@ -814,7 +847,6 @@ def process_record(
         LOGGER.error("Failed writing %s run-%s: %s", subject_id, run, exc)
         return result
 
-    stem = bids_path.fpath.stem[:-4] if bids_path.fpath.stem.endswith("_eeg") else bids_path.fpath.stem
     if eeg_reports_dir is not None:
         ids = bids_io.build_bids_report_ids(bids_path.fpath)
         ids["filepath"] = str(bids_path.fpath)
@@ -881,7 +913,9 @@ def _resolve_n_jobs(n_jobs: int) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="EEG -> BIDS converter")
-    parser.add_argument("--raw_root", type=Path, required=True, help="Root directory containing raw_data")
+    parser.add_argument(
+        "--raw_root", type=Path, required=True, help="Root directory containing raw_data"
+    )
     parser.add_argument("--bids_root", type=Path, required=True, help="BIDS root directory")
     parser.add_argument("--metadata_csv", type=Path, required=True, help="Canonical metadata CSV")
     parser.add_argument(
@@ -889,7 +923,9 @@ def main() -> None:
         nargs="+",
         help="Optional subject IDs to process (e.g. 0002 0027 or sub-0002 sub-0027)",
     )
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing BIDS subject folders")
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing BIDS subject folders"
+    )
     parser.add_argument("--n_jobs", type=int, default=1, help="Parallel jobs for bidsification.")
     parser.add_argument(
         "--with_eeg_reports",
@@ -914,7 +950,9 @@ def main() -> None:
         help="Custom root directory for reports (defaults to sibling of bids_root)",
     )
     args = parser.parse_args()
-    reports_root = args.reports_root if args.reports_root else bids_io.get_reports_root(Path(args.bids_root))
+    reports_root = (
+        args.reports_root if args.reports_root else bids_io.get_reports_root(Path(args.bids_root))
+    )
     eeg_reports_dir = reports_root if args.with_eeg_reports else None
     raw_qc_reports_dir = reports_root if args.with_raw_qc else None
 
@@ -923,7 +961,9 @@ def main() -> None:
     setup_logging(log_file, "INFO")
 
     metadata_df = pd.read_csv(args.metadata_csv)
-    metadata_df["study_id"] = pd.to_numeric(metadata_df["study_id"], errors="coerce").astype("Int64")
+    metadata_df["study_id"] = pd.to_numeric(metadata_df["study_id"], errors="coerce").astype(
+        "Int64"
+    )
     LOGGER.info("Loaded metadata CSV with %d rows", len(metadata_df))
     metadata_lookup = {
         int(row.study_id): {
@@ -934,7 +974,10 @@ def main() -> None:
         }
         for row in metadata_df[
             ["study_id", "source_dataset", "age_group", "sex", "combined_diagnosis"]
-        ].dropna(subset=["study_id"]).drop_duplicates("study_id").itertuples(index=False)
+        ]
+        .dropna(subset=["study_id"])
+        .drop_duplicates("study_id")
+        .itertuples(index=False)
     }
 
     inventory_df = pd.DataFrame.from_records(
@@ -951,7 +994,9 @@ def main() -> None:
             "record_date",
         ],
     )
-    inventory_df["study_id"] = pd.to_numeric(inventory_df["study_id"], errors="coerce").astype("Int64")
+    inventory_df["study_id"] = pd.to_numeric(inventory_df["study_id"], errors="coerce").astype(
+        "Int64"
+    )
     inventory_df["run"] = pd.Series([None] * len(inventory_df), dtype=object)
 
     selected_study_ids: set[int] | None = None
@@ -960,7 +1005,11 @@ def main() -> None:
             int(bids_io.normalize_subject_id(subject).replace("sub-", ""))
             for subject in args.subjects
         }
-        LOGGER.info("Filtering to %d selected subject(s): %s", len(selected_study_ids), sorted(selected_study_ids))
+        LOGGER.info(
+            "Filtering to %d selected subject(s): %s",
+            len(selected_study_ids),
+            sorted(selected_study_ids),
+        )
 
     selected_rows = inventory_df.loc[
         inventory_df["study_id"].isin(metadata_df["study_id"]) & inventory_df["eeg_path"].notna()
@@ -987,7 +1036,9 @@ def main() -> None:
     LOGGER.info("Wrote inventory to %s", inventory_path)
 
     if args.overwrite:
-        for study_id in sorted(inventory_df.loc[inventory_df["run"].notna(), "study_id"].dropna().astype(int).unique()):
+        for study_id in sorted(
+            inventory_df.loc[inventory_df["run"].notna(), "study_id"].dropna().astype(int).unique()
+        ):
             subject_id = bids_io.normalize_subject_id(f"{int(study_id):04d}")
             sub_dir = args.bids_root / subject_id
             if sub_dir.exists():
@@ -1003,7 +1054,9 @@ def main() -> None:
     n_jobs = _resolve_n_jobs(args.n_jobs)
     LOGGER.info("Using %d worker(s) for BIDS conversion", n_jobs)
     if n_jobs == 1:
-        for record in tqdm(selected_records, total=len(selected_records), desc="Converting records"):
+        for record in tqdm(
+            selected_records, total=len(selected_records), desc="Converting records"
+        ):
             record_result = process_record(
                 record,
                 args.bids_root,
@@ -1043,7 +1096,9 @@ def main() -> None:
             )
         for record, record_result in zip(selected_records, record_results):
             if record_result is None:
-                LOGGER.error("Failed processing study_id %s: no result returned", record["study_id"])
+                LOGGER.error(
+                    "Failed processing study_id %s: no result returned", record["study_id"]
+                )
                 failed_ids.add(int(record["study_id"]))
                 continue
             _consume_record_result(
@@ -1060,7 +1115,7 @@ def main() -> None:
         LOGGER.warning("Failed study_ids: %s", sorted(failed_ids))
     if skipped_ids:
         LOGGER.info("Skipped (already converted) study_ids: %s", sorted(skipped_ids))
-    
+
     if successful_ids:
         LOGGER.info("Successfully converted study_ids: %s", sorted(successful_ids))
     elif not failed_ids:
@@ -1068,7 +1123,9 @@ def main() -> None:
 
     if successful_ids:
         converted_meta = metadata_df[metadata_df["study_id"].isin(sorted(successful_ids))].copy()
-        participants_df = converted_meta[["study_id", "age", "sex"]].dropna(subset=["study_id"]).copy()
+        participants_df = (
+            converted_meta[["study_id", "age", "sex"]].dropna(subset=["study_id"]).copy()
+        )
         participants_df["participant_id"] = participants_df["study_id"].apply(
             lambda value: bids_io.normalize_subject_id(f"{int(value):04d}")
         )

@@ -3,18 +3,16 @@
 from __future__ import annotations
 
 import argparse
-from collections import defaultdict
 import json
 import logging
-import re
 import sys
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import mne
 import numpy as np
-
 from meegkit import asr
 from mne_denoise.dss import IterativeDSS, WienerMaskDenoiser
 from mne_denoise.viz import plot_component_summary, plot_score_curve
@@ -33,7 +31,7 @@ LOGGER = logging.getLogger(__name__)
 class ArtifactDenoisingConfig:
     """Configuration for Stage 2 (Denoising)."""
 
-    transient_method: Optional[str] = "wiener"  # 'asr', 'wiener', 'dss', None
+    transient_method: str | None = "wiener"  # 'asr', 'wiener', 'dss', None
 
     # ASR
     asr_cutoff: float = 20.0
@@ -53,14 +51,12 @@ class ArtifactDenoisingConfig:
     random_state: int = 42
 
 
-
-
 def _remove_transients_wiener(
     raw: mne.io.BaseRaw,
     config: ArtifactDenoisingConfig,
-    output_dir: Optional[Path] = None,
+    output_dir: Path | None = None,
     subject_id: str = "unknown",
-) -> Tuple[mne.io.BaseRaw, Dict[str, Any]]:
+) -> tuple[mne.io.BaseRaw, dict[str, Any]]:
     """Remove transients using adaptive Wiener masking."""
     LOGGER.info("Applying Adaptive Wiener Mask Denoiser...")
 
@@ -83,7 +79,7 @@ def _remove_transients_wiener(
     data_2d = raw.get_data(picks="eeg")
     dss.fit(data_2d)
 
-    plot_paths: Dict[str, str] = {}
+    plot_paths: dict[str, str] = {}
     if output_dir:
         import matplotlib.pyplot as plt
 
@@ -98,7 +94,9 @@ def _remove_transients_wiener(
             plot_paths["score_curve"] = str(score_path)
 
         n_samples_plot = min(data_2d.shape[1], int(sfreq * 60))
-        fig_comp = plot_component_summary(dss, data_2d[:, :n_samples_plot], n_components=3, show=False)
+        fig_comp = plot_component_summary(
+            dss, data_2d[:, :n_samples_plot], n_components=3, show=False
+        )
         if fig_comp is not None:
             comp_path = fig_dir / f"{subject_id}_wiener_comps.png"
             fig_comp.savefig(comp_path, dpi=150, bbox_inches="tight")
@@ -122,7 +120,7 @@ def _remove_transients_wiener(
 def _remove_transients_asr(
     raw: mne.io.BaseRaw,
     config: ArtifactDenoisingConfig,
-) -> Tuple[mne.io.BaseRaw, Dict[str, Any]]:
+) -> tuple[mne.io.BaseRaw, dict[str, Any]]:
     """Remove transients using ASR."""
     LOGGER.info("Applying ASR...")
 
@@ -151,7 +149,9 @@ def _remove_transients_asr(
                 best_start = idx
 
     if best_start == -1:
-        LOGGER.warning("No fully clean ASR calibration window found. Falling back to lowest-variance window.")
+        LOGGER.warning(
+            "No fully clean ASR calibration window found. Falling back to lowest-variance window."
+        )
         for idx in range(0, max(1, data.shape[1] - window_len), step):
             variance = float(np.var(data[:, idx : idx + window_len]))
             if variance < min_var:
@@ -182,11 +182,11 @@ def _remove_transients_asr(
 
 
 def _calculate_recovery_stats(
-    base_bad_segments: List[Tuple[float, float]],
-    final_bad_segments: List[Tuple[float, float]],
+    base_bad_segments: list[tuple[float, float]],
+    final_bad_segments: list[tuple[float, float]],
     raw_times: np.ndarray,
     sfreq: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     Calculate recovery metrics using boolean masks to handle overlaps correctly.
     """
@@ -223,7 +223,9 @@ def _calculate_recovery_stats(
     recovered_samples = np.count_nonzero(mask_recovered)
     recovered_seconds = recovered_samples / sfreq
 
-    recovery_rate_pct = (recovered_seconds / base_bad_seconds * 100.0) if base_bad_seconds > 0 else 0.0
+    recovery_rate_pct = (
+        (recovered_seconds / base_bad_seconds * 100.0) if base_bad_seconds > 0 else 0.0
+    )
 
     # Count corrected segments (Legacy metric for report)
     # A segment is "corrected" if it has ZERO overlap with final bads
@@ -236,7 +238,7 @@ def _calculate_recovery_stats(
         end_samp = int((b_on + b_dur) * sfreq)
         start_samp = max(0, start_samp)
         end_samp = min(n_samples, end_samp)
-        
+
         if end_samp > start_samp:
             # Check if any part of this segment is in final mask
             # If np.any(mask_final[start:end]), then it's not fully recovered
@@ -254,17 +256,18 @@ def _calculate_recovery_stats(
         "recovery_rate_pct": recovery_rate_pct,
         "base_total": len(base_bad_segments),
         "n_base_corrected": n_base_corrected,
-        "segments_to_drop": segments_to_drop # Used for dynamic updates (though explicit strip approach is safer)
+        # Used for dynamic updates (though explicit strip approach is safer)
+        "segments_to_drop": segments_to_drop,
     }
 
 
 def _refine_autoreject(
     raw: mne.io.BaseRaw,
     config: ArtifactDenoisingConfig,
-    base_bad_segments: List[Tuple[float, float]],
-    figures_dir: Optional[Path] = None,
+    base_bad_segments: list[tuple[float, float]],
+    figures_dir: Path | None = None,
     subject_id: str = "unknown",
-) -> Tuple[mne.io.BaseRaw, Dict[str, Any]]:
+) -> tuple[mne.io.BaseRaw, dict[str, Any]]:
     """Run final AutoReject refinement and compare against Stage 1 BAD segments."""
     ar_conf_dict = {
         "artifacts": {
@@ -279,7 +282,8 @@ def _refine_autoreject(
 
     raw_for_ar = raw.copy()
     keep_indices = [
-        i for i, annot in enumerate(raw_for_ar.annotations) 
+        i
+        for i, annot in enumerate(raw_for_ar.annotations)
         if not str(annot["description"]).startswith("BAD_")
     ]
     raw_for_ar.set_annotations(raw_for_ar.annotations[keep_indices])
@@ -299,12 +303,9 @@ def _refine_autoreject(
     ]
 
     recovery_stats = _calculate_recovery_stats(
-        base_bad_segments, 
-        new_bad_segments, 
-        raw_refined.times,
-        raw_refined.info["sfreq"]
+        base_bad_segments, new_bad_segments, raw_refined.times, raw_refined.info["sfreq"]
     )
-    
+
     stats.update(recovery_stats)
     return raw_refined, stats
 
@@ -312,11 +313,11 @@ def _refine_autoreject(
 def run_residual_denoising(
     raw: mne.io.BaseRaw,
     config: ArtifactDenoisingConfig,
-    figures_dir: Optional[Path] = None,
+    figures_dir: Path | None = None,
     subject_id: str = "unknown",
-) -> Tuple[mne.io.BaseRaw, Dict[str, Any]]:
+) -> tuple[mne.io.BaseRaw, dict[str, Any]]:
     """Orchestrate Stage 2 denoising."""
-    provenance: Dict[str, Any] = {
+    provenance: dict[str, Any] = {
         "steps_completed": [],
         "transient_stats": {},
         "autoreject_stats": {},
@@ -370,14 +371,14 @@ def run_denoising_pipeline(
     subject_id: str,
     bids_root: Path,
     config: ArtifactDenoisingConfig,
-    preproc_root: Optional[Path] = None,
-    reports_root: Optional[Path] = None,
-    input_path: Optional[Path] = None,
-    condition_name: Optional[str] = None,
+    preproc_root: Path | None = None,
+    reports_root: Path | None = None,
+    input_path: Path | None = None,
+    condition_name: str | None = None,
     input_desc: str = "correct",
     output_desc: str = "denoise",
-    raw_lookup: Optional[Dict[str, Dict[str, object]]] = None,
-    previous_lookup: Optional[Dict[str, Dict[str, object]]] = None,
+    raw_lookup: dict[str, dict[str, object]] | None = None,
+    previous_lookup: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     """Run Stage 2 on one subject (Stage 1 -> Stage 2 handoff)."""
     result: dict[str, object] = {
@@ -505,7 +506,10 @@ def main() -> None:
         "--preproc_root",
         type=str,
         default=None,
-        help="Directory for stage FIF/provenance artifacts (default: <bids_root>/derivatives/preproc)",
+        help=(
+            "Directory for stage FIF/provenance artifacts "
+            "(default: <bids_root>/derivatives/preproc)"
+        ),
     )
     parser.add_argument(
         "--reports_root",
@@ -514,15 +518,23 @@ def main() -> None:
         help="Directory for reports/logs (default: <cwd>/results/reports/preproc)",
     )
 
-    parser.add_argument("--subjects", nargs="+", help="List of specific subjects (e.g. sub-001 sub-002)")
+    parser.add_argument(
+        "--subjects", nargs="+", help="List of specific subjects (e.g. sub-001 sub-002)"
+    )
     parser.add_argument("--start-from", type=str, help="Start processing from this subject ID")
-    parser.add_argument("--all", action="store_true", help="Process all subjects found in Stage 1 outputs")
+    parser.add_argument(
+        "--all", action="store_true", help="Process all subjects found in Stage 1 outputs"
+    )
     parser.add_argument("--test", action="store_true", help="Run on a small subset (5 subjects)")
     parser.add_argument("--random", action="store_true", help="Select random subjects in test mode")
-    parser.add_argument("--skip-existing", action="store_true", help="Skip subjects with existing output")
+    parser.add_argument(
+        "--skip-existing", action="store_true", help="Skip subjects with existing output"
+    )
 
     parser.add_argument("--config", type=str, help="Path to JSON config file")
-    parser.add_argument("--reports-only", action="store_true", help="Skip processing, only generate dataset report")
+    parser.add_argument(
+        "--reports-only", action="store_true", help="Skip processing, only generate dataset report"
+    )
     parser.add_argument(
         "--transient-method",
         type=str,
@@ -561,7 +573,7 @@ def main() -> None:
         sys.exit(1)
 
     if args.config:
-        with open(args.config, "r", encoding="utf-8") as f:
+        with open(args.config, encoding="utf-8") as f:
             config = ArtifactDenoisingConfig(**json.load(f))
     else:
         config = ArtifactDenoisingConfig(
@@ -595,9 +607,13 @@ def main() -> None:
     )
     if not subjects_to_process:
         if args.start_from:
-            LOGGER.error("No subjects found starting from %s.", bids.normalize_subject_id(args.start_from))
+            LOGGER.error(
+                "No subjects found starting from %s.", bids.normalize_subject_id(args.start_from)
+            )
             sys.exit(1)
-        LOGGER.warning("No selection criteria provided (use --all, --test, --subjects, or --start-from).")
+        LOGGER.warning(
+            "No selection criteria provided (use --all, --test, --subjects, or --start-from)."
+        )
         parser.print_help()
         sys.exit(0)
     subjects_to_process = set(subjects_to_process)
@@ -647,8 +663,16 @@ def main() -> None:
                     }
                 )
             except Exception as exc:
-                LOGGER.error("Failed rebuilding existing denoise QC record for %s (%s): %s", sid, input_file.name, exc, exc_info=True)
-                existing_results.append({"success": False, "subject_id": sid, "qc_record": None, "error": str(exc)})
+                LOGGER.error(
+                    "Failed rebuilding existing denoise QC record for %s (%s): %s",
+                    sid,
+                    input_file.name,
+                    exc,
+                    exc_info=True,
+                )
+                existing_results.append(
+                    {"success": False, "subject_id": sid, "qc_record": None, "error": str(exc)}
+                )
         if existing_runs:
             LOGGER.info("Skipping %d existing denoise outputs.", existing_runs)
 
@@ -674,9 +698,9 @@ def main() -> None:
         LOGGER.warning("No subjects left to process.")
         sys.exit(0)
 
-    success_ids: List[str] = []
-    failed_ids: List[str] = []
-    qc_run_records: List[dict[str, object]] = []
+    success_ids: list[str] = []
+    failed_ids: list[str] = []
+    qc_run_records: list[dict[str, object]] = []
     qc_subject_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
 
     for result in existing_results:
@@ -726,7 +750,9 @@ def main() -> None:
             failed_ids.append(run_label)
 
     if not args.reports_only:
-        LOGGER.info("Batch processing complete. Success: %d, Failed: %d", len(success_ids), len(failed_ids))
+        LOGGER.info(
+            "Batch processing complete. Success: %d, Failed: %d", len(success_ids), len(failed_ids)
+        )
         LOGGER.info("Succeeded subjects: %s", sorted(success_ids))
         LOGGER.info("Failed subjects: %s", sorted(failed_ids))
     else:

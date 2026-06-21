@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from typing import List, Tuple
-
 import mne
 import numpy as np
 
 
 def _compute_artifact_overlap(
     raw: mne.io.BaseRaw,
-    new_annots: List[Tuple[float, float, str, Tuple[str, ...]]],
+    new_annots: list[tuple[float, float, str, tuple[str, ...]]],
 ) -> float:
     """Calculate percentage of existing manual BAD segments re-detected by AutoReject.
 
@@ -75,13 +73,19 @@ def inflate_bad_annotations(
     by MNE for rejection.
     """
     major_slugs = [
-        "yawn", "cough", "yawning_coughing",
+        "yawn",
+        "cough",
+        "yawning_coughing",
         "emotion_behavior",
         "oral_activity",
-        "sensor_artefact", "sensor_action",
-        "eye_movement", "blink",
+        "sensor_artefact",
+        "sensor_action",
+        "eye_movement",
+        "blink",
         "jaw_face_tension",
-        "sleep", "sleepy", "wakefulness",
+        "sleep",
+        "sleepy",
+        "wakefulness",
     ]
 
     new_onsets, new_durations, new_descs = [], [], []
@@ -100,9 +104,7 @@ def inflate_bad_annotations(
 
         # Assign duration by label family
         target_duration = (
-            major_duration
-            if any(slug in desc_lower for slug in major_slugs)
-            else default_duration
+            major_duration if any(slug in desc_lower for slug in major_slugs) else default_duration
         )
 
         # Normalise to BAD_ prefix

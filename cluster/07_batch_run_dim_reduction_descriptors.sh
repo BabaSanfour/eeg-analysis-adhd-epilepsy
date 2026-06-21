@@ -6,7 +6,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-#SBATCH --array=1-284
+#SBATCH --array=1-740
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -22,8 +22,7 @@ BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilep
 METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/medicated_adhd_vs_controls}
-REPORTS_ROOT="${BIDS_ROOT%/*}/reports"
-OVERWRITE=${OVERWRITE:-1}
+OVERWRITE=${OVERWRITE:-0}
 
 # Descriptor Data Paths
 DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
@@ -53,7 +52,18 @@ mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 
 # 4. Map this array task to one config/mode pair
 mapfile -t CONFIGS < <(find "$CONFIGS_DIR" -name "*.yaml" | sort)
-MODES=("flat" "sensor" "family" "sensor_within_family")
+MODES=(
+    "flat"
+    "sensor"
+    "family"
+    "subfamily"
+    "sensor_within_family"
+    "sensor_within_subfamily"
+    "feature"
+    "feature_within_family"
+    "descriptor"
+    "descriptor_sensor"
+)
 CONFIG_COUNT=${#CONFIGS[@]}
 MODE_COUNT=${#MODES[@]}
 TOTAL_TASKS=$((CONFIG_COUNT * MODE_COUNT))
@@ -73,23 +83,13 @@ input_mode="descriptors"
 representation=$(basename "$TABLE_PATH")
 representation="${representation%.*}"
 
-ds_name=$(grep "dataset_name:" "$config" | awk '{print $2}')
-out_grp=$(grep "output_group:" "$config" | awk '{print $2}')
-report_repr="${representation//_/-}"
-report_path="$REPORTS_ROOT/summary/dim_reduction/$out_grp/$ds_name/$input_mode/dataset_summary_mode-${mode}_repr-${report_repr}.html"
-
 echo "================================================================================"
 echo "DESCRIPTOR DIM REDUCTION ARRAY TASK $TASK_ID / $TOTAL_TASKS"
 echo "Config:         $config"
 echo "Mode:           $mode"
 echo "Table:          $TABLE_PATH"
-echo "Report:         $report_path"
+echo "Report:         resolved by the configuration-hashed run namespace"
 echo "================================================================================"
-
-if [[ -f "$report_path" ]]; then
-    echo "SKIPPING: report already exists."
-    exit 0
-fi
 
 cmd=(
     python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction

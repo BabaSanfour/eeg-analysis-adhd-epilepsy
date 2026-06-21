@@ -10,16 +10,16 @@ This module is the single source of truth for:
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass, field
-from typing import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
-
 # ---------------------------------------------------------------------------
 # Threshold dataclasses
 # ---------------------------------------------------------------------------
+
 
 @dataclass(frozen=True)
 class SignalQCThresholds:
@@ -142,6 +142,7 @@ MAX_METRICS: tuple[str, ...] = (
 # Scalar helpers
 # ---------------------------------------------------------------------------
 
+
 def _clean_scalar(value: object) -> object:
     """Return ``None`` for NaN/NA, otherwise the original value."""
     return None if pd.isna(value) else value
@@ -150,6 +151,7 @@ def _clean_scalar(value: object) -> object:
 # ---------------------------------------------------------------------------
 # Topomap aggregation
 # ---------------------------------------------------------------------------
+
 
 def _build_topomap_aggregates(
     metrics: Mapping[str, object],
@@ -232,6 +234,7 @@ def _combine_weighted_topomaps(
 # Channel diagnostics
 # ---------------------------------------------------------------------------
 
+
 def _build_channel_diagnostics(
     metrics: Mapping[str, object],
     *,
@@ -253,28 +256,16 @@ def _build_channel_diagnostics(
         ``top_amplitude_channels``, ``top_line_noise_channels``.
     """
     per_channel_metrics = metrics.get("per_channel_metrics") or {}
-    amplitude = np.asarray(
-        per_channel_metrics.get("amplitude_ptp_uv", np.array([])), dtype=float
-    )
-    line_noise = np.asarray(
-        per_channel_metrics.get("line_noise_ratio", np.array([])), dtype=float
-    )
+    amplitude = np.asarray(per_channel_metrics.get("amplitude_ptp_uv", np.array([])), dtype=float)
+    line_noise = np.asarray(per_channel_metrics.get("line_noise_ratio", np.array([])), dtype=float)
     top_amplitude: list[tuple[str, float]] = []
     top_line_noise: list[tuple[str, float]] = []
     if amplitude.size == len(channel_names):
-        amp_pairs = sorted(
-            zip(channel_names, amplitude), key=lambda x: x[1], reverse=True
-        )
-        top_amplitude = [
-            (ch, float(v)) for ch, v in amp_pairs[:5] if np.isfinite(v)
-        ]
+        amp_pairs = sorted(zip(channel_names, amplitude), key=lambda x: x[1], reverse=True)
+        top_amplitude = [(ch, float(v)) for ch, v in amp_pairs[:5] if np.isfinite(v)]
     if line_noise.size == len(channel_names):
-        line_pairs = sorted(
-            zip(channel_names, line_noise), key=lambda x: x[1], reverse=True
-        )
-        top_line_noise = [
-            (ch, float(v)) for ch, v in line_pairs[:5] if np.isfinite(v)
-        ]
+        line_pairs = sorted(zip(channel_names, line_noise), key=lambda x: x[1], reverse=True)
+        top_line_noise = [(ch, float(v)) for ch, v in line_pairs[:5] if np.isfinite(v)]
     return {
         "flat_channels": list(metrics.get("flat_channels", [])),
         "noisy_channels": list(metrics.get("noisy_channels", [])),
@@ -286,6 +277,7 @@ def _build_channel_diagnostics(
 # ---------------------------------------------------------------------------
 # Cross-run electrode failure rates  (state-of-the-art: consensus bad-channel)
 # ---------------------------------------------------------------------------
+
 
 def compute_channel_failure_rates(
     records: Sequence[Mapping[str, object]],
@@ -321,15 +313,13 @@ def compute_channel_failure_rates(
             noisy_counter[ch] += 1
     total = len(records)
     all_channels = set(flat_counter) | set(noisy_counter)
-    return {
-        ch: (flat_counter[ch] + noisy_counter[ch]) / total
-        for ch in sorted(all_channels)
-    }
+    return {ch: (flat_counter[ch] + noisy_counter[ch]) / total for ch in sorted(all_channels)}
 
 
 # ---------------------------------------------------------------------------
 # Continuous QC score  (state-of-the-art: soft ranking vs. binary flag)
 # ---------------------------------------------------------------------------
+
 
 def compute_qc_score(
     metrics_row: Mapping[str, object],
@@ -380,6 +370,7 @@ def compute_qc_score(
 # ---------------------------------------------------------------------------
 # Shared signal QC flag evaluation
 # ---------------------------------------------------------------------------
+
 
 def evaluate_signal_qc_flag(
     metrics_row: Mapping[str, object],
@@ -437,9 +428,7 @@ def evaluate_signal_qc_flag(
         reasons.append("high_hf_ratio")
 
     if check_retention:
-        duration_ret = pd.to_numeric(
-            metrics_row.get("duration_retention_pct"), errors="coerce"
-        )
+        duration_ret = pd.to_numeric(metrics_row.get("duration_retention_pct"), errors="coerce")
         if np.isfinite(duration_ret) and float(duration_ret) < t.duration_retention_pct:
             reasons.append("low_duration_retention")
 

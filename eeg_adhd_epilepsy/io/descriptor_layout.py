@@ -52,9 +52,7 @@ FEATURE_COLUMN_FILES: dict[str, str] = {
 }
 
 
-def required_descriptor_files(
-    include_pooled: bool, *, include_qc: bool = False
-) -> tuple[str, ...]:
+def required_descriptor_files(include_pooled: bool, *, include_qc: bool = False) -> tuple[str, ...]:
     """Return the tuple of relative paths a complete shard must contain.
 
     Parameters

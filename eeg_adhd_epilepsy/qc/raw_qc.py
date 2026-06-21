@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Dict, Mapping, Sequence
 
 import mne
 import numpy as np
@@ -12,24 +12,21 @@ import pandas as pd
 from mne_bids import BIDSPath
 
 import eeg_adhd_epilepsy.io.bids as bids_io
-import eeg_adhd_epilepsy.signal_quality.metrics as signal_quality
 import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
 import eeg_adhd_epilepsy.reports.raw_qc as report_raw_qc
+import eeg_adhd_epilepsy.signal_quality.metrics as signal_quality
 import eeg_adhd_epilepsy.viz.raw_qc as viz_raw_qc
-from eeg_adhd_epilepsy.utils.events import crop_raw_to_recording_start
 from eeg_adhd_epilepsy.qc.utils import (
-    DEFAULT_SIGNAL_THRESHOLDS,
-    MAX_METRICS,
-    TOPOMAP_METRIC_KEYS,
-    SignalQCThresholds,
     _BASE_WEIGHTED_METRICS,
+    MAX_METRICS,
+    SignalQCThresholds,
     _build_channel_diagnostics,
     _build_topomap_aggregates,
     _clean_scalar,
     _combine_weighted_topomaps,
     evaluate_signal_qc_flag,
 )
-
+from eeg_adhd_epilepsy.utils.events import crop_raw_to_recording_start
 
 WEIGHTED_METRICS = (*_BASE_WEIGHTED_METRICS, "coverage_pct")
 
@@ -40,7 +37,9 @@ def _prepare_analysis_raw(
     highpass: float,
 ) -> tuple[mne.io.BaseRaw, list[int]]:
     raw.load_data()
-    target_channels = [channel for channel in bids_io.config.BASIC_1020_CHANNELS if channel in raw.ch_names]
+    target_channels = [
+        channel for channel in bids_io.config.BASIC_1020_CHANNELS if channel in raw.ch_names
+    ]
     if target_channels:
         raw.pick(target_channels)
     picks = list(mne.pick_types(raw.info, eeg=True, exclude=[]))
@@ -69,7 +68,6 @@ def _build_run_metric_row(
         "alpha_peak_hz": metrics.get("alpha_peak_hz"),
         "aperiodic_slope": metrics.get("aperiodic_slope"),
     }
-
 
 
 def _build_segment_qc_rows(
@@ -186,7 +184,7 @@ def build_raw_qc_run_record(
         "filepath": filepath,
         "raw_duration": raw_duration,
     }
-    file_topomaps: Dict[str, tuple[list[str], np.ndarray, float]] = {}
+    file_topomaps: dict[str, tuple[list[str], np.ndarray, float]] = {}
     channel_diagnostics: dict[str, object] = {}
     if analysis_level in {"whole", "both"}:
         computed_metrics = signal_quality.compute_signal_qc_metrics(
@@ -195,9 +193,7 @@ def build_raw_qc_run_record(
             line_freq=line_freq,
             include_channel_metrics=True,
         )
-        run_metrics.update(
-            _build_run_metric_row(computed_metrics)
-        )
+        run_metrics.update(_build_run_metric_row(computed_metrics))
         subject_flag, reasons = evaluate_signal_qc_flag(run_metrics, thresholds)
         run_metrics["subject_flag"] = subject_flag
         run_metrics["subject_flag_reasons"] = ";".join(reasons)
@@ -248,8 +244,12 @@ def build_raw_qc_run_record(
         **ids,
         "filepath": filepath,
         "source_dataset": _clean_scalar(metadata.get("source_dataset")),
-        "record_date": _clean_scalar(raw.info.get("meas_date").date().isoformat() if raw.info.get("meas_date") else ""),
-        "meas_datetime": _clean_scalar(raw.info.get("meas_date").isoformat() if raw.info.get("meas_date") else ""),
+        "record_date": _clean_scalar(
+            raw.info.get("meas_date").date().isoformat() if raw.info.get("meas_date") else ""
+        ),
+        "meas_datetime": _clean_scalar(
+            raw.info.get("meas_date").isoformat() if raw.info.get("meas_date") else ""
+        ),
         "raw_duration": raw_duration,
         "age_group": _clean_scalar(metadata.get("age_group")),
         "sex": _clean_scalar(metadata.get("sex")),
@@ -262,6 +262,7 @@ def build_raw_qc_run_record(
         **run_metrics,
     }
     from eeg_adhd_epilepsy.qc.utils import compute_qc_score
+
     record["qc_score"] = compute_qc_score(run_metrics, thresholds=thresholds)
     record["summary_row"] = _build_run_summary_row(record)
     return record
@@ -297,17 +298,23 @@ def collect_existing_raw_qc_record(
 
 def _aggregate_subject_metrics(records: Sequence[dict[str, object]]) -> dict[str, object]:
     first = records[0]
-    weights = np.asarray([float(record.get("raw_duration", 0.0) or 0.0) for record in records], dtype=float)
+    weights = np.asarray(
+        [float(record.get("raw_duration", 0.0) or 0.0) for record in records], dtype=float
+    )
 
     def weighted_mean(field: str) -> float:
-        values = pd.to_numeric(pd.Series([record.get(field) for record in records]), errors="coerce").to_numpy(dtype=float)
+        values = pd.to_numeric(
+            pd.Series([record.get(field) for record in records]), errors="coerce"
+        ).to_numpy(dtype=float)
         valid = np.isfinite(values) & np.isfinite(weights) & (weights > 0)
         if not valid.any():
             return float("nan")
         return float(np.average(values[valid], weights=weights[valid]))
 
     def max_value(field: str) -> float:
-        values = pd.to_numeric(pd.Series([record.get(field) for record in records]), errors="coerce")
+        values = pd.to_numeric(
+            pd.Series([record.get(field) for record in records]), errors="coerce"
+        )
         return float(values.max(skipna=True)) if not values.isna().all() else float("nan")
 
     status_order = {"usable": 0, "borderline": 1, "unusable": 2}
@@ -335,7 +342,9 @@ def _aggregate_subject_metrics(records: Sequence[dict[str, object]]) -> dict[str
         "combined_diagnosis": first.get("combined_diagnosis"),
         "subject_flag": status,
         "subject_flag_reasons": ";".join(sorted(reasons)),
-        "filepath": ";".join(str(record.get("filepath") or "") for record in records if record.get("filepath")),
+        "filepath": ";".join(
+            str(record.get("filepath") or "") for record in records if record.get("filepath")
+        ),
     }
     for field in WEIGHTED_METRICS:
         output[field] = weighted_mean(field)
@@ -368,12 +377,16 @@ def _aggregate_channel_diagnostics(
     if amplitude_payload:
         channels, values = amplitude_payload
         amp_pairs = sorted(zip(channels, values), key=lambda item: item[1], reverse=True)
-        top_amplitude = [(channel, float(value)) for channel, value in amp_pairs[:5] if np.isfinite(value)]
+        top_amplitude = [
+            (channel, float(value)) for channel, value in amp_pairs[:5] if np.isfinite(value)
+        ]
     line_payload = topomap_aggregates.get("line_noise_ratio")
     if line_payload:
         channels, values = line_payload
         line_pairs = sorted(zip(channels, values), key=lambda item: item[1], reverse=True)
-        top_line_noise = [(channel, float(value)) for channel, value in line_pairs[:5] if np.isfinite(value)]
+        top_line_noise = [
+            (channel, float(value)) for channel, value in line_pairs[:5] if np.isfinite(value)
+        ]
     return {
         "flat_channels": flat_channels,
         "noisy_channels": noisy_channels,
@@ -425,7 +438,10 @@ def write_subject_raw_qc_report(
     fig_dir = subject_dir / "figures"
     topomap_aggregates = _combine_weighted_topomaps(record["file_topomaps"] for record in records)
     subject_segment_df = (
-        pd.concat([record["segment_df"] for record in records if not record["segment_df"].empty], ignore_index=True)
+        pd.concat(
+            [record["segment_df"] for record in records if not record["segment_df"].empty],
+            ignore_index=True,
+        )
         if any(not record["segment_df"].empty for record in records)
         else pd.DataFrame()
     )
@@ -446,9 +462,7 @@ def write_subject_raw_qc_report(
         fig_dir,
     )
     run_summary_df = (
-        report_raw_qc.build_run_summary_table(records)
-        if len(records) > 1
-        else pd.DataFrame()
+        report_raw_qc.build_run_summary_table(records) if len(records) > 1 else pd.DataFrame()
     )
     report_raw_qc.generate_raw_qc_subject_report(
         record=subject_record,
@@ -482,7 +496,9 @@ def write_raw_qc_aggregate_reports(
     )
     runs_df.to_csv(summary_dir / "raw_qc_runs.csv", index=False)
 
-    segment_frames = [record["segment_df"] for record in run_records if not record["segment_df"].empty]
+    segment_frames = [
+        record["segment_df"] for record in run_records if not record["segment_df"].empty
+    ]
     segments_df = pd.concat(segment_frames, ignore_index=True) if segment_frames else pd.DataFrame()
     segments_df.to_csv(summary_dir / "raw_qc_segments.csv", index=False)
 
@@ -501,7 +517,9 @@ def write_raw_qc_aggregate_reports(
     )
     subjects_df.to_csv(summary_dir / "raw_qc_subjects.csv", index=False)
 
-    topomap_aggregates = _combine_weighted_topomaps(record["file_topomaps"] for record in run_records)
+    topomap_aggregates = _combine_weighted_topomaps(
+        record["file_topomaps"] for record in run_records
+    )
     figure_paths = viz_raw_qc.save_dataset_raw_qc_figures(
         runs_df,
         segments_df,

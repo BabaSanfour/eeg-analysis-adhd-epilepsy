@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
+
 import numpy as np
-from typing import Dict, List, Literal, Optional, Union
 
 try:
     from typing import TypedDict
@@ -19,8 +20,16 @@ class NumpyEncoder(json.JSONEncoder):
         if isinstance(
             obj,
             (
-                np.intc, np.intp, np.int8, np.int16, np.int32, np.int64,
-                np.uint8, np.uint16, np.uint32, np.uint64,
+                np.intc,
+                np.intp,
+                np.int8,
+                np.int16,
+                np.int32,
+                np.int64,
+                np.uint8,
+                np.uint16,
+                np.uint32,
+                np.uint64,
             ),
         ):
             return int(obj)
@@ -35,11 +44,11 @@ class AdaptiveParams(TypedDict, total=False):
     fmin: float
     fmax: float
     process_harmonics: bool
-    max_harmonics: Optional[int]
+    max_harmonics: int | None
     hybrid_fallback: bool
     min_chunk_len: float
-    n_remove_params: Dict[str, Union[float, int]]
-    qa_params: Dict[str, float]
+    n_remove_params: dict[str, float | int]
+    qa_params: dict[str, float]
 
 
 class LineNoiseConfig(TypedDict):
@@ -50,7 +59,7 @@ class LineNoiseConfig(TypedDict):
 
 class SegmentRejectionConfig(TypedDict):
     enabled: bool
-    bad_segments_annotation: Union[str, List[str]]
+    bad_segments_annotation: str | list[str]
     segment_buffer: float
     segment_handling: Literal["reject", "correct", "interpolate", "ignore"]
 
@@ -58,7 +67,7 @@ class SegmentRejectionConfig(TypedDict):
 class ArtifactConfig(TypedDict):
     ica_enable: bool
     ica_method: str
-    ica_n_components: Optional[Union[int, float]]
+    ica_n_components: int | float | None
     ica_exclude_annotated: bool
     dss_enable: bool
     dss_supervised: bool
@@ -75,13 +84,13 @@ class ProcessingConfig(TypedDict):
     mode: Literal["continuous", "epochs"]
     highpass_hz: float
     lowpass_hz: float
-    resample_hz: Optional[float]
+    resample_hz: float | None
     epoch_type: Literal["fixed", "events", "segments"]
     epoch_length: float
     epoch_tmin: float
     epoch_tmax: float
-    epoch_event_id: Optional[Dict[str, int]]
-    segments_file: Optional[str]
+    epoch_event_id: dict[str, int] | None
+    segments_file: str | None
 
 
 class BadChannelsConfig(TypedDict):

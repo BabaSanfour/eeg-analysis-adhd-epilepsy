@@ -6,17 +6,17 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from eeg_adhd_epilepsy.utils.metadata_schema import (
-    EPILEPSY_MED_COLS,
-    PATIENTS_METADATA_AUDIT_COLUMNS,
-    PATIENTS_METADATA_COLUMNS,
-)
 from eeg_adhd_epilepsy.io.patients import (
     _normalize_binary_flag_series,
     _normalize_merged_metadata,
     _rename_adhd_source,
     _rename_drug_resistant_source,
     build_patients_metadata,
+)
+from eeg_adhd_epilepsy.utils.metadata_schema import (
+    EPILEPSY_MED_COLS,
+    PATIENTS_METADATA_AUDIT_COLUMNS,
+    PATIENTS_METADATA_COLUMNS,
 )
 
 
@@ -335,9 +335,7 @@ def test_build_patients_metadata_writes_raw_clean_and_removed_outputs(tmp_path: 
 
     assert clean_df["study_id"].tolist() == [1, 8, 1014, 1015, 1017, 1018]
     assert clean_df["patient_id"].tolist() == [1001, 1001, 2001, 2002, 2004, 1001]
-    assert clean_df.loc[
-        clean_df["patient_id"].eq(1001), "patient_group_id"
-    ].nunique() == 1
+    assert clean_df.loc[clean_df["patient_id"].eq(1001), "patient_group_id"].nunique() == 1
     assert (
         clean_df.loc[clean_df["patient_id"].eq(1001), "patient_group_id"]
         != clean_df.loc[clean_df["patient_id"].eq(1001), "patient_id"]
