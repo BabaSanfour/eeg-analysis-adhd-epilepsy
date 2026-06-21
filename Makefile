@@ -6,7 +6,8 @@
 #
 #   make dry-run BIDS_ROOT=/data/BIDS METADATA=/data/meta.csv RAW_ROOT=/data/raw \
 #                COHORT=configs/cohorts/.../total.yaml \
-#                ANALYSIS=configs/analyses/dim_reduction/default.yaml
+#                DIM_ANALYSIS=configs/analyses/dim_reduction/default.yaml \
+#                DECODE_ANALYSIS=configs/analyses/decoding/EO.yaml
 #   make descriptors BIDS_ROOT=/data/BIDS METADATA=/data/meta.csv
 #   make all ...        # whole chain
 #
@@ -18,6 +19,8 @@ METADATA         ?=
 RAW_ROOT         ?=
 COHORT           ?=
 ANALYSIS         ?=
+DIM_ANALYSIS     ?=
+DECODE_ANALYSIS  ?=
 DESCRIPTORS_CFG  ?= configs/descriptors.yaml
 SEGMENT_DURATION ?= 10.0
 N_JOBS           ?= 4
@@ -40,6 +43,8 @@ RUN_ARGS = \
 	$(if $(METADATA),--metadata $(METADATA)) \
 	$(if $(COHORT),--cohort_config $(COHORT)) \
 	$(if $(ANALYSIS),--analysis_config $(ANALYSIS)) \
+	$(if $(DIM_ANALYSIS),--dim_analysis_config $(DIM_ANALYSIS)) \
+	$(if $(DECODE_ANALYSIS),--decode_analysis_config $(DECODE_ANALYSIS)) \
 	--descriptors_config $(DESCRIPTORS_CFG) \
 	--segment_duration $(SEGMENT_DURATION) \
 	--n_jobs $(N_JOBS)

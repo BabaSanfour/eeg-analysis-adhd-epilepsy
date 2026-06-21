@@ -18,7 +18,8 @@ Preview the whole chain without running anything::
 
     eeg-run --dry-run --bids_root /data/BIDS --metadata /data/meta.csv \
         --raw_root /data/raw --cohort_config configs/cohorts/.../total.yaml \
-        --analysis_config configs/analyses/dim_reduction/default.yaml
+        --dim_analysis_config configs/analyses/dim_reduction/default.yaml \
+        --decode_analysis_config configs/analyses/decoding/EO.yaml
 
 Run only preproc → epochs → descriptors → merge::
 
@@ -45,6 +46,8 @@ class Context:
     descriptors_config: Path
     cohort_config: Path | None
     analysis_config: Path | None
+    dim_analysis_config: Path | None
+    decode_analysis_config: Path | None
     segment_duration: float
     n_jobs: int
 
@@ -136,7 +139,7 @@ STAGES: list[Stage] = [
             "--bids_root", str(c.bids_root),
             "--metadata", str(c.metadata),
             "--cohort_config", str(c.cohort_config),
-            "--analysis_config", str(c.analysis_config),
+            "--analysis_config", str(c.dim_analysis_config or c.analysis_config),
             "--input_mode", "descriptors",
             "--analysis_mode", "flat",
             "--descriptor_table_path",
@@ -155,7 +158,7 @@ STAGES: list[Stage] = [
             "--bids_root", str(c.bids_root),
             "--metadata", str(c.metadata),
             "--cohort_config", str(c.cohort_config),
-            "--analysis_config", str(c.analysis_config),
+            "--analysis_config", str(c.decode_analysis_config or c.analysis_config),
             "--n_jobs", str(c.n_jobs),
         ],
         done=None,
@@ -187,8 +190,16 @@ def _missing_inputs(stage: Stage, ctx: Context) -> list[str]:
     if stage.name in {"dim-reduce", "classical-decode"}:
         if ctx.cohort_config is None:
             needs.append("--cohort_config")
-        if ctx.analysis_config is None:
-            needs.append("--analysis_config")
+        analysis_config = (
+            ctx.dim_analysis_config if stage.name == "dim-reduce" else ctx.decode_analysis_config
+        ) or ctx.analysis_config
+        if analysis_config is None:
+            specific_flag = (
+                "--dim_analysis_config"
+                if stage.name == "dim-reduce"
+                else "--decode_analysis_config"
+            )
+            needs.append(f"{specific_flag} (or --analysis_config)")
     return needs
 
 
@@ -218,7 +229,24 @@ def main(argv: Iterable[str] | None = None) -> int:
         default=Path(__file__).resolve().parent.parent / "configs" / "descriptors.yaml",
     )
     parser.add_argument("--cohort_config", type=Path, default=None)
-    parser.add_argument("--analysis_config", type=Path, default=None)
+    parser.add_argument(
+        "--analysis_config",
+        type=Path,
+        default=None,
+        help="Analysis config for a single consumer stage (fallback for compatibility).",
+    )
+    parser.add_argument(
+        "--dim_analysis_config",
+        type=Path,
+        default=None,
+        help="Dimensionality-reduction config; required for a valid full-chain run.",
+    )
+    parser.add_argument(
+        "--decode_analysis_config",
+        type=Path,
+        default=None,
+        help="Classical-decoding config; required for a valid full-chain run.",
+    )
     parser.add_argument("--segment_duration", type=float, default=10.0)
     parser.add_argument("--n_jobs", type=int, default=4)
     args = parser.parse_args(list(argv) if argv is not None else None)
@@ -234,6 +262,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         descriptors_config=args.descriptors_config,
         cohort_config=args.cohort_config,
         analysis_config=args.analysis_config,
+        dim_analysis_config=args.dim_analysis_config,
+        decode_analysis_config=args.decode_analysis_config,
         segment_duration=args.segment_duration,
         n_jobs=args.n_jobs,
     )
