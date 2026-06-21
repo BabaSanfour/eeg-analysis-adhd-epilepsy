@@ -9,16 +9,17 @@ import re
 import sys
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import mne
 import numpy as np
 import pandas as pd
 
+import eeg_adhd_epilepsy.signal_quality.spectral as spectral
+import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
 from eeg_adhd_epilepsy.io import bids
 from eeg_adhd_epilepsy.reports.compare import (
     create_compare_dataset_report,
@@ -26,25 +27,19 @@ from eeg_adhd_epilepsy.reports.compare import (
 )
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 
+from .correct import ArtifactCorrectionConfig, run_correction_pipeline
+from .denoise import ArtifactDenoisingConfig, run_denoising_pipeline
 from .utils import (
-    benchmark_step,
-    NumpyEncoder,
     load_stage_artifacts,
     select_subjects,
 )
 
-
-from .correct import ArtifactCorrectionConfig, run_correction_pipeline
-from .denoise import ArtifactDenoisingConfig, run_denoising_pipeline
-import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
-import eeg_adhd_epilepsy.signal_quality.spectral as spectral
-
 LOGGER = logging.getLogger(__name__)
 
 
-def _collect_subject_log_traces(subject_id: str, reports_root: Path) -> Dict[str, List[str]]:
+def _collect_subject_log_traces(subject_id: str, reports_root: Path) -> dict[str, list[str]]:
     """Collect matching log lines for audit trail (reuse mode)."""
-    traces: Dict[str, List[str]] = {}
+    traces: dict[str, list[str]] = {}
     log_files = [
         reports_root / "logs" / "correct_pipeline.log",
         reports_root / "logs" / "denoise_pipeline.log",
@@ -111,7 +106,7 @@ def _default_denoise_desc(correct_desc: str) -> str:
     return bids.validate_stage_desc(f"denoise{token[0].upper()}{token[1:]}")
 
 
-def _compute_channel_correlation(raw_a: mne.io.BaseRaw, raw_b: mne.io.BaseRaw) -> Dict[str, float]:
+def _compute_channel_correlation(raw_a: mne.io.BaseRaw, raw_b: mne.io.BaseRaw) -> dict[str, float]:
     """Compute per-channel Pearson correlation between two raws."""
     picks = mne.pick_types(raw_a.info, eeg=True, exclude="bads")
     n_samples = min(raw_a.n_times, raw_b.n_times)
@@ -139,7 +134,7 @@ def _compute_variance_removed(raw_before: mne.io.BaseRaw, raw_after: mne.io.Base
     return float(np.clip(ratio, -1.0, 1.0))
 
 
-def _extract_total_timing(provenance: Dict[str, Any], fallback: float = 0.0) -> float:
+def _extract_total_timing(provenance: dict[str, Any], fallback: float = 0.0) -> float:
     """Get total timing from provenance benchmarks."""
     timing_map = provenance.get("benchmarks", {}).get("timing", {})
     if isinstance(timing_map, dict) and timing_map:
@@ -147,7 +142,7 @@ def _extract_total_timing(provenance: Dict[str, Any], fallback: float = 0.0) -> 
     return float(fallback)
 
 
-def _extract_component_counts(provenance: Dict[str, Any]) -> Tuple[int, int, int]:
+def _extract_component_counts(provenance: dict[str, Any]) -> tuple[int, int, int]:
     """Extract EOG/ECG/EMG component counts from correction provenance."""
     stats = provenance.get("correction_stats", {}) if isinstance(provenance, dict) else {}
     eog_comp = int(stats.get("eog", {}).get("n_components_removed", 0) or 0)
@@ -162,7 +157,7 @@ def _extract_component_counts(provenance: Dict[str, Any]) -> Tuple[int, int, int
 
 
 def run_comparison(
-    subjects: List[str],
+    subjects: list[str],
     bids_root: Path,
     preproc_root: Path,
     reports_root: Path,
@@ -171,10 +166,10 @@ def run_comparison(
     ica_desc: str,
     strict_existing: bool,
     use_provenance_metrics: bool,
-    condition_name: Optional[str] = None,
-    train_condition: Optional[str] = None,
-    denoise_config: Optional[ArtifactDenoisingConfig] = None,
-) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+    condition_name: str | None = None,
+    train_condition: str | None = None,
+    denoise_config: ArtifactDenoisingConfig | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Run compare workflow and return metrics + run metadata."""
     dss_desc = bids.validate_stage_desc(dss_desc)
     ica_desc = bids.validate_stage_desc(ica_desc)
@@ -188,14 +183,14 @@ def run_comparison(
 
     task_token = condition_name if condition_name else None
 
-    all_metrics: List[Dict[str, Any]] = []
-    timing_data: List[Dict[str, Any]] = []
-    comp_data: List[Dict[str, Any]] = []
-    var_data: List[Dict[str, Any]] = []
-    global_plot_paths: Dict[str, str] = {}
-    subject_reports: Dict[str, Path] = {}
-    missing_subjects: List[str] = []
-    reuse_log_traces: Dict[str, Dict[str, List[str]]] = {}
+    all_metrics: list[dict[str, Any]] = []
+    timing_data: list[dict[str, Any]] = []
+    comp_data: list[dict[str, Any]] = []
+    var_data: list[dict[str, Any]] = []
+    global_plot_paths: dict[str, str] = {}
+    subject_reports: dict[str, Path] = {}
+    missing_subjects: list[str] = []
+    reuse_log_traces: dict[str, dict[str, list[str]]] = {}
 
     for subject_id in subjects:
         LOGGER.info("%s", "=" * 60)
@@ -213,11 +208,11 @@ def run_comparison(
             missing_subjects.append(subject_id)
             continue
 
-        method_raws: Dict[str, mne.io.BaseRaw] = {}
-        method_provs: Dict[str, Dict[str, Any]] = {}
-        metric_provs: Dict[str, Dict[str, Any]] = {}
-        method_durations: Dict[str, float] = {}
-        subject_issues: List[str] = []
+        method_raws: dict[str, mne.io.BaseRaw] = {}
+        method_provs: dict[str, dict[str, Any]] = {}
+        metric_provs: dict[str, dict[str, Any]] = {}
+        method_durations: dict[str, float] = {}
+        subject_issues: list[str] = []
 
         for method_name, corr_desc in (("dss", dss_desc), ("ica", ica_desc)):
             compare_desc = dss_compare_desc if method_name == "dss" else ica_compare_desc
@@ -269,7 +264,9 @@ def run_comparison(
 
             elif compare_mode == "full":
                 cfg = PIPELINE_CONFIGS[method_name][1]
-                den_cfg = denoise_config if denoise_config is not None else ArtifactDenoisingConfig()
+                den_cfg = (
+                    denoise_config if denoise_config is not None else ArtifactDenoisingConfig()
+                )
 
                 t_start = time.time()
                 corr_result = run_correction_pipeline(
@@ -329,11 +326,14 @@ def run_comparison(
 
         missing_method = "dss" not in method_raws or "ica" not in method_raws
         if missing_method:
-            LOGGER.warning("Skipping %s due to missing method artifacts: %s", subject_id, subject_issues)
+            LOGGER.warning(
+                "Skipping %s due to missing method artifacts: %s", subject_id, subject_issues
+            )
             missing_subjects.append(subject_id)
             if strict_existing and compare_mode == "reuse":
                 raise RuntimeError(
-                    f"Strict reuse check failed for {subject_id}: missing DSS/ICA artifacts ({subject_issues})"
+                    f"Strict reuse check failed for {subject_id}: "
+                    f"missing DSS/ICA artifacts ({subject_issues})"
                 )
             continue
 
@@ -353,16 +353,22 @@ def run_comparison(
                 spectral_metrics[name] = {
                     "alpha_peak": float(summary["alpha_peak"]),
                     "slope": float(summary["aperiodic_slope"]),
-                    "band_powers": {k: float(v) for k, v in summary.get("band_powers_mean", {}).items()},
+                    "band_powers": {
+                        k: float(v) for k, v in summary.get("band_powers_mean", {}).items()
+                    },
                 }
             except Exception as exc:
                 LOGGER.warning("Spectral metrics failed for %s (%s): %s", subject_id, name, exc)
-                spectral_metrics[name] = {"alpha_peak": float("nan"), "slope": float("nan"), "band_powers": {}}
+                spectral_metrics[name] = {
+                    "alpha_peak": float("nan"),
+                    "slope": float("nan"),
+                    "band_powers": {},
+                }
 
         corr_map = _compute_channel_correlation(raw_dss, raw_ica)
         mean_corr = float(np.mean(list(corr_map.values()))) if corr_map else float("nan")
 
-        subject_rows: List[Dict[str, Any]] = []
+        subject_rows: list[dict[str, Any]] = []
         for method_name, raw_method in (
             ("dss", raw_dss),
             ("ica", raw_ica),
@@ -378,7 +384,7 @@ def run_comparison(
             eog_comp, ecg_comp, emg_comp = _extract_component_counts(prov_for_metrics)
             variance_removed = _compute_variance_removed(raw_orig, raw_method) * 100.0
 
-            row: Dict[str, Any] = {
+            row: dict[str, Any] = {
                 "subject": subject_id,
                 "method": method_name,
                 "mode": compare_mode,
@@ -389,9 +395,14 @@ def run_comparison(
                 "emg_components": emg_comp,
                 "mean_dss_ica_corr": mean_corr,
                 "alpha_peak_freq": spectral_metrics[method_name]["alpha_peak"],
-                "alpha_peak_shift": abs(spectral_metrics[method_name]["alpha_peak"] - spectral_metrics["orig"]["alpha_peak"]),
+                "alpha_peak_shift": abs(
+                    spectral_metrics[method_name]["alpha_peak"]
+                    - spectral_metrics["orig"]["alpha_peak"]
+                ),
                 "aperiodic_slope": spectral_metrics[method_name]["slope"],
-                "slope_distortion": abs(spectral_metrics[method_name]["slope"] - spectral_metrics["orig"]["slope"]),
+                "slope_distortion": abs(
+                    spectral_metrics[method_name]["slope"] - spectral_metrics["orig"]["slope"]
+                ),
                 "source_desc": dss_compare_desc if method_name == "dss" else ica_compare_desc,
             }
 
@@ -409,7 +420,9 @@ def run_comparison(
 
             subject_rows.append(row)
             all_metrics.append(row)
-            timing_data.append({"subject": subject_id, "method": method_name, "duration_sec": duration_sec})
+            timing_data.append(
+                {"subject": subject_id, "method": method_name, "duration_sec": duration_sec}
+            )
             comp_data.append(
                 {
                     "subject": subject_id,
@@ -441,7 +454,7 @@ def run_comparison(
         subject_plots_dir = subject_report_path.parent / "figures"
         subject_plots_dir.mkdir(parents=True, exist_ok=True)
 
-        subject_plot_paths: Dict[str, str] = {}
+        subject_plot_paths: dict[str, str] = {}
         try:
             subject_plot_paths["psd_comparison"] = viz_qc.plot_compare_psd(
                 raw_orig, raw_dss, raw_ica, subject_id, subject_plots_dir
@@ -599,7 +612,10 @@ def main() -> None:
         "--preproc_root",
         type=str,
         default=None,
-        help="Directory for stage FIF/provenance artifacts (default: <bids_root>/derivatives/preproc)",
+        help=(
+            "Directory for stage FIF/provenance artifacts "
+            "(default: <bids_root>/derivatives/preproc)"
+        ),
     )
     parser.add_argument(
         "--reports_root",
@@ -620,8 +636,12 @@ def main() -> None:
         action="store_true",
         help="Alias for --compare-mode reuse",
     )
-    parser.add_argument("--dss-desc", type=str, default="correctDss", help="Desc token for DSS branch")
-    parser.add_argument("--ica-desc", type=str, default="correctIca", help="Desc token for ICA branch")
+    parser.add_argument(
+        "--dss-desc", type=str, default="correctDss", help="Desc token for DSS branch"
+    )
+    parser.add_argument(
+        "--ica-desc", type=str, default="correctIca", help="Desc token for ICA branch"
+    )
     parser.add_argument(
         "--strict-existing",
         action="store_true",
@@ -691,16 +711,23 @@ def main() -> None:
     )
     if not subjects_to_process:
         if args.start_from:
-            LOGGER.error("No subjects found starting from %s.", bids.normalize_subject_id(args.start_from))
+            LOGGER.error(
+                "No subjects found starting from %s.", bids.normalize_subject_id(args.start_from)
+            )
             sys.exit(1)
         parser.print_help()
         sys.exit(0)
     subjects_to_process = set(subjects_to_process)
 
     subjects_sorted = sorted(subjects_to_process)
-    LOGGER.info("Running compare (%s) for %d subjects: %s", compare_mode, len(subjects_sorted), subjects_sorted)
+    LOGGER.info(
+        "Running compare (%s) for %d subjects: %s",
+        compare_mode,
+        len(subjects_sorted),
+        subjects_sorted,
+    )
 
-    denoise_config: Optional[ArtifactDenoisingConfig] = None
+    denoise_config: ArtifactDenoisingConfig | None = None
     if compare_mode == "full":
         denoise_config = ArtifactDenoisingConfig(
             transient_method=args.transient_method if args.transient_method != "none" else None

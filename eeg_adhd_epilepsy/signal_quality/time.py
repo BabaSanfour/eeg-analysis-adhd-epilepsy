@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
-import numpy as np
 import mne
+import numpy as np
 
-def compute_channel_amplitude_stats(raw: mne.io.BaseRaw | None, picks: List[str]) -> Dict[str, object]:
+
+def compute_channel_amplitude_stats(
+    raw: mne.io.BaseRaw | None, picks: list[str]
+) -> dict[str, object]:
     """Peak-to-peak amplitude per channel."""
     if raw is None or picks is None or len(picks) == 0:
         return {
@@ -29,7 +31,9 @@ def compute_channel_amplitude_stats(raw: mne.io.BaseRaw | None, picks: List[str]
     }
 
 
-def detect_flat_and_noisy_channels(raw: mne.io.BaseRaw | None, picks: List[str]) -> Dict[str, object]:
+def detect_flat_and_noisy_channels(
+    raw: mne.io.BaseRaw | None, picks: list[str]
+) -> dict[str, object]:
     """Detect flat/noisy channels using variance percentiles."""
     if raw is None or picks is None or len(picks) == 0:
         return {
@@ -59,8 +63,8 @@ def detect_flat_and_noisy_channels(raw: mne.io.BaseRaw | None, picks: List[str])
 
 def compute_epoch_amplitude_stats(
     epochs: mne.Epochs | None,
-    picks: List[str] | None = None,
-) -> Dict[str, float]:
+    picks: list[str] | None = None,
+) -> dict[str, float]:
     """Peak-to-peak amplitude statistics across epochs."""
     if epochs is None:
         return {"mean_ptp_uv": float("nan"), "max_ptp_uv": float("nan")}

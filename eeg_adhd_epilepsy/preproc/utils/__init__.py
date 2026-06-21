@@ -7,23 +7,24 @@ to import from the specific submodule directly, e.g.::
     from eeg_adhd_epilepsy.preproc.utils.subjects import select_subjects
 """
 
-from .types import (
-    NumpyEncoder,
-    AdaptiveParams,
-    LineNoiseConfig,
-    SegmentRejectionConfig,
-    ArtifactConfig,
-    SeizureConfig,
-    ProcessingConfig,
-    BadChannelsConfig,
-    ReportingConfig,
-    PreprocConfig,
-)
 from eeg_adhd_epilepsy.io.bids import load_stage_artifacts
+
+from . import thresholds  # expose sub-module for callers that do `from .utils import thresholds`
 from .artifacts import _compute_artifact_overlap, inflate_bad_annotations
 from .subjects import _normalize_subject_list, select_subjects
 from .timing import benchmark_step
-from . import thresholds  # expose sub-module for callers that do `from .utils import thresholds`
+from .types import (
+    AdaptiveParams,
+    ArtifactConfig,
+    BadChannelsConfig,
+    LineNoiseConfig,
+    NumpyEncoder,
+    PreprocConfig,
+    ProcessingConfig,
+    ReportingConfig,
+    SegmentRejectionConfig,
+    SeizureConfig,
+)
 
 __all__ = [
     # types

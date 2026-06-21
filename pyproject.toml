@@ -23,7 +23,7 @@ dependencies = [
   "mne",
   "mne-bids",
   "pybv>=0.7.3",
-  "coco-pipe[decoding] @ git+https://github.com/BabaSanfour/coco-pipe.git@viz",
+  "coco-pipe[decoding,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@dev",
   "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",
@@ -39,19 +39,40 @@ dependencies = [
 Homepage = "https://github.com/"
 
 [project.scripts]
-eeg-dim-reduce = "eeg_adhd_epilepsy.analysis.dimensionality_reduction:main"
+# Top-level orchestrator that sequences the stages below (see also the Makefile).
+eeg-run = "eeg_adhd_epilepsy.run:main"
+# Producers (dataset-wide, single config / CLI args), in pipeline order.
+eeg-build-patients-metadata = "eeg_adhd_epilepsy.io.patients:main"
+eeg-cohort-report = "eeg_adhd_epilepsy.analysis.cohort:main"
+eeg-to-bids = "eeg_adhd_epilepsy.preproc.to_bids:main"
+eeg-preprocess = "eeg_adhd_epilepsy.preproc.base:main"
 eeg-save-epochs = "eeg_adhd_epilepsy.preproc.epochs:main"
 eeg-descriptors = "eeg_adhd_epilepsy.analysis.extract_descriptors:main"
 eeg-merge-descriptors = "eeg_adhd_epilepsy.analysis.merge_descriptors:main"
-eeg-build-patients-metadata = "eeg_adhd_epilepsy.io.patients:main"
-eeg-cohort-report = "eeg_adhd_epilepsy.analysis.cohort:main"
+eeg-foundation-embeddings = "eeg_adhd_epilepsy.analysis.extract_foundation_embeddings:main"
+# Analysis consumers (cohort + analysis config).
+eeg-dim-reduce = "eeg_adhd_epilepsy.analysis.dimensionality_reduction:main"
+eeg-classical-decode = "eeg_adhd_epilepsy.analysis.classical_decoding:main"
+eeg-foundation-decode = "eeg_adhd_epilepsy.analysis.foundation_decoding:main"
 
 [tool.setuptools]
 packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy*"], exclude = ["tests*"] } }
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--import-mode=importlib"
+markers = [
+    "unit: fast, isolated unit test",
+    "integration: multi-component / pipeline test",
+    "cli: drives a console-script entry point",
+    "slow: long-running test",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py310"
+
+[tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
     "F",   # pyflakes
@@ -62,6 +83,11 @@ ignore = [
     "E203",  # whitespace before ':' (black compat)
     "E266",
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Module-level constants imported after conditional/setup code on purpose.
+"eeg_adhd_epilepsy/utils/constants.py" = ["E402"]
+"eeg_adhd_epilepsy/preproc/utils/ica.py" = ["E402"]
 
 [tool.ruff.format]
 quote-style = "double"

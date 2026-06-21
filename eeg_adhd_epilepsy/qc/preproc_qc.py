@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 import warnings
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Mapping, Sequence
 
 import mne
 import numpy as np
@@ -18,11 +18,9 @@ import eeg_adhd_epilepsy.reports.preproc_qc as report_preproc_qc
 import eeg_adhd_epilepsy.signal_quality.metrics as signal_quality
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_preproc_qc
 from eeg_adhd_epilepsy.qc.utils import (
-    DEFAULT_SIGNAL_THRESHOLDS,
-    MAX_METRICS,
-    TOPOMAP_METRIC_KEYS,
-    SignalQCThresholds,
     _BASE_WEIGHTED_METRICS,
+    MAX_METRICS,
+    SignalQCThresholds,
     _build_channel_diagnostics,
     _build_topomap_aggregates,
     _clean_scalar,
@@ -233,7 +231,6 @@ def compute_usable_condition_coverage(raw: mne.io.BaseRaw) -> float:
     return total
 
 
-
 def _delta(current_value: object, reference_value: object) -> float:
     current = pd.to_numeric(current_value, errors="coerce")
     reference = pd.to_numeric(reference_value, errors="coerce")
@@ -291,7 +288,8 @@ def build_preproc_qc_run_record(
         if previous_lookup is None:
             previous_stage_name = get_preproc_qc_stage_name(
                 profile.previous_stage,
-                previous_output_desc or get_preproc_qc_profile(profile.previous_stage).default_output_desc,
+                previous_output_desc
+                or get_preproc_qc_profile(profile.previous_stage).default_output_desc,
             )
             previous_lookup = load_stage_run_lookup(reports_root, previous_stage_name)
         prev_metrics = _resolve_reference_row(
@@ -344,12 +342,14 @@ def build_preproc_qc_run_record(
 
     for metric in _DELTA_METRICS:
         run_metrics[f"{metric}_delta_prev"] = _delta(metrics.get(metric), prev_metrics.get(metric))
-        run_metrics[f"{metric}_delta_raw"] = _delta(metrics.get(metric), _reference_metric(raw_reference, metric))
+        run_metrics[f"{metric}_delta_raw"] = _delta(
+            metrics.get(metric), _reference_metric(raw_reference, metric)
+        )
 
     qc_flag, qc_reasons = evaluate_signal_qc_flag(run_metrics, thresholds, check_retention=True)
     run_metrics["qc_flag"] = qc_flag
     run_metrics["qc_flag_reasons"] = ";".join(qc_reasons)
-    
+
     warnings = list(pipeline_warnings or [])
     if pd.isna(metrics.get("aperiodic_slope")):
         warnings.append("Spectral slope fitting skipped (insufficient clean/finite data).")
@@ -389,7 +389,7 @@ def _compute_post_clean_segment_metrics(
     (full segment window, no BAD sub-interval splitting).
 
     Returns:
-        tuple[pd.DataFrame, pd.DataFrame]: 
+        tuple[pd.DataFrame, pd.DataFrame]:
             1. Aggregated Summary: one row per segment_type with mean stats.
             2. Raw Segments: one row per individual segment with timing and metrics.
     """
@@ -415,28 +415,36 @@ def _compute_post_clean_segment_metrics(
         except ZeroDivisionError:
             LOGGER.debug(
                 "Skipping segment %s [%.1f–%.1f s] for %s: all Welch windows rejected.",
-                seg_type, t_start, t_stop, run_prefix,
+                seg_type,
+                t_start,
+                t_stop,
+                run_prefix,
             )
             continue
-        post_rows.append({
-            "segment_type": seg_type,
-            "t_start": t_start,
-            "t_stop": t_stop,
-            "duration": duration,
-            "segment_amplitude_mean_uv": m.get("amplitude_mean_uv"),
-            "segment_amplitude_max_uv": m.get("amplitude_max_uv"),
-            "segment_pct_bad_channels": m.get("pct_bad_channels"),
-            "segment_line_noise_ratio": m.get("line_noise_ratio"),
-            "segment_hf_lf_ratio": m.get("hf_lf_ratio"),
-            "segment_aperiodic_slope": m.get("aperiodic_slope"),
-        })
+        post_rows.append(
+            {
+                "segment_type": seg_type,
+                "t_start": t_start,
+                "t_stop": t_stop,
+                "duration": duration,
+                "segment_amplitude_mean_uv": m.get("amplitude_mean_uv"),
+                "segment_amplitude_max_uv": m.get("amplitude_max_uv"),
+                "segment_pct_bad_channels": m.get("pct_bad_channels"),
+                "segment_line_noise_ratio": m.get("line_noise_ratio"),
+                "segment_hf_lf_ratio": m.get("hf_lf_ratio"),
+                "segment_aperiodic_slope": m.get("aperiodic_slope"),
+            }
+        )
     post_rows_df = pd.DataFrame(post_rows)
 
     if post_rows_df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
     # Load pre-base segment rows from the raw_qc_segments CSV (written by raw_qc stage).
-    raw_qc_csv = bids_io.get_stage_summary_dir(reports_root, "raw_qc_pre_base", create_dir=False) / "raw_qc_segments.csv"
+    raw_qc_csv = (
+        bids_io.get_stage_summary_dir(reports_root, "raw_qc_pre_base", create_dir=False)
+        / "raw_qc_segments.csv"
+    )
     if raw_qc_csv.exists():
         try:
             pre_all = pd.read_csv(raw_qc_csv)
@@ -453,45 +461,68 @@ def _compute_post_clean_segment_metrics(
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
-        post_agg = post_rows_df.groupby("segment_type").agg(
-            n_segments_post=("segment_type", "count"),
-            total_duration_post_sec=("duration", "sum"),
-            mean_amplitude_post=("segment_amplitude_mean_uv", "mean"),
-            mean_line_noise_post=("segment_line_noise_ratio", "mean"),
-            mean_hf_lf_post=("segment_hf_lf_ratio", "mean"),
-            mean_pct_bad_channels_post=("segment_pct_bad_channels", "mean"),
-            mean_aperiodic_slope_post=("segment_aperiodic_slope", "mean"),
-        ).reset_index()
+        post_agg = (
+            post_rows_df.groupby("segment_type")
+            .agg(
+                n_segments_post=("segment_type", "count"),
+                total_duration_post_sec=("duration", "sum"),
+                mean_amplitude_post=("segment_amplitude_mean_uv", "mean"),
+                mean_line_noise_post=("segment_line_noise_ratio", "mean"),
+                mean_hf_lf_post=("segment_hf_lf_ratio", "mean"),
+                mean_pct_bad_channels_post=("segment_pct_bad_channels", "mean"),
+                mean_aperiodic_slope_post=("segment_aperiodic_slope", "mean"),
+            )
+            .reset_index()
+        )
 
     if not pre_df.empty and "segment_type" in pre_df.columns:
-        pre_agg = pre_df.groupby("segment_type").agg(
-            n_segments_pre=("segment_type", "count"),
-            mean_amplitude_pre=("segment_amplitude_mean_uv", "mean"),
-            mean_line_noise_pre=("segment_line_noise_ratio", "mean"),
-            mean_hf_lf_pre=("segment_hf_lf_ratio", "mean"),
-            mean_pct_bad_channels_pre=("segment_pct_bad_channels", "mean"),
-            mean_aperiodic_slope_pre=("segment_aperiodic_slope", "mean"),
-        ).reset_index()
+        pre_agg = (
+            pre_df.groupby("segment_type")
+            .agg(
+                n_segments_pre=("segment_type", "count"),
+                mean_amplitude_pre=("segment_amplitude_mean_uv", "mean"),
+                mean_line_noise_pre=("segment_line_noise_ratio", "mean"),
+                mean_hf_lf_pre=("segment_hf_lf_ratio", "mean"),
+                mean_pct_bad_channels_pre=("segment_pct_bad_channels", "mean"),
+                mean_aperiodic_slope_pre=("segment_aperiodic_slope", "mean"),
+            )
+            .reset_index()
+        )
         result = post_agg.merge(pre_agg, on="segment_type", how="left")
     else:
         result = post_agg.copy()
-        for col in ("n_segments_pre", "mean_amplitude_pre", "mean_line_noise_pre",
-                    "mean_hf_lf_pre", "mean_pct_bad_channels_pre", "mean_aperiodic_slope_pre"):
+        for col in (
+            "n_segments_pre",
+            "mean_amplitude_pre",
+            "mean_line_noise_pre",
+            "mean_hf_lf_pre",
+            "mean_pct_bad_channels_pre",
+            "mean_aperiodic_slope_pre",
+        ):
             result[col] = float("nan")
 
     cols = [
         "segment_type",
-        "n_segments_pre", "n_segments_post",
+        "n_segments_pre",
+        "n_segments_post",
         "total_duration_post_sec",
-        "mean_amplitude_pre", "mean_amplitude_post",
-        "mean_line_noise_pre", "mean_line_noise_post",
-        "mean_hf_lf_pre", "mean_hf_lf_post",
-        "mean_pct_bad_channels_pre", "mean_pct_bad_channels_post",
-        "mean_aperiodic_slope_pre", "mean_aperiodic_slope_post",
+        "mean_amplitude_pre",
+        "mean_amplitude_post",
+        "mean_line_noise_pre",
+        "mean_line_noise_post",
+        "mean_hf_lf_pre",
+        "mean_hf_lf_post",
+        "mean_pct_bad_channels_pre",
+        "mean_pct_bad_channels_post",
+        "mean_aperiodic_slope_pre",
+        "mean_aperiodic_slope_post",
     ]
-    summary_df = result[[c for c in cols if c in result.columns]].sort_values("segment_type").reset_index(drop=True)
+    summary_df = (
+        result[[c for c in cols if c in result.columns]]
+        .sort_values("segment_type")
+        .reset_index(drop=True)
+    )
     return summary_df, post_rows_df
-
 
 
 def collect_existing_preproc_qc_record(
@@ -530,18 +561,28 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
         [pd.to_numeric(record.get("retained_duration_sec"), errors="coerce") for record in records],
         dtype=float,
     ).fillna(0.0)
-    total_weight = float(weights.sum())
 
-    aggregate = {key: value for key, value in first.items() if key not in {"topomap_aggregates", "channel_diagnostics", "segment_comparison", "segments_df"}}
+    aggregate = {
+        key: value
+        for key, value in first.items()
+        if key
+        not in {"topomap_aggregates", "channel_diagnostics", "segment_comparison", "segments_df"}
+    }
     aggregate["n_runs"] = len(records)
-    aggregate["retained_duration_sec"] = float(sum(float(record.get("retained_duration_sec", 0.0) or 0.0) for record in records))
-    aggregate["usable_condition_coverage_sec"] = float(sum(float(record.get("usable_condition_coverage_sec", 0.0) or 0.0) for record in records))
+    aggregate["retained_duration_sec"] = float(
+        sum(float(record.get("retained_duration_sec", 0.0) or 0.0) for record in records)
+    )
+    aggregate["usable_condition_coverage_sec"] = float(
+        sum(float(record.get("usable_condition_coverage_sec", 0.0) or 0.0) for record in records)
+    )
 
     for metric in WEIGHTED_METRICS:
         series = pd.to_numeric([record.get(metric) for record in records], errors="coerce")
         valid = np.isfinite(series) & np.isfinite(weights.to_numpy(dtype=float))
         if valid.any() and float(weights.to_numpy(dtype=float)[valid].sum()) > 0:
-            aggregate[metric] = float(np.average(series[valid], weights=weights.to_numpy(dtype=float)[valid]))
+            aggregate[metric] = float(
+                np.average(series[valid], weights=weights.to_numpy(dtype=float)[valid])
+            )
         else:
             aggregate[metric] = np.nan
 
@@ -550,22 +591,29 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
         aggregate[metric] = float(np.nanmax(series)) if np.isfinite(series).any() else np.nan
 
     status_order = {"usable": 0, "borderline": 1, "unusable": 2}
-    aggregate["qc_flag"] = max((record.get("qc_flag", "usable") for record in records), key=lambda status: status_order.get(str(status), -1))
+    aggregate["qc_flag"] = max(
+        (record.get("qc_flag", "usable") for record in records),
+        key=lambda status: status_order.get(str(status), -1),
+    )
     reasons: list[str] = []
     for record in records:
-        reasons.extend([reason for reason in str(record.get("qc_flag_reasons", "")).split(";") if reason])
+        reasons.extend(
+            [reason for reason in str(record.get("qc_flag_reasons", "")).split(";") if reason]
+        )
     aggregate["qc_flag_reasons"] = ";".join(sorted(set(reasons)))
     aggregate["topomap_aggregates"] = _combine_weighted_topomaps(
         record.get("topomap_aggregates", {}) for record in records
     )
     aggregate["channel_diagnostics"] = records[0].get("channel_diagnostics", {})
     from eeg_adhd_epilepsy.qc.utils import compute_channel_failure_rates
+
     aggregate["channel_failure_rates"] = compute_channel_failure_rates(records)
 
     # Combine per-condition segment comparisons across runs: average numeric columns
     # per segment_type so multi-run subjects don't get duplicate condition rows.
     seg_frames = [
-        r.get("segment_comparison") for r in records
+        r.get("segment_comparison")
+        for r in records
         if isinstance(r.get("segment_comparison"), pd.DataFrame)
         and not r["segment_comparison"].empty
     ]
@@ -584,7 +632,11 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
         aggregate["segment_comparison"] = pd.DataFrame()
 
     # Combine individual segments for temporal plotting (concatenation is fine here)
-    seg_dfs = [r.get("segments_df") for r in records if isinstance(r.get("segments_df"), pd.DataFrame) and not r["segments_df"].empty]
+    seg_dfs = [
+        r.get("segments_df")
+        for r in records
+        if isinstance(r.get("segments_df"), pd.DataFrame) and not r["segments_df"].empty
+    ]
     aggregate["segments_df"] = pd.concat(seg_dfs, ignore_index=True) if seg_dfs else pd.DataFrame()
 
     return aggregate
@@ -600,7 +652,10 @@ def write_subject_preproc_qc_report(
     if not records:
         raise ValueError("records must be non-empty")
     aggregate = _aggregate_subject_metrics(records)
-    stage_name = get_preproc_qc_stage_name(profile.stage, output_desc or str(aggregate.get("output_desc") or profile.default_output_desc))
+    stage_name = get_preproc_qc_stage_name(
+        profile.stage,
+        output_desc or str(aggregate.get("output_desc") or profile.default_output_desc),
+    )
     output_path = bids_io.get_subject_session_stage_report_path(
         reports_root=reports_root,
         subject_id=str(aggregate["subject_id"]),
@@ -657,10 +712,21 @@ def write_preproc_qc_aggregate_reports(
 ) -> Path | None:
     if not run_records:
         return None
-    output_desc = output_desc or str(run_records[0].get("output_desc") or profile.default_output_desc)
+    output_desc = output_desc or str(
+        run_records[0].get("output_desc") or profile.default_output_desc
+    )
     stage_name = get_preproc_qc_stage_name(profile.stage, output_desc)
     summary_dir = bids_io.get_stage_summary_dir(reports_root, stage_name, create_dir=True)
-    runs_df = pd.DataFrame([{k: v for k, v in record.items() if k not in {"topomap_aggregates", "channel_diagnostics"}} for record in run_records])
+    runs_df = pd.DataFrame(
+        [
+            {
+                k: v
+                for k, v in record.items()
+                if k not in {"topomap_aggregates", "channel_diagnostics"}
+            }
+            for record in run_records
+        ]
+    )
     runs_df.to_csv(summary_dir / f"{stage_name}_runs.csv", index=False)
 
     subject_groups: dict[tuple[str, str], list[Mapping[str, object]]] = defaultdict(list)
@@ -674,11 +740,19 @@ def write_preproc_qc_aggregate_reports(
             profile=profile,
             output_desc=output_desc,
         )
-        subject_rows.append({k: v for k, v in subject_record.items() if k not in {"topomap_aggregates", "channel_diagnostics", "segment_comparison"}})
+        subject_rows.append(
+            {
+                k: v
+                for k, v in subject_record.items()
+                if k not in {"topomap_aggregates", "channel_diagnostics", "segment_comparison"}
+            }
+        )
     subjects_df = pd.DataFrame(subject_rows)
     subjects_df.to_csv(summary_dir / f"{stage_name}_subjects.csv", index=False)
 
-    topomap_aggregates = _combine_weighted_topomaps(record.get("topomap_aggregates", {}) for record in run_records)
+    topomap_aggregates = _combine_weighted_topomaps(
+        record.get("topomap_aggregates", {}) for record in run_records
+    )
     figure_paths = viz_preproc_qc.save_dataset_preproc_qc_figures(
         runs_df=runs_df,
         topomap_aggregates=topomap_aggregates,
@@ -686,16 +760,17 @@ def write_preproc_qc_aggregate_reports(
     )
     # Build cross-subject per-condition summary by aggregating all run segment_comparisons.
     seg_frames = [
-        r.get("segment_comparison") for r in run_records
+        r.get("segment_comparison")
+        for r in run_records
         if isinstance(r.get("segment_comparison"), pd.DataFrame)
         and not r["segment_comparison"].empty
     ]
     if seg_frames:
         combined_segs = pd.concat(seg_frames, ignore_index=True)
         numeric_cols = [c for c in combined_segs.columns if c != "segment_type"]
-        
+
         counts = combined_segs.groupby("segment_type").size().reset_index(name="n_usable_runs")
-        
+
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", category=RuntimeWarning)
             condition_summary_df = (

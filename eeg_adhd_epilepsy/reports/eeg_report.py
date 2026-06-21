@@ -16,7 +16,7 @@ from eeg_adhd_epilepsy.reports._common import (
     add_optional_table as _add_optional_table,
     build_subject_overview_table,
 )
-from eeg_adhd_epilepsy.utils.config import SEGMENT_COLUMNS
+from eeg_adhd_epilepsy.utils.constants import SEGMENT_COLUMNS
 from eeg_adhd_epilepsy.utils.formatting import format_clock_time, format_duration_hms
 
 

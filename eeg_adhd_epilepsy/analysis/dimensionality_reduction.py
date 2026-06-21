@@ -4,51 +4,60 @@
 from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
 from itertools import product
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
 import yaml
-from coco_pipe.dim_reduction.artifacts import (
-    EVAL_METRIC_COLUMNS,
+from coco_pipe.dim_reduction import (
     EVAL_RUN_KEY_FIELDS,
     FIT_METRIC_COLUMNS,
     FIT_RUN_KEY_FIELDS,
-    SEPARATION_METRIC_KEY,
-    _availability_record,
-    _write_run_status,
-    load_fit_runs,
-    update_runs,
-)
-from coco_pipe.dim_reduction.config import METHODS, parse_eval_specs
-from coco_pipe.dim_reduction.pipeline import (
     POOLED_CONDITION,
-    _build_eval_task,
-    _build_fit_task,
-    _execute_eval_task,
-    _execute_fit_task,
-    _valid_component_sweep,
+    SEPARATION_METRIC_KEY,
     build_auto_pooled_eval_spec,
+    build_availability_record,
+    build_eval_request,
+    build_fit_request,
+    load_fit_runs,
+    parse_eval_specs,
+    run_eval,
+    run_fit,
+    update_runs,
+    valid_component_sweep,
+    write_run_status,
 )
-from coco_pipe.io import iter_analysis_units
-from coco_pipe.io.structures import DataContainer
-from coco_pipe.io.utils import normalize_subject_value
-from coco_pipe.utils import _resolve_n_jobs, _run_task_batch, _slug
+from coco_pipe.io import (
+    ANALYSIS_MODES,
+    DESCRIPTOR_ONLY_ANALYSIS_MODES,
+    DataContainer,
+    iter_analysis_units,
+    normalize_subject_value,
+    read_table,
+    write_json,
+)
+from coco_pipe.utils import resolve_n_jobs, run_task_batch, slug, stable_hash
 
-from eeg_adhd_epilepsy.io.analysis import load_container
+from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
+    build_run_config_payload,
+    condition_load_failure_record,
+    pool_containers,
+)
 from eeg_adhd_epilepsy.io.bids import (
     get_reports_root,
     get_stage_summary_dir,
-    validate_bids_coverage,
 )
-from eeg_adhd_epilepsy.io.table import load
+from eeg_adhd_epilepsy.io.containers import (
+    apply_family_qc_mask,
+    families_for_analysis_unit,
+    load_container,
+)
 from eeg_adhd_epilepsy.reports.dim_reduction import generate_dataset_report
-from eeg_adhd_epilepsy.utils.config import DEFAULT_ANALYSIS_CONDITIONS
+from eeg_adhd_epilepsy.utils.config import load_cohort_analysis_config
+from eeg_adhd_epilepsy.utils.constants import DEFAULT_ANALYSIS_CONDITIONS
+from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 logger = logging.getLogger(__name__)
 
@@ -58,77 +67,7 @@ DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
 DEFAULT_N_COMPONENTS_SWEEP = [2, 3, 5, 10, 20, 50, 75, 100]
 
 
-def _run_variant(args) -> str:
-    parts = [args.analysis_mode]
-    aggregation_unit = getattr(args, "aggregation_unit", None)
-    if (
-        args.input_mode == "raw"
-        and args.representation.startswith(("subject_", "recording_"))
-        and aggregation_unit
-    ):
-        parts.append(str(aggregation_unit))
-    parts.append(args.representation)
-    return "__".join(_slug(part) for part in parts if part)
-
-
-def _report_variant(args) -> str:
-    parts = [f"mode-{_slug(args.analysis_mode).replace('_', '-')}"]
-    aggregation_unit = getattr(args, "aggregation_unit", None)
-    if (
-        args.input_mode == "raw"
-        and args.representation.startswith(("subject_", "recording_"))
-        and aggregation_unit
-    ):
-        parts.append(f"unit-{_slug(aggregation_unit).replace('_', '-')}")
-    parts.append(f"repr-{_slug(args.representation).replace('_', '-')}")
-    return "_".join(parts)
-
-
-def _resolve_subjects(args, bids_root: Path, meta_df: pd.DataFrame) -> list[str]:
-    if args.subjects:
-        return [normalize_subject_value(subject) for subject in args.subjects]
-    if args.input_mode == "descriptors":
-        table_path = Path(args.descriptor_table_path).expanduser()
-        descriptor_df = load(str(table_path), sep=None)
-        if args.subject_col in descriptor_df.columns:
-            subject_series = descriptor_df[args.subject_col]
-        elif "subject" in descriptor_df.columns:
-            subject_series = descriptor_df["subject"]
-        else:
-            raise ValueError(
-                f"Descriptor table must contain '{args.subject_col}' or 'subject' "
-                "to resolve available subjects."
-            )
-        subjects = sorted(
-            {normalize_subject_value(v) for v in subject_series.dropna().unique()}
-        )
-        logger.info(
-            "Resolved %d available subjects from descriptor table %s.",
-            len(subjects),
-            table_path,
-        )
-        return subjects
-
-    coverage_root = bids_root / "derivatives" / "preproc" if args.use_derivatives else bids_root
-    coverage_desc = args.desc if args.use_derivatives else ""
-    coverage_suffix = "epo" if args.use_derivatives else None
-    coverage = validate_bids_coverage(
-        meta_df,
-        coverage_root,
-        desc=coverage_desc,
-        suffix=coverage_suffix,
-        subject_col=args.subject_col,
-    )
-    subjects = [str(subject) for subject in coverage["present_subjects"]]
-    logger.info(
-        "Resolved %d available subjects from %s.",
-        len(subjects),
-        "derivatives" if args.use_derivatives else "BIDS",
-    )
-    return subjects
-
-
-def _collect_scope_fit_tasks(
+def _collect_scope_fit_requests(
     scope: str,
     condition: str,
     container,
@@ -138,22 +77,34 @@ def _collect_scope_fit_tasks(
     unit_containers_by_key: dict,
     data_availability: list,
 ) -> list[dict[str, Any]]:
-    """Enumerate analysis units and build fit tasks for one scope/condition pair."""
-    tasks: list[dict[str, Any]] = []
+    """Enumerate analysis units and build fit requests for one scope/condition pair."""
+    requests: list[dict[str, Any]] = []
     for unit_spec in iter_analysis_units(
         container,
         args.analysis_mode,
         args.input_mode,
         args.descriptor_families,
     ):
-        unit_containers_by_key[(scope, condition, unit_spec["unit_key"])] = unit_spec["container"]
-        valid_components = _valid_component_sweep(unit_spec["container"], args.n_components_sweep)
+        families = families_for_analysis_unit(
+            container,
+            unit_spec,
+            args.descriptor_families,
+        )
+        unit_container, _ = apply_family_qc_mask(
+            unit_spec["container"],
+            families,
+        )
+        unit_spec = {**unit_spec, "container": unit_container}
+        unit_container = unit_spec["container"]
+        unit_containers_by_key[(scope, condition, unit_spec["unit_key"])] = unit_container
+        X = np.asarray(unit_container.X)
+        valid_components = valid_component_sweep(unit_container, args.n_components_sweep)
         data_availability.append(
-            _availability_record(
+            build_availability_record(
                 scope=scope,
                 condition=condition,
                 unit_spec=unit_spec,
-                container=unit_spec["container"],
+                container=unit_container,
                 requested_components=args.n_components_sweep,
                 valid_components=valid_components,
             )
@@ -163,22 +114,94 @@ def _collect_scope_fit_tasks(
                 "Skipping %s/%s: no valid n_components for matrix shape %s.",
                 condition,
                 unit_spec["unit_name"],
-                tuple(np.asarray(unit_spec["container"].X).shape),
+                tuple(X.shape),
             )
             continue
+        filter_specs = [
+            {"column": str(col), "values": [str(value) for value in vals]}
+            for col, vals in zip(args.filter_col, args.filter_val)
+            if vals
+        ]
+        input_signature: dict[str, Any] = {
+            "input_mode": args.input_mode,
+            "representation": args.representation,
+            "analysis_mode": args.analysis_mode,
+            "run_config_hash": getattr(args, "run_config_hash", None),
+            "descriptor_families": list(getattr(args, "descriptor_families", []) or []),
+            "filters": filter_specs,
+            "group_filters": getattr(args, "group_filters", None),
+            "balance_target": args.balance_target,
+            "balance_strategy": args.balance_strategy if args.balance_target else None,
+            "unit_type": unit_spec["unit_type"],
+            "unit_name": unit_spec["unit_name"],
+            "family": unit_spec.get("family"),
+            "run_label": getattr(args, "run_label", None),
+            "qc": getattr(args, "qc", None),
+        }
+        if args.input_mode == "raw":
+            input_signature.update(
+                {
+                    "bids_root": str(Path(args.bids_root).expanduser()),
+                    "use_derivatives": bool(args.use_derivatives),
+                    "task": getattr(args, "task", "clinical"),
+                    "segment_duration": float(args.segment_duration),
+                    "overlap": float(args.overlap),
+                    "desc": args.desc,
+                    "window_source": getattr(args, "window_source", "auto"),
+                    "aggregation_unit": getattr(args, "aggregation_unit", None),
+                }
+            )
+        elif args.input_mode == "descriptors":
+            input_signature.update(
+                {
+                    "descriptor_table_path": str(Path(args.descriptor_table_path).expanduser()),
+                    "descriptor_feature_columns_path": str(
+                        Path(args.descriptor_feature_columns_path).expanduser()
+                    ),
+                    "descriptor_max_abs_value": getattr(args, "descriptor_max_abs_value", None),
+                    "location_statistic": getattr(args, "location_statistic", None),
+                }
+            )
+        elif args.input_mode == "foundation_embeddings":
+            input_signature.update(
+                {
+                    "embedding_derivative_root": str(
+                        Path(args.embedding_derivative_root).expanduser()
+                    ),
+                    "embedding_representation": getattr(
+                        args, "embedding_representation", "recording"
+                    ),
+                    "embedding_aggregate_by": getattr(args, "embedding_aggregate_by", None),
+                    "embedding_model_key": getattr(args, "embedding_model_key", None),
+                }
+            )
+        else:
+            raise ValueError(f"Unsupported input_mode '{args.input_mode}'.")
+
         for reducer_name, n_components in product(reducers, valid_components):
-            tasks.append(
-                _build_fit_task(
-                    args=args,
+            logger.info(
+                "Fitting %s/%s/%s/%s/n%d",
+                condition,
+                args.analysis_mode,
+                unit_spec["unit_name"],
+                reducer_name,
+                int(n_components),
+            )
+            requests.append(
+                build_fit_request(
+                    container=unit_container,
                     scope=scope,
                     condition=condition,
                     unit_spec=unit_spec,
-                    reducer_name=reducer_name,
-                    n_components=n_components,
+                    reducer=reducer_name,
+                    n_components=int(n_components),
+                    input_signature=input_signature,
                     output_root=output_root,
+                    overwrite=bool(args.overwrite),
+                    subject_col=args.subject_col,
                 )
             )
-    return tasks
+    return requests
 
 
 def main() -> None:
@@ -189,12 +212,26 @@ def main() -> None:
 
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--config", default=None)
+    pre_parser.add_argument("--cohort_config", default=None)
+    pre_parser.add_argument("--analysis_config", default=None)
     bootstrap_args, _ = pre_parser.parse_known_args()
 
-    parser = argparse.ArgumentParser(
-        description="Run checkpointed EEG dimensionality reduction."
+    parser = argparse.ArgumentParser(description="Run checkpointed EEG dimensionality reduction.")
+    parser.add_argument(
+        "--cohort_config",
+        default=None,
+        help="Cohort/dataset config: subjects + clinical question (configs/cohorts/).",
     )
-    parser.add_argument("--config", default=None, help="Path to dim-reduction YAML config.")
+    parser.add_argument(
+        "--analysis_config",
+        default=None,
+        help="Analysis/method config: reducers, sweep (configs/analyses/dim_reduction/).",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="[deprecated] single combined config; prefer --cohort_config + --analysis_config.",
+    )
 
     dataset_group = parser.add_argument_group("Dataset")
     dataset_group.add_argument("--bids_root", required=False, default=None)
@@ -221,7 +258,11 @@ def main() -> None:
     )
 
     input_group = parser.add_argument_group("Input")
-    input_group.add_argument("--input_mode", choices=["raw", "descriptors"], default="raw")
+    input_group.add_argument(
+        "--input_mode",
+        choices=["raw", "descriptors", "foundation_embeddings"],
+        default="raw",
+    )
     input_group.add_argument("--task", default="clinical")
     input_group.add_argument("--segment_duration", type=float, default=60.0)
     input_group.add_argument("--overlap", type=float, default=0.0)
@@ -247,12 +288,20 @@ def main() -> None:
     )
     input_group.add_argument(
         "--analysis_mode",
-        choices=["flat", "sensor", "family", "sensor_within_family"],
+        choices=ANALYSIS_MODES,
         default="flat",
     )
     input_group.add_argument("--descriptor_table_path", default=None)
     input_group.add_argument("--descriptor_feature_columns_path", default=None)
     input_group.add_argument("--descriptor_families", nargs="+", default=None)
+    input_group.add_argument("--embedding_derivative_root", default=None)
+    input_group.add_argument(
+        "--embedding_representation",
+        choices=["recording", "window"],
+        default="recording",
+    )
+    input_group.add_argument("--embedding_aggregate_by", default=None)
+    input_group.add_argument("--embedding_model_key", default=None)
     input_group.add_argument(
         "--descriptor_max_abs_value",
         type=float,
@@ -308,9 +357,7 @@ def main() -> None:
     )
 
     report_group = parser.add_argument_group("Report")
-    report_group.add_argument(
-        "--interactive", action=argparse.BooleanOptionalAction, default=True
-    )
+    report_group.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=True)
     report_group.add_argument("--save_static_figures", action="store_true")
     report_group.add_argument("--compress_viz_with_pca", action="store_true")
     report_group.add_argument(
@@ -328,11 +375,21 @@ def main() -> None:
     )
 
     config_eval_specs = None
-    if bootstrap_args.config:
-        config_path = Path(bootstrap_args.config).expanduser()
-        raw_config = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-        if not isinstance(raw_config, dict):
-            raise ValueError(f"Expected mapping payload in {config_path}.")
+    using_pair = bool(bootstrap_args.cohort_config or bootstrap_args.analysis_config)
+    if using_pair:
+        if not (bootstrap_args.cohort_config and bootstrap_args.analysis_config):
+            parser.error("--cohort_config and --analysis_config must be provided together.")
+        if bootstrap_args.config:
+            parser.error("Pass either --config or --cohort_config + --analysis_config, not both.")
+        raw_config = load_cohort_analysis_config(
+            bootstrap_args.cohort_config, bootstrap_args.analysis_config
+        )
+    elif bootstrap_args.config:
+        raw_config = load_yaml_config(Path(bootstrap_args.config).expanduser())
+    else:
+        raw_config = None
+    if raw_config is not None:
+        raw_config = dict(raw_config)
         config_eval_specs = raw_config.pop("evals", None)
         parser.set_defaults(**raw_config)
     args = parser.parse_args()
@@ -353,9 +410,17 @@ def main() -> None:
         # For descriptor inputs, use the table filename stem as the representation label
         # (the --representation CLI flag is ignored; this sets it once before anything reads it)
         args.representation = Path(args.descriptor_table_path).stem
+    if args.input_mode == "foundation_embeddings":
+        if not args.embedding_derivative_root:
+            raise ValueError("--embedding_derivative_root is required for foundation embeddings.")
+        if not args.embedding_model_key:
+            raise ValueError("--embedding_model_key is required to keep model spaces separate.")
+        if args.analysis_mode != "flat":
+            raise ValueError("Foundation embeddings currently support analysis_mode='flat' only.")
+        args.representation = f"foundation_{args.embedding_representation}"
     if args.run_label is None:
         args.run_label = args.dataset_name
-    if args.analysis_mode in {"family", "sensor_within_family"} and args.input_mode != "descriptors":
+    if args.analysis_mode in DESCRIPTOR_ONLY_ANALYSIS_MODES and args.input_mode != "descriptors":
         raise ValueError(
             f"analysis_mode='{args.analysis_mode}' is only supported for descriptor inputs."
         )
@@ -367,9 +432,7 @@ def main() -> None:
             )
     if args.input_mode == "raw" and args.analysis_mode != "flat":
         if args.analysis_mode != "sensor":
-            raise ValueError(
-                "Raw inputs currently support only analysis_mode='flat' or 'sensor'."
-            )
+            raise ValueError("Raw inputs currently support only analysis_mode='flat' or 'sensor'.")
     if args.input_mode == "raw" and args.analysis_mode == "flat":
         if args.representation in {"epoch_native", "subject_native", "recording_native"}:
             raise ValueError(
@@ -379,9 +442,7 @@ def main() -> None:
             )
     if args.input_mode == "raw" and args.representation.startswith("recording_"):
         if args.aggregation_unit != "recording":
-            raise ValueError(
-                "recording_* representations require --aggregation_unit recording."
-            )
+            raise ValueError("recording_* representations require --aggregation_unit recording.")
     if args.descriptor_families and args.input_mode != "descriptors":
         raise ValueError("--descriptor_families is only supported for descriptor inputs.")
     if args.descriptor_families:
@@ -396,27 +457,34 @@ def main() -> None:
                 f"Valid families: {['band', 'complexity', 'param']}"
             )
 
-    resolved_n_jobs = _resolve_n_jobs(args.n_jobs)
+    resolved_n_jobs = resolve_n_jobs(args.n_jobs)
 
-    requested_reducers = [value.upper() for value in args.reducers]
-    if requested_reducers == ["DEFAULT"]:
-        reducers = DEFAULT_REDUCERS
-    elif requested_reducers == ["EXTENDED"]:
-        reducers = EXTENDED_REDUCERS
+    requested_reducers = [str(value) for value in args.reducers]
+    if len(requested_reducers) == 1 and requested_reducers[0].lower() == "default":
+        reducers = list(DEFAULT_REDUCERS)
+    elif len(requested_reducers) == 1 and requested_reducers[0].lower() == "extended":
+        reducers = list(EXTENDED_REDUCERS)
     else:
-        # Validate against METHODS — the authoritative registry in coco-pipe
-        valid_reducers = set(METHODS)
-        invalid_reducers = [v for v in requested_reducers if v not in valid_reducers]
-        if invalid_reducers:
-            raise ValueError(
-                f"Unknown reducers: {invalid_reducers}. "
-                f"Valid reducers: {sorted(valid_reducers)}"
-            )
         reducers = requested_reducers
 
     bids_root = Path(args.bids_root).expanduser()
-    meta_df = load(str(Path(args.metadata)), sep=",")
-    subjects = _resolve_subjects(args, bids_root, meta_df)
+    meta_df = read_table(Path(args.metadata), sep=",")
+    if args.subjects:
+        subjects = [normalize_subject_value(subject) for subject in args.subjects]
+    else:
+        if args.subject_col not in meta_df.columns:
+            raise ValueError(f"Metadata table must contain subject column '{args.subject_col}'.")
+        subjects = sorted(
+            {
+                normalize_subject_value(subject)
+                for subject in meta_df[args.subject_col].dropna().unique()
+            }
+        )
+        logger.info(
+            "Resolved %d subjects from metadata column '%s'.",
+            len(subjects),
+            args.subject_col,
+        )
     raw_eval_specs = config_eval_specs
     if raw_eval_specs is None and args.eval_config:
         raw_eval_specs = (
@@ -445,90 +513,95 @@ def main() -> None:
             f"Valid eval names: {sorted(eval_names)}"
         )
 
+    run_config = build_run_config_payload(args, reducers, eval_specs)
+    args.run_config_hash = stable_hash(run_config, length=12)
+
     output_base = bids_root / "derivatives" / "dim_reduction"
     if args.output_group:
         output_group = Path(str(args.output_group))
         if output_group.is_absolute():
             raise ValueError("--output_group must be relative, not absolute.")
         output_base = output_base / output_group
-    run_variant = _run_variant(args)
-    output_dataset_name = _slug(args.run_label or args.dataset_name)
-    output_root = output_base / output_dataset_name / args.input_mode / run_variant
+    aggregation_unit = getattr(args, "aggregation_unit", None)
+    representation_label = (
+        args.representation.removesuffix(f"_{args.analysis_mode}")
+        if args.input_mode == "raw"
+        else args.representation
+    )
+    variant_parts = [args.analysis_mode, args.input_mode, representation_label]
+    if args.input_mode == "foundation_embeddings":
+        variant_parts.append(args.embedding_model_key)
+    if (
+        args.input_mode == "raw"
+        and representation_label == "subject"
+        and aggregation_unit
+        and aggregation_unit != "subject"
+    ):
+        variant_parts.append(f"by_{aggregation_unit}")
+    variant_parts.append(f"cfg-{args.run_config_hash}")
+    run_variant = "_".join(slug(part) for part in variant_parts if part)
+    args.run_variant = run_variant
+    output_dataset_name = slug(args.run_label or args.dataset_name)
+    output_root = output_base / output_dataset_name / run_variant
     output_root.mkdir(parents=True, exist_ok=True)
+    runs_dir = output_root / "runs"
+    runs_dir.mkdir(parents=True, exist_ok=True)
     config_snapshot = {
-        key: value
-        for key, value in vars(args).items()
-        if key not in {"config", "eval_config"}
+        key: value for key, value in vars(args).items() if key not in {"config", "eval_config"}
     }
     if eval_specs:
         config_snapshot["evals"] = eval_specs
     (output_root / "config_used.yaml").write_text(
         yaml.safe_dump(config_snapshot, sort_keys=True), encoding="utf-8"
     )
-    fit_runs_path = output_root / "dim_reduction_fit_runs.json"
-    eval_runs_path = output_root / "dim_reduction_eval_runs.json"
+    fit_runs_path = runs_dir / "fit_runs.json"
+    eval_runs_path = runs_dir / "eval_runs.json"
+    run_summary_path = runs_dir / "run_summary.json"
+    if not args.reports_only:
+        write_json(fit_runs_path, [], indent=2)
+        write_json(eval_runs_path, [], indent=2)
     logger.info("Using %d outer worker(s) for fits/evals.", resolved_n_jobs)
 
     base_containers_by_scope: dict[tuple[str, str], DataContainer] = {}
     unit_containers_by_key: dict[tuple[str, str, str], DataContainer] = {}
     data_availability: list[dict[str, Any]] = []
     condition_load_failures: list[dict[str, str]] = []
+    report_path: Path | None = None
+    fatal_error: str | None = None
+    try:
+        if args.reports_only:
+            if not fit_runs_path.exists():
+                raise FileNotFoundError(
+                    f"--reports-only requested but {fit_runs_path} does not exist."
+                )
+        else:
+            fit_requests: list[dict[str, Any]] = []
+            for condition in args.conditions:
+                logger.info("Loading input for condition '%s' (%s).", condition, args.input_mode)
+                try:
+                    base_container = load_container(
+                        args, subjects, meta_df, condition, target_col=None
+                    )
+                except Exception as exc:
+                    logger.exception("Failed to load condition '%s'.", condition)
+                    condition_load_failures.append({"condition": condition, "error": str(exc)})
+                    update_runs(
+                        fit_runs_path,
+                        condition_load_failure_record(
+                            condition=condition,
+                            args=args,
+                            error=exc,
+                        ),
+                        key_fields=FIT_RUN_KEY_FIELDS,
+                    )
+                    continue
 
-    if args.reports_only:
-        if not fit_runs_path.exists():
-            raise FileNotFoundError(
-                f"--reports-only requested but {fit_runs_path} does not exist."
-            )
-    else:
-        fit_tasks: list[dict[str, Any]] = []
-        for condition in args.conditions:
-            logger.info(
-                "Loading input for condition '%s' (%s).", condition, args.input_mode
-            )
-            try:
-                base_container = load_container(
-                    args, subjects, meta_df, condition, target_col=None
-                )
-            except Exception as exc:
-                logger.exception("Failed to load condition '%s'.", condition)
-                condition_load_failures.append(
-                    {"condition": condition, "error": str(exc)}
-                )
-                continue
-
-            base_containers_by_scope[("condition", condition)] = base_container
-            fit_tasks.extend(
-                _collect_scope_fit_tasks(
-                    "condition",
-                    condition,
-                    base_container,
-                    args,
-                    reducers,
-                    output_root,
-                    unit_containers_by_key,
-                    data_availability,
-                )
-            )
-
-        if args.run_pooled:
-            available_conditions = [
-                cond
-                for cond in args.conditions
-                if ("condition", cond) in base_containers_by_scope
-            ]
-            if available_conditions:
-                pooled_container = DataContainer.concat(
-                    [
-                        base_containers_by_scope[("condition", cond)]
-                        for cond in available_conditions
-                    ]
-                )
-                base_containers_by_scope[("pooled", POOLED_CONDITION)] = pooled_container
-                fit_tasks.extend(
-                    _collect_scope_fit_tasks(
-                        "pooled",
-                        POOLED_CONDITION,
-                        pooled_container,
+                base_containers_by_scope[("condition", condition)] = base_container
+                fit_requests.extend(
+                    _collect_scope_fit_requests(
+                        "condition",
+                        condition,
+                        base_container,
                         args,
                         reducers,
                         output_root,
@@ -536,80 +609,118 @@ def main() -> None:
                         data_availability,
                     )
                 )
-            else:
-                logger.warning(
-                    "Skipping pooled mode: no condition containers were available."
-                )
 
-        logger.info(
-            "Queued %d fit task(s) across %d loaded scope(s).",
-            len(fit_tasks),
-            len(base_containers_by_scope),
-        )
-        for record in _run_task_batch(fit_tasks, _execute_fit_task, resolved_n_jobs):
-            update_runs(fit_runs_path, record, key_fields=FIT_RUN_KEY_FIELDS)
-
-        if eval_specs:
-            if not fit_runs_path.exists():
-                raise RuntimeError(
-                    "No fit runs were produced, so post-hoc evaluations cannot run. "
-                    "Check the condition load errors above."
-                )
-            fit_runs = [
-                record
-                for record in load_fit_runs(fit_runs_path)
-                if record.get("status") == "success"
-                and record.get("input_mode") == args.input_mode
-                and record.get("analysis_mode") == args.analysis_mode
-                and record.get("reducer") in reducers
-                and int(record.get("n_components", 0)) in args.n_components_sweep
-            ]
-            if not fit_runs:
-                raise RuntimeError(
-                    "No successful fit runs were produced, so post-hoc evaluations "
-                    "cannot run. Check the fit errors above."
-                )
-            eval_tasks: list[dict[str, Any]] = []
-            for fit_record in fit_runs:
-                unit_container = unit_containers_by_key.get(
-                    (
-                        fit_record["scope"],
-                        fit_record["condition"],
-                        fit_record["unit_key"],
-                    )
-                )
-                if unit_container is None:
-                    logger.warning(
-                        "Skipping evals for missing unit scope %s/%s/%s.",
-                        fit_record["scope"],
-                        fit_record["condition"],
-                        fit_record["unit_key"],
-                    )
-                    continue
-                for eval_spec in eval_specs:
-                    # The auto-pooled eval spec is only meaningful for pooled scopes
-                    if (
-                        auto_pooled_eval_spec is not None
-                        and eval_spec["name"] == auto_pooled_eval_spec["name"]
-                        and fit_record["scope"] != "pooled"
-                    ):
-                        continue
-                    eval_tasks.append(
-                        _build_eval_task(
-                            fit_record=fit_record,
-                            eval_spec=eval_spec,
-                            container=unit_container,
-                            output_root=output_root,
-                            overwrite=args.overwrite,
+            if args.run_pooled:
+                available_conditions = [
+                    cond
+                    for cond in args.conditions
+                    if ("condition", cond) in base_containers_by_scope
+                ]
+                if available_conditions:
+                    source_containers = [
+                        base_containers_by_scope[("condition", cond)]
+                        for cond in available_conditions
+                    ]
+                    pooled_container = pool_containers(source_containers)
+                    base_containers_by_scope[("pooled", POOLED_CONDITION)] = pooled_container
+                    fit_requests.extend(
+                        _collect_scope_fit_requests(
+                            "pooled",
+                            POOLED_CONDITION,
+                            pooled_container,
+                            args,
+                            reducers,
+                            output_root,
+                            unit_containers_by_key,
+                            data_availability,
                         )
                     )
-            logger.info("Queued %d eval task(s).", len(eval_tasks))
-            for record in _run_task_batch(eval_tasks, _execute_eval_task, resolved_n_jobs):
-                update_runs(eval_runs_path, record, key_fields=EVAL_RUN_KEY_FIELDS)
+                else:
+                    logger.warning("Skipping pooled mode: no condition containers were available.")
 
-    report_path: Path | None = None
-    fatal_error: str | None = None
-    try:
+            logger.info(
+                "Queued %d fit request(s) across %d loaded scope(s).",
+                len(fit_requests),
+                len(base_containers_by_scope),
+            )
+            for record in run_task_batch(
+                fit_requests,
+                lambda request: run_fit(**request, errors="record"),
+                resolved_n_jobs,
+            ):
+                update_runs(fit_runs_path, record, key_fields=FIT_RUN_KEY_FIELDS)
+
+            if eval_specs:
+                if not fit_runs_path.exists():
+                    raise RuntimeError(
+                        "No fit runs were produced, so post-hoc evaluations cannot run. "
+                        "Check the condition load errors above."
+                    )
+                fit_runs = [
+                    record
+                    for record in load_fit_runs(fit_runs_path)
+                    if record.get("status") == "success"
+                    and record.get("input_mode") == args.input_mode
+                    and record.get("analysis_mode") == args.analysis_mode
+                    and record.get("reducer") in reducers
+                    and int(record.get("n_components", 0)) in args.n_components_sweep
+                ]
+                if not fit_runs:
+                    raise RuntimeError(
+                        "No successful fit runs were produced, so post-hoc evaluations "
+                        "cannot run. Check the fit errors above."
+                    )
+                eval_requests: list[dict[str, Any]] = []
+                for fit_record in fit_runs:
+                    unit_container = unit_containers_by_key.get(
+                        (
+                            fit_record["scope"],
+                            fit_record["condition"],
+                            fit_record["unit_key"],
+                        )
+                    )
+                    if unit_container is None:
+                        logger.warning(
+                            "Skipping evals for missing unit scope %s/%s/%s.",
+                            fit_record["scope"],
+                            fit_record["condition"],
+                            fit_record["unit_key"],
+                        )
+                        continue
+                    for eval_spec in eval_specs:
+                        # The auto-pooled eval spec is only meaningful for pooled scopes.
+                        if (
+                            auto_pooled_eval_spec is not None
+                            and eval_spec["name"] == auto_pooled_eval_spec["name"]
+                            and fit_record["scope"] != "pooled"
+                        ):
+                            continue
+                        logger.info(
+                            "Evaluating %s/%s/%s/%s/n%d [%s]",
+                            fit_record["condition"],
+                            fit_record["analysis_mode"],
+                            fit_record["unit_name"],
+                            fit_record["reducer"],
+                            fit_record["n_components"],
+                            eval_spec["name"],
+                        )
+                        eval_requests.append(
+                            build_eval_request(
+                                fit_record=fit_record,
+                                eval_spec=eval_spec,
+                                container=unit_container,
+                                output_root=output_root,
+                                overwrite=bool(args.overwrite),
+                            )
+                        )
+                logger.info("Queued %d eval request(s).", len(eval_requests))
+                for record in run_task_batch(
+                    eval_requests,
+                    lambda request: run_eval(**request, errors="record"),
+                    resolved_n_jobs,
+                ):
+                    update_runs(eval_runs_path, record, key_fields=EVAL_RUN_KEY_FIELDS)
+
         if not fit_runs_path.exists():
             raise RuntimeError(
                 f"No fit runs found in {fit_runs_path}. "
@@ -633,19 +744,20 @@ def main() -> None:
         summary_dir = get_stage_summary_dir(reports_root, "dim_reduction", create_dir=True)
         if args.output_group:
             summary_dir = summary_dir / Path(str(args.output_group))
-        summary_dir = summary_dir / output_dataset_name / args.input_mode
+        summary_dir = summary_dir / output_dataset_name
         summary_dir.mkdir(parents=True, exist_ok=True)
-        report_path = summary_dir / f"dataset_summary_{_report_variant(args)}.html"
+        report_path = summary_dir / f"{run_variant}_dataset_summary.html"
         report.save(report_path)
         logger.info("Report saved to: %s", report_path)
     except Exception as exc:
         fatal_error = str(exc)
         raise
     finally:
-        _write_run_status(
-            output_root=output_root,
-            fit_runs_path=fit_runs_path,
-            eval_runs_path=eval_runs_path,
+        write_run_status(
+            output_root,
+            fit_runs_path,
+            eval_runs_path,
+            run_summary_path=run_summary_path,
             fatal_error=fatal_error,
             report_path=report_path,
             run_metadata={
@@ -656,6 +768,7 @@ def main() -> None:
                 "representation": args.representation,
                 "aggregation_unit": args.aggregation_unit,
                 "run_variant": run_variant,
+                "run_config_hash": args.run_config_hash,
                 "output_dataset_name": output_dataset_name,
                 "conditions_requested": list(args.conditions),
                 "subjects_resolved": len(subjects),

@@ -6,7 +6,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-#SBATCH --array=1-284
+#SBATCH --array=1-740
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -21,9 +21,11 @@ PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
 METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/medicated_adhd_vs_controls}
-REPORTS_ROOT="${BIDS_ROOT%/*}/reports"
-OVERWRITE=${OVERWRITE:-1}
+# Cohort configs paired with the single analysis config below.
+# NOTE: --array (line 13) must equal CONFIG_COUNT * MODE_COUNT (guarded below).
+CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/cohorts}
+ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/dim_reduction/default.yaml}
+OVERWRITE=${OVERWRITE:-0}
 
 # Descriptor Data Paths
 DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
@@ -48,16 +50,35 @@ mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 [ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
 [ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }
 [ -d "$CONFIGS_DIR" ] || { echo "Config directory not found: $CONFIGS_DIR"; exit 1; }
+[ -f "$ANALYSIS_CONFIG" ] || { echo "Analysis config not found: $ANALYSIS_CONFIG"; exit 1; }
 [ -f "$TABLE_PATH" ] || { echo "Descriptor table not found: $TABLE_PATH"; exit 1; }
 [ -f "$COLUMNS_PATH" ] || { echo "Descriptor feature columns not found: $COLUMNS_PATH"; exit 1; }
 
 # 4. Map this array task to one config/mode pair
 mapfile -t CONFIGS < <(find "$CONFIGS_DIR" -name "*.yaml" | sort)
-MODES=("flat" "sensor" "family" "sensor_within_family")
+MODES=(
+    "flat"
+    "sensor"
+    "family"
+    "subfamily"
+    "sensor_within_family"
+    "sensor_within_subfamily"
+    "feature"
+    "feature_within_family"
+    "descriptor"
+    "descriptor_sensor"
+)
 CONFIG_COUNT=${#CONFIGS[@]}
 MODE_COUNT=${#MODES[@]}
 TOTAL_TASKS=$((CONFIG_COUNT * MODE_COUNT))
 TASK_ID=${SLURM_ARRAY_TASK_ID:-1}
+
+# Guard: a stale #SBATCH --array bound silently drops the trailing tasks.
+if [ -n "${SLURM_ARRAY_TASK_COUNT:-}" ] && [ "$SLURM_ARRAY_TASK_COUNT" -ne "$TOTAL_TASKS" ]; then
+    echo "ERROR: array size $SLURM_ARRAY_TASK_COUNT != cohorts($CONFIG_COUNT) x modes($MODE_COUNT) = $TOTAL_TASKS." >&2
+    echo "Update '#SBATCH --array=1-$TOTAL_TASKS' (or set CONFIGS_DIR to a subtree)." >&2
+    exit 1
+fi
 
 if (( TASK_ID < 1 || TASK_ID > TOTAL_TASKS )); then
     echo "Array task $TASK_ID is outside valid task range 1-$TOTAL_TASKS; nothing to do."
@@ -73,29 +94,20 @@ input_mode="descriptors"
 representation=$(basename "$TABLE_PATH")
 representation="${representation%.*}"
 
-ds_name=$(grep "dataset_name:" "$config" | awk '{print $2}')
-out_grp=$(grep "output_group:" "$config" | awk '{print $2}')
-report_repr="${representation//_/-}"
-report_path="$REPORTS_ROOT/summary/dim_reduction/$out_grp/$ds_name/$input_mode/dataset_summary_mode-${mode}_repr-${report_repr}.html"
-
 echo "================================================================================"
 echo "DESCRIPTOR DIM REDUCTION ARRAY TASK $TASK_ID / $TOTAL_TASKS"
 echo "Config:         $config"
 echo "Mode:           $mode"
 echo "Table:          $TABLE_PATH"
-echo "Report:         $report_path"
+echo "Report:         resolved by the configuration-hashed run namespace"
 echo "================================================================================"
-
-if [[ -f "$report_path" ]]; then
-    echo "SKIPPING: report already exists."
-    exit 0
-fi
 
 cmd=(
     python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction
     --bids_root "$BIDS_ROOT"
     --metadata "$METADATA_PATH"
-    --config "$config"
+    --cohort_config "$config"
+    --analysis_config "$ANALYSIS_CONFIG"
     --input_mode "$input_mode"
     --descriptor_table_path "$TABLE_PATH"
     --descriptor_feature_columns_path "$COLUMNS_PATH"

@@ -3,24 +3,24 @@
 from __future__ import annotations
 
 import random
-from typing import List, Optional, Sequence
+from collections.abc import Sequence
 
 from eeg_adhd_epilepsy.io import bids
 
 
-def _normalize_subject_list(subjects: Sequence[str]) -> List[str]:
+def _normalize_subject_list(subjects: Sequence[str]) -> list[str]:
     """Normalise and deduplicate a raw list of subject labels."""
     return sorted({bids.normalize_subject_id(s) for s in subjects})
 
 
 def select_subjects(
     subjects_found: Sequence[str],
-    selected_subjects: Optional[Sequence[str]] = None,
-    start_from: Optional[str] = None,
+    selected_subjects: Sequence[str] | None = None,
+    start_from: str | None = None,
     use_test: bool = False,
     use_random_test: bool = False,
     use_all: bool = False,
-) -> List[str]:
+) -> list[str]:
     """Return the subjects to process based on standard CLI selection flags.
 
     Parameters

@@ -1,0 +1,93 @@
+bids_root: /path/to/BIDS
+metadata: /path/to/patients_metadata_clean.csv
+dataset_name: pooled_01_all_subjects_total
+output_group: medicated_adhd_vs_controls/pooled
+subject_col: study_id
+session_col: session
+group_col: patient_group_id
+task: clinical
+desc: base
+use_derivatives: true
+segment_duration: 10.0
+overlap: 0.0
+window_mismatch_policy: error
+allow_transductive_input: false
+conditions:
+  - EO_baseline
+  - EC_baseline
+models:
+  - model_key: cbramod
+    segment_duration: 10.0
+    window_source: derivative
+  - model_key: labram
+    # LaBraM needs 3000 samples at 200 Hz (15 s). The saved epoch derivative is
+    # 10 s, so re-epoch the cleaned continuous desc-base recording at 15 s
+    # (same continuous-stage cleaning, minus per-epoch autoreject; recorded in
+    # the artifact metadata).
+    segment_duration: 15.0
+    window_source: re_epoch
+    backend_kwargs:
+      interpolate_channels: true
+  - model_key: reve
+    segment_duration: 10.0
+    window_source: derivative
+  - model_key: luna
+    segment_duration: 10.0
+    window_source: derivative
+train_modes:
+  - linear_probe
+  - full
+  - lora
+training_defaults:
+  linear_probe:
+    max_epochs: 20
+    lr: 0.001
+    batch_size: 16
+    early_stopping_patience: 5
+  full:
+    max_epochs: 10
+    lr: 0.00001
+    batch_size: 8
+    early_stopping_patience: 3
+  lora:
+    max_epochs: 15
+    lr: 0.0001
+    batch_size: 8
+    early_stopping_patience: 4
+evals:
+  - name: med_adhd_vs_ctrl
+    target_col: combined_diagnosis
+    label_map:
+      Control: "0"
+      Epilepsy: "0"
+      ASD: "0"
+      ASD+Epilepsy: "0"
+      ADHD: "1"
+      ADHD+Epilepsy: "1"
+      ADHD+ASD: "1"
+      ADHD+ASD+Epilepsy: "1"
+    positive_class: "1"
+group_filters:
+  - adhd: [0]
+    psychostimulant: [0]
+  - adhd: [1]
+    psychostimulant: [1]
+cv:
+  n_splits: 5
+# Chance-level / significance assessment (shared with classical decoding).
+# "permutation" builds an empirical, subject-level null (shuffles labels within
+# group_id); "binomial" uses the analytical theoretical chance level. Permutation
+# refits the full pipeline per shuffle, so runtime scales with n_permutations.
+chance_method: permutation
+n_permutations: 100
+store_null_distribution: false
+# Neural training class weighting (matches the classical models' default).
+# "balanced" up-weights the minority class; use null to disable, or a
+# {class: weight} mapping for explicit weights.
+class_weight: balanced
+device: auto
+precision: fp32
+on_unsupported: skip
+overwrite: false
+detailed_unit_reports: true
+report_asset_urls: inline

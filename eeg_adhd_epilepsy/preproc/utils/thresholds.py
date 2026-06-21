@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from typing import List, Sequence
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -63,7 +63,7 @@ def select_ica_components(
     labels: dict,
     target_labels: Sequence[str],
     exclude_probability: float = 0.8,
-) -> List[int]:
+) -> list[int]:
     """Select ICA components to exclude based on ICLabel probabilities.
 
     Parameters
@@ -82,8 +82,6 @@ def select_ica_components(
     """
     return [
         i
-        for i, (label, prob) in enumerate(
-            zip(labels["labels"], labels["y_pred_proba"])
-        )
+        for i, (label, prob) in enumerate(zip(labels["labels"], labels["y_pred_proba"]))
         if label in target_labels and prob > exclude_probability
     ]

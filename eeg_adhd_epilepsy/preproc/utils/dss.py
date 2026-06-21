@@ -4,27 +4,26 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any
 
 import mne
 import numpy as np
-
 from mne_denoise.dss import (
     DSS,
-    IterativeDSS,
     AverageBias,
     BandpassBias,
+    IterativeDSS,
     QuasiPeriodicDenoiser,
 )
 
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
-from . import thresholds  # within utils package
 
+from . import thresholds  # within utils package
 
 LOGGER = logging.getLogger(__name__)
 
 
-def _resolve_eog_detection_channels(raw: mne.io.BaseRaw) -> Tuple[Optional[List[str]], str]:
+def _resolve_eog_detection_channels(raw: mne.io.BaseRaw) -> tuple[list[str] | None, str]:
     """Pick channels for blink detection: prefer true EOG, else Fp1+Fp2."""
     eog_picks = mne.pick_types(raw.info, eog=True, exclude="bads")
     if len(eog_picks) > 0:
@@ -39,15 +38,15 @@ def _resolve_eog_detection_channels(raw: mne.io.BaseRaw) -> Tuple[Optional[List[
 def _init_dss(
     config: Any,
     *,
-    bias: Optional[Any] = None,
-    denoiser: Optional[Any] = None,
-    beta: Optional[Any] = None,
+    bias: Any | None = None,
+    denoiser: Any | None = None,
+    beta: Any | None = None,
     method: str = "deflation",
-    max_iter: Optional[int] = None,
-) -> Union[DSS, IterativeDSS]:
+    max_iter: int | None = None,
+) -> DSS | IterativeDSS:
     """Initialize linear DSS or IterativeDSS from a shared factory."""
     if denoiser is not None:
-        kwargs: Dict[str, Any] = {
+        kwargs: dict[str, Any] = {
             "denoiser": denoiser,
             "n_components": config.dss_n_components,
             "method": method,
@@ -65,14 +64,14 @@ def _init_dss(
 
 def _remove_source_dss(
     raw: mne.io.BaseRaw,
-    dss: Union[DSS, IterativeDSS],
+    dss: DSS | IterativeDSS,
     n_remove: int,
     *,
-    expected_ch_names: Optional[List[str]] = None,
+    expected_ch_names: list[str] | None = None,
     use_single_epoch_3d: bool = False,
     subtract_artifact: bool = False,
     safe_subtraction: bool = False,
-) -> Tuple[mne.io.BaseRaw, Dict[str, Any]]:
+) -> tuple[mne.io.BaseRaw, dict[str, Any]]:
     """Standardized DSS source removal for all artifact types."""
     n_remove = max(1, int(n_remove))
     target_eeg = raw.copy().pick_types(eeg=True, exclude="bads")
@@ -83,10 +82,10 @@ def _remove_source_dss(
     # 1. Transform to sources
     target_data = target_eeg.get_data()
     if use_single_epoch_3d:
-        sources = dss.transform(target_data[np.newaxis, :, :]) # (1, sources, samples)
+        sources = dss.transform(target_data[np.newaxis, :, :])  # (1, sources, samples)
         n_available = sources.shape[1]
     else:
-        sources = dss.transform(target_data) # (sources, samples)
+        sources = dss.transform(target_data)  # (sources, samples)
         n_available = sources.shape[0]
 
     n_use = min(n_remove, n_available)
@@ -112,7 +111,7 @@ def _remove_source_dss(
     if subtract_artifact and safe_subtraction:
         orig_std = float(np.std(raw._data[picks, :]))
         art_std = float(np.std(model_data))
-        if art_std > 10 * orig_std: # Heuristic threshold
+        if art_std > 10 * orig_std:  # Heuristic threshold
             return raw, {"skipped": True, "reason": "unsafe_variance"}
 
     raw_out = raw.copy()
@@ -192,7 +191,7 @@ def _get_dss_profile(
     method: str,
     config: Any,
     sfreq: float,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Return a runtime profile for one DSS artifact path via registry."""
     key = (artifact, method)
     if key not in DSS_PROFILES:
@@ -232,7 +231,7 @@ def _get_dss_profile(
     return profile
 
 
-def _prepare_continuous_fit(train_raw: mne.io.BaseRaw) -> Dict[str, Any]:
+def _prepare_continuous_fit(train_raw: mne.io.BaseRaw) -> dict[str, Any]:
     """Prepare fit data for continuous signals (e.g. EMG or Blind DSS)."""
     train_eeg = train_raw.copy().pick_types(eeg=True, exclude="bads")
     if len(train_eeg.ch_names) == 0:
@@ -243,7 +242,7 @@ def _prepare_continuous_fit(train_raw: mne.io.BaseRaw) -> Dict[str, Any]:
     }
 
 
-def _prepare_eog_epochs_fit(train_raw: mne.io.BaseRaw) -> Dict[str, Any]:
+def _prepare_eog_epochs_fit(train_raw: mne.io.BaseRaw) -> dict[str, Any]:
     """Prepare fit data for EOG-triggered DSS."""
     from mne.preprocessing import create_eog_epochs
 
@@ -278,7 +277,7 @@ def _prepare_eog_epochs_fit(train_raw: mne.io.BaseRaw) -> Dict[str, Any]:
     }
 
 
-def _prepare_ecg_epochs_fit(train_raw: mne.io.BaseRaw) -> Dict[str, Any]:
+def _prepare_ecg_epochs_fit(train_raw: mne.io.BaseRaw) -> dict[str, Any]:
     """Prepare fit data for ECG-triggered DSS (QRS complex)."""
     from mne.preprocessing import create_ecg_epochs
 
@@ -309,8 +308,8 @@ def _prepare_ecg_epochs_fit(train_raw: mne.io.BaseRaw) -> Dict[str, Any]:
 
 def _prepare_dss_fit_data(
     train_raw: mne.io.BaseRaw,
-    profile: Dict[str, Any],
-) -> Dict[str, Any]:
+    profile: dict[str, Any],
+) -> dict[str, Any]:
     """Entry point for DSS fit data preparation."""
     fit_mode = profile["fit_mode"]
     if fit_mode == "continuous":
@@ -324,9 +323,9 @@ def _prepare_dss_fit_data(
 
 def _build_dss_estimator(
     config: Any,
-    profile: Dict[str, Any],
+    profile: dict[str, Any],
     sfreq: float,
-) -> Tuple[Union[DSS, IterativeDSS], Dict[str, Any]]:
+) -> tuple[DSS | IterativeDSS, dict[str, Any]]:
     """Create DSS/IterativeDSS estimator and extra provenance fields."""
     estimator_kind = profile["estimator"]
     bias_kind = profile.get("bias_kind")
@@ -375,7 +374,9 @@ def _build_dss_estimator(
             beta = beta_tanh
         elif denoiser_kind == "gauss":
             denoiser = GaussDenoiser(a=blind_alpha)
-            beta = lambda source: beta_gauss(source, a=blind_alpha)
+
+            def beta(source):
+                return beta_gauss(source, a=blind_alpha)
         elif denoiser_kind == "smooth_tanh":
             denoiser = SmoothTanhDenoiser(alpha=blind_alpha, window=blind_window)
             beta = beta_tanh
@@ -399,11 +400,11 @@ def _build_dss_estimator(
 def _run_dss_artifact(
     raw: mne.io.BaseRaw,
     config: Any,
-    profile: Dict[str, Any],
-    raw_fit: Optional[mne.io.BaseRaw] = None,
-    output_dir: Optional[Path] = None,
+    profile: dict[str, Any],
+    raw_fit: mne.io.BaseRaw | None = None,
+    output_dir: Path | None = None,
     subject_id: str = "unknown",
-) -> Tuple[mne.io.BaseRaw, Dict[str, Any]]:
+) -> tuple[mne.io.BaseRaw, dict[str, Any]]:
     """Run a single DSS artifact pipeline (Simplified Orchestration)."""
     train_raw = raw_fit if raw_fit is not None else raw
     fit_bundle = _prepare_dss_fit_data(train_raw, profile)
@@ -424,7 +425,7 @@ def _run_dss_artifact(
     dss.fit(fit_data)
 
     # 2. Diagnostic Plots (Pre-cleaning)
-    plot_paths: Dict[str, str] = {}
+    plot_paths: dict[str, str] = {}
     if output_dir:
         eeg_info = mne.pick_info(raw.info, mne.pick_types(raw.info, eeg=True, exclude="bads"))
         plot_paths.update(
@@ -449,10 +450,7 @@ def _run_dss_artifact(
     n_remove_auto = profile["n_remove"]
     if scores is not None and len(scores) > 0:
         n_remove_auto = thresholds.select_n_components_dss(
-            scores=scores,
-            max_n=profile["n_remove"],
-            threshold_ratio=0.5,
-            method="ratio"
+            scores=scores, max_n=profile["n_remove"], threshold_ratio=0.5, method="ratio"
         )
 
     # 4. Remove Artifact
@@ -490,5 +488,5 @@ def _run_dss_artifact(
         **extra_stats,
         **{k: v for k, v in fit_bundle.items() if k not in ("fit_data", "expected_ch_names")},
     }
-    
+
     return (raw_out if not remove_stats.get("skipped") else raw), stats
