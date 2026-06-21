@@ -36,7 +36,7 @@ from coco_pipe.viz.interactive.dim_reduction import (
     plot_radar_comparison,
 )
 
-from eeg_adhd_epilepsy.io.analysis import load_container
+from eeg_adhd_epilepsy.io.containers import load_container
 from eeg_adhd_epilepsy.io.bids import get_reports_root
 from eeg_adhd_epilepsy.utils.metadata_schema import EPILEPSY_MED_COLS
 from eeg_adhd_epilepsy.viz.topo import plot_topomap_from_channel_values, plot_topomap_selector

@@ -47,8 +47,8 @@ from eeg_adhd_epilepsy.analysis.utils.foundation import (
     default_foundation_models,
     resolve_foundation_input_plan,
 )
-from eeg_adhd_epilepsy.io.analysis import load_container
 from eeg_adhd_epilepsy.io.bids import get_reports_root
+from eeg_adhd_epilepsy.io.containers import load_container
 from eeg_adhd_epilepsy.reports.decoding import (
     generate_decoding_summary_report,
     generate_foundation_decoding_report,
