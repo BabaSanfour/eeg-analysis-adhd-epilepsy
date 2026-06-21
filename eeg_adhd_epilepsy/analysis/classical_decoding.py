@@ -39,12 +39,12 @@ from eeg_adhd_epilepsy.analysis.utils.decoding import (
     slug,
     write_run_status,
 )
-from eeg_adhd_epilepsy.io.analysis import (
+from eeg_adhd_epilepsy.io.bids import get_reports_root
+from eeg_adhd_epilepsy.io.containers import (
     apply_family_qc_mask,
     families_for_analysis_unit,
     load_container,
 )
-from eeg_adhd_epilepsy.io.bids import get_reports_root
 from eeg_adhd_epilepsy.reports.decoding import (
     descriptor_feature_metadata,
     generate_decoding_summary_report,

@@ -18,7 +18,7 @@ from eeg_adhd_epilepsy.analysis.dimensionality_reduction import (
     _collect_scope_fit_requests,
 )
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import pool_containers
-from eeg_adhd_epilepsy.io.analysis import (
+from eeg_adhd_epilepsy.io.containers import (
     apply_family_qc_mask,
     families_for_analysis_unit,
     load_container,

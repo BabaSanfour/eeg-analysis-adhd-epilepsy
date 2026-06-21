@@ -45,14 +45,14 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     condition_load_failure_record,
     pool_containers,
 )
-from eeg_adhd_epilepsy.io.analysis import (
-    apply_family_qc_mask,
-    families_for_analysis_unit,
-    load_container,
-)
 from eeg_adhd_epilepsy.io.bids import (
     get_reports_root,
     get_stage_summary_dir,
+)
+from eeg_adhd_epilepsy.io.containers import (
+    apply_family_qc_mask,
+    families_for_analysis_unit,
+    load_container,
 )
 from eeg_adhd_epilepsy.reports.dim_reduction import generate_dataset_report
 from eeg_adhd_epilepsy.utils.config import load_cohort_analysis_config
