@@ -69,6 +69,25 @@ def test_consumer_stage_skips_when_configs_missing(tmp_path, capsys, monkeypatch
     assert "SKIP" in out and "--cohort_config" in out
 
 
+def test_full_dry_run_uses_stage_specific_analysis_configs(tmp_path, capsys):
+    rc = orch.main(
+        [
+            "--dry-run",
+            "--from", "dim-reduce",
+            "--to", "classical-decode",
+            "--bids_root", str(tmp_path / "BIDS"),
+            "--metadata", str(tmp_path / "meta.csv"),
+            "--cohort_config", "cohort.yaml",
+            "--dim_analysis_config", "dim.yaml",
+            "--decode_analysis_config", "decode.yaml",
+        ]
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "dimensionality_reduction" in out and "--analysis_config dim.yaml" in out
+    assert "classical_decoding" in out and "--analysis_config decode.yaml" in out
+
+
 def test_list_exits_zero(capsys):
     rc = orch.main(["--list"])
     out = capsys.readouterr().out

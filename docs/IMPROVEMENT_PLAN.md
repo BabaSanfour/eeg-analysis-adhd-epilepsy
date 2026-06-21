@@ -19,7 +19,8 @@
   consistency (eeg-to-bids/eeg-preprocess/eeg-classical-decode); cluster scripts
   08–11 + cluster/README; io/preproc `__init__`; io/analysis→io/containers;
   cohort.py docstring/section map; package README reconciled. 92 tests green.
-- [ ] Wave 3 — docs & provenance. *(next: W3.1 README rewrite, W3.2 configs/README.md)*
+- [x] **Wave 3 complete** — README/config guide and final provenance checks;
+  full-chain orchestration now accepts distinct dim-reduction and decoding configs.
 
 Leave a one-line "Resume note" at the bottom whenever you stop mid-step.
 
@@ -171,13 +172,13 @@ directly, so CLI changes don't touch them.
 
 ## Wave 3 — Docs & provenance
 
-- [ ] **W3.1** README rewrite around the two-config model: corrected
+- [x] **W3.1** README rewrite around the two-config model: corrected
   `eeg-build-patients-metadata` signature (`io/patients.py:445-447`); `pip install
   -e .` reinstall note (stale env still had `eeg-ml-run`); fixed Repository-Layout
   block (drop nonexistent `data/`,`results/`,`reports/`); pipeline-order sentence
   incl. decoding/foundation; a "Prerequisites" block (braindecode≥1.5, HF auth for
   REVE, optional GPU); a "point it at your data" subsection; a "Module map" section.
-- [ ] **W3.2** `configs/README.md`: cohorts vs analyses trees, which CLI consumes
+- [x] **W3.2** `configs/README.md`: cohorts vs analyses trees, which CLI consumes
   which, copy-an-example-and-edit workflow.
 
 ## Verification (run before marking a wave done)
@@ -186,7 +187,9 @@ directly, so CLI changes don't touch them.
 - `eeg-classical-decode --cohort_config <c> --analysis_config <a>` and the
   dim-reduce / foundation equivalents run; a missing/misspelled key gives an
   actionable error, not a `KeyError`.
-- `eeg-run --dry-run --from bids --to decode` prints correct ordered commands.
+- `eeg-run --dry-run --from to-bids --to classical-decode` prints correct ordered
+  commands, using separate `--dim_analysis_config` and
+  `--decode_analysis_config` method files.
 - Re-derive cluster array math post-W1.5; no task silently dropped.
 - `ruff check` clean on touched files; every touched `--help` still works.
 - Spot-check a migrated cohort+analysis pair reproduces the same effective config
@@ -196,9 +199,8 @@ directly, so CLI changes don't touch them.
 
 ## Resume note
 
-_(Last stop:)_ **Wave 1 done & committed** (3 commits on
-`improve/two-config-run-flow`: config helper, CLI wiring, migration+cluster).
-74 cohort + 4 analysis configs live under `configs/{cohorts,analyses}/`; legacy
-tree deleted; 82 tests green; ruff clean. Next action: **Wave 2** — start with
-W2.3 (add `eeg-to-bids`/`eeg-preprocess`, rename `eeg-decode`→`eeg-classical-decode`
-in `pyproject.toml`), then `pip install -e .`, then W2.1 orchestrator (`run.py`).
+_(Completed 2026-06-21:)_ **Waves 1–3 complete.** The two-config migration,
+orchestrator/CLI/cluster work, README rewrite, and `configs/README.md` are done.
+Final gate: 93 tests passed; Ruff clean; consumer `--help` smoke tests passed;
+the full `eeg-run` dry run emitted the correct ordered commands with distinct
+dim-reduction and decoding analysis configs.
