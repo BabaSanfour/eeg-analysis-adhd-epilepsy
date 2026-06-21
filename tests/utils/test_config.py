@@ -10,6 +10,7 @@ from eeg_adhd_epilepsy.utils.config import (
     ConfigError,
     apply_overrides,
     load_cohort_analysis_config,
+    resolve_cli_config,
 )
 
 
@@ -134,3 +135,47 @@ def test_apply_overrides_ignores_none():
     assert config["bids_root"] == "/from/config"  # None override ignored
     assert config["metadata"] == "/cli/meta.csv"
     assert config["n_jobs"] == 8
+
+
+def test_resolve_cli_config_pair_with_path_override(tmp_path):
+    cohort = _write(tmp_path / "cohort.yaml", _cohort_yaml())
+    analysis = _write(tmp_path / "analysis.yaml", _analysis_yaml())
+
+    config = resolve_cli_config(
+        cohort_config=cohort,
+        analysis_config=analysis,
+        bids_root="/data/BIDS",
+        metadata=None,
+    )
+    assert config["bids_root"] == "/data/BIDS"
+    assert "logreg" in config["models"]
+
+
+def test_resolve_cli_config_requires_bids_root(tmp_path):
+    cohort = _write(tmp_path / "cohort.yaml", _cohort_yaml())
+    analysis = _write(tmp_path / "analysis.yaml", _analysis_yaml())
+
+    with pytest.raises(ConfigError, match="bids_root is required"):
+        resolve_cli_config(cohort_config=cohort, analysis_config=analysis)
+
+
+def test_resolve_cli_config_rejects_config_and_pair_together(tmp_path):
+    cohort = _write(tmp_path / "cohort.yaml", _cohort_yaml())
+    analysis = _write(tmp_path / "analysis.yaml", _analysis_yaml())
+    legacy = _write(tmp_path / "legacy.yaml", _cohort_yaml("models:\n      m: {}"))
+
+    with pytest.raises(ConfigError, match="not both"):
+        resolve_cli_config(
+            cohort_config=cohort, analysis_config=analysis, legacy_config=legacy
+        )
+
+
+def test_resolve_cli_config_legacy_single(tmp_path):
+    legacy = _write(
+        tmp_path / "legacy.yaml",
+        _cohort_yaml("bids_root: /data/BIDS\n    models:\n      m: {}"),
+    )
+    config = resolve_cli_config(
+        cohort_config=None, analysis_config=None, legacy_config=legacy
+    )
+    assert config["bids_root"] == "/data/BIDS"

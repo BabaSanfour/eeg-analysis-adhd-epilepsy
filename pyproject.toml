@@ -39,14 +39,18 @@ dependencies = [
 Homepage = "https://github.com/"
 
 [project.scripts]
-eeg-dim-reduce = "eeg_adhd_epilepsy.analysis.dimensionality_reduction:main"
+# Producers (dataset-wide, single config / CLI args), in pipeline order.
+eeg-build-patients-metadata = "eeg_adhd_epilepsy.io.patients:main"
+eeg-cohort-report = "eeg_adhd_epilepsy.analysis.cohort:main"
+eeg-to-bids = "eeg_adhd_epilepsy.preproc.to_bids:main"
+eeg-preprocess = "eeg_adhd_epilepsy.preproc.base:main"
 eeg-save-epochs = "eeg_adhd_epilepsy.preproc.epochs:main"
 eeg-descriptors = "eeg_adhd_epilepsy.analysis.extract_descriptors:main"
 eeg-merge-descriptors = "eeg_adhd_epilepsy.analysis.merge_descriptors:main"
-eeg-build-patients-metadata = "eeg_adhd_epilepsy.io.patients:main"
-eeg-cohort-report = "eeg_adhd_epilepsy.analysis.cohort:main"
 eeg-foundation-embeddings = "eeg_adhd_epilepsy.analysis.extract_foundation_embeddings:main"
-eeg-decode = "eeg_adhd_epilepsy.analysis.classical_decoding:main"
+# Analysis consumers (cohort + analysis config).
+eeg-dim-reduce = "eeg_adhd_epilepsy.analysis.dimensionality_reduction:main"
+eeg-classical-decode = "eeg_adhd_epilepsy.analysis.classical_decoding:main"
 eeg-foundation-decode = "eeg_adhd_epilepsy.analysis.foundation_decoding:main"
 
 [tool.setuptools]

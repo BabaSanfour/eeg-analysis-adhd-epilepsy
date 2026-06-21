@@ -143,9 +143,12 @@ directly, so CLI changes don't touch them.
   producers single. Tests for ordering + `--dry-run`.
 - [ ] **W2.2** Top-level `Makefile`: per-stage targets + `all`, `install`, `test`,
   `dry-run`; centralize env vars (`BIDS_ROOT`, `METADATA_PATH`, …).
-- [ ] **W2.3** `pyproject.toml [project.scripts]`: add `eeg-to-bids` →
-  `preproc.to_bids:main`, `eeg-preprocess` → `preproc.base:main`; rename
-  `eeg-decode` → `eeg-classical-decode`. Update README + cluster refs.
+- [x] **W2.3** `pyproject.toml [project.scripts]`: added `eeg-to-bids`,
+  `eeg-preprocess`; renamed `eeg-decode` → `eeg-classical-decode`; grouped
+  producers vs consumers. `pip install -e .` refreshed scripts (old `eeg-ml-run`/
+  `eeg-decode` gone; previously-missing `eeg-foundation-*` now present).
+  `resolve_cli_config` now raises an actionable error when `bids_root` is unset.
+  Tests up to 12. *(README/cluster refs to `eeg-decode` → updated in W3.1.)*
 - [ ] **W2.4** Cluster scripts (numbered) for merge, foundation-embeddings,
   classical-decode, foundation-decode; `cluster/README.md`.
 - [ ] **W2.5** Add missing `io/__init__.py`, `preproc/__init__.py`.
