@@ -1,14 +1,32 @@
 """Cohort-level patient analysis and report generation.
 
-Reads ``patients_metadata_clean.csv`` (produced by ``eeg-build-patients-metadata``)
-and generates:
+Reads ``patients_metadata_clean.csv`` (produced by ``eeg-build-patients-metadata``,
+see :mod:`eeg_adhd_epilepsy.io.patients`) and generates:
 
 - a full HTML cohort report with demographics, diagnosis, and medication breakdowns
 - analysis-opportunity tables (all combinations + valid-only filtered)
 - optional recruitment-milestone projections
 
-This module is a study-level analysis script; it has no generic re-usable API.
-Run via ``eeg-cohort-report`` or ``python -m eeg_adhd_epilepsy.analysis.cohort``.
+This module is a study-level analysis *script* (the ``eeg-cohort-report`` entry
+point); it has no generic re-usable API. Run via ``eeg-cohort-report`` or
+``python -m eeg_adhd_epilepsy.analysis.cohort``.
+
+Where things live (the cohort/metadata concern spans a few modules)
+-------------------------------------------------------------------
+- :mod:`eeg_adhd_epilepsy.io.patients`            — *builds* the canonical metadata CSVs.
+- this module                                     — *analyses* the clean cohort,
+                                                    builds the tables, drives the report.
+- :mod:`eeg_adhd_epilepsy.reports.cohort_report`  — composes the HTML from those tables.
+- :mod:`eeg_adhd_epilepsy.viz.patients`           — figures embedded in the report.
+
+Sections in this file (top → bottom)
+------------------------------------
+1. Cohort config + row filtering          (``_load_cohort_config`` …)
+2. Summary tables                         (``_build_*_summary`` …)
+3. Drug-resistant / source-overlap views  (``_build_drug_resistant_*`` …)
+4. Recruitment-milestone projection       (``_build_recruitment_*`` …)
+5. Analysis-opportunity enumeration       (``build_analysis_opportunities``)
+6. Figures + ``main`` entry point
 """
 
 from __future__ import annotations
@@ -321,6 +339,8 @@ DROP_REASON_DISPLAY = {
 }
 
 
+# === 1. Cohort config + row filtering =========================================
+
 def _load_cohort_config(config_path: Path | None) -> dict[str, Any]:
     if config_path is None:
         return {
@@ -428,6 +448,8 @@ def _load_removed_json(removed_json: Path | None) -> dict[str, Any] | None:
 def _metric_table(rows: list[tuple[str, Any]], value_name: str = "value") -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["metric", value_name])
 
+
+# === 2. Summary tables ========================================================
 
 def _build_cohort_summary_table(
     df: pd.DataFrame,
@@ -585,6 +607,8 @@ def _first_later_patient_sets(df: pd.DataFrame) -> tuple[set[Any], set[Any]]:
     later_patients = set(df.loc[df["first_eeg"].eq(0), patient_col].dropna().tolist())
     return first_patients, later_patients
 
+
+# === 3. Drug-resistant / source-overlap views =================================
 
 def _build_drug_resistant_overview(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -755,6 +779,8 @@ def _build_drug_resistant_first_later_figure(df: pd.DataFrame) -> go.Figure | No
     )
     return fig
 
+
+# === 4. Recruitment-milestone projection ======================================
 
 def _resolve_recruitment_selectors(
     valid_opportunities: pd.DataFrame,
@@ -1138,6 +1164,8 @@ def _build_recruitment_outputs(
     )
     return recruitment_markdown, projection_df, summary_df, pools_df, current_milestone
 
+
+# === 5. Analysis-opportunity enumeration ======================================
 
 def _constraint_mask(df: pd.DataFrame, name: str) -> pd.Series:
     if name == "No_Constraint":
@@ -1561,6 +1589,8 @@ def build_analysis_opportunities(df: pd.DataFrame, min_group_n: int) -> pd.DataF
         ascending=[False, True, True, True, True],
     ).reset_index(drop=True)
 
+
+# === 6. Figures + entry point =================================================
 
 def _create_figures(df: pd.DataFrame, figure_dir: Path) -> dict[str, list[tuple[str, Path]]]:
     figure_dir.mkdir(parents=True, exist_ok=True)
