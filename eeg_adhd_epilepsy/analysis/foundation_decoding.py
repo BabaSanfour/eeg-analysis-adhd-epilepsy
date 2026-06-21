@@ -35,7 +35,6 @@ from eeg_adhd_epilepsy.analysis.utils.decoding import (
     completed_for_config,
     grouped_accuracy_assessment,
     load_completed_result_records,
-    load_yaml_config,
     prepare_decoding_scope,
     redact_sensitive,
     require_conditions,
@@ -55,6 +54,7 @@ from eeg_adhd_epilepsy.reports.decoding import (
     generate_foundation_decoding_report,
     generate_head_to_head_report,
 )
+from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 
 LOGGER = logging.getLogger(__name__)
 
@@ -455,10 +455,40 @@ def run(config: dict[str, Any]) -> Path:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--config", required=True)
+    parser.add_argument(
+        "--cohort_config",
+        default=None,
+        help="Cohort/dataset config: subjects + clinical question (configs/cohorts/).",
+    )
+    parser.add_argument(
+        "--analysis_config",
+        default=None,
+        help="Analysis/method config: models, train_modes (configs/analyses/foundation_decoding/).",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="[deprecated] single combined config; prefer --cohort_config + --analysis_config.",
+    )
+    parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
+    parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
+    parser.add_argument(
+        "--overwrite",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override the config's overwrite flag.",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    run(load_yaml_config(args.config))
+    config = resolve_cli_config(
+        cohort_config=args.cohort_config,
+        analysis_config=args.analysis_config,
+        legacy_config=args.config,
+        bids_root=args.bids_root,
+        metadata=args.metadata,
+        overwrite=args.overwrite,
+    )
+    run(config)
 
 
 if __name__ == "__main__":

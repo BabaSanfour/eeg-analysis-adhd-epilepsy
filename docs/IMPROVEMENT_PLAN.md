@@ -107,10 +107,11 @@ directly, so CLI changes don't touch them.
 - [x] **W1.2** Validation in `utils/config.py`: required-key checks per role +
   eval cross-reference + method-marker check, each with an actionable message
   (`ConfigError`). Tests: `tests/utils/test_config.py` (8 passing).
-- [ ] **W1.3** Wire `--cohort_config` + `--analysis_config` into
-  `analysis/dimensionality_reduction.py`, `analysis/classical_decoding.py`,
-  `analysis/foundation_decoding.py`; build merged dict via the helper, call
-  existing `run()`. Dim-reduce keeps its extra CLI override flags on top.
+- [x] **W1.3** Wired `--cohort_config` + `--analysis_config` (+ `--bids_root`/
+  `--metadata`/`--overwrite`[/`--n_jobs`] overrides; `--config` kept as deprecated
+  fallback) into `classical_decoding.py`, `foundation_decoding.py`,
+  `dimensionality_reduction.py` via `utils/config.resolve_cli_config` /
+  `load_cohort_analysis_config`. `run()` bodies untouched. 82 tests green, ruff clean.
 - [ ] **W1.4** Migration script `scripts/split_configs.py` (one-shot): split each
   existing config into cohort + analysis by the ownership table; write
   `configs/cohorts/medicated_adhd_vs_controls/{pooled,mph,lis}/<cohort>/<variant>.yaml`

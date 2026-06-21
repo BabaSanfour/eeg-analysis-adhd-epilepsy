@@ -55,6 +55,7 @@ from eeg_adhd_epilepsy.io.bids import (
     get_stage_summary_dir,
 )
 from eeg_adhd_epilepsy.reports.dim_reduction import generate_dataset_report
+from eeg_adhd_epilepsy.utils.config import load_cohort_analysis_config
 from eeg_adhd_epilepsy.utils.constants import DEFAULT_ANALYSIS_CONDITIONS
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
@@ -211,10 +212,26 @@ def main() -> None:
 
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--config", default=None)
+    pre_parser.add_argument("--cohort_config", default=None)
+    pre_parser.add_argument("--analysis_config", default=None)
     bootstrap_args, _ = pre_parser.parse_known_args()
 
     parser = argparse.ArgumentParser(description="Run checkpointed EEG dimensionality reduction.")
-    parser.add_argument("--config", default=None, help="Path to dim-reduction YAML config.")
+    parser.add_argument(
+        "--cohort_config",
+        default=None,
+        help="Cohort/dataset config: subjects + clinical question (configs/cohorts/).",
+    )
+    parser.add_argument(
+        "--analysis_config",
+        default=None,
+        help="Analysis/method config: reducers, sweep (configs/analyses/dim_reduction/).",
+    )
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="[deprecated] single combined config; prefer --cohort_config + --analysis_config.",
+    )
 
     dataset_group = parser.add_argument_group("Dataset")
     dataset_group.add_argument("--bids_root", required=False, default=None)
@@ -358,9 +375,21 @@ def main() -> None:
     )
 
     config_eval_specs = None
-    if bootstrap_args.config:
-        config_path = Path(bootstrap_args.config).expanduser()
-        raw_config = load_yaml_config(config_path)
+    using_pair = bool(bootstrap_args.cohort_config or bootstrap_args.analysis_config)
+    if using_pair:
+        if not (bootstrap_args.cohort_config and bootstrap_args.analysis_config):
+            parser.error("--cohort_config and --analysis_config must be provided together.")
+        if bootstrap_args.config:
+            parser.error("Pass either --config or --cohort_config + --analysis_config, not both.")
+        raw_config = load_cohort_analysis_config(
+            bootstrap_args.cohort_config, bootstrap_args.analysis_config
+        )
+    elif bootstrap_args.config:
+        raw_config = load_yaml_config(Path(bootstrap_args.config).expanduser())
+    else:
+        raw_config = None
+    if raw_config is not None:
+        raw_config = dict(raw_config)
         config_eval_specs = raw_config.pop("evals", None)
         parser.set_defaults(**raw_config)
     args = parser.parse_args()
