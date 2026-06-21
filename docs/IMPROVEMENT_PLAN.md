@@ -15,8 +15,11 @@
 - [x] Branch created; this tracking doc written.
 - [x] **Wave 1 complete** — two-config split, migration (74 cohorts + 4 analyses),
   validation, cluster glob fix. 82 tests green.
-- [ ] Wave 2 — orchestrator, CLI consistency, structure. *(next: W2.3 console scripts, then W2.1 orchestrator)*
-- [ ] Wave 3 — docs & provenance.
+- [x] **Wave 2 complete** — `eeg-run` + Makefile orchestrator; console-script
+  consistency (eeg-to-bids/eeg-preprocess/eeg-classical-decode); cluster scripts
+  08–11 + cluster/README; io/preproc `__init__`; io/analysis→io/containers;
+  cohort.py docstring/section map; package README reconciled. 92 tests green.
+- [ ] Wave 3 — docs & provenance. *(next: W3.1 README rewrite, W3.2 configs/README.md)*
 
 Leave a one-line "Resume note" at the bottom whenever you stop mid-step.
 
@@ -159,9 +162,12 @@ directly, so CLI changes don't touch them.
 - [x] **W2.5** Added `io/__init__.py`, `preproc/__init__.py` (documented surfaces).
 - [x] **W2.6** Renamed `io/analysis.py` → `io/containers.py`; updated all 5 import
   sites; package imports + 92 tests green.
-- [ ] **W2.7** `analysis/cohort.py` light cleanup: section structure + docstring
-  map; document relationship to `reports/cohort_report.py` and `io/patients.py`.
-- [ ] **W2.8** Reconcile package-level `eeg_adhd_epilepsy/README.md` (one canonical README).
+- [x] **W2.7** `analysis/cohort.py`: expanded module docstring with a "where
+  things live" map (io.patients / reports.cohort_report / viz.patients) + a
+  6-section map, and inserted matching `# === N. ... ===` section banners.
+  No code moved; 92 green.
+- [x] **W2.8** Moved stray `eeg_adhd_epilepsy/README.md` (a TODO list) → `docs/BACKLOG.md`
+  (marked the now-done automated-workflow item); top-level `README.md` is canonical.
 
 ## Wave 3 — Docs & provenance
 
