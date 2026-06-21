@@ -151,12 +151,14 @@ directly, so CLI changes don't touch them.
   `eeg-decode` gone; previously-missing `eeg-foundation-*` now present).
   `resolve_cli_config` now raises an actionable error when `bids_root` is unset.
   Tests up to 12. *(README/cluster refs to `eeg-decode` → updated in W3.1.)*
-- [ ] **W2.4** Cluster scripts (numbered) for merge, foundation-embeddings,
-  classical-decode, foundation-decode; `cluster/README.md`.
-- [ ] **W2.5** Add missing `io/__init__.py`, `preproc/__init__.py`.
-- [ ] **W2.6** Rename `io/analysis.py` → `io/containers.py`; update 5 import sites
-  (`analysis/{classical_decoding,dimensionality_reduction,foundation_decoding}.py`,
-  `reports/dim_reduction.py`, `tests/analysis/test_dim_reduction_inputs.py`).
+- [x] **W2.4** Cluster scripts `08_submit_merge_descriptors.sh`,
+  `09_submit_classical_decode.sh`, `10_submit_foundation_embeddings.sh`,
+  `11_submit_foundation_decode.sh` (decoding ones take `COHORT_CONFIG`+
+  `ANALYSIS_CONFIG`); `cluster/README.md` (numbered order, env vars, array math,
+  two-config pairing, GPU/HF notes). Syntax-checked.
+- [x] **W2.5** Added `io/__init__.py`, `preproc/__init__.py` (documented surfaces).
+- [x] **W2.6** Renamed `io/analysis.py` → `io/containers.py`; updated all 5 import
+  sites; package imports + 92 tests green.
 - [ ] **W2.7** `analysis/cohort.py` light cleanup: section structure + docstring
   map; document relationship to `reports/cohort_report.py` and `io/patients.py`.
 - [ ] **W2.8** Reconcile package-level `eeg_adhd_epilepsy/README.md` (one canonical README).
