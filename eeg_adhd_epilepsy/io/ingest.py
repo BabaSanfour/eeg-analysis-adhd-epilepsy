@@ -8,14 +8,13 @@ import logging
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Union
 
 import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
 
 
-def parse_pnt_metadata(pnt_path: Path) -> Dict[str, Union[str, datetime, None]]:
+def parse_pnt_metadata(pnt_path: Path) -> dict[str, str | datetime | None]:
     """
     Parse a brainvision-style .pnt file (text) to extract:
     - 'original_id': The ID string found in the file
@@ -34,7 +33,7 @@ def parse_pnt_metadata(pnt_path: Path) -> Dict[str, Union[str, datetime, None]]:
     original_id = None
     match = re.search(r"ID(\d+(?:\.\d+)?)", text)
     if match:
-        original_id = match.group(1).split('.')[0]  # strip potential suffix
+        original_id = match.group(1).split(".")[0]  # strip potential suffix
 
     # --- parse Date + Start Time ---
     meas_dt = None
@@ -55,7 +54,9 @@ def parse_pnt_metadata(pnt_path: Path) -> Dict[str, Union[str, datetime, None]]:
 def _build_lookup(
     metadata_df: pd.DataFrame,
 ) -> dict[str, tuple[dict[int, tuple[int, int | None]], dict[int, tuple[int, int | None]]]]:
-    lookups: dict[str, tuple[dict[int, tuple[int, int | None]], dict[int, tuple[int, int | None]]]] = {}
+    lookups: dict[
+        str, tuple[dict[int, tuple[int, int | None]], dict[int, tuple[int, int | None]]]
+    ] = {}
     for source_dataset, group in metadata_df.groupby("source_dataset", dropna=False):
         study_lookup: dict[int, tuple[int, int | None]] = {}
         patient_lookup: dict[int, tuple[int, int | None]] = {}

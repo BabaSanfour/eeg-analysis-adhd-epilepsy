@@ -6,21 +6,24 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-import yaml
-from coco_pipe.io.descriptors import check_feature_column_consistency
+from coco_pipe.descriptors import (
+    check_feature_column_consistency,
+    merge_descriptor_tables,
+)
+from coco_pipe.io import read_table, write_json
+
 from eeg_adhd_epilepsy.io.bids import get_reports_root
 from eeg_adhd_epilepsy.io.descriptor_layout import (
     FEATURE_COLUMN_FILES,
     required_descriptor_files,
 )
-from eeg_adhd_epilepsy.io.table import save
 from eeg_adhd_epilepsy.qc.descriptor_qc import run_descriptor_dataset_qc
+from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
 
@@ -41,7 +44,9 @@ def _check_shard_feature_columns(
     mismatches: list[str] = []
     for key in keys:
         try:
-            check_feature_column_consistency(shard_root, FEATURE_COLUMN_FILES[key], feature_cols, key)
+            check_feature_column_consistency(
+                shard_root, FEATURE_COLUMN_FILES[key], feature_cols, key
+            )
         except ValueError as exc:
             mismatches.append(str(exc))
     return mismatches
@@ -82,8 +87,7 @@ def main() -> None:
 
     config_bytes = config_path.read_bytes()
     config_hash = hashlib.sha256(config_bytes).hexdigest()
-    with config_path.open("r", encoding="utf-8") as handle:
-        config_used = yaml.safe_load(handle) or {}
+    config_used = load_yaml_config(config_path)
     include_pooled = bool((config_used.get("pooling") or {}).get("channel_groups"))
 
     # Discover completed shards across sessions
@@ -95,9 +99,7 @@ def main() -> None:
     for success_path in success_paths:
         shard_root = success_path.parent
         missing = [
-            f
-            for f in required_descriptor_files(include_pooled)
-            if not (shard_root / f).exists()
+            f for f in required_descriptor_files(include_pooled) if not (shard_root / f).exists()
         ]
         if missing:
             excluded_shards.append(
@@ -159,10 +161,8 @@ def main() -> None:
 
     LOGGER.info("Merging %d shards (%d excluded total).", len(shard_roots), len(excluded_shards))
 
-    sensor_epoch_tables: list[pd.DataFrame] = []
-    sensor_agg_tables: list[pd.DataFrame] = []
-    pooled_epoch_tables: list[pd.DataFrame] = []
-    pooled_agg_tables: list[pd.DataFrame] = []
+    # Per-shard orchestration data (failures + QC). Feature tables are combined
+    # below by coco-pipe's merge primitive, which reads each shard once.
     failure_tables: list[pd.DataFrame] = []
     shard_qc_rows: list[pd.DataFrame] = []
     shard_manifest_rows: list[dict[str, object]] = []
@@ -175,35 +175,16 @@ def main() -> None:
             n_shards,
             shard_root.relative_to(derivative_root),
         )
-        sensor_epoch_df = pd.read_parquet(shard_root / "sensor_epoch_features.parquet")
-        sensor_subject_df = pd.read_parquet(shard_root / "sensor_subject_features.parquet")
-        sensor_epoch_tables.append(sensor_epoch_df)
-        sensor_agg_tables.append(sensor_subject_df)
-
-        pooled_epoch_rows = 0
-        pooled_subject_rows = 0
-        if include_pooled:
-            pooled_epoch_df = pd.read_parquet(shard_root / "pooled_epoch_features.parquet")
-            pooled_subject_df = pd.read_parquet(shard_root / "pooled_subject_features.parquet")
-            pooled_epoch_tables.append(pooled_epoch_df)
-            pooled_agg_tables.append(pooled_subject_df)
-            pooled_epoch_rows = len(pooled_epoch_df)
-            pooled_subject_rows = len(pooled_subject_df)
-
-        failure_df = pd.read_csv(shard_root / "failures.csv")
+        failure_df = read_table(shard_root / "failures.csv")
         failure_tables.append(failure_df)
 
         shard_qc_path = shard_root / "qc" / "summary_row.csv"
         if shard_qc_path.exists():
-            shard_qc_rows.append(pd.read_csv(shard_qc_path))
+            shard_qc_rows.append(read_table(shard_qc_path))
 
         shard_manifest_rows.append(
             {
                 "shard": str(shard_root.relative_to(derivative_root)),
-                "n_sensor_epoch_rows": len(sensor_epoch_df),
-                "n_sensor_subject_rows": len(sensor_subject_df),
-                "n_pooled_epoch_rows": pooled_epoch_rows,
-                "n_pooled_subject_rows": pooled_subject_rows,
                 "n_failures": len(failure_df),
             }
         )
@@ -211,36 +192,25 @@ def main() -> None:
     combined_root = derivative_root / "combined"
     combined_root.mkdir(parents=True, exist_ok=True)
 
+    def _merge_family(name: str) -> pd.DataFrame:
+        combined, _ = merge_descriptor_tables(
+            [shard_root / f"{name}.parquet" for shard_root in shard_roots],
+            [shard_root / f"{name}_feature_columns.json" for shard_root in shard_roots],
+            out_base_path=combined_root / name,
+            formats=("parquet", "csv"),
+        )
+        return combined
+
     LOGGER.info("Combining sensor families...")
-    combined_sensor_epoch_df = pd.concat(sensor_epoch_tables, ignore_index=True)
-    combined_sensor_subject_df = pd.concat(sensor_agg_tables, ignore_index=True)
-    save(
-        combined_sensor_epoch_df,
-        combined_root / "sensor_epoch_features",
-        feature_columns=feature_cols["sensor_epoch"],
-    )
-    save(
-        combined_sensor_subject_df,
-        combined_root / "sensor_subject_features",
-        feature_columns=feature_cols["sensor_subject"],
-    )
+    combined_sensor_epoch_df = _merge_family("sensor_epoch_features")
+    combined_sensor_subject_df = _merge_family("sensor_subject_features")
 
     combined_pooled_epoch_df = None
     combined_pooled_subject_df = None
     if include_pooled:
         LOGGER.info("Combining pooled families...")
-        combined_pooled_epoch_df = pd.concat(pooled_epoch_tables, ignore_index=True)
-        combined_pooled_subject_df = pd.concat(pooled_agg_tables, ignore_index=True)
-        save(
-            combined_pooled_epoch_df,
-            combined_root / "pooled_epoch_features",
-            feature_columns=feature_cols["pooled_epoch"],
-        )
-        save(
-            combined_pooled_subject_df,
-            combined_root / "pooled_subject_features",
-            feature_columns=feature_cols["pooled_subject"],
-        )
+        combined_pooled_epoch_df = _merge_family("pooled_epoch_features")
+        combined_pooled_subject_df = _merge_family("pooled_subject_features")
 
     # Some shards may have zero-row failures.csv; concatenating only the
     # non-empty frames avoids dtype-mismatch warnings from pd.concat while
@@ -262,9 +232,15 @@ def main() -> None:
         "n_shards_merged": len(shard_roots),
         "n_shards_excluded": len(excluded_shards),
         "skip_inconsistent": bool(args.skip_inconsistent),
-        "n_subjects": int(combined_sensor_subject_df["subject"].nunique()) if "subject" in combined_sensor_subject_df.columns else None,
-        "n_sessions": int(combined_sensor_subject_df["session"].nunique()) if "session" in combined_sensor_subject_df.columns else None,
-        "n_conditions": int(combined_sensor_subject_df["condition"].nunique()) if "condition" in combined_sensor_subject_df.columns else None,
+        "n_subjects": int(combined_sensor_subject_df["subject"].nunique())
+        if "subject" in combined_sensor_subject_df.columns
+        else None,
+        "n_sessions": int(combined_sensor_subject_df["session"].nunique())
+        if "session" in combined_sensor_subject_df.columns
+        else None,
+        "n_conditions": int(combined_sensor_subject_df["condition"].nunique())
+        if "condition" in combined_sensor_subject_df.columns
+        else None,
         "n_sensor_epoch_rows": int(len(combined_sensor_epoch_df)),
         "n_sensor_subject_rows": int(len(combined_sensor_subject_df)),
         "n_failures_total": int(len(combined_failures_df)),
@@ -278,12 +254,18 @@ def main() -> None:
         reports_root=reports_root,
         merged_sensor_epoch_df=combined_sensor_epoch_df,
         merged_sensor_subject_df=combined_sensor_subject_df,
-        merged_sensor_epoch_feature_columns_path=combined_root / "sensor_epoch_features_feature_columns.json",
-        merged_sensor_subject_feature_columns_path=combined_root / "sensor_subject_features_feature_columns.json",
+        merged_sensor_epoch_feature_columns_path=combined_root
+        / "sensor_epoch_features_feature_columns.json",
+        merged_sensor_subject_feature_columns_path=combined_root
+        / "sensor_subject_features_feature_columns.json",
         merged_pooled_epoch_df=combined_pooled_epoch_df,
         merged_pooled_subject_df=combined_pooled_subject_df,
-        merged_pooled_epoch_feature_columns_path=None if not include_pooled else combined_root / "pooled_epoch_features_feature_columns.json",
-        merged_pooled_subject_feature_columns_path=None if not include_pooled else combined_root / "pooled_subject_features_feature_columns.json",
+        merged_pooled_epoch_feature_columns_path=None
+        if not include_pooled
+        else combined_root / "pooled_epoch_features_feature_columns.json",
+        merged_pooled_subject_feature_columns_path=None
+        if not include_pooled
+        else combined_root / "pooled_subject_features_feature_columns.json",
         shard_qc_rows_df=pd.concat(shard_qc_rows, ignore_index=True) if shard_qc_rows else None,
         merged_failures_df=combined_failures_df,
         config_snapshot=config_used,
@@ -293,7 +275,7 @@ def main() -> None:
     manifest["qc_status"] = dataset_qc["qc_status"]
     manifest["report_path"] = dataset_qc["report_path"]
     manifest_path = combined_root / "merge_manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    write_json(manifest_path, manifest)
 
     LOGGER.info(
         "Merged %d shards (%d excluded) into %s; dataset qc=%s, report=%s, manifest=%s",

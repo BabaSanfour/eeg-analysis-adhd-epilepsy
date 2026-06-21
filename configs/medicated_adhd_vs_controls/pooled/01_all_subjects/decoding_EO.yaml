@@ -1,0 +1,157 @@
+bids_root: /Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS
+metadata: /Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/csv/patients_metadata_clean.csv
+dataset_name: pooled_01_all_subjects_EO
+output_group: medicated_adhd_vs_controls/pooled
+subject_col: study_id
+session_col: session
+group_col: patient_group_id
+input_mode: descriptors
+descriptor_table_path: /Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS/derivatives/signal_features/descriptors/combined/sensor_subject_features.parquet
+descriptor_feature_columns_path: /Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS/derivatives/signal_features/descriptors/combined/sensor_subject_features_feature_columns.json
+# Use only the mean epoch-aggregate when both mean and median exist.
+location_statistic: mean
+qc:
+  column_prune:
+    enabled: true
+    max_missing_rate: 0.20
+    drop_constant: true
+    # Drop NaN-bearing columns rather than dropping any recording (0.0 = never
+    # drop a subject for NaN). Mostly removes specparam alpha_peak_* columns that
+    # are NaN when no alpha peak is detected (common frontally).
+    max_row_drop_rate: 0.0
+  outlier:
+    z_threshold: 5.0
+    group_by: measure
+    epoch_outlier_fraction: 0.30
+    subject_outlier_fraction: 0.20
+  min_obs: 5
+conditions:
+  - EO_baseline
+run_pooled: false
+analysis_modes:
+  - flat
+  - sensor
+  - subfamily
+  - sensor_within_subfamily
+  - descriptor
+  - descriptor_sensor
+feature_selection:
+  - name: sfs
+    method: sfs
+    direction: forward
+    scoring: balanced_accuracy
+    tol: 0.001
+    analysis_modes:
+      - flat
+      - sensor
+      - subfamily
+      - sensor_within_subfamily
+tuning:
+  enabled: true
+  scoring: balanced_accuracy
+  n_splits: 3   # inner grouped CV folds for hyperparameter search
+models:
+  logreg_enet:
+    estimator: LogisticRegression
+    # ElasticNet (L1+L2) handles correlated EEG features far better than pure L1,
+    # which arbitrarily drops one of each correlated group. Tuned via inner CV on
+    # the feature-rich modes (see the top-level `tuning` block).
+    analysis_modes:
+      - flat
+      - sensor
+      - subfamily
+      - descriptor
+    params:
+      penalty: elasticnet
+      solver: saga
+      l1_ratio: 0.5
+      class_weight: balanced
+      max_iter: 5000
+    grid:
+      C: [0.01, 0.1, 1.0, 10.0]
+      l1_ratio: [0.2, 0.5, 0.8]
+  logreg_enet_fixed:
+    estimator: LogisticRegression
+    # Fixed ElasticNet for the few-feature modes (cheap, tuning not worth it).
+    analysis_modes:
+      - sensor_within_subfamily
+      - descriptor_sensor
+    params:
+      penalty: elasticnet
+      solver: saga
+      C: 1.0
+      l1_ratio: 0.5
+      class_weight: balanced
+      max_iter: 5000
+  random_forest:
+    estimator: RandomForestClassifier
+    # Full forest for the feature-rich modes.
+    analysis_modes:
+      - flat
+      - sensor
+      - subfamily
+      - descriptor
+    params:
+      n_estimators: 300
+      class_weight: balanced
+      n_jobs: 1
+  random_forest_medium:
+    estimator: RandomForestClassifier
+    # Mid-size forest for sensor_within_subfamily (6-18 features/unit).
+    analysis_modes:
+      - sensor_within_subfamily
+    params:
+      n_estimators: 150
+      max_depth: 5
+      class_weight: balanced
+      n_jobs: 1
+  random_forest_light:
+    estimator: RandomForestClassifier
+    # Lighter forest for descriptor_sensor (1-3 features/unit): fewer, shallower
+    # trees — a deep 300-tree forest adds nothing with so few features.
+    analysis_modes:
+      - descriptor_sensor
+    params:
+      n_estimators: 100
+      max_depth: 3
+      class_weight: balanced
+      n_jobs: 1
+cv:
+  n_splits: 5
+chance_method: binomial
+n_permutations: 20
+store_null_distribution: false
+metrics:
+  - accuracy
+  - balanced_accuracy
+  - f1
+  - precision
+  - recall
+  - roc_auc
+evals:
+  - name: med_adhd_vs_ctrl
+    target_col: combined_diagnosis
+    label_map:
+      Control: "0"
+      Epilepsy: "0"
+      ASD: "0"
+      ASD+Epilepsy: "0"
+      ADHD: "1"
+      ADHD+Epilepsy: "1"
+      ADHD+ASD: "1"
+      ADHD+ASD+Epilepsy: "1"
+    positive_class: "1"
+group_filters:
+  - adhd: [0]
+    psychostimulant: [0]
+  - adhd: [1]
+    psychostimulant: [1]
+random_state: 42
+n_jobs: -1
+verbose: true
+overwrite: false
+allow_transductive_input: false
+detailed_unit_reports: true
+detailed_unit_report_modes:
+  - flat
+report_asset_urls: inline

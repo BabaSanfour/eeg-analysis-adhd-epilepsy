@@ -6,16 +6,15 @@ import logging
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import mne
 import numpy as np
 import pandas as pd
-from coco_pipe.io import load_data
-from coco_pipe.io.structures import DataContainer
+from coco_pipe.io import BIDSConfig, DataContainer, load_data, read_json, read_table
 from mne_bids import BIDSPath, get_entity_vals, read_raw_bids
 
-from eeg_adhd_epilepsy.utils import config
+from eeg_adhd_epilepsy.utils import constants
 
 logger = logging.getLogger(__name__)
 
@@ -59,9 +58,7 @@ def validate_stage_desc(desc: str, allowed: set[str] | None = None) -> str:
     desc_token = _normalize_bids_token(desc, "desc")
     if allowed is not None and desc_token not in allowed:
         allowed_vals = ", ".join(sorted(allowed))
-        raise ValueError(
-            f"Invalid desc {desc_token!r}. Expected one of: {allowed_vals}"
-        )
+        raise ValueError(f"Invalid desc {desc_token!r}. Expected one of: {allowed_vals}")
     return desc_token
 
 
@@ -211,9 +208,7 @@ def get_stage_summary_dir(
     return summary_dir
 
 
-def get_stage_summary_report_path(
-    reports_root: Path, stage: str, create_dir: bool = False
-) -> Path:
+def get_stage_summary_report_path(reports_root: Path, stage: str, create_dir: bool = False) -> Path:
     """Return unified dataset summary report path for a given stage."""
     stage_name = normalize_stage_name(stage)
     summary_dir = Path(reports_root).expanduser() / stage_name / "summary"
@@ -222,9 +217,7 @@ def get_stage_summary_report_path(
     return summary_dir / f"{stage_name}_dataset_summary.html"
 
 
-def get_compare_summary_paths(
-    reports_root: Path, create_dir: bool = False
-) -> Dict[str, Path]:
+def get_compare_summary_paths(reports_root: Path, create_dir: bool = False) -> dict[str, Path]:
     """Return canonical compare summary artifact paths."""
     summary_dir = Path(reports_root).expanduser() / "compare" / "summary"
     if create_dir:
@@ -248,7 +241,7 @@ def discover_bids_files(
     suffix: str = "eeg",
     extension: str = ".vhdr",
     subjects_filter: set[str] | None = None,
-) -> List[Path]:
+) -> list[Path]:
     """Use BIDSPath matching to find EEG files under a BIDS root."""
     template = BIDSPath(
         root=bids_root,
@@ -264,7 +257,7 @@ def discover_bids_files(
         extension=extension,
     )
     matches = template.match()
-    files: List[Path] = []
+    files: list[Path] = []
     for match in matches:
         subj = match.subject or ""
         subj_tag = f"sub-{subj}" if subj else ""
@@ -336,12 +329,12 @@ def build_bids_report_ids(
     }
 
 
-def merge_intervals(intervals: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+def merge_intervals(intervals: list[tuple[float, float]]) -> list[tuple[float, float]]:
     """Merge overlapping intervals."""
     cleaned = sorted((start, stop) for start, stop in intervals if stop > start)
     if not cleaned:
         return []
-    merged: List[Tuple[float, float]] = [cleaned[0]]
+    merged: list[tuple[float, float]] = [cleaned[0]]
     for start, stop in cleaned[1:]:
         cur_start, cur_stop = merged[-1]
         if start <= cur_stop:
@@ -378,7 +371,7 @@ class BlockWindow:
         return parse_block_segment_type(self.name)[1]
 
 
-def parse_block_segment_type(segment_type: str) -> Tuple[str, str]:
+def parse_block_segment_type(segment_type: str) -> tuple[str, str]:
     segment_type = str(segment_type or "")
     if segment_type == "RAW_baseline":
         return "raw_baseline", "unknown"
@@ -395,9 +388,7 @@ def parse_block_segment_type(segment_type: str) -> Tuple[str, str]:
     return "unknown", "unknown"
 
 
-def _resolve_segments_csv(
-    raw: mne.io.BaseRaw, segments_file: Optional[str]
-) -> Optional[Path]:
+def _resolve_segments_csv(raw: mne.io.BaseRaw, segments_file: str | None) -> Path | None:
     """Resolve the path to the segments CSV file."""
     if segments_file:
         segments_path = Path(segments_file).expanduser()
@@ -421,13 +412,13 @@ def _resolve_segments_csv(
     return raw_path.parent / f"{stem}_segments.csv"
 
 
-def _collect_block_windows(raw: mne.io.BaseRaw) -> List[BlockWindow]:
+def _collect_block_windows(raw: mne.io.BaseRaw) -> list[BlockWindow]:
     """Parse annotations to collect all BLOCK_* segments."""
     if raw.n_times == 0:
         return []
 
     max_t = float(raw.times[-1])
-    windows: List[BlockWindow] = []
+    windows: list[BlockWindow] = []
     for annot in raw.annotations:
         desc = str(annot["description"])
         if not desc.startswith("BLOCK_"):
@@ -449,9 +440,9 @@ def _collect_block_windows(raw: mne.io.BaseRaw) -> List[BlockWindow]:
     return windows
 
 
-def collect_baseline_windows(raw: mne.io.BaseRaw) -> List[Tuple[float, float]]:
+def collect_baseline_windows(raw: mne.io.BaseRaw) -> list[tuple[float, float]]:
     """Return block windows whose segment name contains 'baseline'."""
-    windows: List[Tuple[float, float]] = []
+    windows: list[tuple[float, float]] = []
     for block in _collect_block_windows(raw):
         if "baseline" in block.name.lower():
             windows.append((block.onset, block.stop))
@@ -459,7 +450,7 @@ def collect_baseline_windows(raw: mne.io.BaseRaw) -> List[Tuple[float, float]]:
 
 
 def segments_from_block_annotations(raw: mne.io.BaseRaw) -> pd.DataFrame:
-    records: List[Dict[str, Any]] = []
+    records: list[dict[str, Any]] = []
     for block in _collect_block_windows(raw):
         family, eye_state = parse_block_segment_type(block.name)
         records.append(
@@ -473,15 +464,13 @@ def segments_from_block_annotations(raw: mne.io.BaseRaw) -> pd.DataFrame:
                 "freq_hz": np.nan,
             }
         )
-    return pd.DataFrame.from_records(records, columns=config.SEGMENT_COLUMNS)
+    return pd.DataFrame.from_records(records, columns=constants.SEGMENT_COLUMNS)
 
 
-def load_segments_for_raw(
-    raw: mne.io.BaseRaw, segments_file: Optional[str] = None
-) -> pd.DataFrame:
+def load_segments_for_raw(raw: mne.io.BaseRaw, segments_file: str | None = None) -> pd.DataFrame:
     csv_path = _resolve_segments_csv(raw, segments_file)
     if csv_path is not None and csv_path.exists():
-        df = pd.read_csv(csv_path)
+        df = read_table(csv_path, sep=None)
     else:
         df = segments_from_block_annotations(raw)
 
@@ -495,10 +484,10 @@ def load_segments_for_raw(
         df["block_family"] = [item[0] for item in parsed]
         df["eye_state"] = [item[1] for item in parsed]
 
-    for column in config.SEGMENT_COLUMNS:
+    for column in constants.SEGMENT_COLUMNS:
         if column not in df.columns:
             df[column] = np.nan
-    return df[config.SEGMENT_COLUMNS].copy()
+    return df[constants.SEGMENT_COLUMNS].copy()
 
 
 def parse_subject_id(filepath: Path) -> str:
@@ -521,7 +510,7 @@ def load_bids_raw(
     preload: bool = True,
 ) -> mne.io.BaseRaw:
     """Load a raw file using BIDS structure."""
-    
+
     # Auto-infer entities if not provided
     comps = parse_bids_components(filepath)
     if not session:
@@ -534,9 +523,9 @@ def load_bids_raw(
         acquisition = comps.get("acquisition") or comps.get("acq")
     if not processing:
         processing = comps.get("processing") or comps.get("proc")
-    
+
     subject_clean = parse_subject_id(filepath).replace("sub-", "")
-    
+
     bids_path = BIDSPath(
         root=bids_root,
         subject=subject_clean,
@@ -559,8 +548,8 @@ def load_stage_artifacts(
     subject_id: str,
     preproc_root: Path,
     desc: str,
-    task: Optional[str] = None,
-) -> Tuple[Optional[mne.io.BaseRaw], Dict[str, Any], List[str]]:
+    task: str | None = None,
+) -> tuple[mne.io.BaseRaw | None, dict[str, Any], list[str]]:
     """Load a preprocessed stage FIF and its provenance JSON for one subject.
 
     This is the read-side complement to the per-stage save logic in
@@ -584,9 +573,7 @@ def load_stage_artifacts(
     Tuple of ``(raw_obj, provenance_dict, issues_list)``.
     ``raw_obj`` is ``None`` and ``issues_list`` is non-empty when loading fails.
     """
-    import json as _json
-
-    issues: List[str] = []
+    issues: list[str] = []
     out_path = get_stage_output_path(
         subject_id=subject_id, preproc_root=preproc_root, desc=desc, task=task
     )
@@ -594,8 +581,8 @@ def load_stage_artifacts(
         subject_id=subject_id, preproc_root=preproc_root, desc=desc, task=task
     )
 
-    raw_obj: Optional[mne.io.BaseRaw] = None
-    prov: Dict[str, Any] = {}
+    raw_obj: mne.io.BaseRaw | None = None
+    prov: dict[str, Any] = {}
 
     if not out_path.exists():
         issues.append(f"missing_raw:{out_path}")
@@ -609,8 +596,7 @@ def load_stage_artifacts(
         issues.append(f"missing_provenance:{prov_path}")
     else:
         try:
-            with open(prov_path, "r", encoding="utf-8") as fh:
-                prov = _json.load(fh)
+            prov = read_json(prov_path)
         except Exception as exc:
             issues.append(f"bad_provenance:{prov_path}:{exc}")
 
@@ -618,12 +604,12 @@ def load_stage_artifacts(
 
 
 def validate_bids_coverage(
-    df: Optional[pd.DataFrame],
+    df: pd.DataFrame | None,
     root: Path,
-    desc: Optional[str] = None,
-    suffix: Optional[str] = None,
+    desc: str | None = None,
+    suffix: str | None = None,
     subject_col: str = "study_id",
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Compare metadata subject ids against subjects present in a BIDS tree."""
     root = Path(root)
 
@@ -649,7 +635,7 @@ def validate_bids_coverage(
         )
     )
 
-    results: Dict[str, object] = {
+    results: dict[str, object] = {
         "present_subjects": present,
         "present_count": len(present),
     }
@@ -681,30 +667,50 @@ def validate_bids_coverage(
 def load_eeg_data(
     bids_root: Path,
     use_derivatives: bool = False,
-    subjects: Optional[List[str]] = None,
+    subjects: list[str] | None = None,
     task: str = "clinical",
-    session: Optional[str | List[str]] = None,
+    session: str | list[str] | None = None,
     segment_duration: float = 10.0,
     overlap: float = 0.0,
-    metadata_df: Optional[pd.DataFrame] = None,
+    metadata_df: pd.DataFrame | None = None,
     subject_col: str = "study_id",
     target_col: str | None = None,
     desc: str = "base",
-    condition: Optional[str] = None,
+    condition: str | None = None,
+    window_source: str = "auto",
 ) -> DataContainer:
-    """Load raw BIDS data or saved epoch derivatives into a DataContainer."""
+    """Load raw BIDS data or saved epoch derivatives into a DataContainer.
+
+    ``window_source='re_epoch'`` re-epochs the cleaned continuous ``desc``
+    derivative at ``segment_duration`` (see
+    :func:`load_cleaned_continuous_container`); otherwise the loader returns the
+    saved epoch derivative (``use_derivatives=True``) or raw-acquisition epochs
+    (``use_derivatives=False``).
+    """
     subjects = subjects or []
+    if window_source == "re_epoch":
+        return load_cleaned_continuous_container(
+            bids_root=bids_root,
+            subjects=list(subjects),
+            task=task,
+            segment_duration=segment_duration,
+            overlap=overlap,
+            condition=condition,
+            metadata_df=metadata_df,
+            subject_col=subject_col,
+            desc=desc,
+            session=session if isinstance(session, str) else "01",
+        )
     external_metadata_df = metadata_df.copy() if metadata_df is not None else None
     if external_metadata_df is not None:
-        external_metadata_df[subject_col] = external_metadata_df[subject_col].astype(int).map(
-            lambda value: f"{value:04d}"
+        external_metadata_df[subject_col] = (
+            external_metadata_df[subject_col].astype(int).map(lambda value: f"{value:04d}")
         )
 
     if use_derivatives:
         epochs_root = bids_root / "derivatives" / "preproc"
         logger.info(f"Loading saved epochs from {epochs_root}")
-        return load_data(
-            mode="bids",
+        config = BIDSConfig(
             path=epochs_root,
             datatype="eeg",
             suffix="epo",
@@ -712,13 +718,15 @@ def load_eeg_data(
             subjects=subjects if subjects else None,
             event_id=condition if condition else None,
             target_col=target_col,
+        )
+        return load_data(
+            config=config,
             subject_metadata_df=external_metadata_df,
             subject_key=subject_col if external_metadata_df is not None else None,
         )
 
     logger.info(f"Loading data for {len(subjects)} subjects. Task: {task}")
-    container = load_data(
-        mode="bids",
+    config = BIDSConfig(
         path=bids_root,
         task=task,
         session=session,
@@ -729,8 +737,135 @@ def load_eeg_data(
         datatype="eeg",
         suffix="eeg",
         target_col=target_col,
+    )
+    container = load_data(
+        config=config,
         subject_metadata_df=external_metadata_df,
         subject_key=subject_col if external_metadata_df is not None else None,
     )
     logger.info(f"Initial Container Shape: {container.X.shape}, Dims: {container.dims}")
     return container
+
+
+def load_cleaned_continuous_container(
+    bids_root: Path,
+    subjects: list[str],
+    task: str,
+    segment_duration: float,
+    overlap: float,
+    condition: str | None,
+    metadata_df: pd.DataFrame | None = None,
+    subject_col: str = "study_id",
+    desc: str = "base",
+    session: str = "01",
+) -> DataContainer:
+    """Re-epoch the cleaned continuous ``desc`` derivative at ``segment_duration``.
+
+    This is the leakage-safe source for foundation models whose pretrained window
+    differs from the saved epoch derivative (e.g. LaBraM at 15 s). It reuses the
+    same continuous-stage cleaning (filter / ICA / interpolation) as the saved
+    epoch derivative but does **not** re-apply per-epoch autoreject rejection;
+    that difference is recorded in ``meta['autoreject_applied'] = False`` and the
+    embedding sidecar.
+
+    Notes
+    -----
+    Returned epochs carry MNE's inclusive endpoint (``segment_duration * sfreq +
+    1`` samples). Callers should pass the result through coco-pipe's
+    ``normalize_inclusive_endpoint`` to drop the extra sample.
+    """
+    from eeg_adhd_epilepsy.preproc.epochs import make_epochs_from_preproc_raw
+
+    preproc_root = get_preproc_root(bids_root)
+    meta_lookup: pd.DataFrame | None = None
+    if metadata_df is not None:
+        meta_lookup = metadata_df.copy()
+        meta_lookup[subject_col] = (
+            meta_lookup[subject_col].astype(int).map(lambda value: f"{value:04d}")
+        )
+        meta_lookup = meta_lookup.set_index(subject_col)
+
+    x_chunks: list[np.ndarray] = []
+    obs_rows: list[dict[str, Any]] = []
+    ids: list[str] = []
+    ch_names: list[str] | None = None
+    sfreq: float | None = None
+    times: np.ndarray | None = None
+    issues: list[str] = []
+
+    for raw_sid in subjects or []:
+        study_id = f"{int(raw_sid):04d}" if str(raw_sid).isdigit() else str(raw_sid)
+        subject_id = f"sub-{study_id}"
+        raw, _prov, load_issues = load_stage_artifacts(
+            subject_id, preproc_root, desc=desc, task=task
+        )
+        if raw is None:
+            issues.extend(load_issues)
+            continue
+        try:
+            epochs = make_epochs_from_preproc_raw(
+                raw, segment_duration=segment_duration, overlap=overlap
+            )
+        except ValueError as exc:
+            issues.append(f"no_epochs:{subject_id}:{exc}")
+            continue
+        if condition is None or condition not in epochs.event_id:
+            issues.append(f"missing_condition:{subject_id}:{condition}")
+            continue
+        cond_epochs = epochs[condition]
+        data = np.asarray(cond_epochs.get_data(), dtype=np.float32)
+        if data.shape[0] == 0:
+            continue
+        if ch_names is None:
+            ch_names = list(cond_epochs.ch_names)
+            sfreq = float(cond_epochs.info["sfreq"])
+            times = np.asarray(cond_epochs.times)
+        recording_id = f"{subject_id}_ses-{session}_run-01"
+        meta_row: dict[str, Any] = {}
+        if meta_lookup is not None and study_id in meta_lookup.index:
+            meta_row = {
+                str(column): meta_lookup.loc[study_id, column] for column in meta_lookup.columns
+            }
+        for epoch_idx in range(data.shape[0]):
+            obs_rows.append(
+                {
+                    subject_col: study_id,
+                    "subject": subject_id,
+                    "session": session,
+                    "run": "01",
+                    "condition": condition,
+                    "recording_id": recording_id,
+                    **meta_row,
+                }
+            )
+            ids.append(f"{recording_id}_epoch-{epoch_idx:03d}")
+        x_chunks.append(data)
+
+    if not x_chunks:
+        raise RuntimeError(
+            f"No cleaned-continuous epochs for condition {condition!r} at "
+            f"{segment_duration:g}s. First issues: {issues[:5]}"
+        )
+
+    X = np.concatenate(x_chunks, axis=0)
+    obs_df = pd.DataFrame(obs_rows)
+    coords: dict[str, Any] = {
+        "channel": np.asarray(ch_names, dtype=object),
+        "time": np.asarray(times),
+    }
+    for column in obs_df.columns:
+        coords[column] = obs_df[column].to_numpy()
+
+    return DataContainer(
+        X=X,
+        dims=("obs", "channel", "time"),
+        coords=coords,
+        ids=np.asarray(ids, dtype=object),
+        meta={
+            "sfreq": sfreq,
+            "window_source": "re_epoch_cleaned_continuous",
+            "autoreject_applied": False,
+            "segment_duration": float(segment_duration),
+            "load_issues": issues,
+        },
+    )

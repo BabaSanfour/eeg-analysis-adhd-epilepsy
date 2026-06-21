@@ -7,10 +7,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-
+from coco_pipe.descriptors import build_descriptor_tables
 from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis import extract_descriptors, merge_descriptors
+from eeg_adhd_epilepsy.io.recording import add_recording_group_columns
 
 
 def _demo_container() -> DataContainer:
@@ -31,9 +32,7 @@ def _demo_container() -> DataContainer:
             "study_id": np.array(["0001", "0001", "0002", "0002"], dtype=object),
             "session": np.array(["01", "01", "01", "01"], dtype=object),
             "run": np.array(["01", "02", "01", "01"], dtype=object),
-            "combined_diagnosis": np.array(
-                ["Control", "Control", "ADHD", "ADHD"], dtype=object
-            ),
+            "combined_diagnosis": np.array(["Control", "Control", "ADHD", "ADHD"], dtype=object),
             "age": np.array([10, 10, 13, 13], dtype=object),
             "sex": np.array(["F", "F", "M", "M"], dtype=object),
         },
@@ -62,8 +61,8 @@ def _demo_container_for_subjects(subjects: list[str] | None = None) -> DataConta
     sessions = ["01"] * n_total
     # "0001" alternates between run-01 and run-02; "0002" stays on run-01
     runs = (
-        [f"{(i % 2) + 1:02d}" for i in range(n_per_subject)]   # 0001: 01,02,01,...
-        + ["01"] * n_per_subject                                  # 0002: all run-01
+        [f"{(i % 2) + 1:02d}" for i in range(n_per_subject)]  # 0001: 01,02,01,...
+        + ["01"] * n_per_subject  # 0002: all run-01
     )
     labels = ["Control"] * n_per_subject + ["ADHD"] * n_per_subject
     container = DataContainer(
@@ -121,76 +120,30 @@ def test_table_helpers_preserve_metadata_and_feature_names() -> None:
         column for column in metadata_df.columns if column not in ordered_columns
     )
     metadata_df = metadata_df[ordered_columns]
-    result = {
-        "X": np.arange(28, dtype=float).reshape(4, 7),
-        "descriptor_names": [
-            "band_abs_alpha_ch-Fz",
-            "band_abs_beta_ch-Fz",
-            "band_corr_abs_alpha_ch-Fz",
-            "band_corr_abs_beta_ch-Fz",
-            "band_log_abs_alpha_ch-Fz",
-            "band_log_abs_beta_ch-Fz",
-            "param_offset_ch-Cz",
-        ],
-        "failures": [],
-    }
-
-    epoch_df = pd.concat(
-        [
-            metadata_df.reset_index(drop=True),
-            pd.DataFrame(result["X"], columns=result["descriptor_names"]),
-        ],
-        axis=1,
-    )
-    assert "obs_id" in epoch_df.columns
-    assert "subject" in epoch_df.columns
-    assert "condition" in epoch_df.columns
-    assert "band_abs_alpha_ch-Fz" in epoch_df.columns
-    assert "band_abs_beta_ch-Fz" in epoch_df.columns
-    assert "band_log_abs_alpha_ch-Fz" in epoch_df.columns
-    assert "band_log_abs_beta_ch-Fz" in epoch_df.columns
-    assert "param_offset_ch-Cz" in epoch_df.columns
-
-    coords = {
-        "obs": metadata_df["obs_id"].to_numpy(dtype=object),
-        "feature": np.asarray(result["descriptor_names"], dtype=object),
-    }
-    for column in metadata_df.columns:
-        if column == "obs_id":
-            continue
-        coords[column] = metadata_df[column].to_numpy(dtype=object)
+    descriptor_names = [
+        "band_abs_alpha_ch-Fz",
+        "band_abs_beta_ch-Fz",
+        "band_corr_abs_alpha_ch-Fz",
+        "band_corr_abs_beta_ch-Fz",
+        "band_log_abs_alpha_ch-Fz",
+        "band_log_abs_beta_ch-Fz",
+        "param_offset_ch-Cz",
+    ]
     feature_container = DataContainer(
-        X=result["X"],
+        X=np.arange(28, dtype=float).reshape(4, 7),
         y=metadata_df["combined_diagnosis"].to_numpy(dtype=object),
         ids=metadata_df["obs_id"].to_numpy(dtype=object),
         dims=("obs", "feature"),
-        coords=coords,
+        coords={"feature": np.asarray(descriptor_names, dtype=object)},
         meta={},
     )
-    grouped_mean = feature_container.aggregate(
-        by="subject",
-        stats="mean",
-        min_count=1,
-        on_insufficient="raise",
-    )
-    agg_metadata_df = grouped_mean.obs_table(
-        include_y=True,
-        y_col="combined_diagnosis",
-    )
-    agg_metadata_df["condition"] = "EO_baseline"
-    ordered_columns = ["subject", "condition", "epoch_count"]
-    ordered_columns.extend(
-        column
-        for column in agg_metadata_df.columns
-        if column not in ordered_columns
-    )
-    base_agg_feature_df = pd.DataFrame(
-        grouped_mean.X,
-        columns=list(np.asarray(grouped_mean.coords["feature"], dtype=object)),
-    )
-    grouped_features = feature_container.aggregate_groups(
-        by="subject",
-        groups=[
+    outputs = build_descriptor_tables(
+        feature_container,
+        metadata_df,
+        group_by="subject",
+        id_col="obs_id",
+        target_col="combined_diagnosis",
+        aggregation_groups=[
             {
                 "name": "mean_export",
                 "stats": "mean",
@@ -208,40 +161,20 @@ def test_table_helpers_preserve_metadata_and_feature_names() -> None:
                 "stats": ["median", "iqr"],
             },
         ],
+        ratio_pairs=[("alpha", "beta")],
     )
-    agg_feature_df = pd.concat(
-        [
-            pd.DataFrame(
-                grouped_features.X,
-                columns=list(np.asarray(grouped_features.coords["feature"], dtype=object)),
-            ),
-            pd.DataFrame(
-                {
-                    "agg_band_ratio_alpha_beta_ch-Fz": np.divide(
-                        base_agg_feature_df["band_abs_alpha_ch-Fz"].to_numpy(dtype=float),
-                        base_agg_feature_df["band_abs_beta_ch-Fz"].to_numpy(dtype=float),
-                        out=np.full(base_agg_feature_df.shape[0], np.nan, dtype=float),
-                        where=base_agg_feature_df["band_abs_beta_ch-Fz"].to_numpy(dtype=float) > 0.0,
-                    ),
-                    "agg_band_corr_ratio_alpha_beta_ch-Fz": np.divide(
-                        base_agg_feature_df["band_corr_abs_alpha_ch-Fz"].to_numpy(dtype=float),
-                        base_agg_feature_df["band_corr_abs_beta_ch-Fz"].to_numpy(dtype=float),
-                        out=np.full(base_agg_feature_df.shape[0], np.nan, dtype=float),
-                        where=base_agg_feature_df["band_corr_abs_beta_ch-Fz"].to_numpy(dtype=float) > 0.0,
-                    ),
-                },
-                index=base_agg_feature_df.index,
-            ),
-        ],
-        axis=1,
-    )
-    agg_df = pd.concat(
-        [
-            agg_metadata_df[ordered_columns].reset_index(drop=True),
-            agg_feature_df.reset_index(drop=True),
-        ],
-        axis=1,
-    )
+
+    epoch_df = outputs["epoch_df"]
+    assert "obs_id" in epoch_df.columns
+    assert "subject" in epoch_df.columns
+    assert "condition" in epoch_df.columns
+    assert "band_abs_alpha_ch-Fz" in epoch_df.columns
+    assert "band_abs_beta_ch-Fz" in epoch_df.columns
+    assert "band_log_abs_alpha_ch-Fz" in epoch_df.columns
+    assert "band_log_abs_beta_ch-Fz" in epoch_df.columns
+    assert "param_offset_ch-Cz" in epoch_df.columns
+
+    agg_df = outputs["subject_df"]
     assert agg_df["subject"].tolist() == ["0001", "0002"]
     assert "epoch_count" in agg_df.columns
     assert "mean_band_abs_alpha_ch-Fz" not in agg_df.columns
@@ -278,20 +211,21 @@ def test_feature_outputs_preserve_run_level_aggregation() -> None:
             "condition": ["EO_baseline", "EO_baseline"],
         }
     )
-    result = {
-        "X": np.asarray([[1.0, 2.0], [10.0, 20.0]]),
-        "descriptor_names": ["band_abs_alpha_ch-Fz", "band_abs_beta_ch-Fz"],
-        "failures": [],
-    }
+    metadata_df = add_recording_group_columns(metadata_df)
+    container = DataContainer(
+        X=np.asarray([[1.0, 2.0], [10.0, 20.0]]),
+        dims=("obs", "feature"),
+        coords={
+            "feature": np.asarray(["band_abs_alpha_ch-Fz", "band_abs_beta_ch-Fz"], dtype=object)
+        },
+        ids=metadata_df["obs_id"].to_numpy(dtype=object),
+    )
 
-    outputs = extract_descriptors._build_feature_outputs(
-        result,
+    outputs = build_descriptor_tables(
+        container,
         metadata_df,
-        condition="EO_baseline",
-        target_col=None,
-        aggregation_descriptors=[{"name": "mean_export", "stats": "mean"}],
-        aggregated_ratio_pairs=[],
-        aggregated_ratio_floor=0.0,
+        group_by="recording_id",
+        aggregation_groups=[{"name": "mean_export", "stats": "mean"}],
     )
 
     subject_df = outputs["subject_df"]
@@ -350,7 +284,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load",
+        "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -452,16 +386,12 @@ aggregation:
     assert any(column.startswith("agg_band_ratio_") for column in sensor_agg_df.columns)
     assert any(column.startswith("agg_band_corr_ratio_") for column in sensor_agg_df.columns)
     assert any(column.startswith("agg_band_ratio_") for column in pooled_agg_df.columns)
-    assert any(
-        column.startswith("agg_band_corr_ratio_") for column in pooled_agg_df.columns
-    )
+    assert any(column.startswith("agg_band_corr_ratio_") for column in pooled_agg_df.columns)
     assert not any(column.startswith("band_ratio_") for column in sensor_epoch_df.columns)
     pooled_log_col = "band_log_abs_alpha_chgrp-midline"
     assert pooled_log_col in pooled_epoch_df.columns
     first_recording_id = pooled_agg_df.loc[0, "recording_id"]
-    first_recording_epochs = pooled_epoch_df[
-        pooled_epoch_df["recording_id"] == first_recording_id
-    ]
+    first_recording_epochs = pooled_epoch_df[pooled_epoch_df["recording_id"] == first_recording_id]
     assert pooled_agg_df.loc[0, f"median_{pooled_log_col}"] == pytest.approx(
         first_recording_epochs[pooled_log_col].median()
     )
@@ -508,7 +438,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load",
+        "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -553,9 +483,7 @@ aggregation:
     )
     merge_descriptors.main()
 
-    combined_root = (
-        bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
-    )
+    combined_root = bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
     reports_root = tmp_path / "reports"
     combined_sensor_epoch_df = pd.read_csv(combined_root / "sensor_epoch_features.csv")
     combined_sensor_agg_df = pd.read_csv(combined_root / "sensor_subject_features.csv")
@@ -568,19 +496,13 @@ aggregation:
     assert len(combined_sensor_agg_df) == 3
     assert len(combined_pooled_epoch_df) >= 10
     assert len(combined_pooled_agg_df) == 3
+    assert any(column.startswith("agg_band_ratio_") for column in combined_sensor_agg_df.columns)
     assert any(
-        column.startswith("agg_band_ratio_") for column in combined_sensor_agg_df.columns
+        column.startswith("agg_band_corr_ratio_") for column in combined_sensor_agg_df.columns
     )
+    assert any(column.startswith("agg_band_ratio_") for column in combined_pooled_agg_df.columns)
     assert any(
-        column.startswith("agg_band_corr_ratio_")
-        for column in combined_sensor_agg_df.columns
-    )
-    assert any(
-        column.startswith("agg_band_ratio_") for column in combined_pooled_agg_df.columns
-    )
-    assert any(
-        column.startswith("agg_band_corr_ratio_")
-        for column in combined_pooled_agg_df.columns
+        column.startswith("agg_band_corr_ratio_") for column in combined_pooled_agg_df.columns
     )
     assert (combined_root / "failures.csv").exists()
     assert (combined_root / "sensor_epoch_features_feature_columns.json").exists()
@@ -639,7 +561,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load",
+        "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -716,7 +638,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load",
+        "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -775,9 +697,7 @@ aggregation:
     extract_descriptors.main()
     assert rerun_calls == [("0001",)]
 
-    combined_root = (
-        bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
-    )
+    combined_root = bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
     assert not combined_root.exists()
 
 
@@ -812,7 +732,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load",
+        "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -857,9 +777,7 @@ aggregation:
     )
     merge_descriptors.main()
 
-    combined_root = (
-        bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
-    )
+    combined_root = bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
     reports_root = tmp_path / "reports"
     assert (combined_root / "sensor_epoch_features.csv").exists()
     assert (combined_root / "sensor_subject_features.csv").exists()
@@ -901,7 +819,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load",
+        "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -969,7 +887,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load",
+        "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -1043,7 +961,7 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "load",
+        "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
     monkeypatch.setattr(
@@ -1077,3 +995,77 @@ aggregation:
     )
 
     extract_descriptors.main()
+
+
+def _mad_container():
+    from coco_pipe.io import DataContainer
+
+    return DataContainer(
+        X=np.asarray(
+            [
+                [0.0, 1.0],
+                [0.0, 1.1],
+                [0.0, 0.9],
+                [0.0, 1.05],
+                [0.0, 0.95],
+                [100.0, 1.0],
+            ]
+        ),
+        dims=("obs", "feature"),
+        coords={
+            "feature": np.asarray(["band_alpha_ch-Fz", "complexity_entropy_ch-Fz"], dtype=object)
+        },
+        ids=np.asarray([f"obs-{index}" for index in range(6)], dtype=object),
+    )
+
+
+def test_apply_mad_rejection_delegates_and_logs_drop():
+    metadata = pd.DataFrame({"obs_id": [f"obs-{index}" for index in range(6)]})
+
+    clean, clean_metadata = extract_descriptors._apply_mad_rejection(
+        _mad_container(),
+        metadata,
+        "EO_baseline",
+        "0001",
+        mad_threshold=3.0,
+        fraction_thresh=0.4,
+        min_epochs=5,
+    )
+
+    assert clean.X.shape[0] == 5
+    assert clean_metadata["obs_id"].tolist() == [f"obs-{index}" for index in range(5)]
+    assert clean.meta["failures"][0]["exception_type"] == "MADOutlierError"
+
+
+def test_apply_mad_rejection_raises_when_too_few_remain():
+    metadata = pd.DataFrame({"obs_id": [f"obs-{index}" for index in range(6)]})
+    with pytest.raises(RuntimeError, match="minimum required: 6"):
+        extract_descriptors._apply_mad_rejection(
+            _mad_container(),
+            metadata,
+            "EO_baseline",
+            "0001",
+            mad_threshold=3.0,
+            fraction_thresh=0.4,
+            min_epochs=6,
+        )
+
+
+def test_apply_mad_rejection_per_family_tags_failures():
+    metadata = pd.DataFrame({"obs_id": [f"obs-{index}" for index in range(6)]})
+
+    clean, clean_metadata = extract_descriptors._apply_mad_rejection(
+        _mad_container(),
+        metadata,
+        "EO_baseline",
+        "0001",
+        mad_threshold=3.0,
+        fraction_thresh=0.4,
+        min_epochs=5,
+        group_by="family",
+    )
+
+    assert clean.X.shape[0] == 5
+    assert clean_metadata["obs_id"].tolist() == [f"obs-{index}" for index in range(5)]
+    families = {failure["family"] for failure in clean.meta["failures"]}
+    assert "MAD_Rejection:band" in families

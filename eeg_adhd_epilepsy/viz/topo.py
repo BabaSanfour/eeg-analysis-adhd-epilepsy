@@ -5,15 +5,13 @@ from __future__ import annotations
 import base64
 import io
 import logging
-from typing import Dict, List, Optional, Sequence
+from collections.abc import Sequence
 
 import matplotlib.pyplot as plt
-import numpy as np
 import mne
+import numpy as np
 import plotly.graph_objects as go
-
 from coco_pipe.viz import plot_topomap as coco_plot_topomap
-from eeg_adhd_epilepsy.viz.utils import save_fig
 
 LOGGER = logging.getLogger(__name__)
 
@@ -24,10 +22,10 @@ def plot_topomap_from_channel_values(
     title: str,
     cmap: str = "viridis",
     unit: str | None = None,
-    bad_channels: List[str] | None = None,
+    bad_channels: list[str] | None = None,
 ) -> plt.Figure | None:
     """Topomap plotting without a raw object (uses standard montage).
-    
+
     Args:
         channel_names: List of channel names.
         values: Values to plot (one per channel).
@@ -41,7 +39,7 @@ def plot_topomap_from_channel_values(
     arr = np.asarray(values, dtype=float)
     if arr.size == 0 or len(channel_names) != arr.size:
         return None
-        
+
     montage = mne.channels.make_standard_montage("standard_1020")
     montage_names = set(montage.ch_names)
     kept = [
@@ -91,7 +89,7 @@ def plot_topomap_from_channel_values(
 
 
 def plot_topomap_selector(
-    value_maps: Dict[str, tuple[Sequence[str], Sequence[float]]],
+    value_maps: dict[str, tuple[Sequence[str], Sequence[float]]],
     title: str,
     unit: str | None = None,
 ) -> go.Figure | None:
@@ -195,20 +193,20 @@ def plot_topomap_selector(
 
 def plot_bad_channels_topo(
     raw: mne.io.BaseRaw,
-    global_bads: List[str],
-    artifact_stats: Dict | None = None,
+    global_bads: list[str],
+    artifact_stats: dict | None = None,
     title: str = "Bad Channels & Artifact Frequency",
-    show: bool = False
+    show: bool = False,
 ) -> plt.Figure:
     """Generate a topographic map showing global bads and local artifact frequency.
-    
-    This function leverages the new plot_topomap_from_channel_values but with 
+
+    This function leverages the new plot_topomap_from_channel_values but with
     additional raw-specific annotations logic.
     """
     info = raw.info
     picks = mne.pick_types(info, eeg=True, exclude=[])
     ch_names = [info["ch_names"][i] for i in picks]
-    
+
     freqs = np.zeros(len(ch_names))
     ch_to_idx = {name: i for i, name in enumerate(ch_names)}
     for annot in raw.annotations:
@@ -223,9 +221,9 @@ def plot_bad_channels_topo(
         title=title,
         cmap="YlOrRd",
         unit="Artifact Count",
-        bad_channels=global_bads
+        bad_channels=global_bads,
     )
-    
+
     if fig and show:
         plt.show()
     return fig

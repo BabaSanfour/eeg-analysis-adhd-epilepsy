@@ -10,30 +10,32 @@ from typing import Any, Optional, Sequence
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-from coco_pipe.dim_reduction.artifacts import (
+from coco_pipe.dim_reduction import (
+    DimReduction,
     EVAL_METRIC_COLUMNS,
     SEPARATION_METRIC_KEY,
+    grouped_condition_stats,
     load_fit_artifact,
     load_fit_runs,
+    paired_condition_stats,
 )
-from coco_pipe.dim_reduction.core import DimReduction
-from coco_pipe.report.core import Report, Section
-from coco_pipe.report.elements import (
+from coco_pipe.io import DataContainer
+from coco_pipe.report import (
     ImageElement,
+    InteractiveTableElement,
     PlotlyElement,
+    Report,
+    Section,
     TableElement,
 )
-from coco_pipe.report.elements import InteractiveTableElement
 from coco_pipe.report.qc import build_qc_section
 from coco_pipe.viz import dim_reduction as viz
-from coco_pipe.dim_reduction import grouped_condition_stats, paired_condition_stats
 from coco_pipe.viz.interactive.dim_reduction import (
     plot_component_loadings,
     plot_embedding as plot_embedding_interactive,
     plot_radar_comparison,
 )
 
-from coco_pipe.io.structures import DataContainer
 from eeg_adhd_epilepsy.io.analysis import load_container
 from eeg_adhd_epilepsy.io.bids import get_reports_root
 from eeg_adhd_epilepsy.utils.metadata_schema import EPILEPSY_MED_COLS
@@ -41,6 +43,28 @@ from eeg_adhd_epilepsy.viz.topo import plot_topomap_from_channel_values, plot_to
 from eeg_adhd_epilepsy.viz.utils import save_fig
 
 logger = logging.getLogger(__name__)
+
+_UNIT_LABELS = {
+    "flat": "global",
+    "sensor": "sensor",
+    "family": "family",
+    "subfamily": "subfamily",
+    "sensor_within_family": "sensor",
+    "sensor_within_subfamily": "sensor",
+    "feature": "feature",
+    "feature_within_family": "feature",
+    "descriptor": "descriptor",
+    "descriptor_sensor": "descriptor × sensor",
+}
+
+
+def _unit_label(analysis_mode: str) -> str:
+    return _UNIT_LABELS.get(analysis_mode, "analysis unit")
+
+
+def _unit_intro(analysis_mode: str) -> str:
+    return _UNIT_LABELS.get(analysis_mode, analysis_mode.replace("_", " "))
+
 
 _PLOT_META_EXCLUDED_COLUMNS = {
     "obs",
@@ -247,6 +271,29 @@ def _filter_runs(
     filtered = filtered[filtered["n_components"].isin(args.n_components_sweep)].copy()
     wanted_conditions = set(args.conditions) | ({pooled_condition} if args.run_pooled else set())
     filtered = filtered[filtered["condition"].isin(wanted_conditions)].copy()
+    run_config_hash = getattr(args, "run_config_hash", None)
+    if run_config_hash and "input_signature" in filtered.columns:
+        filtered = filtered[
+            filtered["input_signature"].apply(
+                lambda value: isinstance(value, dict)
+                and value.get("run_config_hash") == run_config_hash
+            )
+        ].copy()
+    if "representation" in filtered.columns:
+        filtered = filtered[filtered["representation"] == args.representation].copy()
+    if args.input_mode == "foundation_embeddings":
+        for column, desired in (
+            ("embedding_model_key", getattr(args, "embedding_model_key", None)),
+            (
+                "embedding_representation",
+                getattr(args, "embedding_representation", None),
+            ),
+            ("embedding_aggregate_by", getattr(args, "embedding_aggregate_by", None)),
+        ):
+            if column in filtered.columns:
+                filtered = filtered[
+                    filtered[column].fillna("") == (desired or "")
+                ].copy()
 
     desired_families = list(args.descriptor_families or [])
     if args.input_mode == "descriptors" and "descriptor_families" in filtered.columns:
@@ -881,10 +928,13 @@ def _add_unit_summary(
         return
 
     unit_runs = _selection_view(unit_runs, selection_metric, selection_eval_name)
+    unit_column = (
+        "unit_key" if args.analysis_mode == "descriptor_sensor" else "unit_name"
+    )
 
     group_columns = [
         column
-        for column in ["family", "eval_name", "target_col"]
+        for column in ["family", "subfamily", "eval_name", "target_col"]
         if column in unit_runs.columns and unit_runs[column].notna().any()
     ]
     sort_columns = list(
@@ -895,22 +945,34 @@ def _add_unit_summary(
         )
     )
     best_units = (
-        unit_runs.sort_values(sort_columns, ascending=[False] * len(sort_columns), na_position="last")
-        .groupby([*group_columns, "unit_name"], dropna=False)
+        unit_runs.sort_values(
+            sort_columns,
+            ascending=[False] * len(sort_columns),
+            na_position="last",
+        )
+        .groupby([*group_columns, unit_column], dropna=False)
         .head(1)
         .copy()
     )
     display_columns = [
         column
-        for column in [*group_columns, "unit_name", "reducer", "n_components", *sort_columns]
+        for column in [*group_columns, unit_column, "reducer", "n_components", *sort_columns]
         if column in best_units.columns
     ]
     section.add_element(
         InteractiveTableElement(
             best_units.loc[:, display_columns].round(4),
             title=f"{title_prefix} {unit_label} ranking",
-            selector_columns=[column for column in [*group_columns, "reducer"] if column in best_units.columns],
-            default_sort={"column": sort_columns[0], "direction": "desc"} if sort_columns else None,
+            selector_columns=[
+                column
+                for column in [*group_columns, "reducer"]
+                if column in best_units.columns
+            ],
+            default_sort=(
+                {"column": sort_columns[0], "direction": "desc"}
+                if sort_columns
+                else None
+            ),
             page_size=5,
         )
     )
@@ -919,7 +981,7 @@ def _add_unit_summary(
         :,
         [
             column
-            for column in [*group_columns, "unit_name", "reducer", "n_components", *sort_columns]
+            for column in [*group_columns, unit_column, "reducer", "n_components", *sort_columns]
             if column in unit_runs.columns
         ],
     ].copy()
@@ -927,14 +989,22 @@ def _add_unit_summary(
         InteractiveTableElement(
             sweep_df.round(4),
             title=f"{title_prefix} {unit_label} sweep",
-            selector_columns=[column for column in [*group_columns, "unit_name", "reducer"] if column in sweep_df.columns],
+            selector_columns=[
+                column
+                for column in [*group_columns, unit_column, "reducer"]
+                if column in sweep_df.columns
+            ],
             page_size=5,
         )
     )
 
     best_by_unit = best_units.copy()
     plot_metric = sort_columns[0] if sort_columns else "trustworthiness"
-    grouped_best = list(best_by_unit.groupby(group_columns, dropna=False)) if group_columns else [((), best_by_unit)]
+    grouped_best = (
+        list(best_by_unit.groupby(group_columns, dropna=False))
+        if group_columns
+        else [((), best_by_unit)]
+    )
     bar_fig = go.Figure()
     for idx, (group_key, group_df) in enumerate(grouped_best):
         plot_df = group_df.dropna(subset=[plot_metric]).copy()
@@ -942,11 +1012,15 @@ def _add_unit_summary(
             continue
         if not isinstance(group_key, tuple):
             group_key = (group_key,)
-        label_parts = [str(value) for value in group_key if pd.notna(value) and str(value) != ""]
+        label_parts = [
+            str(value)
+            for value in group_key
+            if pd.notna(value) and str(value) != ""
+        ]
         trace_label = " / ".join(label_parts) if label_parts else plot_metric
         bar_fig.add_trace(
             go.Bar(
-                x=plot_df["unit_name"].astype(str),
+                x=plot_df[unit_column].astype(str),
                 y=plot_df[plot_metric],
                 text=plot_df["n_components"].map(lambda value: f"n={int(value)}"),
                 name=trace_label,
@@ -969,7 +1043,12 @@ def _add_unit_summary(
                             "method": "update",
                             "args": [
                                 {"visible": [j == idx for j in range(len(bar_fig.data))]},
-                                {"title": f"{title_prefix} best {plot_metric} by {unit_label} - {trace.name}"},
+                                {
+                                    "title": (
+                                        f"{title_prefix} best {plot_metric} by "
+                                        f"{unit_label} - {trace.name}"
+                                    )
+                                },
                             ],
                         }
                         for idx, trace in enumerate(bar_fig.data)
@@ -979,8 +1058,13 @@ def _add_unit_summary(
         )
     if bar_fig.data:
         first_bar_label = bar_fig.data[0].name
+        title_suffix = (
+            f" - {first_bar_label}"
+            if first_bar_label and len(bar_fig.data) > 1
+            else ""
+        )
         bar_fig.update_layout(
-            title=f"{title_prefix} best {plot_metric} by {unit_label}{f' - {first_bar_label}' if first_bar_label and len(bar_fig.data) > 1 else ''}",
+            title=f"{title_prefix} best {plot_metric} by {unit_label}{title_suffix}",
             xaxis_title=unit_label,
             yaxis_title=plot_metric,
         )
@@ -993,10 +1077,14 @@ def _add_unit_summary(
                 continue
             if not isinstance(group_key, tuple):
                 group_key = (group_key,)
-            label_parts = [str(value) for value in group_key if pd.notna(value) and str(value) != ""]
+            label_parts = [
+                str(value)
+                for value in group_key
+                if pd.notna(value) and str(value) != ""
+            ]
             topo_label = " / ".join(label_parts) if label_parts else plot_metric
             topo_groups[topo_label] = (
-                topo_df["unit_name"].astype(str).tolist(),
+                topo_df[unit_column].astype(str).tolist(),
                 topo_df[plot_metric].astype(float).to_numpy(),
             )
         if topo_groups:
@@ -1034,16 +1122,14 @@ def _build_nonflat_condition_section(
     eval_specs: Sequence[dict[str, Any]],
     reducers: Sequence[str],
 ) -> Section:
-    unit_label = "family" if args.analysis_mode == "family" else "sensor"
+    unit_label = _unit_label(args.analysis_mode)
     fam_label = _family_label(args)
     section = Section(condition, icon="📊")
     artifacts = {
         str(row["fit_id"]): load_fit_artifact(output_root / row["artifact_path"])
         for _, row in condition_runs.iterrows()
     }
-    intro = f"Primary analysis unit: **{unit_label}**."
-    if args.analysis_mode == "sensor_within_family":
-        intro = "Primary analysis unit: **sensor within family**."
+    intro = f"Primary analysis unit: **{_unit_intro(args.analysis_mode)}**."
     section.add_markdown(
         (
             f"Input mode: **{args.input_mode}**. "
@@ -1183,9 +1269,17 @@ def _build_nonflat_condition_section(
                 )
             )
         return section
-    if args.analysis_mode == "sensor_within_family":
-        for family, family_runs in merged.groupby("family", dropna=False):
-            section.add_markdown(f"### {family}")
+    if args.analysis_mode in {"sensor_within_family", "sensor_within_subfamily"}:
+        group_columns = ["family"]
+        if (
+            args.analysis_mode == "sensor_within_subfamily"
+            and "subfamily" in merged.columns
+        ):
+            group_columns.append("subfamily")
+        for group_key, family_runs in merged.groupby(group_columns, dropna=False):
+            group_values = group_key if isinstance(group_key, tuple) else (group_key,)
+            group_label = " / ".join(str(value) for value in group_values)
+            section.add_markdown(f"### {group_label}")
             _add_unit_summary(
                 section,
                 family_runs,
@@ -1196,7 +1290,7 @@ def _build_nonflat_condition_section(
                 output_root=output_root,
                 subjects=subjects,
                 unit_label="sensor",
-                title_prefix=f"{condition} - {family}",
+                title_prefix=f"{condition} - {group_label}",
                 input_mode=args.input_mode,
                 selection_metric=args.selection_metric,
                 selection_eval_name=getattr(args, "selection_eval_name", None),
@@ -1415,9 +1509,17 @@ def _build_pooled_section(
                 compress_viz_with_pca=args.compress_viz_with_pca,
                 feature_names=_get_feature_names(pooled_container),
             )
-    elif args.analysis_mode == "sensor_within_family":
-        for family, family_runs in merged.groupby("family", dropna=False):
-            section.add_markdown(f"### {family}")
+    elif args.analysis_mode in {"sensor_within_family", "sensor_within_subfamily"}:
+        group_columns = ["family"]
+        if (
+            args.analysis_mode == "sensor_within_subfamily"
+            and "subfamily" in merged.columns
+        ):
+            group_columns.append("subfamily")
+        for group_key, family_runs in merged.groupby(group_columns, dropna=False):
+            group_values = group_key if isinstance(group_key, tuple) else (group_key,)
+            group_label = " / ".join(str(value) for value in group_values)
+            section.add_markdown(f"### {group_label}")
             _add_unit_summary(
                 section,
                 family_runs,
@@ -1428,13 +1530,13 @@ def _build_pooled_section(
                 output_root=output_root,
                 subjects=subjects,
                 unit_label="sensor",
-                title_prefix=f"Pooled - {family}",
+                title_prefix=f"Pooled - {group_label}",
                 input_mode=args.input_mode,
                 selection_metric=args.selection_metric,
                 selection_eval_name=getattr(args, "selection_eval_name", None),
             )
     else:
-        unit_label = "family" if args.analysis_mode == "family" else "sensor"
+        unit_label = _unit_label(args.analysis_mode)
         _add_unit_summary(
             section,
             merged,

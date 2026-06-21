@@ -6,7 +6,7 @@
 #SBATCH --time=03:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
-#SBATCH --array=1-142
+#SBATCH --array=1-148
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -22,7 +22,6 @@ BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilep
 METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/medicated_adhd_vs_controls}
-REPORTS_ROOT="${BIDS_ROOT%/*}/reports"
 
 # 3. Environment Setup
 cd "$PROJECT_ROOT"
@@ -66,23 +65,13 @@ config="${CONFIGS[$config_index]}"
 input_mode="raw"
 aggregation_unit="${AGGREGATION_UNIT:-recording}"
 
-ds_name=$(grep "dataset_name:" "$config" | awk '{print $2}')
-out_grp=$(grep "output_group:" "$config" | awk '{print $2}')
-report_repr="${representation//_/-}"
-report_path="$REPORTS_ROOT/summary/dim_reduction/$out_grp/$ds_name/$input_mode/dataset_summary_mode-${mode}_unit-${aggregation_unit}_repr-${report_repr}.html"
-
 echo "================================================================================"
 echo "DIM REDUCTION ARRAY TASK $TASK_ID / $TOTAL_TASKS"
 echo "Config:         $config"
 echo "Mode:           $mode"
 echo "Representation: $representation"
-echo "Report:         $report_path"
+echo "Report:         resolved by the configuration-hashed run namespace"
 echo "================================================================================"
-
-if [[ -f "$report_path" ]]; then
-    echo "SKIPPING: report already exists."
-    exit 0
-fi
 
 python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
     --bids_root "$BIDS_ROOT" \

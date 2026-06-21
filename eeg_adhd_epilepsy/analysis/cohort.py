@@ -22,9 +22,8 @@ from typing import Any
 
 import pandas as pd
 import plotly.graph_objects as go
-import yaml
+from coco_pipe.io import read_table
 
-from eeg_adhd_epilepsy.io.table import load
 from eeg_adhd_epilepsy.reports.cohort_report import generate_cohort_report
 from eeg_adhd_epilepsy.utils.analysis_opportunities_schema import (
     CONSTRAINT_RULES,
@@ -34,6 +33,7 @@ from eeg_adhd_epilepsy.utils.metadata_schema import (
     EPILEPSY_MED_COLS,
     NORMALIZED_PSYCHOSTIMULANT_CATEGORIES,
 )
+from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 from eeg_adhd_epilepsy.viz.patients import (
     plot_age_by_diagnosis,
     plot_asm_exposure_counts,
@@ -81,25 +81,120 @@ DEFAULT_TRACKED_RECRUITMENT_OPPORTUNITIES = [
     {"analysis": "DrugResistance_Status", "constraint": "Psychostim_False"},
 ]
 RECRUITMENT_REQUIRED_GROUPS = {
-    "ADHD_Psychostim_Effect_Any": {1500: (100, 150), 2000: (150, 250), 3000: (200, 400), 5000: (200, 800)},
-    "ADHD_Psychostim_Effect_Methylphenidate": {1500: (100, 75), 2000: (150, 125), 3000: (200, 200), 5000: (200, 400)},
-    "ADHD_Psychostim_Effect_Lisdexamfetamine": {1500: (100, 75), 2000: (150, 125), 3000: (200, 200), 5000: (200, 400)},
-    "ADHD_Psychostim_Effect_Dextroamphetamine": {1500: (100, 75), 2000: (150, 125), 3000: (200, 200), 5000: (200, 400)},
-    "ADHD_Methylphenidate_vs_Lisdexamfetamine": {1500: (75, 75), 2000: (125, 125), 3000: (200, 200), 5000: (400, 400)},
-    "ADHD_Methylphenidate_vs_Amphetamine": {1500: (75, 75), 2000: (125, 125), 3000: (200, 200), 5000: (400, 400)},
-    "Control_vs_ADHD_Medicated_Any": {1500: (150, 150), 2000: (250, 250), 3000: (400, 400), 5000: (800, 800)},
-    "Control_vs_ADHD_Methylphenidate": {1500: (75, 75), 2000: (125, 125), 3000: (200, 200), 5000: (400, 400)},
-    "Control_vs_ADHD_Lisdexamfetamine": {1500: (75, 75), 2000: (125, 125), 3000: (200, 200), 5000: (400, 400)},
-    "Control_vs_ADHD_Amphetamine": {1500: (75, 75), 2000: (125, 125), 3000: (200, 200), 5000: (400, 400)},
-    "Epilepsy_ASM_Effect_Any": {1500: (100, 250), 2000: (150, 350), 3000: (200, 600), 5000: (200, 1150)},
-    "Epilepsy_ASM_Effect_LEV_Only": {1500: (100, 125), 2000: (150, 175), 3000: (200, 300), 5000: (200, 575)},
-    "Epilepsy_ASM_Effect_VPA_Only": {1500: (100, 125), 2000: (150, 175), 3000: (200, 300), 5000: (200, 575)},
-    "Epilepsy_LEV_vs_VPA_Only": {1500: (125, 125), 2000: (175, 175), 3000: (300, 300), 5000: (575, 575)},
-    "NonEpilepsy_vs_Epilepsy_Unmedicated": {1500: (100, 100), 2000: (150, 150), 3000: (200, 200), 5000: (200, 200)},
-    "NonEpilepsy_vs_Epilepsy_ASM_Any": {1500: (250, 250), 2000: (350, 350), 3000: (600, 600), 5000: (1150, 1150)},
-    "NonEpilepsy_vs_Epilepsy_LEV_Only": {1500: (125, 125), 2000: (175, 175), 3000: (300, 300), 5000: (575, 575)},
-    "NonEpilepsy_vs_Epilepsy_VPA_Only": {1500: (125, 125), 2000: (175, 175), 3000: (300, 300), 5000: (575, 575)},
-    "DrugResistance_Status": {1500: (150, 100), 2000: (200, 150), 3000: (350, 250), 5000: (700, 450)},
+    "ADHD_Psychostim_Effect_Any": {
+        1500: (100, 150),
+        2000: (150, 250),
+        3000: (200, 400),
+        5000: (200, 800),
+    },
+    "ADHD_Psychostim_Effect_Methylphenidate": {
+        1500: (100, 75),
+        2000: (150, 125),
+        3000: (200, 200),
+        5000: (200, 400),
+    },
+    "ADHD_Psychostim_Effect_Lisdexamfetamine": {
+        1500: (100, 75),
+        2000: (150, 125),
+        3000: (200, 200),
+        5000: (200, 400),
+    },
+    "ADHD_Psychostim_Effect_Dextroamphetamine": {
+        1500: (100, 75),
+        2000: (150, 125),
+        3000: (200, 200),
+        5000: (200, 400),
+    },
+    "ADHD_Methylphenidate_vs_Lisdexamfetamine": {
+        1500: (75, 75),
+        2000: (125, 125),
+        3000: (200, 200),
+        5000: (400, 400),
+    },
+    "ADHD_Methylphenidate_vs_Amphetamine": {
+        1500: (75, 75),
+        2000: (125, 125),
+        3000: (200, 200),
+        5000: (400, 400),
+    },
+    "Control_vs_ADHD_Medicated_Any": {
+        1500: (150, 150),
+        2000: (250, 250),
+        3000: (400, 400),
+        5000: (800, 800),
+    },
+    "Control_vs_ADHD_Methylphenidate": {
+        1500: (75, 75),
+        2000: (125, 125),
+        3000: (200, 200),
+        5000: (400, 400),
+    },
+    "Control_vs_ADHD_Lisdexamfetamine": {
+        1500: (75, 75),
+        2000: (125, 125),
+        3000: (200, 200),
+        5000: (400, 400),
+    },
+    "Control_vs_ADHD_Amphetamine": {
+        1500: (75, 75),
+        2000: (125, 125),
+        3000: (200, 200),
+        5000: (400, 400),
+    },
+    "Epilepsy_ASM_Effect_Any": {
+        1500: (100, 250),
+        2000: (150, 350),
+        3000: (200, 600),
+        5000: (200, 1150),
+    },
+    "Epilepsy_ASM_Effect_LEV_Only": {
+        1500: (100, 125),
+        2000: (150, 175),
+        3000: (200, 300),
+        5000: (200, 575),
+    },
+    "Epilepsy_ASM_Effect_VPA_Only": {
+        1500: (100, 125),
+        2000: (150, 175),
+        3000: (200, 300),
+        5000: (200, 575),
+    },
+    "Epilepsy_LEV_vs_VPA_Only": {
+        1500: (125, 125),
+        2000: (175, 175),
+        3000: (300, 300),
+        5000: (575, 575),
+    },
+    "NonEpilepsy_vs_Epilepsy_Unmedicated": {
+        1500: (100, 100),
+        2000: (150, 150),
+        3000: (200, 200),
+        5000: (200, 200),
+    },
+    "NonEpilepsy_vs_Epilepsy_ASM_Any": {
+        1500: (250, 250),
+        2000: (350, 350),
+        3000: (600, 600),
+        5000: (1150, 1150),
+    },
+    "NonEpilepsy_vs_Epilepsy_LEV_Only": {
+        1500: (125, 125),
+        2000: (175, 175),
+        3000: (300, 300),
+        5000: (575, 575),
+    },
+    "NonEpilepsy_vs_Epilepsy_VPA_Only": {
+        1500: (125, 125),
+        2000: (175, 175),
+        3000: (300, 300),
+        5000: (575, 575),
+    },
+    "DrugResistance_Status": {
+        1500: (150, 100),
+        2000: (200, 150),
+        3000: (350, 250),
+        5000: (700, 450),
+    },
 }
 RECRUITMENT_POOL_SPECS = [
     {
@@ -240,8 +335,7 @@ def _load_cohort_config(config_path: Path | None) -> dict[str, Any]:
             },
         }
 
-    with config_path.open("r", encoding="utf-8") as fobj:
-        raw = yaml.safe_load(fobj) or {}
+    raw = load_yaml_config(config_path)
     recruitment_raw = raw.get("recruitment") or {}
     milestones = recruitment_raw.get("milestones") or DEFAULT_RECRUITMENT_MILESTONES
     tracked = recruitment_raw.get("tracked_opportunities")
@@ -277,9 +371,17 @@ def _apply_row_filter(df: pd.DataFrame, row_filter: list[dict[str, Any]]) -> pd.
         series = df[column]
 
         if operator == "==":
-            current = series.isin(_values_for_filter(values)) if isinstance(values, list) else series == values
+            current = (
+                series.isin(_values_for_filter(values))
+                if isinstance(values, list)
+                else series == values
+            )
         elif operator == "!=":
-            current = ~series.isin(_values_for_filter(values)) if isinstance(values, list) else series != values
+            current = (
+                ~series.isin(_values_for_filter(values))
+                if isinstance(values, list)
+                else series != values
+            )
         elif operator == "in":
             current = series.isin(_values_for_filter(values))
         elif operator == "not in":
@@ -312,9 +414,7 @@ def _format_row_filter_markdown(config: dict[str, Any], n_rows: int) -> str:
 
     lines.append("**Row Filter:**")
     for rule in config["row_filter"]:
-        lines.append(
-            f"- `{rule['column']}` {rule.get('operator', '==')} `{rule.get('values')}`"
-        )
+        lines.append(f"- `{rule['column']}` {rule.get('operator', '==')} `{rule.get('values')}`")
     return "\n\n".join(lines)
 
 
@@ -410,9 +510,7 @@ def _build_combined_diagnosis_summary(df: pd.DataFrame) -> pd.DataFrame:
 def _build_demographics_summary(df: pd.DataFrame) -> pd.DataFrame:
     sex_counts = df["sex"].value_counts().to_dict()
     age_group_counts = (
-        df["age_group"].astype(str).value_counts().to_dict()
-        if "age_group" in df.columns
-        else {}
+        df["age_group"].astype(str).value_counts().to_dict() if "age_group" in df.columns else {}
     )
     return _metric_table(
         [
@@ -427,7 +525,9 @@ def _build_demographics_summary(df: pd.DataFrame) -> pd.DataFrame:
                     f"{group}={count}"
                     for group, count in sorted(
                         age_group_counts.items(),
-                        key=lambda item: int(item[0].split("-")[0]) if item[0] and item[0] != "nan" else 999,
+                        key=lambda item: int(item[0].split("-")[0])
+                        if item[0] and item[0] != "nan"
+                        else 999,
                     )
                     if group != "nan"
                 ),
@@ -456,7 +556,12 @@ def _build_medication_summary(df: pd.DataFrame) -> pd.DataFrame:
         ),
         (
             "top_asm_counts",
-            ", ".join(f"{name}={count}" for name, count in sorted(asm_counts.items(), key=lambda item: item[1], reverse=True)),
+            ", ".join(
+                f"{name}={count}"
+                for name, count in sorted(
+                    asm_counts.items(), key=lambda item: item[1], reverse=True
+                )
+            ),
         ),
     ]
     return _metric_table(rows)
@@ -500,13 +605,19 @@ def _build_drug_resistant_overview(df: pd.DataFrame) -> pd.DataFrame:
                 "population": label,
                 "rows": len(subset),
                 "unique_patients": _n_unique_patients(subset),
-                "first_eeg_rows": int(subset["first_eeg"].eq(1).sum()) if "first_eeg" in subset else 0,
-                "later_eeg_rows": int(subset["first_eeg"].eq(0).sum()) if "first_eeg" in subset else 0,
+                "first_eeg_rows": int(subset["first_eeg"].eq(1).sum())
+                if "first_eeg" in subset
+                else 0,
+                "later_eeg_rows": int(subset["first_eeg"].eq(0).sum())
+                if "first_eeg" in subset
+                else 0,
                 "patients_with_first_eeg": len(first_patients),
                 "patients_with_later_eeg": len(later_patients),
                 "patients_with_both": len(first_patients & later_patients),
                 "patients_with_2plus_recordings": int(recordings_per_patient.ge(2).sum()),
-                "max_recordings_per_patient": int(recordings_per_patient.max()) if not recordings_per_patient.empty else 0,
+                "max_recordings_per_patient": int(recordings_per_patient.max())
+                if not recordings_per_patient.empty
+                else 0,
             }
         )
     return pd.DataFrame(rows)
@@ -526,7 +637,9 @@ def _build_first_later_drug_resistant_summary(df: pd.DataFrame) -> pd.DataFrame:
                 "median_age": round(float(frame["age"].median()), 2) if len(frame) else None,
                 "adhd_rows": int(frame["adhd"].eq(1).sum()) if len(frame) else 0,
                 "autism_rows": int(frame["autism"].eq(1).sum()) if len(frame) else 0,
-                "psychostimulant_rows": int(frame["psychostimulant"].eq(1).sum()) if len(frame) else 0,
+                "psychostimulant_rows": int(frame["psychostimulant"].eq(1).sum())
+                if len(frame)
+                else 0,
                 "asm_rows": int(frame["asm"].eq(1).sum()) if len(frame) else 0,
             }
         )
@@ -537,7 +650,9 @@ def _build_source_overlap_summary(df: pd.DataFrame) -> pd.DataFrame:
     patient_col = _patient_id_col(df)
     source_sets = {
         "cohort_1": set(df.loc[df["source_dataset"].eq("adhd"), patient_col].dropna().tolist()),
-        "cohort_2": set(df.loc[df["source_dataset"].eq("drug_resistant"), patient_col].dropna().tolist()),
+        "cohort_2": set(
+            df.loc[df["source_dataset"].eq("drug_resistant"), patient_col].dropna().tolist()
+        ),
     }
     categories = [
         ("Only cohort 1", source_sets["cohort_1"] - source_sets["cohort_2"]),
@@ -602,10 +717,14 @@ def _build_drug_resistant_longitudinal_patients(df: pd.DataFrame) -> pd.DataFram
                 "eeg_dates",
             ]
         )
-    return pd.DataFrame(rows).sort_values(
-        ["n_recordings", "patient_group_id"],
-        ascending=[False, True],
-    ).reset_index(drop=True)
+    return (
+        pd.DataFrame(rows)
+        .sort_values(
+            ["n_recordings", "patient_group_id"],
+            ascending=[False, True],
+        )
+        .reset_index(drop=True)
+    )
 
 
 def _build_drug_resistant_first_later_figure(df: pd.DataFrame) -> go.Figure | None:
@@ -642,8 +761,7 @@ def _resolve_recruitment_selectors(
     recruitment_config: dict[str, Any],
 ) -> pd.DataFrame:
     selectors = (
-        recruitment_config["tracked_opportunities"]
-        or DEFAULT_TRACKED_RECRUITMENT_OPPORTUNITIES
+        recruitment_config["tracked_opportunities"] or DEFAULT_TRACKED_RECRUITMENT_OPPORTUNITIES
     )
     rows: list[dict[str, Any]] = []
 
@@ -724,9 +842,19 @@ def _recruitment_pool_mask(df: pd.DataFrame, pool_key: str) -> pd.Series:
     if pool_key == "adhd_total":
         return (df["adhd"] == 1) & (df["autism"] == 0) & (df["epilepsy"] == 0)
     if pool_key == "adhd_unmed":
-        return (df["adhd"] == 1) & (df["autism"] == 0) & (df["epilepsy"] == 0) & (df["psychostimulant"] == 0)
+        return (
+            (df["adhd"] == 1)
+            & (df["autism"] == 0)
+            & (df["epilepsy"] == 0)
+            & (df["psychostimulant"] == 0)
+        )
     if pool_key == "adhd_med_any":
-        return (df["adhd"] == 1) & (df["autism"] == 0) & (df["epilepsy"] == 0) & (df["psychostimulant"] == 1)
+        return (
+            (df["adhd"] == 1)
+            & (df["autism"] == 0)
+            & (df["epilepsy"] == 0)
+            & (df["psychostimulant"] == 1)
+        )
     if pool_key == "adhd_methyl":
         return (
             (df["adhd"] == 1)
@@ -748,9 +876,19 @@ def _recruitment_pool_mask(df: pd.DataFrame, pool_key: str) -> pd.Series:
     if pool_key == "epilepsy_asm_any":
         return (df["epilepsy"] == 1) & (df["adhd"] == 0) & (df["autism"] == 0) & (df["asm"] == 1)
     if pool_key == "epilepsy_lev_only":
-        return (df["epilepsy"] == 1) & (df["adhd"] == 0) & (df["autism"] == 0) & (df["asm_types"] == "LEV")
+        return (
+            (df["epilepsy"] == 1)
+            & (df["adhd"] == 0)
+            & (df["autism"] == 0)
+            & (df["asm_types"] == "LEV")
+        )
     if pool_key == "epilepsy_vpa_only":
-        return (df["epilepsy"] == 1) & (df["adhd"] == 0) & (df["autism"] == 0) & (df["asm_types"] == "VPA")
+        return (
+            (df["epilepsy"] == 1)
+            & (df["adhd"] == 0)
+            & (df["autism"] == 0)
+            & (df["asm_types"] == "VPA")
+        )
     if pool_key == "drug_resistant_epilepsy":
         return (df["epilepsy"] == 1) & (df["asm_resistant"] == 1)
     raise KeyError(f"Unknown recruitment pool key: {pool_key}")
@@ -762,7 +900,8 @@ def _required_group_sizes(analysis_name: str, milestone: int) -> tuple[int, int]
         raise ValueError(f"No recruitment targets defined for analysis {analysis_name!r}.")
     if int(milestone) not in analysis_targets:
         raise ValueError(
-            f"No recruitment targets defined for analysis {analysis_name!r} at milestone {milestone}."
+            f"No recruitment targets defined for analysis {analysis_name!r} "
+            f"at milestone {milestone}."
         )
     required_n1, required_n2 = analysis_targets[int(milestone)]
     return int(required_n1), int(required_n2)
@@ -836,14 +975,18 @@ def _build_recruitment_projection(
             row["opportunity_label"] = _recruitment_opportunity_label(pd.Series(row))
             projection_rows.append(row)
 
-    projection_df = pd.DataFrame(projection_rows).sort_values(
-        ["milestone", "analysis", "constraint", "sex", "age_group"]
-    ).reset_index(drop=True)
+    projection_df = (
+        pd.DataFrame(projection_rows)
+        .sort_values(["milestone", "analysis", "constraint", "sex", "age_group"])
+        .reset_index(drop=True)
+    )
 
     previous_feasible = {
         row["opportunity_label"]: (
-            int(row["current_n1"]) >= _required_group_sizes(str(row["analysis"]), current_milestone)[0]
-            and int(row["current_n2"]) >= _required_group_sizes(str(row["analysis"]), current_milestone)[1]
+            int(row["current_n1"])
+            >= _required_group_sizes(str(row["analysis"]), current_milestone)[0]
+            and int(row["current_n2"])
+            >= _required_group_sizes(str(row["analysis"]), current_milestone)[1]
         )
         for _, row in tracked_df.assign(
             opportunity_label=tracked_df.apply(_recruitment_opportunity_label, axis=1)
@@ -854,8 +997,7 @@ def _build_recruitment_projection(
     for milestone in milestones:
         milestone_df = projection_df.loc[projection_df["milestone"] == int(milestone)].copy()
         feasible_map = {
-            row["opportunity_label"]: bool(row["feasible"])
-            for _, row in milestone_df.iterrows()
+            row["opportunity_label"]: bool(row["feasible"]) for _, row in milestone_df.iterrows()
         }
         newly_feasible_labels = {
             label
@@ -878,7 +1020,8 @@ def _build_recruitment_projection(
     summary_df = pd.DataFrame(summary_rows)
     projection_df["family"] = projection_df["analysis"].map(_analysis_family)
     projection_df["newly_feasible"] = projection_df.apply(
-        lambda row: row["opportunity_label"] in newly_feasible_labels_by_milestone.get(int(row["milestone"]), set()),
+        lambda row: row["opportunity_label"]
+        in newly_feasible_labels_by_milestone.get(int(row["milestone"]), set()),
         axis=1,
     )
     projection_df["status"] = projection_df.apply(
@@ -899,7 +1042,6 @@ def _build_recruitment_pools(
     milestones: list[int],
 ) -> pd.DataFrame:
     child_map: dict[str, list[str]] = {}
-    spec_by_key = {spec["key"]: spec for spec in RECRUITMENT_POOL_SPECS}
     for spec in RECRUITMENT_POOL_SPECS:
         if spec["parent"] is not None:
             child_map.setdefault(str(spec["parent"]), []).append(str(spec["key"]))
@@ -914,7 +1056,9 @@ def _build_recruitment_pools(
                 {
                     "milestone": int(milestone),
                     "pool_key": str(spec["key"]),
-                    "pool": ("  " * int(spec["depth"])) + ("↳ " if int(spec["depth"]) > 0 else "") + str(spec["label"]),
+                    "pool": ("  " * int(spec["depth"]))
+                    + ("↳ " if int(spec["depth"]) > 0 else "")
+                    + str(spec["label"]),
                     "depth": int(spec["depth"]),
                     "parent": spec["parent"],
                     "current_n": current_n,
@@ -929,7 +1073,9 @@ def _build_recruitment_pools(
         for spec in reversed(RECRUITMENT_POOL_SPECS):
             row = row_map[str(spec["key"])]
             child_keys = child_map.get(str(spec["key"]), [])
-            child_planned = sum(int(row_map[child_key]["net_recruit_needed"]) for child_key in child_keys)
+            child_planned = sum(
+                int(row_map[child_key]["net_recruit_needed"]) for child_key in child_keys
+            )
             row["child_planned"] = child_planned
             row["net_recruit_needed"] = max(0, int(row["raw_gap"]) - child_planned)
 
@@ -971,10 +1117,12 @@ def _build_recruitment_outputs(
     int,
 ]:
     tracked_df = _resolve_recruitment_selectors(valid_opportunities, recruitment_config)
-    projection_df, summary_df, current_feasible_count, current_milestone = _build_recruitment_projection(
-        tracked_df=tracked_df,
-        filtered_cohort_n=filtered_cohort_n,
-        milestones=recruitment_config["milestones"],
+    projection_df, summary_df, current_feasible_count, current_milestone = (
+        _build_recruitment_projection(
+            tracked_df=tracked_df,
+            filtered_cohort_n=filtered_cohort_n,
+            milestones=recruitment_config["milestones"],
+        )
     )
     pools_df = _build_recruitment_pools(
         df=cohort_df,
@@ -1053,9 +1201,15 @@ def _constraint_status(constraint_names: tuple[str, ...]) -> str | None:
         return "contradictory_constraints"
     if "Combined_Amphetamine" in names and "Methylphenidate" in names:
         return "contradictory_constraints"
-    if "Combined_Amphetamine" in names and len(names & {"Dextroamphetamine", "Lisdexamfetamine"}) == 2:
+    if (
+        "Combined_Amphetamine" in names
+        and len(names & {"Dextroamphetamine", "Lisdexamfetamine"}) == 2
+    ):
         return "contradictory_constraints"
-    if "Combined_Amphetamine" in names and len(names & {"Dextroamphetamine", "Lisdexamfetamine"}) == 1:
+    if (
+        "Combined_Amphetamine" in names
+        and len(names & {"Dextroamphetamine", "Lisdexamfetamine"}) == 1
+    ):
         return "redundant_constraint_set"
 
     for rule in CONSTRAINT_RULES:
@@ -1063,7 +1217,9 @@ def _constraint_status(constraint_names: tuple[str, ...]) -> str | None:
             continue
         if rule.contradicts:
             return "contradictory_constraints"
-        implied_present = [item for item in rule.implies if item in names and item not in rule.if_all]
+        implied_present = [
+            item for item in rule.implies if item in names and item not in rule.if_all
+        ]
         if implied_present:
             return "redundant_constraint_set"
     return None
@@ -1252,11 +1408,15 @@ def _group_empty_reason(analysis_name: str, n1: int, n2: int) -> str:
         "Control_vs_ADHD_Amphetamine",
     }:
         return "insufficient_category_support"
-    if analysis_name in {
-        "NonEpilepsy_vs_Epilepsy_Unmedicated",
-        "NonEpilepsy_vs_Epilepsy_ASM_Any",
-        "Control_vs_ADHD_Medicated_Any",
-    } and n2 == 0:
+    if (
+        analysis_name
+        in {
+            "NonEpilepsy_vs_Epilepsy_Unmedicated",
+            "NonEpilepsy_vs_Epilepsy_ASM_Any",
+            "Control_vs_ADHD_Medicated_Any",
+        }
+        and n2 == 0
+    ):
         return "insufficient_category_support"
     return "one_group_empty"
 
@@ -1284,7 +1444,9 @@ def build_analysis_opportunities(df: pd.DataFrame, min_group_n: int) -> pd.DataF
     for sex_label, sex_mask in sex_groups:
         sex_df = df.loc[sex_mask].copy()
         for age_label, age_mask in age_groups:
-            stratum_df = sex_df if age_label == ALL_LABEL else sex_df.loc[age_mask.loc[sex_df.index]].copy()
+            stratum_df = (
+                sex_df if age_label == ALL_LABEL else sex_df.loc[age_mask.loc[sex_df.index]].copy()
+            )
             for analysis_spec in TARGET_ANALYSES:
                 for constraint_names in analysis_spec.constraint_sets:
                     constraint_label = _constraint_label(constraint_names)
@@ -1329,7 +1491,9 @@ def build_analysis_opportunities(df: pd.DataFrame, min_group_n: int) -> pd.DataF
                         rows.append(row)
                         continue
 
-                    applicability_reason = _analysis_applicability_reason(cohort_df, analysis_spec.name)
+                    applicability_reason = _analysis_applicability_reason(
+                        cohort_df, analysis_spec.name
+                    )
                     if applicability_reason is not None:
                         row["skip_reason"] = applicability_reason
                         rows.append(row)
@@ -1358,7 +1522,9 @@ def build_analysis_opportunities(df: pd.DataFrame, min_group_n: int) -> pd.DataF
                     row["N2"] = len(group_2)
 
                     if row["N1"] == 0 or row["N2"] == 0:
-                        row["skip_reason"] = _group_empty_reason(analysis_spec.name, row["N1"], row["N2"])
+                        row["skip_reason"] = _group_empty_reason(
+                            analysis_spec.name, row["N1"], row["N2"]
+                        )
                         rows.append(row)
                         continue
 
@@ -1401,19 +1567,51 @@ def _create_figures(df: pd.DataFrame, figure_dir: Path) -> dict[str, list[tuple[
 
     sections = {
         "Cohort Definition": [
-            ("Source Dataset Counts", figure_dir / "source_dataset_counts.png", plot_source_dataset_counts),
+            (
+                "Source Dataset Counts",
+                figure_dir / "source_dataset_counts.png",
+                plot_source_dataset_counts,
+            ),
         ],
         "Diagnosis and Demographics": [
-            ("Diagnosis Prevalence", figure_dir / "diagnosis_prevalence.png", plot_diagnosis_prevalence),
-            ("Combined Diagnosis Counts", figure_dir / "combined_diagnosis_counts.png", plot_combined_diagnosis_counts),
+            (
+                "Diagnosis Prevalence",
+                figure_dir / "diagnosis_prevalence.png",
+                plot_diagnosis_prevalence,
+            ),
+            (
+                "Combined Diagnosis Counts",
+                figure_dir / "combined_diagnosis_counts.png",
+                plot_combined_diagnosis_counts,
+            ),
             ("Sex by Age Group", figure_dir / "sex_age_heatmap.png", plot_sex_age_heatmap),
-            ("Age by Combined Diagnosis", figure_dir / "age_by_diagnosis.png", plot_age_by_diagnosis),
+            (
+                "Age by Combined Diagnosis",
+                figure_dir / "age_by_diagnosis.png",
+                plot_age_by_diagnosis,
+            ),
         ],
         "Medication and Drug Resistance": [
-            ("Psychostimulant Categories", figure_dir / "psychostimulant_category_counts.png", plot_psychostimulant_category_counts),
-            ("ASM Exposure Counts", figure_dir / "asm_exposure_counts.png", plot_asm_exposure_counts),
-            ("Psychostimulant vs ASM Exposure", figure_dir / "medication_overlap.png", plot_medication_overlap),
-            ("Drug Resistance Summary", figure_dir / "drug_resistance_summary.png", plot_drug_resistance_summary),
+            (
+                "Psychostimulant Categories",
+                figure_dir / "psychostimulant_category_counts.png",
+                plot_psychostimulant_category_counts,
+            ),
+            (
+                "ASM Exposure Counts",
+                figure_dir / "asm_exposure_counts.png",
+                plot_asm_exposure_counts,
+            ),
+            (
+                "Psychostimulant vs ASM Exposure",
+                figure_dir / "medication_overlap.png",
+                plot_medication_overlap,
+            ),
+            (
+                "Drug Resistance Summary",
+                figure_dir / "drug_resistance_summary.png",
+                plot_drug_resistance_summary,
+            ),
         ],
     }
 
@@ -1428,8 +1626,12 @@ def _create_figures(df: pd.DataFrame, figure_dir: Path) -> dict[str, list[tuple[
 
 def main() -> None:
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
-    parser = argparse.ArgumentParser(description="Generate a cohort report over cleaned patient metadata.")
-    parser.add_argument("--metadata_csv", type=Path, required=True, help="Path to patients_metadata_clean.csv")
+    parser = argparse.ArgumentParser(
+        description="Generate a cohort report over cleaned patient metadata."
+    )
+    parser.add_argument(
+        "--metadata_csv", type=Path, required=True, help="Path to patients_metadata_clean.csv"
+    )
     parser.add_argument(
         "--removed_json",
         type=Path,
@@ -1440,24 +1642,31 @@ def main() -> None:
         "--cohort_config",
         type=Path,
         default=None,
-        help="Optional YAML cohort config with name/title/row_filter/min_group_n and recruitment settings.",
+        help=(
+            "Optional YAML cohort config with name/title/row_filter/min_group_n "
+            "and recruitment settings."
+        ),
     )
     parser.add_argument(
         "--with_recruitment",
         action="store_true",
         help="Enable the optional recruitment strategy section and recruitment CSV outputs.",
     )
-    parser.add_argument("--output_dir", type=Path, required=True, help="Output directory for the cohort report.")
+    parser.add_argument(
+        "--output_dir", type=Path, required=True, help="Output directory for the cohort report."
+    )
     args = parser.parse_args()
 
     cohort_config = _load_cohort_config(args.cohort_config)
-    removed_json = args.removed_json or args.metadata_csv.with_name("patients_metadata_removed.json")
+    removed_json = args.removed_json or args.metadata_csv.with_name(
+        "patients_metadata_removed.json"
+    )
 
     output_dir = args.output_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Loading clean metadata from %s", args.metadata_csv)
-    metadata_df = load(str(args.metadata_csv), sep=None)
+    metadata_df = read_table(args.metadata_csv, sep=None)
     cohort_df = _apply_row_filter(metadata_df, cohort_config["row_filter"])
     logger.info("Cohort '%s' contains %d rows", cohort_config["name"], len(cohort_df))
 
@@ -1470,7 +1679,10 @@ def main() -> None:
     valid_opportunities = (
         all_opportunities.loc[all_opportunities["is_valid"]]
         .copy()
-        .sort_values(["Analysis", "Sex", "AgeGroup", "Constraint", "N1", "N2"], ascending=[True, True, True, True, False, False])
+        .sort_values(
+            ["Analysis", "Sex", "AgeGroup", "Constraint", "N1", "N2"],
+            ascending=[True, True, True, True, False, False],
+        )
         .reset_index(drop=True)
     )
     valid_opportunities = valid_opportunities.drop(

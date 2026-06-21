@@ -3,21 +3,20 @@
 from __future__ import annotations
 
 import logging
-from typing import Dict, List, Tuple
 
-import numpy as np
 import mne
+import numpy as np
 
+from eeg_adhd_epilepsy.signal_quality.spectral import (
+    compute_aperiodic_slope,
+    compute_hf_lf_ratio,
+    compute_line_noise_index,
+    compute_lsd,
+    compute_spectral_metrics,
+)
 from eeg_adhd_epilepsy.signal_quality.time import (
     compute_channel_amplitude_stats,
-    detect_flat_and_noisy_channels
-)
-from eeg_adhd_epilepsy.signal_quality.spectral import (
-    compute_spectral_metrics,
-    compute_line_noise_index,
-    compute_hf_lf_ratio,
-    compute_aperiodic_slope,
-    compute_lsd
+    detect_flat_and_noisy_channels,
 )
 
 LOGGER = logging.getLogger("qc_metrics")
@@ -27,7 +26,7 @@ def crop_segment(
     raw: mne.io.BaseRaw,
     t_start: float,
     t_stop: float,
-    picks: List[str] | None = None,
+    picks: list[str] | None = None,
 ) -> mne.io.BaseRaw | None:
     """Return a cropped copy of raw between t_start and t_stop (seconds)."""
     if raw is None:
@@ -44,16 +43,16 @@ def crop_segment(
             return None
         segment = segment.copy().pick(picks)
     elif picks is not None and len(picks) > 0:
-         segment = segment.copy().pick(picks)
+        segment = segment.copy().pick(picks)
     return segment
 
 
 def compute_signal_qc_metrics(
     signal: mne.io.BaseRaw | None,
-    picks: List[str] | None = None,
+    picks: list[str] | None = None,
     line_freq: float = 60.0,
     include_channel_metrics: bool = False,
-) -> Dict[str, object]:
+) -> dict[str, object]:
     """Compute broad signal QC metrics for a raw recording or segment."""
     if signal is None:
         return {}
@@ -71,12 +70,14 @@ def compute_signal_qc_metrics(
     psd, freqs, alpha_peak, _band_powers = compute_spectral_metrics(
         signal, picks, fmin=0.5, fmax=99.5
     )
-    
+
     line_noise_mean, line_noise_ratios = compute_line_noise_index(psd, freqs, line_freq=line_freq)
-    hf_ratio_mean, _hf_ratio_max, hf_ratios = compute_hf_lf_ratio(psd, freqs, hf_band=(30.0, 100.0), lf_band=(1.0, 30.0))
+    hf_ratio_mean, _hf_ratio_max, hf_ratios = compute_hf_lf_ratio(
+        psd, freqs, hf_band=(30.0, 100.0), lf_band=(1.0, 30.0)
+    )
     slope_mean, _, _, slope_per_channel = compute_aperiodic_slope(psd, freqs, fmin=1.0, fmax=30.0)
 
-    metrics: Dict[str, object] = {
+    metrics: dict[str, object] = {
         "duration_sec": duration_sec,
         "n_channels": len(picks),
         "amplitude_mean_uv": amp_stats["mean"],
@@ -96,7 +97,7 @@ def compute_signal_qc_metrics(
     }
 
     if include_channel_metrics:
-        channel_metrics: Dict[str, np.ndarray] = {
+        channel_metrics: dict[str, np.ndarray] = {
             "amplitude_ptp_uv": amp_stats["per_channel"],
             "line_noise_ratio": line_noise_ratios,
             "hf_lf_ratio": hf_ratios,
@@ -104,7 +105,7 @@ def compute_signal_qc_metrics(
         }
         metrics["per_channel_metrics"] = channel_metrics
 
-    reasons: List[str] = []
+    reasons: list[str] = []
     hf_ratio = metrics.get("hf_lf_ratio", float("nan"))
     if np.isfinite(hf_ratio) and hf_ratio > 0.50:
         reasons.append("high_hf_lf_ratio")
@@ -120,34 +121,32 @@ def compute_signal_qc_metrics(
 
 
 def compute_spectral_fidelity(
-    raw_clean: mne.io.BaseRaw, 
-    raw_orig: mne.io.BaseRaw, 
-    bands: Dict[str, Tuple[float, float]]
-) -> Dict[str, float]:
+    raw_clean: mne.io.BaseRaw, raw_orig: mne.io.BaseRaw, bands: dict[str, tuple[float, float]]
+) -> dict[str, float]:
     """
     Compute Log-Spectral Distance (LSD) per band between clean and original data.
-    
+
     Args:
         raw_clean: Preprocessed Raw object.
         raw_orig: Original Raw object.
-        bands: Dictionary of frequency bands {name: (fmin, fmax)}. 
+        bands: Dictionary of frequency bands {name: (fmin, fmax)}.
                If None, defaults to standard bands + Line(58-62).
-               
+
     Returns:
         Dictionary mapping "LSD_{band}" to the float score.
-    """    
-    metrics: Dict[str, float] = {}
-    
+    """
+    metrics: dict[str, float] = {}
+
     # Compute PSDs (Welch) - quick check on up to 60s for speed
-    tmax = min(raw_clean.times[-1], 60.0) 
-    
+    tmax = min(raw_clean.times[-1], 60.0)
+
     # Compute PSD-derived summaries for both signals
     spec_clean = raw_clean.compute_psd(tmax=tmax, fmax=120, n_jobs=1, verbose="ERROR")
     spec_orig = raw_orig.compute_psd(tmax=tmax, fmax=120, n_jobs=1, verbose="ERROR")
-    
+
     psd_clean, freqs = spec_clean.get_data(return_freqs=True)
     psd_orig, _ = spec_orig.get_data(return_freqs=True)
-    
+
     # Average over channels
     avg_clean = np.mean(psd_clean, axis=0)
     avg_orig = np.mean(psd_orig, axis=0)
@@ -157,5 +156,5 @@ def compute_spectral_fidelity(
         if np.any(idx):
             lsd_val = compute_lsd(avg_clean[idx], avg_orig[idx])
             metrics[f"LSD_{band}"] = float(lsd_val)
-            
+
     return metrics

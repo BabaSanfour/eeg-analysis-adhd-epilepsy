@@ -2,14 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Sequence, Tuple, Optional
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import mne
+
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
 
 
-def fit_ica_context(train_raw: mne.io.BaseRaw, config: Any) -> Dict[str, Any]:
+def fit_ica_context(train_raw: mne.io.BaseRaw, config: Any) -> dict[str, Any]:
     """Fit ICA once and run ICLabel once for a training raw."""
     from mne.preprocessing import ICA
     from mne_icalabel import label_components
@@ -20,7 +22,7 @@ def fit_ica_context(train_raw: mne.io.BaseRaw, config: Any) -> Dict[str, Any]:
 
     ica_picks = mne.pick_types(train_raw_filt.info, eeg=True, exclude="bads")
     n_components = min(config.ica_n_components, len(ica_picks))
-    
+
     ica = ICA(
         n_components=n_components,
         method="fastica",
@@ -39,16 +41,17 @@ def fit_ica_context(train_raw: mne.io.BaseRaw, config: Any) -> Dict[str, Any]:
 
 from . import thresholds
 
+
 def apply_ica_artifact(
     raw: mne.io.BaseRaw,
-    ica_context: Dict[str, Any],
+    ica_context: dict[str, Any],
     *,
     target_labels: Sequence[str],
     exclude_probability: float,
-    output_dir: Optional[Path] = None,
+    output_dir: Path | None = None,
     subject_id: str = "unknown",
     artifact_label: str = "ICA",
-) -> Tuple[mne.io.BaseRaw, Dict[str, Any]]:
+) -> tuple[mne.io.BaseRaw, dict[str, Any]]:
     """Apply a shared ICA model by excluding ICs that match target labels."""
     ica = ica_context["ica"]
     labels = ica_context["labels"]
@@ -58,31 +61,38 @@ def apply_ica_artifact(
         target_labels=target_labels,
         exclude_probability=exclude_probability,
     )
-    
+
     probas = [float(labels["y_pred_proba"][i]) for i in exclude_idx]
 
     raw_clean = ica.apply(raw.copy(), exclude=exclude_idx)
-    
+
     # Save ICA plots
     plot_paths = {}
     if output_dir is not None:
         fig_dir = output_dir / "figures" / "ica"
         fig_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # 1. Spatial patterns of excluded components
         if exclude_idx:
             fig_topo = ica.plot_components(picks=exclude_idx, show=False)
             topo_path = fig_dir / f"{subject_id}_ica_excluded_topo.png"
             fig_topo.savefig(topo_path, dpi=150, bbox_inches="tight")
             import matplotlib.pyplot as plt
+
             plt.close(fig_topo)
             plot_paths["spatial_patterns"] = str(topo_path)
-            
+
             # 2. Component time series
             # Use custom snapshot for cleaner, non-red, non-compressed plots
             ts_path = viz_qc.save_ica_sources_snapshot(
-                ica, raw, fig_dir, subject_id, picks=exclude_idx, label=artifact_label, 
-                start=30.0, duration=20.0
+                ica,
+                raw,
+                fig_dir,
+                subject_id,
+                picks=exclude_idx,
+                label=artifact_label,
+                start=30.0,
+                duration=20.0,
             )
             plot_paths["component_time_series"] = ts_path
 

@@ -18,6 +18,10 @@ analysis_*/
 /derivatives
 *upstream_work
 reports/
+!eeg_adhd_epilepsy/reports/
+eeg_adhd_epilepsy/reports/*
+!eeg_adhd_epilepsy/reports/__init__.py
+!eeg_adhd_epilepsy/reports/decoding.py
 
 # SLURM output and error logs
 *.out

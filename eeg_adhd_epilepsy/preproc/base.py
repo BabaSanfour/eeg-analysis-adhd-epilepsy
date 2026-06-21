@@ -23,8 +23,9 @@ import json
 import logging
 import sys
 from collections import defaultdict
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any
 
 import mne
 import numpy as np
@@ -45,8 +46,6 @@ from eeg_adhd_epilepsy.preproc.utils import (
 from eeg_adhd_epilepsy.qc import preproc_qc
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 
-
-
 LOGGER = logging.getLogger("preproc_base")
 
 DEFAULT_HIGHPASS_HZ = 0.1
@@ -55,11 +54,11 @@ DEFAULT_ARTIFACT_SEGMENT_S = 1.0
 DEFAULT_ARTIFACT_MIN_EPOCHS = 5
 
 
-def _group_consecutive_indices(indices: List[int]) -> List[Tuple[int, int]]:
+def _group_consecutive_indices(indices: list[int]) -> list[tuple[int, int]]:
     """Group consecutive integers into inclusive (start, end) tuples."""
     if len(indices) == 0:
         return []
-    groups: List[Tuple[int, int]] = []
+    groups: list[tuple[int, int]] = []
     start = int(indices[0])
     prev = start
     for idx in indices[1:]:
@@ -85,7 +84,7 @@ def _prepare_condition_epoch_inputs(
 ) -> list[tuple[str, list[bids.BlockWindow], np.ndarray]]:
     """Return condition-grouped blocks with their fixed-length events."""
     block_windows = bids._collect_block_windows(raw)
-    grouped_blocks: Dict[str, List[bids.BlockWindow]] = {}
+    grouped_blocks: dict[str, list[bids.BlockWindow]] = {}
     for block in block_windows:
         grouped_blocks.setdefault(block.name, []).append(block)
 
@@ -127,7 +126,8 @@ def _iter_autoreject_chunks(
 
     n_chunks = int(np.ceil(n_epochs_total / n_epochs_chunk_max))
     LOGGER.info(
-        "Condition '%s' too long (%d epochs). Splitting into %d chunks of ~%d epochs (~%.1f min each).",
+        "Condition '%s' too long (%d epochs). "
+        "Splitting into %d chunks of ~%d epochs (~%.1f min each).",
         condition_name,
         n_epochs_total,
         n_chunks,
@@ -147,7 +147,7 @@ def _iter_autoreject_chunks(
 def _save_autoreject_plot(
     reject_log,
     *,
-    figures_dir: Optional[Path],
+    figures_dir: Path | None,
     record_label: str,
     condition_name: str,
     chunk_suffix: str,
@@ -197,9 +197,7 @@ def _reject_log_to_annotations(
                 duration_s = end_s - start_s
                 if duration_s <= 0:
                     continue
-                new_annots.append(
-                    (start_s, duration_s, f"BAD_{condition_name}", (ch_name,))
-                )
+                new_annots.append((start_s, duration_s, f"BAD_{condition_name}", (ch_name,)))
                 bad_span_count += 1
 
     return new_annots, bad_epoch_count, bad_span_count
@@ -211,10 +209,10 @@ def _run_autoreject_chunk(
     condition_name: str,
     chunk_suffix: str,
     segment_duration: float,
-    n_interpolate: List[int],
+    n_interpolate: list[int],
     random_seed: int,
     n_jobs: int,
-    figures_dir: Optional[Path],
+    figures_dir: Path | None,
     record_label: str,
 ) -> tuple[list[tuple[float, float, str, tuple[str, ...]]], int, int] | None:
     """Fit AutoReject on one chunk and convert the reject log to annotations."""
@@ -260,7 +258,7 @@ def _run_autoreject_chunk(
     )
 
 
-def _compute_clean_stats(raw: mne.io.BaseRaw) -> Dict[str, float]:
+def _compute_clean_stats(raw: mne.io.BaseRaw) -> dict[str, float]:
     """Compute clean-data fraction and per-type bad fractions from raw annotations.
 
     Iterates over global (channel-less) BAD_ annotations and categorises them as
@@ -300,8 +298,12 @@ def _compute_clean_stats(raw: mne.io.BaseRaw) -> Dict[str, float]:
     return {
         "clean_duration_s": float(clean_samples / raw.info["sfreq"]),
         "clean_fraction": float(clean_samples / total_samples) if total_samples > 0 else 0.0,
-        "manual_bad_fraction": float(mask_manual.sum() / total_samples) if total_samples > 0 else 0.0,
-        "autoreject_bad_fraction": float(mask_autoreject.sum() / total_samples) if total_samples > 0 else 0.0,
+        "manual_bad_fraction": float(mask_manual.sum() / total_samples)
+        if total_samples > 0
+        else 0.0,
+        "autoreject_bad_fraction": float(mask_autoreject.sum() / total_samples)
+        if total_samples > 0
+        else 0.0,
     }
 
 
@@ -313,8 +315,8 @@ def run_base_pipeline(
     task: str | None = None,
     run_id: str | None = None,
     record_label: str | None = None,
-    figures_dir: Optional[Path] = None,
-) -> Tuple[mne.io.BaseRaw, Dict]:
+    figures_dir: Path | None = None,
+) -> tuple[mne.io.BaseRaw, dict]:
     """Run the shared preprocessing trunk and return cleaned raw + provenance.
 
     Pure transform — applies preprocessing steps and returns ``(cleaned_raw,
@@ -337,7 +339,7 @@ def run_base_pipeline(
 
     LOGGER.info("Starting base pipeline for %s", record_label)
 
-    provenance: Dict[str, Any] = {
+    provenance: dict[str, Any] = {
         "subject_id": subject_id,
         "config": config,
         "steps_completed": [],
@@ -351,12 +353,14 @@ def run_base_pipeline(
     # 1. Embedded block annotations
     n_blocks = len(bids._collect_block_windows(raw))
     if n_blocks == 0:
-        LOGGER.warning("No embedded BLOCK_* annotations found; block-aware steps will have limited context.")
-    
+        LOGGER.warning(
+            "No embedded BLOCK_* annotations found; block-aware steps will have limited context."
+        )
+
     # 1b. Inflate Manual Annotations (Major -> 5s, Common -> 3s)
     raw = inflate_bad_annotations(raw)
     LOGGER.info("Inflated manual annotations: %d", len(raw.annotations))
-    
+
     provenance["steps_completed"].append("embedded_blocks")
 
     # 2. Resample
@@ -373,39 +377,36 @@ def run_base_pipeline(
         lp_hz = config.get("processing", {}).get("lowpass_hz", DEFAULT_LOWPASS_HZ)
         line_noise_cfg = config.get("line_noise", {})
         line_freq = line_noise_cfg.get("line_freq", 60.0)
-        
+
         # 3a. Bandpass Filter
         # Ensure lowpass is strictly less than Nyquist (sfreq/2)
         nyquist = raw.info["sfreq"] / 2.0
         h_f = min(lp_hz, nyquist - 0.1) if lp_hz else None
         n_jobs = int(config.get("n_jobs", 1))
-        
+
         LOGGER.info("Applying Bandpass filter: %s-%s Hz (n_jobs=%d)", hp_hz, h_f, n_jobs)
         raw.filter(l_freq=hp_hz, h_freq=h_f, verbose="ERROR", n_jobs=n_jobs)
         provenance["steps_completed"].append("bandpass_filter")
-        
+
         # 3b. Line Noise Removal
         adaptive = line_noise_cfg.get("adaptive", False)
-        
+
         from mne_denoise.zapline import ZapLine
+
         LOGGER.info("Applying ZapLine (%s Hz, adaptive=%s)...", line_freq, adaptive)
-        
+
         # ZapLine Class Usage
-        zapline_obj = ZapLine(
-            sfreq=raw.info["sfreq"], 
-            line_freq=line_freq, 
-            adaptive=adaptive
-        )
+        zapline_obj = ZapLine(sfreq=raw.info["sfreq"], line_freq=line_freq, adaptive=adaptive)
         # fit_transform works for both adaptive and standard modes
         raw = zapline_obj.fit_transform(raw)
-        
+
         provenance["steps_completed"].append("zapline")
         provenance["zapline_stats"] = {
-            "method": "zapline", 
-            "line_freq": line_freq, 
+            "method": "zapline",
+            "line_freq": line_freq,
             "adaptive": adaptive,
-            "n_removed": int(zapline_obj.n_removed_)
-        }            
+            "n_removed": int(zapline_obj.n_removed_),
+        }
 
     # 5. Global Bad Channel Detection
     with benchmark_step("detect_global_bads", provenance):
@@ -445,10 +446,8 @@ def run_base_pipeline(
 
 
 def detect_global_bads_ransac(
-    raw: mne.io.BaseRaw, 
-    config: PreprocConfig,
-    record_label: str = "run"
-) -> Tuple[List[str], Optional[str]]:
+    raw: mne.io.BaseRaw, config: PreprocConfig, record_label: str = "run"
+) -> tuple[list[str], str | None]:
     """Detect global bad EEG channels with RANSAC, biased toward rest blocks.
 
     Uses a subset of data (rest blocks) to speed up RANSAC and focus on
@@ -460,7 +459,7 @@ def detect_global_bads_ransac(
         record_label: Label for logging.
 
     Returns:
-        tuple[List[str], str | None]: 
+        tuple[List[str], str | None]:
             1. List of newly detected bad channel names.
             2. Warning message if RANSAC was skipped/failed.
     """
@@ -475,7 +474,7 @@ def detect_global_bads_ransac(
 
     raw_for_ransac = eeg_raw
     if rest_windows:
-        crops: List[mne.io.BaseRaw] = []
+        crops: list[mne.io.BaseRaw] = []
         for onset, stop in rest_windows:
             if stop <= onset:
                 continue
@@ -485,11 +484,8 @@ def detect_global_bads_ransac(
 
         if crops:
             raw_for_ransac = (
-                crops[0]
-                if len(crops) == 1
-                else mne.concatenate_raws(crops, verbose="ERROR")
+                crops[0] if len(crops) == 1 else mne.concatenate_raws(crops, verbose="ERROR")
             )
-
 
     duration_s = raw_for_ransac.n_times / raw_for_ransac.info["sfreq"]
     LOGGER.info("Running RANSAC on %.1fs of EEG data...", duration_s)
@@ -514,12 +510,12 @@ def detect_global_bads_ransac(
 
 
 def annotate_artifacts_blockwise(
-    raw: mne.io.BaseRaw, 
-    config: PreprocConfig, 
-    figures_dir: Optional[Path] = None,
+    raw: mne.io.BaseRaw,
+    config: PreprocConfig,
+    figures_dir: Path | None = None,
     record_label: str = "record",
-    n_interpolate: List[int] = None,
-) -> Tuple[mne.io.BaseRaw, Dict]:
+    n_interpolate: list[int] = None,
+) -> tuple[mne.io.BaseRaw, dict]:
     """Run condition-wise AutoReject and add non-destructive BAD annotations.
 
     Groups disjoint blocks by condition (e.g., all "EO_baseline" blocks) and
@@ -536,7 +532,7 @@ def annotate_artifacts_blockwise(
         A tuple containing the annotated raw object and a statistics dictionary.
     """
     block_windows = bids._collect_block_windows(raw)
-    stats: Dict[str, Any] = {
+    stats: dict[str, Any] = {
         "blocks_total": len(block_windows),
         "blocks_processed": 0,
         "bad_epochs": 0,
@@ -574,9 +570,11 @@ def annotate_artifacts_blockwise(
     chunk_minutes = max(1.0, chunk_minutes)
     condition_inputs = _prepare_condition_epoch_inputs(raw, segment_duration=seg_len)
 
-    LOGGER.info("Running condition-wise artifact annotation on %d conditions...", len(condition_inputs))
+    LOGGER.info(
+        "Running condition-wise artifact annotation on %d conditions...", len(condition_inputs)
+    )
 
-    new_annots: List[Tuple[float, float, str, Tuple[str, ...]]] = []
+    new_annots: list[tuple[float, float, str, tuple[str, ...]]] = []
 
     for condition_name, blocks, condition_events in condition_inputs:
         epochs = mne.Epochs(
@@ -606,7 +604,7 @@ def annotate_artifacts_blockwise(
             continue
 
         for chunk_idx, epochs_chunk in epoch_chunks:
-            chunk_suffix = f"_chunk{chunk_idx+1}" if len(epoch_chunks) > 1 else ""
+            chunk_suffix = f"_chunk{chunk_idx + 1}" if len(epoch_chunks) > 1 else ""
             result = _run_autoreject_chunk(
                 raw,
                 epochs_chunk,
@@ -665,7 +663,7 @@ def run_base_record(
     subject_id: str,
     source_path: Path,
     bids_root: Path,
-    config: Dict | None = None,
+    config: dict | None = None,
     reports_root: Path | None = None,
     raw_lookup: Mapping[str, Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
@@ -764,31 +762,64 @@ def run_base_record(
 def main():
     parser = argparse.ArgumentParser(description="Run EEG Preprocessing Pipeline on BIDS Dataset")
     parser.add_argument("--bids_root", type=str, required=True, help="Path to BIDS dataset root")
-    parser.add_argument("--n_jobs", type=int, default=1, help="Number of parallel jobs (default: 1)")
-    parser.add_argument("--lowpass", type=float, default=DEFAULT_LOWPASS_HZ, help=f"Lowpass filter cutoff Hz (default: {DEFAULT_LOWPASS_HZ})")
-    parser.add_argument("--highpass", type=float, default=DEFAULT_HIGHPASS_HZ, help=f"Highpass filter cutoff Hz (default: {DEFAULT_HIGHPASS_HZ})")
-    parser.add_argument("--line_freq", type=float, default=60.0, help="Line noise frequency Hz (default: 60.0)")
-    parser.add_argument("--resample", type=float, default=None, help="Resampling frequency Hz (optional)")
-    parser.add_argument("--adaptive", action="store_true", help="Enable adaptive line noise removal (for ZapLine)")
-    parser.add_argument("--subjects", nargs="+", help="List of specific subject IDs (e.g., sub-001 sub-002)")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing stage outputs instead of skipping them")
-    parser.add_argument("--reports_root", type=str, default=None, help="Custom root directory for reports (defaults to sibling of bids_root)")
-    
+    parser.add_argument(
+        "--n_jobs", type=int, default=1, help="Number of parallel jobs (default: 1)"
+    )
+    parser.add_argument(
+        "--lowpass",
+        type=float,
+        default=DEFAULT_LOWPASS_HZ,
+        help=f"Lowpass filter cutoff Hz (default: {DEFAULT_LOWPASS_HZ})",
+    )
+    parser.add_argument(
+        "--highpass",
+        type=float,
+        default=DEFAULT_HIGHPASS_HZ,
+        help=f"Highpass filter cutoff Hz (default: {DEFAULT_HIGHPASS_HZ})",
+    )
+    parser.add_argument(
+        "--line_freq", type=float, default=60.0, help="Line noise frequency Hz (default: 60.0)"
+    )
+    parser.add_argument(
+        "--resample", type=float, default=None, help="Resampling frequency Hz (optional)"
+    )
+    parser.add_argument(
+        "--adaptive", action="store_true", help="Enable adaptive line noise removal (for ZapLine)"
+    )
+    parser.add_argument(
+        "--subjects", nargs="+", help="List of specific subject IDs (e.g., sub-001 sub-002)"
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing stage outputs instead of skipping them",
+    )
+    parser.add_argument(
+        "--reports_root",
+        type=str,
+        default=None,
+        help="Custom root directory for reports (defaults to sibling of bids_root)",
+    )
+
     args = parser.parse_args()
-    
+
     bids_root = Path(args.bids_root).expanduser()
     preproc_root = bids.get_preproc_root(bids_root)
-    reports_root = Path(args.reports_root).expanduser() if args.reports_root else bids.get_reports_root(bids_root)
+    reports_root = (
+        Path(args.reports_root).expanduser()
+        if args.reports_root
+        else bids.get_reports_root(bids_root)
+    )
     reports_root.mkdir(parents=True, exist_ok=True)
-    
+
     # Setup logging
     log_file = reports_root / "logs" / "preproc_base.log"
     setup_logging(log_file, "INFO")
-    
+
     if not bids_root.exists():
         LOGGER.error("BIDS root not found: %s", bids_root)
         sys.exit(1)
-        
+
     files_found = bids.discover_bids_files(bids_root, suffix="eeg", extension=".vhdr")
 
     if not files_found:
@@ -796,7 +827,11 @@ def main():
         sys.exit(1)
 
     subjects_found = sorted({bids.parse_subject_id(path) for path in files_found})
-    LOGGER.info("Found %d EEG runs across %d subjects in BIDS directory.", len(files_found), len(subjects_found))
+    LOGGER.info(
+        "Found %d EEG runs across %d subjects in BIDS directory.",
+        len(files_found),
+        len(subjects_found),
+    )
 
     if args.subjects:
         normalized_subjects = [bids.normalize_subject_id(s) for s in args.subjects]
@@ -805,17 +840,17 @@ def main():
     else:
         subjects_to_process = set(subjects_found)
         LOGGER.info("Processing all %d subjects.", len(subjects_found))
-        
+
     profile = preproc_qc.get_preproc_qc_profile("base")
     qc_run_records: list[dict[str, object]] = []
     qc_subject_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
-    subject_status: Dict[str, bool] = {}
-    subject_skipped: Dict[str, bool] = {} # Tracks if ALL runs for a subject were skipped
+    subject_status: dict[str, bool] = {}
+    subject_skipped: dict[str, bool] = {}  # Tracks if ALL runs for a subject were skipped
 
     def consume_result(result: dict[str, object], *, subject_id: str) -> None:
         ok = bool(result.get("success"))
         skipped = bool(result.get("skipped", False))
-        
+
         subject_status[subject_id] = subject_status.get(subject_id, True) and ok
         # Subject is considered skipped only if ALL its runs consumed so far are skipped
         subject_skipped[subject_id] = subject_skipped.get(subject_id, True) and skipped
@@ -874,9 +909,21 @@ def main():
                 )
                 consume_result(existing_results[-1], subject_id=sid)
             except Exception as exc:
-                LOGGER.error("Failed rebuilding existing base QC record for %s (%s): %s", sid, fpath.name, exc, exc_info=True)
+                LOGGER.error(
+                    "Failed rebuilding existing base QC record for %s (%s): %s",
+                    sid,
+                    fpath.name,
+                    exc,
+                    exc_info=True,
+                )
                 existing_results.append(
-                    {"success": False, "skipped": False, "subject_id": sid, "qc_record": None, "error": str(exc)}
+                    {
+                        "success": False,
+                        "skipped": False,
+                        "subject_id": sid,
+                        "qc_record": None,
+                        "error": str(exc),
+                    }
                 )
                 consume_result(existing_results[-1], subject_id=sid)
         if existing_runs:
@@ -898,11 +945,11 @@ def main():
         if ids["run_key"] in existing_run_keys:
             continue
         files_to_process.append(fpath)
-    
+
     if not files_to_process and not existing_results:
         LOGGER.warning("No files matched the final selection criteria.")
         sys.exit(0)
-        
+
     LOGGER.info("Scanning file durations to optimize parallelization...")
     short_files = []
     long_files = []
@@ -910,24 +957,34 @@ def main():
     for f in tqdm(files_to_process, desc="Checking Durations"):
         try:
             raw_info = mne.io.read_raw_brainvision(f, preload=False, verbose="ERROR")
-            duration_min = (raw_info.n_times / raw_info.info['sfreq']) / 60.0
+            duration_min = (raw_info.n_times / raw_info.info["sfreq"]) / 60.0
 
             if duration_min >= 30.0:
                 long_files.append(f)
             else:
                 short_files.append(f)
         except Exception as e:
-            LOGGER.warning("Could not read duration for %s, treating as long file. Error: %s", f.name, e)
+            LOGGER.warning(
+                "Could not read duration for %s, treating as long file. Error: %s", f.name, e
+            )
             long_files.append(f)
 
-    LOGGER.info("Optimization Strategy: %d short files (<30m), %d long files (>=30m)", len(short_files), len(long_files))
+    LOGGER.info(
+        "Optimization Strategy: %d short files (<30m), %d long files (>=30m)",
+        len(short_files),
+        len(long_files),
+    )
 
     # ---------------------------------------------------------
     # Phase 1: Process Short Files (Parallel Subjects)
     # ---------------------------------------------------------
     if short_files:
-        LOGGER.info("--- Phase 1: Processing %d short files in parallel (n_jobs=%d) ---", len(short_files), args.n_jobs)
-        
+        LOGGER.info(
+            "--- Phase 1: Processing %d short files in parallel (n_jobs=%d) ---",
+            len(short_files),
+            args.n_jobs,
+        )
+
         pipeline_config_short = {
             "n_jobs": 1,  # 1 core per subject internally
             "bids_root": str(bids_root),
@@ -942,9 +999,9 @@ def main():
             "line_noise": {
                 "line_freq": args.line_freq,
                 "adaptive": args.adaptive,
-            }
+            },
         }
-        
+
         with tqdm_joblib(tqdm(total=len(short_files), desc="Processing Short Files")):
             results_short = Parallel(n_jobs=args.n_jobs)(
                 delayed(run_base_record)(
@@ -964,10 +1021,14 @@ def main():
     # Phase 2: Process Long Files (Sequential Subjects, Parallel Internal)
     # ---------------------------------------------------------
     if long_files:
-        LOGGER.info("--- Phase 2: Processing %d long files sequentially (internal n_jobs=%d) ---", len(long_files), args.n_jobs)
-        
+        LOGGER.info(
+            "--- Phase 2: Processing %d long files sequentially (internal n_jobs=%d) ---",
+            len(long_files),
+            args.n_jobs,
+        )
+
         pipeline_config_long = {
-            "n_jobs": args.n_jobs, # Full power per subject
+            "n_jobs": args.n_jobs,  # Full power per subject
             "bids_root": str(bids_root),
             "preproc_root": str(preproc_root),
             "reports_root": str(reports_root),
@@ -980,9 +1041,9 @@ def main():
             "line_noise": {
                 "line_freq": args.line_freq,
                 "adaptive": args.adaptive,
-            }
+            },
         }
-        
+
         # Simple loop, no Parallel (or Parallel(n_jobs=1))
         # We use a loop to ensure strictly sequential execution to save memory
         for f in tqdm(long_files, desc="Processing Long Files"):
@@ -996,22 +1057,31 @@ def main():
             )
             consume_result(res, subject_id=bids.parse_subject_id(f))
 
-    success_ids = sorted([sid for sid, ok in subject_status.items() if ok and not subject_skipped.get(sid, False)])
-    skipped_ids = sorted([sid for sid, ok in subject_status.items() if ok and subject_skipped.get(sid, False)])
+    success_ids = sorted(
+        [sid for sid, ok in subject_status.items() if ok and not subject_skipped.get(sid, False)]
+    )
+    skipped_ids = sorted(
+        [sid for sid, ok in subject_status.items() if ok and subject_skipped.get(sid, False)]
+    )
     failed_ids = sorted([sid for sid, ok in subject_status.items() if not ok])
-    
+
     success_count = len(success_ids)
     skipped_count = len(skipped_ids)
     fail_count = len(failed_ids)
 
-    LOGGER.info("Batch processing complete. Success: %d, Skipped: %d, Failed: %d", success_count, skipped_count, fail_count)
+    LOGGER.info(
+        "Batch processing complete. Success: %d, Skipped: %d, Failed: %d",
+        success_count,
+        skipped_count,
+        fail_count,
+    )
     if success_ids:
         LOGGER.info("Succeeded subjects: %s", success_ids)
     if skipped_ids:
         LOGGER.info("Skipped (already processed) subjects: %s", skipped_ids)
     if failed_ids:
         LOGGER.info("Failed subjects: %s", failed_ids)
-    
+
     LOGGER.info("Generating shared base QC dataset report...")
     preproc_qc.write_preproc_qc_aggregate_reports(
         reports_root,

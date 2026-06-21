@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-from typing import Dict, Optional
 
 import mne
 import numpy as np
@@ -21,12 +20,10 @@ def build_block_events_by_condition(
     raw: mne.io.BaseRaw,
     segment_duration: float,
     overlap: float = 0.0,
- ) -> dict[str, np.ndarray]:
+) -> dict[str, np.ndarray]:
     """Build fixed-length events grouped by block condition."""
     blocks = [
-        block
-        for block in bids_io._collect_block_windows(raw)
-        if block.duration >= segment_duration
+        block for block in bids_io._collect_block_windows(raw) if block.duration >= segment_duration
     ]
     events_by_condition: dict[str, np.ndarray] = {}
     for block in blocks:
@@ -41,7 +38,9 @@ def build_block_events_by_condition(
         )
         if len(block_events) == 0:
             continue
-        condition_name = block.name.replace("BLOCK_", "") if str(block.name).startswith("BLOCK_") else block.name
+        condition_name = (
+            block.name.replace("BLOCK_", "") if str(block.name).startswith("BLOCK_") else block.name
+        )
         if condition_name in events_by_condition:
             events_by_condition[condition_name] = np.concatenate(
                 [events_by_condition[condition_name], block_events]
@@ -59,7 +58,7 @@ def make_epochs_from_preproc_raw(
     segment_duration: float,
     overlap: float = 0.0,
     ignore_annotations: bool = True,
-    save_path: Optional[Path] = None,
+    save_path: Path | None = None,
     overwrite: bool = False,
 ) -> mne.Epochs:
     """Create fixed-length epochs from all annotated blocks in a preprocessed raw."""
@@ -71,8 +70,7 @@ def make_epochs_from_preproc_raw(
     if not events_by_condition:
         raise ValueError("No block events could be constructed from the annotated raw.")
     event_id = {
-        condition_name: idx
-        for idx, condition_name in enumerate(events_by_condition, start=1)
+        condition_name: idx for idx, condition_name in enumerate(events_by_condition, start=1)
     }
     remapped = []
     for condition_name, condition_events in events_by_condition.items():
@@ -107,7 +105,9 @@ def main() -> None:
     )
     parser.add_argument("--bids_root", required=True, help="Path to BIDS dataset root")
     parser.add_argument("--desc", default="base", help="Preprocessed raw desc to read")
-    parser.add_argument("--segment_duration", type=float, required=True, help="Epoch length in seconds")
+    parser.add_argument(
+        "--segment_duration", type=float, required=True, help="Epoch length in seconds"
+    )
     parser.add_argument("--overlap", type=float, default=0.0, help="Epoch overlap in seconds")
     parser.add_argument("--subjects", nargs="+", default=None, help="Specific subjects to process")
     parser.add_argument(
@@ -145,7 +145,10 @@ def main() -> None:
         output_path = input_path.with_name(input_path.name.replace("_eeg.fif", "_epo.fif"))
 
         if not args.overwrite and output_path.exists():
-            logger.info(f"Skipping {input_path.name}: epoch file already exists. Use --overwrite to overwrite.")
+            logger.info(
+                f"Skipping {input_path.name}: epoch file already exists. "
+                f"Use --overwrite to overwrite."
+            )
             continue
 
         try:
