@@ -3,7 +3,7 @@
 #SBATCH --account=rrg-kjerbi
 #SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.out
 #SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.err
-#SBATCH --time=02:30:00
+#SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
 #SBATCH --array=1-1000
