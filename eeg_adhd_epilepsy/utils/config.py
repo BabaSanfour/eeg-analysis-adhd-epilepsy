@@ -34,6 +34,7 @@ from .yaml import load_yaml_config
 __all__ = [
     "ConfigError",
     "load_cohort_analysis_config",
+    "resolve_cli_config",
     "validate_cohort_config",
     "validate_analysis_config",
     "apply_overrides",
@@ -154,6 +155,37 @@ def apply_overrides(config: dict[str, Any], **overrides: Any) -> dict[str, Any]:
         if value is not None:
             config[key] = value
     return config
+
+
+def resolve_cli_config(
+    *,
+    cohort_config: str | Path | None,
+    analysis_config: str | Path | None,
+    legacy_config: str | Path | None = None,
+    **overrides: Any,
+) -> dict[str, Any]:
+    """Resolve a consumer CLI's config from the two-config flags (or legacy single).
+
+    Preferred: ``--cohort_config`` + ``--analysis_config``. A single
+    ``--config`` (``legacy_config``) is still accepted for back-compat. Non-``None``
+    ``overrides`` (e.g. CLI ``--bids_root``) are layered on last.
+    """
+    if legacy_config is not None:
+        if cohort_config is not None or analysis_config is not None:
+            raise ConfigError(
+                "Pass either --config (single, deprecated) or "
+                "--cohort_config + --analysis_config, not both."
+            )
+        config = load_yaml_config(legacy_config)
+    elif cohort_config is not None and analysis_config is not None:
+        config = load_cohort_analysis_config(cohort_config, analysis_config)
+    else:
+        raise ConfigError(
+            "Provide --cohort_config and --analysis_config "
+            "(the cohort defines the dataset/question, the analysis defines the "
+            "method). A single --config is still accepted for back-compat."
+        )
+    return apply_overrides(config, **overrides)
 
 
 def load_cohort_analysis_config(
