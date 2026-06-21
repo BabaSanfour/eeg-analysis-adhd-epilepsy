@@ -39,6 +39,8 @@ dependencies = [
 Homepage = "https://github.com/"
 
 [project.scripts]
+# Top-level orchestrator that sequences the stages below (see also the Makefile).
+eeg-run = "eeg_adhd_epilepsy.run:main"
 # Producers (dataset-wide, single config / CLI args), in pipeline order.
 eeg-build-patients-metadata = "eeg_adhd_epilepsy.io.patients:main"
 eeg-cohort-report = "eeg_adhd_epilepsy.analysis.cohort:main"

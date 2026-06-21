@@ -137,12 +137,14 @@ directly, so CLI changes don't touch them.
 
 ## Wave 2 — Orchestrator, CLI consistency, structure
 
-- [ ] **W2.1** `eeg_adhd_epilepsy/run.py` + console script `eeg-run`: sequence
-  stages with `--from/--to`, `--dry-run` (prints exact commands), resume-by-default
-  (skip a stage whose output exists). Consumers take `COHORT=`+`ANALYSIS=`,
-  producers single. Tests for ordering + `--dry-run`.
-- [ ] **W2.2** Top-level `Makefile`: per-stage targets + `all`, `install`, `test`,
-  `dry-run`; centralize env vars (`BIDS_ROOT`, `METADATA_PATH`, …).
+- [x] **W2.1** `eeg_adhd_epilepsy/run.py` + console script `eeg-run`: sequences
+  the 7 core stages (to-bids→…→classical-decode) with `--from/--to`, `--dry-run`,
+  `--list`, resume-by-default (per-stage output globs), and per-stage
+  missing-input SKIP. Tests: `tests/test_run_orchestrator.py` (6).
+- [x] **W2.2** Top-level `Makefile`: `help`/`install`/`test`/`dry-run`/`all` +
+  per-stage targets (core delegate to `eeg-run`; foundation/cohort/metadata call
+  modules directly). Centralized vars; `$(if …)` so unset paths aren't passed;
+  `PYTHON`/`EEG_RUN` keep it PATH-independent. 92 tests green; ruff clean.
 - [x] **W2.3** `pyproject.toml [project.scripts]`: added `eeg-to-bids`,
   `eeg-preprocess`; renamed `eeg-decode` → `eeg-classical-decode`; grouped
   producers vs consumers. `pip install -e .` refreshed scripts (old `eeg-ml-run`/
