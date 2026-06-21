@@ -185,7 +185,14 @@ def resolve_cli_config(
             "(the cohort defines the dataset/question, the analysis defines the "
             "method). A single --config is still accepted for back-compat."
         )
-    return apply_overrides(config, **overrides)
+    apply_overrides(config, **overrides)
+    if not config.get("bids_root"):
+        raise ConfigError(
+            "bids_root is required but not set. Dataset paths live on the CLI/env, "
+            "not in the cohort/analysis configs — pass --bids_root (and --metadata) "
+            "or set BIDS_ROOT/METADATA_PATH in the cluster environment."
+        )
+    return config
 
 
 def load_cohort_analysis_config(
