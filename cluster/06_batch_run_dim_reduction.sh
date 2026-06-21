@@ -21,7 +21,11 @@ PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
 METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/medicated_adhd_vs_controls}
+# Cohort configs (one per dataset/cohort/strata), each paired with the single
+# analysis config below. Point CONFIGS_DIR at a subtree to narrow the sweep.
+# NOTE: --array (line 9) must equal CONFIG_COUNT * MODE_COUNT (guarded below).
+CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/cohorts}
+ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/dim_reduction/default.yaml}
 
 # 3. Environment Setup
 cd "$PROJECT_ROOT"
@@ -41,14 +45,23 @@ mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 [ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
 [ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }
 [ -d "$CONFIGS_DIR" ] || { echo "Config directory not found: $CONFIGS_DIR"; exit 1; }
+[ -f "$ANALYSIS_CONFIG" ] || { echo "Analysis config not found: $ANALYSIS_CONFIG"; exit 1; }
 
-# 4. Map this array task to one config/mode pair
+# 4. Map this array task to one cohort/mode pair
 mapfile -t CONFIGS < <(find "$CONFIGS_DIR" -name "*.yaml" | sort)
 MODES=("flat:recording_flat" "sensor:recording_native")
 CONFIG_COUNT=${#CONFIGS[@]}
 MODE_COUNT=${#MODES[@]}
 TOTAL_TASKS=$((CONFIG_COUNT * MODE_COUNT))
 TASK_ID=${SLURM_ARRAY_TASK_ID:-1}
+
+# Guard: a stale #SBATCH --array bound silently drops the trailing tasks. Fail
+# loudly if the submitted array size does not match cohorts x modes.
+if [ -n "${SLURM_ARRAY_TASK_COUNT:-}" ] && [ "$SLURM_ARRAY_TASK_COUNT" -ne "$TOTAL_TASKS" ]; then
+    echo "ERROR: array size $SLURM_ARRAY_TASK_COUNT != cohorts($CONFIG_COUNT) x modes($MODE_COUNT) = $TOTAL_TASKS." >&2
+    echo "Update '#SBATCH --array=1-$TOTAL_TASKS' (or set CONFIGS_DIR to a subtree)." >&2
+    exit 1
+fi
 
 if (( TASK_ID < 1 || TASK_ID > TOTAL_TASKS )); then
     echo "Array task $TASK_ID is outside valid task range 1-$TOTAL_TASKS; nothing to do."
@@ -76,7 +89,8 @@ echo "==========================================================================
 python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
     --bids_root "$BIDS_ROOT" \
     --metadata "$METADATA_PATH" \
-    --config "$config" \
+    --cohort_config "$config" \
+    --analysis_config "$ANALYSIS_CONFIG" \
     --input_mode "$input_mode" \
     --analysis_mode "$mode" \
     --representation "$representation" \

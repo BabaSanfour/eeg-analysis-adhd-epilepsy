@@ -13,8 +13,9 @@
 
 - [x] Phase 1 analysis + Phase 2 plan agreed with the user.
 - [x] Branch created; this tracking doc written.
-- [ ] **Wave 1 in progress** — two-config split. *(next: W1.1)*
-- [ ] Wave 2 — orchestrator, CLI consistency, structure.
+- [x] **Wave 1 complete** — two-config split, migration (74 cohorts + 4 analyses),
+  validation, cluster glob fix. 82 tests green.
+- [ ] Wave 2 — orchestrator, CLI consistency, structure. *(next: W2.3 console scripts, then W2.1 orchestrator)*
 - [ ] Wave 3 — docs & provenance.
 
 Leave a one-line "Resume note" at the bottom whenever you stop mid-step.
@@ -112,20 +113,27 @@ directly, so CLI changes don't touch them.
   fallback) into `classical_decoding.py`, `foundation_decoding.py`,
   `dimensionality_reduction.py` via `utils/config.resolve_cli_config` /
   `load_cohort_analysis_config`. `run()` bodies untouched. 82 tests green, ruff clean.
-- [ ] **W1.4** Migration script `scripts/split_configs.py` (one-shot): split each
-  existing config into cohort + analysis by the ownership table; write
-  `configs/cohorts/medicated_adhd_vs_controls/{pooled,mph,lis}/<cohort>/<variant>.yaml`
-  (71 cohort files), `configs/analyses/dim_reduction/default.yaml` (shared),
-  `configs/analyses/decoding/*.yaml` from the 3 `decoding_*.yaml` (EO/EO+EC →
-  one cohort + `conditions`-override analysis variants; `*_amph_vs_mph` differs in
-  `group_filters` → distinct cohort). Hand-author
-  `configs/analyses/{foundation_decoding,foundation_embeddings}/*.yaml` from the
-  `*.example.yaml`. Verify, then delete old `configs/medicated_adhd_vs_controls/`.
-- [ ] **W1.5** Fix cluster glob bug in `cluster/06`, `cluster/07`: glob
-  `configs/cohorts/...` only, pair with the shared analysis config via new flags,
-  **derive** the `--array` bound (or guard live `CONFIG_COUNT*MODE_COUNT` ==
-  declared bound, error loudly), replacing hardcoded `1-148` / `1-740`.
-- [ ] **W1.6** Tests for `utils/config.py` merge/validate; `pytest` green.
+- [x] **W1.4** Migration script `scripts/split_configs.py` (dry-run default,
+  `--apply`). Split all 74 legacy configs → **74 cohort** files under
+  `configs/cohorts/medicated_adhd_vs_controls/...` + **1 shared**
+  `configs/analyses/dim_reduction/default.yaml` + **3** bespoke
+  `configs/analyses/decoding/{EO,EO_EC_baseline_only,EO_amph_vs_mph}.yaml`
+  (the 3 decoding files differ on both axes → distinct cohort *and* analysis).
+  Verified each pair round-trips to the original effective config (minus dropped
+  paths) and validates. Old `configs/medicated_adhd_vs_controls/` removed.
+  *Note:* foundation_decoding/foundation_embeddings example configs are still
+  single-file; they'll be split/documented in W3 (foundation_embeddings is a
+  producer = stays single).
+- [x] **W1.5** `cluster/06`, `cluster/07`: glob `configs/cohorts` (cohorts only,
+  no analysis configs), pair each with `ANALYSIS_CONFIG`
+  (default `dim_reduction/default.yaml`) via `--cohort_config`/`--analysis_config`;
+  added a guard that errors when `SLURM_ARRAY_TASK_COUNT != cohorts*modes` so a
+  stale `--array` bound fails loudly. 74 cohorts → 148 (06) / 740 (07), matching
+  the existing bounds. *Nuance:* the 3 decoding-specific cohorts are in the swept
+  tree; the amph cohort lacks `med_adhd_vs_ctrl`, so dim-reduce's selection eval
+  makes those 2 tasks fail loudly (validator working) — narrow with `CONFIGS_DIR`
+  if undesired.
+- [x] **W1.6** `tests/utils/test_config.py` (8) green; full suite 82 green; ruff clean.
 
 ## Wave 2 — Orchestrator, CLI consistency, structure
 
@@ -175,7 +183,9 @@ directly, so CLI changes don't touch them.
 
 ## Resume note
 
-_(Last stop:)_ Tracking doc created on branch `improve/two-config-run-flow`.
-Next action: **W1.1** — create `eeg_adhd_epilepsy/utils/config.py`. Read
-`utils/yaml.py` and one consumer (`analysis/classical_decoding.py` `run()` +
-`main()`) first to match style.
+_(Last stop:)_ **Wave 1 done & committed** (3 commits on
+`improve/two-config-run-flow`: config helper, CLI wiring, migration+cluster).
+74 cohort + 4 analysis configs live under `configs/{cohorts,analyses}/`; legacy
+tree deleted; 82 tests green; ruff clean. Next action: **Wave 2** — start with
+W2.3 (add `eeg-to-bids`/`eeg-preprocess`, rename `eeg-decode`→`eeg-classical-decode`
+in `pyproject.toml`), then `pip install -e .`, then W2.1 orchestrator (`run.py`).
