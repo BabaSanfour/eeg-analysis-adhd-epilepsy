@@ -6,9 +6,8 @@ import argparse
 import json
 import logging
 import sys
-from pathlib import Path
-from typing import Dict, List, Optional
 from collections import defaultdict
+from pathlib import Path
 
 from eeg_adhd_epilepsy.io import bids
 from eeg_adhd_epilepsy.qc import preproc_qc
@@ -23,7 +22,7 @@ from .utils import select_subjects
 LOGGER = logging.getLogger("preproc_run_all")
 
 
-def _discover_input_files(bids_root: Path) -> List[Path]:
+def _discover_input_files(bids_root: Path) -> list[Path]:
     """Discover all raw EEG input runs."""
     return bids.discover_bids_files(bids_root, suffix="eeg", extension=".vhdr")
 
@@ -33,12 +32,12 @@ def _build_base_config(
     n_jobs: int,
     highpass: float,
     lowpass: float,
-    resample: Optional[float],
+    resample: float | None,
     line_freq: float,
     adaptive: bool,
-    segments_file: Optional[str],
-) -> Dict:
-    processing_cfg: Dict[str, object] = {
+    segments_file: str | None,
+) -> dict:
+    processing_cfg: dict[str, object] = {
         "highpass_hz": highpass,
         "lowpass_hz": lowpass,
         "resample_hz": resample,
@@ -56,11 +55,11 @@ def _build_base_config(
     }
 
 
-def _load_json(path: Optional[str]) -> Dict:
+def _load_json(path: str | None) -> dict:
     if not path:
         return {}
     p = Path(path).expanduser()
-    with open(p, "r", encoding="utf-8") as f:
+    with open(p, encoding="utf-8") as f:
         data = json.load(f)
     if not isinstance(data, dict):
         raise ValueError(f"Expected object JSON in {p}, got {type(data).__name__}")
@@ -76,7 +75,10 @@ def main() -> None:
         "--preproc_root",
         type=str,
         default=None,
-        help="Directory for stage FIF/provenance artifacts (default: <bids_root>/derivatives/preproc)",
+        help=(
+            "Directory for stage FIF/provenance artifacts "
+            "(default: <bids_root>/derivatives/preproc)"
+        ),
     )
     parser.add_argument(
         "--reports_root",
@@ -96,10 +98,18 @@ def main() -> None:
         help="Skip each stage when its expected output already exists",
     )
 
-    parser.add_argument("--n_jobs", type=int, default=1, help="Internal parallel workers for stage methods")
-    parser.add_argument("--highpass", type=float, default=DEFAULT_HIGHPASS_HZ, help="Base high-pass frequency (Hz)")
-    parser.add_argument("--lowpass", type=float, default=DEFAULT_LOWPASS_HZ, help="Base low-pass frequency (Hz)")
-    parser.add_argument("--resample", type=float, default=None, help="Base resampling frequency (Hz)")
+    parser.add_argument(
+        "--n_jobs", type=int, default=1, help="Internal parallel workers for stage methods"
+    )
+    parser.add_argument(
+        "--highpass", type=float, default=DEFAULT_HIGHPASS_HZ, help="Base high-pass frequency (Hz)"
+    )
+    parser.add_argument(
+        "--lowpass", type=float, default=DEFAULT_LOWPASS_HZ, help="Base low-pass frequency (Hz)"
+    )
+    parser.add_argument(
+        "--resample", type=float, default=None, help="Base resampling frequency (Hz)"
+    )
     parser.add_argument("--line-freq", type=float, default=60.0, help="Line noise frequency (Hz)")
     parser.add_argument("--adaptive", action="store_true", help="Enable adaptive ZapLine mode")
     parser.add_argument(
@@ -136,7 +146,9 @@ def main() -> None:
         choices=["mwf", "wica", "ica", "dss", "none"],
         help="Stage 1 EMG method",
     )
-    parser.add_argument("--correct-desc", type=str, default="correct", help="Stage 1 output desc token")
+    parser.add_argument(
+        "--correct-desc", type=str, default="correct", help="Stage 1 output desc token"
+    )
     parser.add_argument(
         "--correct-config-json",
         type=str,
@@ -151,7 +163,9 @@ def main() -> None:
         choices=["wiener", "asr", "dss", "none"],
         help="Stage 2 transient method",
     )
-    parser.add_argument("--denoise-desc", type=str, default="denoise", help="Stage 2 output desc token")
+    parser.add_argument(
+        "--denoise-desc", type=str, default="denoise", help="Stage 2 output desc token"
+    )
     parser.add_argument(
         "--denoise-config-json",
         type=str,
@@ -159,7 +173,9 @@ def main() -> None:
         help="Optional JSON object merged into ArtifactDenoisingConfig",
     )
 
-    parser.add_argument("--condition", type=str, default=None, help="Optional condition/task for correct/denoise")
+    parser.add_argument(
+        "--condition", type=str, default=None, help="Optional condition/task for correct/denoise"
+    )
     parser.add_argument(
         "--train-condition",
         type=str,
@@ -167,7 +183,9 @@ def main() -> None:
         help="Optional training condition for Stage 1 fitting",
     )
 
-    parser.add_argument("--run-compare", action="store_true", help="Run compare after base/correct/denoise")
+    parser.add_argument(
+        "--run-compare", action="store_true", help="Run compare after base/correct/denoise"
+    )
     parser.add_argument(
         "--compare-mode",
         type=str,
@@ -180,8 +198,12 @@ def main() -> None:
         action="store_true",
         help="Alias for --compare-mode reuse",
     )
-    parser.add_argument("--dss-desc", type=str, default="correctDss", help="Compare DSS branch desc token")
-    parser.add_argument("--ica-desc", type=str, default="correctIca", help="Compare ICA branch desc token")
+    parser.add_argument(
+        "--dss-desc", type=str, default="correctDss", help="Compare DSS branch desc token"
+    )
+    parser.add_argument(
+        "--ica-desc", type=str, default="correctIca", help="Compare ICA branch desc token"
+    )
     parser.add_argument(
         "--strict-existing",
         action="store_true",
@@ -246,7 +268,9 @@ def main() -> None:
             LOGGER.error("No valid subjects remain after filtering missing requests.")
             sys.exit(1)
 
-    selected_input_files = [path for path in input_files if bids.parse_subject_id(path) in set(subjects_sorted)]
+    selected_input_files = [
+        path for path in input_files if bids.parse_subject_id(path) in set(subjects_sorted)
+    ]
 
     LOGGER.info(
         "Running full chain for %d subjects: %s",
@@ -287,12 +311,12 @@ def main() -> None:
     if denoise_overrides:
         denoise_cfg = ArtifactDenoisingConfig(**{**denoise_cfg.__dict__, **denoise_overrides})
 
-    base_success: List[str] = []
-    base_failed: List[str] = []
-    correct_success: List[str] = []
-    correct_failed: List[str] = []
-    denoise_success: List[str] = []
-    denoise_failed: List[str] = []
+    base_success: list[str] = []
+    base_failed: list[str] = []
+    correct_success: list[str] = []
+    correct_failed: list[str] = []
+    denoise_success: list[str] = []
+    denoise_failed: list[str] = []
     raw_lookup = preproc_qc.load_raw_pre_base_lookup(reports_root)
     base_lookup = preproc_qc.load_stage_run_lookup(
         reports_root,
@@ -305,9 +329,9 @@ def main() -> None:
     base_profile = preproc_qc.get_preproc_qc_profile("base")
     correct_profile = preproc_qc.get_preproc_qc_profile("correct")
     denoise_profile = preproc_qc.get_preproc_qc_profile("denoise")
-    base_qc_records: List[dict[str, object]] = []
-    correct_qc_records: List[dict[str, object]] = []
-    denoise_qc_records: List[dict[str, object]] = []
+    base_qc_records: list[dict[str, object]] = []
+    correct_qc_records: list[dict[str, object]] = []
+    denoise_qc_records: list[dict[str, object]] = []
     base_qc_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     correct_qc_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
     denoise_qc_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
@@ -422,7 +446,9 @@ def main() -> None:
                 }
                 stage_correct_ok = True
             except Exception as exc:
-                LOGGER.error("Failed rebuilding correct QC for %s: %s", subject_id, exc, exc_info=True)
+                LOGGER.error(
+                    "Failed rebuilding correct QC for %s: %s", subject_id, exc, exc_info=True
+                )
                 correct_result = {"success": False, "qc_record": None}
                 stage_correct_ok = False
         else:
@@ -476,7 +502,9 @@ def main() -> None:
                 }
                 stage_denoise_ok = True
             except Exception as exc:
-                LOGGER.error("Failed rebuilding denoise QC for %s: %s", subject_id, exc, exc_info=True)
+                LOGGER.error(
+                    "Failed rebuilding denoise QC for %s: %s", subject_id, exc, exc_info=True
+                )
                 denoise_result = {"success": False, "qc_record": None}
                 stage_denoise_ok = False
         else:
@@ -521,13 +549,19 @@ def main() -> None:
     LOGGER.info("Correct: success=%d failed=%d", len(correct_success), len(correct_failed))
     LOGGER.info("Denoise: success=%d failed=%d", len(denoise_success), len(denoise_failed))
 
-    preproc_qc.write_preproc_qc_aggregate_reports(reports_root, base_qc_records, profile=base_profile, output_desc="base")
-    preproc_qc.write_preproc_qc_aggregate_reports(reports_root, correct_qc_records, profile=correct_profile, output_desc=correct_desc)
-    preproc_qc.write_preproc_qc_aggregate_reports(reports_root, denoise_qc_records, profile=denoise_profile, output_desc=denoise_desc)
+    preproc_qc.write_preproc_qc_aggregate_reports(
+        reports_root, base_qc_records, profile=base_profile, output_desc="base"
+    )
+    preproc_qc.write_preproc_qc_aggregate_reports(
+        reports_root, correct_qc_records, profile=correct_profile, output_desc=correct_desc
+    )
+    preproc_qc.write_preproc_qc_aggregate_reports(
+        reports_root, denoise_qc_records, profile=denoise_profile, output_desc=denoise_desc
+    )
 
     if args.run_compare:
         compare_mode = "reuse" if args.reuse_existing_correct else args.compare_mode
-        compare_den_cfg: Optional[ArtifactDenoisingConfig] = None
+        compare_den_cfg: ArtifactDenoisingConfig | None = None
         if compare_mode == "full":
             compare_den_cfg = ArtifactDenoisingConfig(
                 transient_method=(

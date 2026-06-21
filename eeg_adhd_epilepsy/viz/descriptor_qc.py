@@ -12,7 +12,6 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
-
 from coco_pipe.viz import plot_bar, plot_histogram, save_figure
 
 
@@ -87,7 +86,11 @@ def save_subject_descriptor_qc_figures(
     if path:
         figure_paths["family_missingness"] = path
 
-    family_failures = failure_summary_df[failure_summary_df["group"] == "family"] if "group" in failure_summary_df.columns else pd.DataFrame()
+    family_failures = (
+        failure_summary_df[failure_summary_df["group"] == "family"]
+        if "group" in failure_summary_df.columns
+        else pd.DataFrame()
+    )
     path = _bar_plot(
         family_failures.rename(columns={"value": "family", "count": "count"}),
         x="family",
@@ -121,7 +124,9 @@ def save_subject_descriptor_qc_figures(
         if path:
             figure_paths["param_r_squared_hist"] = path
 
-    param_error_cols = [column for column in epoch_feature_df.columns if "param_fit_error_" in column]
+    param_error_cols = [
+        column for column in epoch_feature_df.columns if "param_fit_error_" in column
+    ]
     if param_error_cols:
         path = _hist_plot(
             epoch_feature_df[param_error_cols].stack(),
@@ -146,7 +151,11 @@ def save_dataset_descriptor_qc_figures(
     figure_paths: dict[str, Path] = {}
 
     status_counts = (
-        shard_summary_df["qc_status"].astype(str).value_counts().rename_axis("status").reset_index(name="count")
+        shard_summary_df["qc_status"]
+        .astype(str)
+        .value_counts()
+        .rename_axis("status")
+        .reset_index(name="count")
         if "qc_status" in shard_summary_df.columns
         else pd.DataFrame()
     )
@@ -197,7 +206,11 @@ def save_dataset_descriptor_qc_figures(
         figure_paths["top_missing_features"] = path
 
     low_variance_counts = (
-        low_variance_df["family"].astype(str).value_counts().rename_axis("family").reset_index(name="count")
+        low_variance_df["family"]
+        .astype(str)
+        .value_counts()
+        .rename_axis("family")
+        .reset_index(name="count")
         if "family" in low_variance_df.columns and not low_variance_df.empty
         else pd.DataFrame()
     )

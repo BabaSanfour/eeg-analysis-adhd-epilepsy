@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Dict, Mapping, Sequence
 
 import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
 from coco_pipe.viz import plot_bar, plot_histogram
-from eeg_adhd_epilepsy.viz import topo, utils, qc_plots
+
+from eeg_adhd_epilepsy.viz import qc_plots, topo, utils
 
 matplotlib.use("Agg")
 
@@ -58,9 +58,6 @@ TOPOMAP_SPECS = (
 )
 
 
-
-
-
 def _plot_histogram(
     values: pd.Series,
     title: str,
@@ -90,7 +87,11 @@ def _plot_flag_status_distribution(runs_df: pd.DataFrame, output_dir: Path) -> P
     counts = runs_df["subject_flag"].fillna("unknown").astype(str).value_counts()
     if counts.empty:
         return None
-    order = [status for status in ("usable", "borderline", "unusable", "unknown") if status in counts.index]
+    order = [
+        status
+        for status in ("usable", "borderline", "unusable", "unknown")
+        if status in counts.index
+    ]
     counts = counts.reindex(order)
     colors = ["#55A868", "#DD8452", "#C44E52", "#8172B2"][: len(counts)]
     fig, ax = plot_bar(
@@ -133,10 +134,10 @@ def _plot_flag_reason_counts(runs_df: pd.DataFrame, output_dir: Path) -> Path | 
 def _save_topomap_figures(
     topomap_aggregates: Mapping[str, tuple[Sequence[str], np.ndarray]] | None,
     output_dir: Path,
-) -> Dict[str, Path]:
+) -> dict[str, Path]:
     if not topomap_aggregates:
         return {}
-    paths: Dict[str, Path] = {}
+    paths: dict[str, Path] = {}
     for metric_key, title, cmap in TOPOMAP_SPECS:
         payload = topomap_aggregates.get(metric_key)
         if not payload:
@@ -156,10 +157,10 @@ def _save_topomap_figures(
     return paths
 
 
-def _save_segment_figures(segment_df: pd.DataFrame, output_dir: Path) -> Dict[str, Path]:
+def _save_segment_figures(segment_df: pd.DataFrame, output_dir: Path) -> dict[str, Path]:
     if segment_df is None or segment_df.empty:
         return {}
-    paths: Dict[str, Path] = {}
+    paths: dict[str, Path] = {}
     for column, title, xlabel in SEGMENT_METRIC_SPECS:
         path = qc_plots.plot_segment_metric_distribution_by_type(
             segment_df,
@@ -177,7 +178,7 @@ def save_subject_raw_qc_figures(
     segment_df: pd.DataFrame,
     topomap_aggregates: Mapping[str, tuple[Sequence[str], np.ndarray]] | None,
     output_dir: Path,
-) -> Dict[str, Path]:
+) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
     figure_paths = _save_topomap_figures(topomap_aggregates, output_dir / "topomaps")
     figure_paths.update(_save_segment_figures(segment_df, output_dir / "segments"))
@@ -189,9 +190,9 @@ def save_dataset_raw_qc_figures(
     segment_df: pd.DataFrame,
     topomap_aggregates: Mapping[str, tuple[Sequence[str], np.ndarray]] | None,
     output_dir: Path,
-) -> Dict[str, Path]:
+) -> dict[str, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    figure_paths: Dict[str, Path] = {}
+    figure_paths: dict[str, Path] = {}
     for column, title, xlabel in RUN_METRIC_SPECS:
         if column not in runs_df:
             continue

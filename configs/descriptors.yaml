@@ -98,3 +98,11 @@ aggregation:
     - name: param_summaries
       prefixes: [param_]
       stats: [median, iqr]
+
+qc:
+  outlier:
+    z_threshold: 5.0
+    group_by: family
+    epoch_outlier_fraction: 0.30
+    subject_outlier_fraction: 0.20
+  min_obs: 5

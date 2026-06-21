@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+
 @dataclass(frozen=True)
 class ConstraintSpec:
     name: str
@@ -34,7 +36,9 @@ TARGET_CONSTRAINTS = (
     ConstraintSpec("No_Autism", "Keep rows without autism.", "autism == 0"),
     ConstraintSpec("No_Epilepsy", "Keep rows without epilepsy.", "epilepsy == 0"),
     ConstraintSpec("Psychostim_True", "Keep psychostimulant-exposed rows.", "psychostimulant == 1"),
-    ConstraintSpec("Psychostim_False", "Keep rows without psychostimulant exposure.", "psychostimulant == 0"),
+    ConstraintSpec(
+        "Psychostim_False", "Keep rows without psychostimulant exposure.", "psychostimulant == 0"
+    ),
     ConstraintSpec("ASM_True", "Keep ASM-exposed rows.", "asm == 1"),
     ConstraintSpec("ASM_False", "Keep rows without ASM exposure.", "asm == 0"),
     ConstraintSpec("ASM_Resistant_True", "Keep drug-resistant rows.", "asm_resistant == 1"),
@@ -45,13 +49,41 @@ TARGET_CONSTRAINTS = (
         "Keep resistant rows only when they are first EEG recordings.",
         "asm_resistant == 0 or first_eeg == 1",
     ),
-    ConstraintSpec("Control_Only", "No ADHD, autism, or epilepsy.", "adhd == 0 and autism == 0 and epilepsy == 0"),
-    ConstraintSpec("ADHD_Only", "ADHD without autism or epilepsy.", "adhd == 1 and autism == 0 and epilepsy == 0"),
-    ConstraintSpec("Epilepsy_Only", "Epilepsy without ADHD or autism.", "adhd == 0 and autism == 0 and epilepsy == 1"),
-    ConstraintSpec("Autism_Only", "Autism without ADHD or epilepsy.", "adhd == 0 and autism == 1 and epilepsy == 0"),
-    ConstraintSpec("ADHD_Epilepsy", "ADHD and epilepsy without autism.", "adhd == 1 and autism == 0 and epilepsy == 1"),
-    ConstraintSpec("ADHD_Autism", "ADHD and autism without epilepsy.", "adhd == 1 and autism == 1 and epilepsy == 0"),
-    ConstraintSpec("Epilepsy_Autism", "Epilepsy and autism without ADHD.", "adhd == 0 and autism == 1 and epilepsy == 1"),
+    ConstraintSpec(
+        "Control_Only",
+        "No ADHD, autism, or epilepsy.",
+        "adhd == 0 and autism == 0 and epilepsy == 0",
+    ),
+    ConstraintSpec(
+        "ADHD_Only",
+        "ADHD without autism or epilepsy.",
+        "adhd == 1 and autism == 0 and epilepsy == 0",
+    ),
+    ConstraintSpec(
+        "Epilepsy_Only",
+        "Epilepsy without ADHD or autism.",
+        "adhd == 0 and autism == 0 and epilepsy == 1",
+    ),
+    ConstraintSpec(
+        "Autism_Only",
+        "Autism without ADHD or epilepsy.",
+        "adhd == 0 and autism == 1 and epilepsy == 0",
+    ),
+    ConstraintSpec(
+        "ADHD_Epilepsy",
+        "ADHD and epilepsy without autism.",
+        "adhd == 1 and autism == 0 and epilepsy == 1",
+    ),
+    ConstraintSpec(
+        "ADHD_Autism",
+        "ADHD and autism without epilepsy.",
+        "adhd == 1 and autism == 1 and epilepsy == 0",
+    ),
+    ConstraintSpec(
+        "Epilepsy_Autism",
+        "Epilepsy and autism without ADHD.",
+        "adhd == 0 and autism == 1 and epilepsy == 1",
+    ),
     ConstraintSpec(
         "ADHD_Epilepsy_Autism",
         "ADHD, epilepsy, and autism together.",
@@ -153,7 +185,8 @@ TARGET_ANALYSES = (
         "DrugResistance_First_vs_Later",
         "First EEG",
         "Later EEG",
-        "Within-subject comparison of drug-resistant patients with both first and later recordings.",
+        "Within-subject comparison of drug-resistant patients "
+        "with both first and later recordings.",
         "Only valid for drug-resistant patients with at least one first EEG and one later EEG.",
         DRUG_RESISTANCE_LONGITUDINAL_CONSTRAINTS,
     ),
@@ -313,13 +346,41 @@ DATA_IMPLICATIONS = (
 
 
 CONSTRAINT_RULES = (
-    RuleSpec(if_all=("No_ADHD",), implies=("Psychostim_False",), notes="No ADHD rows cannot be psychostimulant-positive."),
-    RuleSpec(if_all=("No_Epilepsy",), implies=("ASM_False",), notes="No epilepsy rows cannot be ASM-positive."),
-    RuleSpec(if_all=("ASM_Resistant_True",), implies=("ASM_True",), notes="Drug-resistant rows must also be ASM-positive."),
-    RuleSpec(if_all=("Methylphenidate",), implies=("Psychostim_True",), notes="Medication category implies stimulant exposure."),
-    RuleSpec(if_all=("Dextroamphetamine",), implies=("Psychostim_True",), notes="Medication category implies stimulant exposure."),
-    RuleSpec(if_all=("Lisdexamfetamine",), implies=("Psychostim_True",), notes="Medication category implies stimulant exposure."),
-    RuleSpec(if_all=("Combined_Amphetamine",), implies=("Psychostim_True",), notes="Medication family implies stimulant exposure."),
+    RuleSpec(
+        if_all=("No_ADHD",),
+        implies=("Psychostim_False",),
+        notes="No ADHD rows cannot be psychostimulant-positive.",
+    ),
+    RuleSpec(
+        if_all=("No_Epilepsy",),
+        implies=("ASM_False",),
+        notes="No epilepsy rows cannot be ASM-positive.",
+    ),
+    RuleSpec(
+        if_all=("ASM_Resistant_True",),
+        implies=("ASM_True",),
+        notes="Drug-resistant rows must also be ASM-positive.",
+    ),
+    RuleSpec(
+        if_all=("Methylphenidate",),
+        implies=("Psychostim_True",),
+        notes="Medication category implies stimulant exposure.",
+    ),
+    RuleSpec(
+        if_all=("Dextroamphetamine",),
+        implies=("Psychostim_True",),
+        notes="Medication category implies stimulant exposure.",
+    ),
+    RuleSpec(
+        if_all=("Lisdexamfetamine",),
+        implies=("Psychostim_True",),
+        notes="Medication category implies stimulant exposure.",
+    ),
+    RuleSpec(
+        if_all=("Combined_Amphetamine",),
+        implies=("Psychostim_True",),
+        notes="Medication family implies stimulant exposure.",
+    ),
     RuleSpec(
         if_all=("Psychostim_True", "Psychostim_False"),
         contradicts=("Psychostim_True", "Psychostim_False"),
@@ -380,6 +441,7 @@ SKIP_REASONS = (
 DEDUPLICATION_POLICY = (
     "Deduplicate by actual comparison meaning, not display labels alone.",
     "Use `study_id` membership for group 1 and group 2 as the canonical cohort identity.",
-    "Two rows are duplicates if they share the same analysis name and the same ordered pair of group membership sets.",
+    "Two rows are duplicates if they share the same analysis name "
+    "and the same ordered pair of group membership sets.",
     "Keep one representative row and record alternate labels or constraints later if needed.",
 )

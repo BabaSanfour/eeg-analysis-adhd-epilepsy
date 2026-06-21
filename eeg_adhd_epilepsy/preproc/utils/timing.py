@@ -5,13 +5,12 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import contextmanager
-from typing import Dict
 
 LOGGER = logging.getLogger(__name__)
 
 
 @contextmanager
-def benchmark_step(name: str, provenance: Dict):
+def benchmark_step(name: str, provenance: dict):
     """Measure wall-clock time for a named step and record it in provenance.
 
     Usage::

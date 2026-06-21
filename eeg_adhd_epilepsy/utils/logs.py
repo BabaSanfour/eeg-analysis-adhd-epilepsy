@@ -6,7 +6,6 @@ import logging
 import sys
 from contextlib import contextmanager
 from pathlib import Path
-from typing import List
 
 from joblib import parallel
 from tqdm import tqdm
@@ -14,7 +13,7 @@ from tqdm import tqdm
 
 def setup_logging(log_file: Path | None, level: str) -> logging.Logger:
     """Configure a logger that writes to both file and stdout."""
-    handlers: List[logging.Handler] = [logging.StreamHandler(sys.stdout)]
+    handlers: list[logging.Handler] = [logging.StreamHandler(sys.stdout)]
     if log_file is not None:
         log_file.parent.mkdir(parents=True, exist_ok=True)
         handlers.insert(0, logging.FileHandler(log_file))
