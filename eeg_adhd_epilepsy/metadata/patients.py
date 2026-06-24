@@ -13,7 +13,7 @@ from typing import Any
 import pandas as pd
 from coco_pipe.io import read_table, write_json
 
-from eeg_adhd_epilepsy.utils.metadata_schema import (
+from eeg_adhd_epilepsy.metadata.schema import (
     EPILEPSY_MED_COLS,
     PATIENTS_METADATA_AUDIT_COLUMNS,
     PATIENTS_METADATA_COLUMNS,

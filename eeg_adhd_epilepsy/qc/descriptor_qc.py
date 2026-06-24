@@ -30,6 +30,7 @@ from coco_pipe.report.descriptor_qc import (
 )
 
 import eeg_adhd_epilepsy.io.bids as bids_io
+import eeg_adhd_epilepsy.io.report_paths as report_paths
 import eeg_adhd_epilepsy.viz.descriptor_qc as viz_descriptor_qc
 from eeg_adhd_epilepsy.qc.utils import DEFAULT_DESCRIPTOR_THRESHOLDS
 
@@ -54,12 +55,12 @@ def run_descriptor_subject_qc(
     config_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
     qc_dir = shard_root / "qc"
-    report_dir = bids_io.get_subject_session_stage_dir(
+    report_dir = report_paths.subject_report_dir(
         reports_root=reports_root,
-        subject_id=subject,
-        session_id=session,
-        stage="descriptor_qc",
-        create_dir=True,
+        subject=subject,
+        session=session,
+        stage=report_paths.ReportStage.DESCRIPTOR_QC,
+        create=True,
     )
     families_config = (
         (config_snapshot.get("families") or {}) if isinstance(config_snapshot, dict) else {}
@@ -300,13 +301,16 @@ def run_descriptor_subject_qc(
             )
 
     qc_status = resolve_qc_status(flags)
-    report_path = bids_io.get_subject_session_stage_report_path(
+    report_dir = report_paths.subject_report_dir(
         reports_root=reports_root,
-        subject_id=subject,
-        session_id=session,
-        stage="descriptor_qc",
-        report_stem=f"sub-{subject}_ses-{session}_{condition}",
-        create_dir=True,
+        subject=subject,
+        session=session,
+        stage=report_paths.ReportStage.DESCRIPTOR_QC,
+        create=True,
+    )
+    report_path = report_dir / (
+        f"{bids_io.bids_subject_label(subject)}_{bids_io.bids_session_label(session)}_"
+        f"{condition}_descriptor_qc_report.html"
     )
     summary_row = {
         "subject": subject,
@@ -393,7 +397,9 @@ def run_descriptor_dataset_qc(
         raise ValueError(
             "Merged sensor subject table must carry qc_dir in attrs for descriptor QC."
         )
-    summary_dir = bids_io.get_stage_summary_dir(reports_root, "descriptor_qc", create_dir=True)
+    summary_dir = report_paths.summary_report_dir(
+        reports_root, report_paths.ReportStage.DESCRIPTOR_QC, create=True
+    )
 
     families_config = (
         (config_snapshot.get("families") or {}) if isinstance(config_snapshot, dict) else {}

@@ -40,8 +40,13 @@ from eeg_adhd_epilepsy.analysis.utils.foundation import (
     default_foundation_models,
     resolve_foundation_input_plan,
 )
-from eeg_adhd_epilepsy.io.bids import get_reports_root, load_eeg_data
-from eeg_adhd_epilepsy.io.recording import ensure_recording_id
+from eeg_adhd_epilepsy.io.bids import (
+    add_recording_id,
+    bids_session_label,
+    bids_subject_label,
+)
+from eeg_adhd_epilepsy.analysis.dataset import build_container
+from eeg_adhd_epilepsy.io.report_paths import default_reports_root
 
 LOGGER = logging.getLogger(__name__)
 
@@ -65,9 +70,10 @@ def _artifact_path(
     run = _bids_token(row.get("run") or "01")
     desc = _bids_token(f"{model_key}{condition}{pooling.title()}")
     filename = (
-        f"sub-{subject}_ses-{session}_task-{_bids_token(task)}_run-{run}_desc-{desc}_embedding.npz"
+        f"{bids_subject_label(subject)}_{bids_session_label(session)}_"
+        f"task-{_bids_token(task)}_run-{run}_desc-{desc}_embedding.npz"
     )
-    return root / f"sub-{subject}" / f"ses-{session}" / "eeg" / filename
+    return root / bids_subject_label(subject) / bids_session_label(session) / "eeg" / filename
 
 
 def _record_metadata(frame: pd.DataFrame) -> dict[str, Any]:
@@ -163,7 +169,7 @@ def run(config: dict[str, Any]) -> Path:
             )
             container = container_cache.get(load_key)
             if container is None:
-                container = load_eeg_data(
+                container = build_container(
                     bids_root=bids_root,
                     use_derivatives=plan.use_derivatives,
                     subjects=subjects,
@@ -194,7 +200,7 @@ def run(config: dict[str, Any]) -> Path:
                     records.append(record)
                     failures.append(record)
                     continue
-                container = ensure_recording_id(container, subject_col)
+                container = add_recording_id(container, subject_col)
                 container_cache[load_key] = container
             frame = container.observation_frame()
             if session_col not in frame:
@@ -367,7 +373,7 @@ def run(config: dict[str, Any]) -> Path:
     status = "SUCCESS" if successful and not failures else "PARTIAL" if successful else "FAILED"
     write_run_status(derivative_root, status)
 
-    reports_root = Path(config.get("reports_root", get_reports_root(bids_root))).expanduser()
+    reports_root = Path(config.get("reports_root", default_reports_root(bids_root))).expanduser()
     report_dir = (
         reports_root
         / "summary"

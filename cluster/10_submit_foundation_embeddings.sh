@@ -15,11 +15,11 @@ set -euo pipefail
 module purge
 module load gcc arrow/23.0.1 python/3.11
 
-# Dataset-wide producer: one config (configs/foundation_embeddings.example.yaml,
-# or your edited copy). REVE is gated — set HF_TOKEN / `hf auth login` first.
+# Dataset-wide producer: set FOUNDATION_CONFIG to its dataset config.
+# REVE is gated — set HF_TOKEN / `hf auth login` first.
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-FOUNDATION_CONFIG=${FOUNDATION_CONFIG:-$PROJECT_ROOT/configs/foundation_embeddings.example.yaml}
+FOUNDATION_CONFIG=${FOUNDATION_CONFIG:?Set FOUNDATION_CONFIG to the dataset-wide embedding config}
 
 [ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
 [ -f "$FOUNDATION_CONFIG" ] || { echo "Foundation config not found: $FOUNDATION_CONFIG"; exit 1; }

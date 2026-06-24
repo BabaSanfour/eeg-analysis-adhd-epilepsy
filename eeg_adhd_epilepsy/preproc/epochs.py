@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 
 import mne
@@ -11,9 +13,11 @@ import numpy as np
 from tqdm import tqdm
 
 from eeg_adhd_epilepsy.io import bids as bids_io
+from eeg_adhd_epilepsy.io.report_paths import default_reports_root
+from eeg_adhd_epilepsy.utils import events as events_utils
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 
-logger = logging.getLogger(__name__)
+LOGGER = logging.getLogger(__name__)
 
 
 def build_block_events_by_condition(
@@ -23,7 +27,9 @@ def build_block_events_by_condition(
 ) -> dict[str, np.ndarray]:
     """Build fixed-length events grouped by block condition."""
     blocks = [
-        block for block in bids_io._collect_block_windows(raw) if block.duration >= segment_duration
+        block
+        for block in events_utils.collect_block_windows(raw)
+        if block.duration >= segment_duration
     ]
     events_by_condition: dict[str, np.ndarray] = {}
     for block in blocks:
@@ -48,8 +54,6 @@ def build_block_events_by_condition(
         else:
             events_by_condition[condition_name] = block_events
 
-    for condition_name, events in list(events_by_condition.items()):
-        events_by_condition[condition_name] = events[events[:, 0].argsort()]
     return events_by_condition
 
 
@@ -99,6 +103,35 @@ def make_epochs_from_preproc_raw(
     return epochs
 
 
+def _write_epoch_provenance(
+    output_path: Path,
+    epochs: mne.Epochs,
+    *,
+    source_path: Path,
+    desc: str,
+    segment_duration: float,
+    overlap: float,
+    ignore_annotations: bool,
+) -> Path:
+    """Write a JSON sidecar describing how an epochs file was constructed."""
+    condition_counts = {
+        name: int((epochs.events[:, 2] == code).sum()) for name, code in epochs.event_id.items()
+    }
+    provenance = {
+        "source_file": source_path.name,
+        "desc": desc,
+        "segment_duration": segment_duration,
+        "overlap": overlap,
+        "ignore_annotations": ignore_annotations,
+        "n_epochs": len(epochs),
+        "condition_counts": condition_counts,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    sidecar_path = output_path.with_name(output_path.name.replace("_epo.fif", "_epo.json"))
+    sidecar_path.write_text(json.dumps(provenance, indent=2))
+    return sidecar_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Save fixed epochs from all annotated blocks in preprocessed FIF files"
@@ -121,33 +154,35 @@ def main() -> None:
 
     bids_root = Path(args.bids_root)
     preproc_root = bids_io.get_preproc_root(bids_root)
-    log_file = bids_io.get_reports_root(bids_root) / "logs" / "epochs.log"
+    log_file = default_reports_root(bids_root) / "logs" / "epochs.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)
     setup_logging(log_file, "INFO")
 
-    logger.info(f"Discovering preprocessed files in {preproc_root}")
+    LOGGER.info("Discovering preprocessed files in %s", preproc_root)
     found_files = list(preproc_root.rglob(f"*desc-{args.desc}_eeg.fif"))
 
     if args.subjects:
         valid_sids = set()
         for s in args.subjects:
             if s.startswith("sub-"):
-                valid_sids.add(bids_io.normalize_subject_id(s))
+                valid_sids.add(bids_io.study_id_to_bids_subject(s))
             else:
-                valid_sids.add(bids_io.normalize_subject_id(f"{int(s):04d}"))
-        files_to_process = [f for f in found_files if bids_io.parse_subject_id(f) in valid_sids]
+                valid_sids.add(bids_io.study_id_to_bids_subject(int(s)))
+        files_to_process = [
+            f for f in found_files if bids_io.parse_bids_components(f)["subject"] in valid_sids
+        ]
     else:
         files_to_process = found_files
 
-    logger.info(f"Found {len(files_to_process)} matching _eeg.fif files to epoch.")
+    LOGGER.info("Found %d matching _eeg.fif files to epoch.", len(files_to_process))
 
     for input_path in tqdm(files_to_process, desc="Saving Epochs"):
         output_path = input_path.with_name(input_path.name.replace("_eeg.fif", "_epo.fif"))
 
         if not args.overwrite and output_path.exists():
-            logger.info(
-                f"Skipping {input_path.name}: epoch file already exists. "
-                f"Use --overwrite to overwrite."
+            LOGGER.info(
+                "Skipping %s: epoch file already exists. Use --overwrite to overwrite.",
+                input_path.name,
             )
             continue
 
@@ -161,9 +196,18 @@ def main() -> None:
                 save_path=output_path,
                 overwrite=args.overwrite,
             )
-            logger.info(f"Saved {len(epochs)} epochs to {output_path.name}")
+            _write_epoch_provenance(
+                output_path,
+                epochs,
+                source_path=input_path,
+                desc=args.desc,
+                segment_duration=args.segment_duration,
+                overlap=args.overlap,
+                ignore_annotations=args.ignore_annotations,
+            )
+            LOGGER.info("Saved %d epochs to %s", len(epochs), output_path.name)
         except Exception as exc:
-            logger.error(f"Failed to epoch {input_path.name}: {exc}", exc_info=True)
+            LOGGER.error("Failed to epoch %s: %s", input_path.name, exc, exc_info=True)
 
 
 if __name__ == "__main__":

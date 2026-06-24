@@ -34,7 +34,7 @@ from joblib import Parallel, delayed
 from pyprep.find_noisy_channels import NoisyChannels
 from tqdm import tqdm
 
-from eeg_adhd_epilepsy.io import bids
+from eeg_adhd_epilepsy.io import bids, readers, report_paths
 from eeg_adhd_epilepsy.preproc.epochs import build_block_events_by_condition
 from eeg_adhd_epilepsy.preproc.utils import (
     NumpyEncoder,
@@ -44,6 +44,7 @@ from eeg_adhd_epilepsy.preproc.utils import (
     inflate_bad_annotations,
 )
 from eeg_adhd_epilepsy.qc import preproc_qc
+from eeg_adhd_epilepsy.utils import events
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 
 LOGGER = logging.getLogger("preproc_base")
@@ -81,10 +82,10 @@ def _event_sample_to_onset(raw: mne.io.BaseRaw, event_sample: int) -> float:
 def _prepare_condition_epoch_inputs(
     raw: mne.io.BaseRaw,
     segment_duration: float,
-) -> list[tuple[str, list[bids.BlockWindow], np.ndarray]]:
+) -> list[tuple[str, list[events.BlockWindow], np.ndarray]]:
     """Return condition-grouped blocks with their fixed-length events."""
-    block_windows = bids._collect_block_windows(raw)
-    grouped_blocks: dict[str, list[bids.BlockWindow]] = {}
+    block_windows = events.collect_block_windows(raw)
+    grouped_blocks: dict[str, list[events.BlockWindow]] = {}
     for block in block_windows:
         grouped_blocks.setdefault(block.name, []).append(block)
 
@@ -93,7 +94,7 @@ def _prepare_condition_epoch_inputs(
         segment_duration=segment_duration,
         overlap=0.0,
     )
-    prepared: list[tuple[str, list[bids.BlockWindow], np.ndarray]] = []
+    prepared: list[tuple[str, list[events.BlockWindow], np.ndarray]] = []
     for condition_name, blocks in grouped_blocks.items():
         condition_events = events_by_condition.get(condition_name)
         if condition_events is None or len(condition_events) == 0:
@@ -334,13 +335,14 @@ def run_base_pipeline(
             - The processed MNE Raw object.
             - A dictionary containing processing provenance and statistics.
     """
-    subject_id = bids.normalize_subject_id(subject_id)
+    subject = subject_id
+    subject_id = bids.bids_subject_label(subject)
     record_label = record_label or subject_id
 
     LOGGER.info("Starting base pipeline for %s", record_label)
 
     provenance: dict[str, Any] = {
-        "subject_id": subject_id,
+        "subject_id": bids.bids_subject_label(subject_id),
         "config": config,
         "steps_completed": [],
         "pipeline_warnings": [],
@@ -351,7 +353,7 @@ def run_base_pipeline(
     }
 
     # 1. Embedded block annotations
-    n_blocks = len(bids._collect_block_windows(raw))
+    n_blocks = len(events.collect_block_windows(raw))
     if n_blocks == 0:
         LOGGER.warning(
             "No embedded BLOCK_* annotations found; block-aware steps will have limited context."
@@ -470,7 +472,7 @@ def detect_global_bads_ransac(
 
     eeg_ch_names = [raw.ch_names[idx] for idx in eeg_picks]
     eeg_raw = raw.copy().pick(eeg_ch_names)
-    rest_windows = bids.collect_baseline_windows(raw)
+    rest_windows = events.collect_baseline_windows(raw)
 
     raw_for_ransac = eeg_raw
     if rest_windows:
@@ -531,7 +533,7 @@ def annotate_artifacts_blockwise(
     Returns:
         A tuple containing the annotated raw object and a statistics dictionary.
     """
-    block_windows = bids._collect_block_windows(raw)
+    block_windows = events.collect_block_windows(raw)
     stats: dict[str, Any] = {
         "blocks_total": len(block_windows),
         "blocks_processed": 0,
@@ -671,14 +673,14 @@ def run_base_record(
     result: dict[str, object] = {
         "success": False,
         "skipped": False,
-        "subject_id": bids.normalize_subject_id(subject_id),
+        "subject_id": subject_id,
         "qc_record": None,
         "error": "",
     }
     try:
         config = dict(config or {})
-        sid = bids.normalize_subject_id(subject_id)
-        ids = bids.build_bids_report_ids(source_path)
+        subject = subject_id
+        ids = report_paths.build_bids_report_ids(source_path)
         comps = bids.parse_bids_components(source_path)
         session_id = comps.get("session")
         task = comps.get("task")
@@ -689,28 +691,35 @@ def run_base_record(
         # Resolve roots and setup report/figures directories
         preproc_root = bids.get_preproc_root(Path(bids_root).expanduser())
         if reports_root is None:
-            reports_root = bids.get_reports_root(Path(bids_root).expanduser())
+            reports_root = report_paths.default_reports_root(Path(bids_root).expanduser())
         else:
             reports_root = Path(reports_root).expanduser()
 
         stage_name = preproc_qc.get_preproc_qc_stage_name("base", "base")
-        subject_report_path = bids.get_subject_session_stage_report_path(
+        report_dir = report_paths.subject_report_dir(
             reports_root=reports_root,
-            subject_id=sid,
-            session_id=session_id,
+            subject=subject,
+            session=session_id or "01",
             stage=stage_name,
-            report_stem=record_label,
-            create_dir=True,
+            create=True,
         )
+        subject_report_path = report_dir / f"{record_label}_{stage_name.value}_report.html"
         figures_dir = subject_report_path.parent / "figures" / record_label
         figures_dir.mkdir(parents=True, exist_ok=True)
 
-        raw = bids.load_bids_raw(source_path, bids_root=Path(bids_root))
+        source_entities = bids.parse_bids_components(source_path)
+        raw = readers.read_bids_raw(
+            bids_root=Path(bids_root),
+            subject=source_entities["subject"],
+            task=source_entities.get("task", task),
+            session=source_entities.get("session", session_id),
+            run=source_entities.get("run", run_id),
+        )
 
         cleaned_raw, _provenance = run_base_pipeline(
             raw,
             config=config,
-            subject_id=sid,
+            subject=subject,
             session_id=session_id,
             task=task,
             run_id=run_id,
@@ -720,7 +729,7 @@ def run_base_record(
 
         # Build output paths and persist results
         out_path = bids.get_stage_output_path(
-            subject_id=sid,
+            subject=subject,
             preproc_root=preproc_root,
             desc="base",
             session=session_id,
@@ -728,15 +737,7 @@ def run_base_record(
             run=run_id,
             create_dir=True,
         )
-        prov_path = bids.get_stage_provenance_path(
-            subject_id=sid,
-            preproc_root=preproc_root,
-            desc="base",
-            session=session_id,
-            task=task,
-            run=run_id,
-            create_dir=True,
-        )
+        prov_path = out_path.with_name(out_path.name.replace("_eeg.fif", "_provenance.json"))
         with open(prov_path, "w") as f:
             json.dump(_provenance, f, cls=NumpyEncoder, indent=4)
         cleaned_raw.save(out_path, overwrite=True, verbose="ERROR")
@@ -808,7 +809,7 @@ def main():
     reports_root = (
         Path(args.reports_root).expanduser()
         if args.reports_root
-        else bids.get_reports_root(bids_root)
+        else report_paths.default_reports_root(bids_root)
     )
     reports_root.mkdir(parents=True, exist_ok=True)
 
@@ -826,7 +827,7 @@ def main():
         LOGGER.error("No .vhdr files found in BIDS directory.")
         sys.exit(1)
 
-    subjects_found = sorted({bids.parse_subject_id(path) for path in files_found})
+    subjects_found = sorted({bids.parse_bids_components(path)["subject"] for path in files_found})
     LOGGER.info(
         "Found %d EEG runs across %d subjects in BIDS directory.",
         len(files_found),
@@ -834,7 +835,7 @@ def main():
     )
 
     if args.subjects:
-        normalized_subjects = [bids.normalize_subject_id(s) for s in args.subjects]
+        normalized_subjects = [bids.study_id_to_bids_subject(s) for s in args.subjects]
         subjects_to_process = set(normalized_subjects)
         LOGGER.info("Selected specific subjects: %s", normalized_subjects)
     else:
@@ -876,12 +877,12 @@ def main():
 
         existing_runs = 0
         for fpath in files_found:
-            sid = bids.parse_subject_id(fpath)
+            sid = bids.parse_bids_components(fpath)["subject"]
             if sid not in subjects_to_process:
                 continue
             comps = bids.parse_bids_components(fpath)
             out_path = bids.get_stage_output_path(
-                subject_id=sid,
+                subject=sid,
                 preproc_root=preproc_root,
                 desc="base",
                 session=comps.get("session"),
@@ -938,10 +939,10 @@ def main():
         if isinstance(record, dict):
             existing_run_keys.add(record.get("run_key"))
     for fpath in files_found:
-        sid = bids.parse_subject_id(fpath)
+        sid = bids.parse_bids_components(fpath)["subject"]
         if sid not in subjects_to_process:
             continue
-        ids = bids.build_bids_report_ids(fpath)
+        ids = report_paths.build_bids_report_ids(fpath)
         if ids["run_key"] in existing_run_keys:
             continue
         files_to_process.append(fpath)
@@ -1005,7 +1006,7 @@ def main():
         with tqdm_joblib(tqdm(total=len(short_files), desc="Processing Short Files")):
             results_short = Parallel(n_jobs=args.n_jobs)(
                 delayed(run_base_record)(
-                    subject_id=bids.parse_subject_id(f),
+                    subject_id=bids.parse_bids_components(f)["subject"],
                     source_path=f,
                     bids_root=bids_root,
                     config=pipeline_config_short,
@@ -1015,7 +1016,7 @@ def main():
                 for f in short_files
             )
         for fpath, result in zip(short_files, results_short):
-            consume_result(result, subject_id=bids.parse_subject_id(fpath))
+            consume_result(result, subject_id=bids.parse_bids_components(fpath)["subject"])
 
     # ---------------------------------------------------------
     # Phase 2: Process Long Files (Sequential Subjects, Parallel Internal)
@@ -1048,14 +1049,14 @@ def main():
         # We use a loop to ensure strictly sequential execution to save memory
         for f in tqdm(long_files, desc="Processing Long Files"):
             res = run_base_record(
-                subject_id=bids.parse_subject_id(f),
+                subject_id=bids.parse_bids_components(f)["subject"],
                 source_path=f,
                 bids_root=bids_root,
                 config=pipeline_config_long,
                 reports_root=reports_root,
                 raw_lookup=raw_lookup,
             )
-            consume_result(res, subject_id=bids.parse_subject_id(f))
+            consume_result(res, subject_id=bids.parse_bids_components(f)["subject"])
 
     success_ids = sorted(
         [sid for sid, ok in subject_status.items() if ok and not subject_skipped.get(sid, False)]

@@ -66,15 +66,6 @@ def pool_containers(containers: list[DataContainer]) -> DataContainer:
             "Cannot pool containers with different family-QC grouping levels: "
             f"{sorted(group_by_values)}"
         )
-    descriptor_name_values = [
-        list(container.meta.get("family_qc_descriptor_names", []))
-        for container in containers
-        if container.meta.get("family_qc_descriptor_names")
-    ]
-    if descriptor_name_values and any(
-        names != descriptor_name_values[0] for names in descriptor_name_values[1:]
-    ):
-        raise ValueError("Cannot pool containers with different descriptor schemas.")
     pooled.meta = {
         **dict(pooled.meta),
         "family_qc_bad_ids": {
@@ -92,8 +83,6 @@ def pool_containers(containers: list[DataContainer]) -> DataContainer:
     }
     if group_by_values:
         pooled.meta["family_qc_group_by"] = next(iter(group_by_values))
-    if descriptor_name_values:
-        pooled.meta["family_qc_descriptor_names"] = descriptor_name_values[0]
     return pooled
 
 

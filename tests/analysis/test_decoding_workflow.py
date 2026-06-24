@@ -26,7 +26,7 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
         },
         ids=np.array([f"r{idx:03d}" for idx in range(len(groups))]),
     )
-    monkeypatch.setattr(decoding, "load_container", lambda *args, **kwargs: container)
+    monkeypatch.setattr(decoding, "build_dataset", lambda *args, **kwargs: container)
 
     bids_root = tmp_path / "BIDS"
     bids_root.mkdir()
@@ -180,7 +180,7 @@ def test_embedding_and_reduced_dimension_decoding_modes(tmp_path, monkeypatch):
         coords={**coords, "feature": [f"embedding_{idx:04d}" for idx in range(12)]},
         ids=np.asarray([f"r{idx:03d}" for idx in range(len(groups))]),
     )
-    monkeypatch.setattr(decoding, "load_container", lambda *args, **kwargs: container)
+    monkeypatch.setattr(decoding, "build_dataset", lambda *args, **kwargs: container)
 
     embedding_config = _compact_config(
         tmp_path / "embedding",
@@ -226,7 +226,7 @@ def test_nonflat_descriptor_sweeps(tmp_path, monkeypatch):
         },
         ids=np.asarray([f"r{idx:03d}" for idx in range(len(groups))]),
     )
-    monkeypatch.setattr(decoding, "load_container", lambda *args, **kwargs: container)
+    monkeypatch.setattr(decoding, "build_dataset", lambda *args, **kwargs: container)
     config = _compact_config(
         tmp_path,
         input_mode="descriptors",
@@ -325,7 +325,7 @@ def test_transductive_input_requires_explicit_opt_in(tmp_path, monkeypatch):
         ids=np.asarray([f"r{idx:03d}" for idx in range(len(groups))]),
         meta={"transductive": True},
     )
-    monkeypatch.setattr(decoding, "load_container", lambda *args, **kwargs: container)
+    monkeypatch.setattr(decoding, "build_dataset", lambda *args, **kwargs: container)
     config = _compact_config(
         tmp_path,
         input_mode="reduced_dimensions",
@@ -359,7 +359,7 @@ def test_pooled_scope_preserves_transductive_flag(tmp_path, monkeypatch):
     containers = iter([transductive, inductive])
     monkeypatch.setattr(
         decoding,
-        "load_container",
+        "build_dataset",
         lambda *args, **kwargs: next(containers),
     )
     config = _compact_config(

@@ -13,7 +13,7 @@ import mne
 import numpy as np
 import pandas as pd
 
-import eeg_adhd_epilepsy.io.bids as bids_io
+import eeg_adhd_epilepsy.io.report_paths as report_paths
 import eeg_adhd_epilepsy.reports.preproc_qc as report_preproc_qc
 import eeg_adhd_epilepsy.signal_quality.metrics as signal_quality
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_preproc_qc
@@ -28,6 +28,7 @@ from eeg_adhd_epilepsy.qc.utils import (
     compute_qc_score,
     evaluate_signal_qc_flag,
 )
+from eeg_adhd_epilepsy.utils import events
 
 LOGGER = logging.getLogger(__name__)
 
@@ -107,20 +108,25 @@ def get_preproc_qc_profile(stage: str) -> PreprocQCProfile:
         raise ValueError(f"Unsupported preproc QC stage: {stage!r}") from exc
 
 
-def get_preproc_qc_stage_name(stage: str, output_desc: str | None = None) -> str:
-    profile = get_preproc_qc_profile(stage)
-    if output_desc and output_desc != profile.default_output_desc:
-        return bids_io.normalize_stage_name(f"{stage}_{output_desc}_qc")
-    return bids_io.normalize_stage_name(f"{stage}_qc")
+def get_preproc_qc_stage_name(
+    stage: str, output_desc: str | None = None
+) -> report_paths.ReportStage:
+    """Return the fixed report namespace for a preprocessing stage."""
+    get_preproc_qc_profile(stage)
+    return {
+        "base": report_paths.ReportStage.BASE_QC,
+        "correct": report_paths.ReportStage.CORRECT_QC,
+        "denoise": report_paths.ReportStage.DENOISE_QC,
+    }[stage]
 
 
 def load_stage_run_lookup(
     reports_root: Path,
-    stage_name: str,
+    stage_name: report_paths.ReportStage,
     *,
     csv_name: str | None = None,
 ) -> dict[str, dict[str, object]]:
-    summary_path = bids_io.get_stage_summary_dir(reports_root, stage_name, create_dir=False) / (
+    summary_path = report_paths.summary_report_dir(reports_root, stage_name) / (
         csv_name or f"{stage_name}_runs.csv"
     )
     if not summary_path.exists():
@@ -196,7 +202,7 @@ def _annotation_intervals(raw: mne.io.BaseRaw) -> list[tuple[float, float]]:
             stop = onset + duration
             if stop > onset:
                 intervals.append((onset, stop))
-    return bids_io.merge_intervals(intervals)
+    return events.merge_intervals(intervals)
 
 
 def _interval_overlap(start: float, stop: float, overlaps: Sequence[tuple[float, float]]) -> float:
@@ -216,7 +222,7 @@ def compute_clean_duration(raw: mne.io.BaseRaw) -> float:
 
 
 def compute_usable_condition_coverage(raw: mne.io.BaseRaw) -> float:
-    segments_df = bids_io.load_segments_for_raw(raw)
+    segments_df = events.segments_from_block_annotations(raw)
     if segments_df is None or segments_df.empty:
         return 0.0
     bad_intervals = _annotation_intervals(raw)
@@ -258,7 +264,7 @@ def build_preproc_qc_run_record(
     line_freq: float = 60.0,
     thresholds: SignalQCThresholds | None = None,
 ) -> dict[str, object]:
-    ids = bids_io.build_bids_report_ids(current_filepath)
+    ids = report_paths.build_bids_report_ids(current_filepath)
     prepared_raw, picks = _prepare_signal(current_raw)
     metrics = signal_quality.compute_signal_qc_metrics(
         prepared_raw,
@@ -393,7 +399,7 @@ def _compute_post_clean_segment_metrics(
             1. Aggregated Summary: one row per segment_type with mean stats.
             2. Raw Segments: one row per individual segment with timing and metrics.
     """
-    segments_df = bids_io.load_segments_for_raw(raw)
+    segments_df = events.segments_from_block_annotations(raw)
     if segments_df is None or segments_df.empty:
         return pd.DataFrame(), pd.DataFrame()
 
@@ -442,7 +448,7 @@ def _compute_post_clean_segment_metrics(
 
     # Load pre-base segment rows from the raw_qc_segments CSV (written by raw_qc stage).
     raw_qc_csv = (
-        bids_io.get_stage_summary_dir(reports_root, "raw_qc_pre_base", create_dir=False)
+        report_paths.summary_report_dir(reports_root, report_paths.ReportStage.RAW_QC_PRE_BASE)
         / "raw_qc_segments.csv"
     )
     if raw_qc_csv.exists():
@@ -656,14 +662,17 @@ def write_subject_preproc_qc_report(
         profile.stage,
         output_desc or str(aggregate.get("output_desc") or profile.default_output_desc),
     )
-    output_path = bids_io.get_subject_session_stage_report_path(
+    subject = str(aggregate["subject_id"]).removeprefix("sub-")
+    session = str(aggregate.get("session_id") or "01").removeprefix("ses-")
+    report_stem = str(aggregate["subject_session_prefix"])
+    report_dir = report_paths.subject_report_dir(
         reports_root=reports_root,
-        subject_id=str(aggregate["subject_id"]),
-        session_id=str(aggregate.get("session_id") or ""),
+        subject=subject,
+        session=session,
         stage=stage_name,
-        report_stem=str(aggregate["subject_session_prefix"]),
-        create_dir=True,
+        create=True,
     )
+    output_path = report_dir / f"{report_stem}_{stage_name.value}_report.html"
     figures_dir = output_path.parent / "figures"
     figure_paths = viz_preproc_qc.save_subject_preproc_qc_figures(
         record=aggregate,
@@ -716,7 +725,7 @@ def write_preproc_qc_aggregate_reports(
         run_records[0].get("output_desc") or profile.default_output_desc
     )
     stage_name = get_preproc_qc_stage_name(profile.stage, output_desc)
-    summary_dir = bids_io.get_stage_summary_dir(reports_root, stage_name, create_dir=True)
+    summary_dir = report_paths.summary_report_dir(reports_root, stage_name, create=True)
     runs_df = pd.DataFrame(
         [
             {

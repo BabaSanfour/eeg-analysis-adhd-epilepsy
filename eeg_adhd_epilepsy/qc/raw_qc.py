@@ -12,18 +12,22 @@ import pandas as pd
 from mne_bids import BIDSPath
 
 import eeg_adhd_epilepsy.io.bids as bids_io
+import eeg_adhd_epilepsy.io.report_paths as report_paths
 import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
 import eeg_adhd_epilepsy.reports.raw_qc as report_raw_qc
 import eeg_adhd_epilepsy.signal_quality.metrics as signal_quality
 import eeg_adhd_epilepsy.viz.raw_qc as viz_raw_qc
 from eeg_adhd_epilepsy.qc.utils import (
     _BASE_WEIGHTED_METRICS,
+    DEFAULT_SIGNAL_THRESHOLDS,
     MAX_METRICS,
     SignalQCThresholds,
     _build_channel_diagnostics,
     _build_topomap_aggregates,
     _clean_scalar,
     _combine_weighted_topomaps,
+    compute_channel_failure_rates,
+    compute_qc_score,
     evaluate_signal_qc_flag,
 )
 from eeg_adhd_epilepsy.utils.events import crop_raw_to_recording_start
@@ -36,16 +40,17 @@ def _prepare_analysis_raw(
     *,
     highpass: float,
 ) -> tuple[mne.io.BaseRaw, list[int]]:
-    raw.load_data()
+    analysis_raw = raw.copy().load_data()
     target_channels = [
-        channel for channel in bids_io.config.BASIC_1020_CHANNELS if channel in raw.ch_names
+        channel
+        for channel in bids_io.config.BASIC_1020_CHANNELS
+        if channel in analysis_raw.ch_names
     ]
     if target_channels:
-        raw.pick(target_channels)
-    picks = list(mne.pick_types(raw.info, eeg=True, exclude=[]))
+        analysis_raw.pick(target_channels)
+    picks = list(mne.pick_types(analysis_raw.info, eeg=True, exclude=[]))
     if not picks:
         raise RuntimeError("No EEG channels found.")
-    analysis_raw = raw.copy()
     cropped_raw = crop_raw_to_recording_start(analysis_raw)
     if cropped_raw is None:
         cropped_raw = analysis_raw
@@ -108,8 +113,10 @@ def _build_segment_qc_rows(
                 "run_prefix": ids["run_prefix"],
                 "filepath": filepath,
                 "segment_type": getattr(row, "segment_type", None),
+                "eye_state": getattr(row, "eye_state", None),
                 "t_start": t_start,
                 "duration": duration,
+                "segment_alpha_power": (metrics.get("band_powers") or {}).get("alpha", np.nan),
                 "segment_amplitude_mean_uv": metrics.get("amplitude_mean_uv"),
                 "segment_amplitude_max_uv": metrics.get("amplitude_max_uv"),
                 "segment_pct_bad_channels": metrics.get("pct_bad_channels"),
@@ -154,6 +161,39 @@ def _build_run_summary_row(record: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _whole_recording_metrics(
+    cropped_raw: mne.io.BaseRaw,
+    *,
+    picks: Sequence[int],
+    channel_names: Sequence[str],
+    raw_duration: float,
+    line_freq: float,
+    thresholds: SignalQCThresholds | None,
+    base_metrics: Mapping[str, object],
+) -> tuple[dict[str, object], dict, dict]:
+    """Whole-recording signal-QC metrics, usability flag, topomaps, and diagnostics."""
+    computed_metrics = signal_quality.compute_signal_qc_metrics(
+        cropped_raw,
+        picks=list(picks),
+        line_freq=line_freq,
+        include_channel_metrics=True,
+    )
+    run_metrics = {**base_metrics, **_build_run_metric_row(computed_metrics)}
+    subject_flag, reasons = evaluate_signal_qc_flag(run_metrics, thresholds)
+    run_metrics["subject_flag"] = subject_flag
+    run_metrics["subject_flag_reasons"] = ";".join(reasons)
+    file_topomaps = _build_topomap_aggregates(
+        computed_metrics,
+        channel_names=list(channel_names),
+        weight=max(raw_duration, 1.0),
+    )
+    channel_diagnostics = _build_channel_diagnostics(
+        computed_metrics,
+        channel_names=list(channel_names),
+    )
+    return run_metrics, file_topomaps, channel_diagnostics
+
+
 def build_raw_qc_run_record(
     *,
     raw: mne.io.BaseRaw,
@@ -169,13 +209,13 @@ def build_raw_qc_run_record(
 ) -> dict[str, object]:
     metadata = metadata or {}
     filepath = str(bids_path.fpath)
-    ids = bids_io.build_bids_report_ids(bids_path.fpath)
+    ids = report_paths.build_bids_report_ids(bids_path.fpath)
     ids["filepath"] = filepath
     cropped_raw, picks = _prepare_analysis_raw(raw, highpass=highpass)
     raw_duration = float(raw.times[-1]) if raw.n_times > 0 else 0.0
     channel_names = [cropped_raw.ch_names[index] for index in picks]
 
-    run_metrics: dict[str, object] = {
+    base_metrics: dict[str, object] = {
         "subject_id": ids["subject_id"],
         "session_id": ids["session_id"],
         "run_id": ids["run_id"],
@@ -184,44 +224,33 @@ def build_raw_qc_run_record(
         "filepath": filepath,
         "raw_duration": raw_duration,
     }
-    file_topomaps: dict[str, tuple[list[str], np.ndarray, float]] = {}
-    channel_diagnostics: dict[str, object] = {}
     if analysis_level in {"whole", "both"}:
-        computed_metrics = signal_quality.compute_signal_qc_metrics(
+        run_metrics, file_topomaps, channel_diagnostics = _whole_recording_metrics(
             cropped_raw,
-            picks=list(picks),
+            picks=picks,
+            channel_names=channel_names,
+            raw_duration=raw_duration,
             line_freq=line_freq,
-            include_channel_metrics=True,
-        )
-        run_metrics.update(_build_run_metric_row(computed_metrics))
-        subject_flag, reasons = evaluate_signal_qc_flag(run_metrics, thresholds)
-        run_metrics["subject_flag"] = subject_flag
-        run_metrics["subject_flag_reasons"] = ";".join(reasons)
-        file_topomaps = _build_topomap_aggregates(
-            computed_metrics,
-            channel_names=channel_names,
-            weight=max(raw_duration, 1.0),
-        )
-        channel_diagnostics = _build_channel_diagnostics(
-            computed_metrics,
-            channel_names=channel_names,
+            thresholds=thresholds,
+            base_metrics=base_metrics,
         )
     else:
-        run_metrics.update(
-            {
-                "amplitude_mean_uv": np.nan,
-                "amplitude_max_uv": np.nan,
-                "n_flat_channels": 0,
-                "n_noisy_channels": 0,
-                "pct_bad_channels": np.nan,
-                "line_noise_ratio": np.nan,
-                "hf_lf_ratio": np.nan,
-                "alpha_peak_hz": np.nan,
-                "aperiodic_slope": np.nan,
-                "subject_flag": "",
-                "subject_flag_reasons": "",
-            }
-        )
+        run_metrics = {
+            **base_metrics,
+            "amplitude_mean_uv": np.nan,
+            "amplitude_max_uv": np.nan,
+            "n_flat_channels": 0,
+            "n_noisy_channels": 0,
+            "pct_bad_channels": np.nan,
+            "line_noise_ratio": np.nan,
+            "hf_lf_ratio": np.nan,
+            "alpha_peak_hz": np.nan,
+            "aperiodic_slope": np.nan,
+            "subject_flag": "",
+            "subject_flag_reasons": "",
+        }
+        file_topomaps = {}
+        channel_diagnostics = {}
 
     coverage_pct = (
         float(condition_summary.get("total_duration", 0.0) or 0.0) / raw_duration * 100.0
@@ -261,39 +290,17 @@ def build_raw_qc_run_record(
         "channel_diagnostics": channel_diagnostics,
         **run_metrics,
     }
-    from eeg_adhd_epilepsy.qc.utils import compute_qc_score
-
     record["qc_score"] = compute_qc_score(run_metrics, thresholds=thresholds)
+    active = thresholds or DEFAULT_SIGNAL_THRESHOLDS
+    record["thresholds"] = {
+        "n_bad_borderline": active.n_bad_borderline,
+        "n_bad_unusable": active.n_bad_unusable,
+        "amplitude_max_uv": active.amplitude_max_uv,
+        "line_noise_ratio": active.line_noise_ratio,
+        "hf_lf_ratio": active.hf_lf_ratio,
+    }
     record["summary_row"] = _build_run_summary_row(record)
     return record
-
-
-def collect_existing_raw_qc_record(
-    *,
-    bids_path: BIDSPath,
-    bids_root: Path,
-    metadata: Mapping[str, object] | None = None,
-    analysis_level: str = "both",
-    line_freq: float = 60.0,
-    highpass: float = 0.5,
-    min_segment_duration: float = 5.0,
-    thresholds: SignalQCThresholds | None = None,
-) -> dict[str, object]:
-    raw = bids_io.load_bids_raw(filepath=bids_path.fpath, bids_root=bids_root)
-    condition_segments_df = bids_io.load_segments_for_raw(raw)
-    condition_summary = report_eeg.summarize_condition_segments(condition_segments_df)
-    return build_raw_qc_run_record(
-        raw=raw,
-        bids_path=bids_path,
-        condition_segments_df=condition_segments_df,
-        condition_summary=condition_summary,
-        metadata=metadata,
-        analysis_level=analysis_level,
-        line_freq=line_freq,
-        highpass=highpass,
-        min_segment_duration=min_segment_duration,
-        thresholds=thresholds,
-    )
 
 
 def _aggregate_subject_metrics(records: Sequence[dict[str, object]]) -> dict[str, object]:
@@ -422,18 +429,48 @@ def _build_subject_summary_row(record: dict[str, object]) -> dict[str, object]:
     }
 
 
+def _alpha_reactivity(segment_df: pd.DataFrame) -> dict[str, float]:
+    """Eyes-closed vs eyes-open resting alpha power (Berger effect).
+
+    Uses baseline EO/EC segments only. Returns the mean alpha band power for
+    each state and their ratio (EC/EO); a ratio > 1 is the expected
+    physiological pattern in awake resting EEG and a sensitive validity check.
+    """
+    result = {
+        "alpha_power_eo": float("nan"),
+        "alpha_power_ec": float("nan"),
+        "alpha_reactivity": float("nan"),
+    }
+    if (
+        segment_df is None
+        or segment_df.empty
+        or "segment_alpha_power" not in segment_df.columns
+        or "segment_type" not in segment_df.columns
+    ):
+        return result
+    power = pd.to_numeric(segment_df["segment_alpha_power"], errors="coerce")
+    seg_type = segment_df["segment_type"].astype(str)
+    eo = power[seg_type.eq("EO_baseline")].mean()
+    ec = power[seg_type.eq("EC_baseline")].mean()
+    result["alpha_power_eo"] = float(eo) if np.isfinite(eo) else float("nan")
+    result["alpha_power_ec"] = float(ec) if np.isfinite(ec) else float("nan")
+    if np.isfinite(eo) and np.isfinite(ec) and eo > 0:
+        result["alpha_reactivity"] = float(ec / eo)
+    return result
+
+
 def write_subject_raw_qc_report(
     reports_root: Path,
     records: list[dict[str, object]],
 ) -> dict[str, object]:
     ids = records[0]
     subject_prefix = str(ids["subject_session_prefix"])
-    subject_dir = bids_io.get_subject_session_stage_dir(
+    subject_dir = report_paths.subject_report_dir(
         reports_root,
-        str(ids["subject_id"]),
-        str(ids["session_id"]),
-        "raw_qc_pre_base",
-        create_dir=True,
+        str(ids["subject"]),
+        str(ids["session"]),
+        report_paths.ReportStage.RAW_QC_PRE_BASE,
+        create=True,
     )
     fig_dir = subject_dir / "figures"
     topomap_aggregates = _combine_weighted_topomaps(record["file_topomaps"] for record in records)
@@ -454,6 +491,8 @@ def write_subject_raw_qc_report(
     subject_record = {
         **subject_metrics,
         "condition_summary": condition_summary,
+        "thresholds": records[0].get("thresholds"),
+        **_alpha_reactivity(subject_segment_df),
     }
     channel_diagnostics = _aggregate_channel_diagnostics(records, topomap_aggregates)
     figure_paths = viz_raw_qc.save_subject_raw_qc_figures(
@@ -469,14 +508,7 @@ def write_subject_raw_qc_report(
         run_summary_df=run_summary_df,
         channel_diagnostics=channel_diagnostics,
         figure_paths=figure_paths,
-        output_path=bids_io.get_subject_session_stage_report_path(
-            reports_root=reports_root,
-            subject_id=str(ids["subject_id"]),
-            session_id=str(ids["session_id"]),
-            stage="raw_qc_pre_base",
-            report_stem=subject_prefix,
-            create_dir=True,
-        ),
+        output_path=subject_dir / f"{subject_prefix}_raw_qc_pre_base_report.html",
     )
     return subject_record
 
@@ -488,7 +520,9 @@ def write_raw_qc_aggregate_reports(
     if not run_records:
         return
 
-    summary_dir = bids_io.get_stage_summary_dir(reports_root, "raw_qc_pre_base", create_dir=True)
+    summary_dir = report_paths.summary_report_dir(
+        reports_root, report_paths.ReportStage.RAW_QC_PRE_BASE, create=True
+    )
 
     runs_df = pd.DataFrame([record["summary_row"] for record in run_records]).sort_values(
         ["subject_id", "session_id", "run_id", "filepath"],
@@ -527,6 +561,10 @@ def write_raw_qc_aggregate_reports(
         summary_dir / "figures",
     )
     dataset_tables = report_raw_qc.build_dataset_report_tables(runs_df, subjects_df)
+    dataset_tables["channel_failure_df"] = report_raw_qc.build_channel_failure_table(
+        compute_channel_failure_rates(run_records)
+    )
+    dataset_tables["outlier_df"] = report_raw_qc.build_cohort_outlier_table(runs_df)
     report_raw_qc.generate_raw_qc_dataset_report(
         tables=dataset_tables,
         figure_paths=figure_paths,

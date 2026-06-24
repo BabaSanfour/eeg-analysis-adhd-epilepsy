@@ -9,7 +9,7 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-from eeg_adhd_epilepsy.io import bids
+from eeg_adhd_epilepsy.io import bids, report_paths
 from eeg_adhd_epilepsy.qc import preproc_qc
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 
@@ -35,16 +35,12 @@ def _build_base_config(
     resample: float | None,
     line_freq: float,
     adaptive: bool,
-    segments_file: str | None,
 ) -> dict:
     processing_cfg: dict[str, object] = {
         "highpass_hz": highpass,
         "lowpass_hz": lowpass,
         "resample_hz": resample,
     }
-    if segments_file:
-        processing_cfg["segments_file"] = segments_file
-
     return {
         "n_jobs": int(n_jobs),
         "processing": processing_cfg,
@@ -112,12 +108,6 @@ def main() -> None:
     )
     parser.add_argument("--line-freq", type=float, default=60.0, help="Line noise frequency (Hz)")
     parser.add_argument("--adaptive", action="store_true", help="Enable adaptive ZapLine mode")
-    parser.add_argument(
-        "--segments-file",
-        type=str,
-        default=None,
-        help="Optional segments CSV path for base block annotation",
-    )
     parser.add_argument(
         "--base-config-json",
         type=str,
@@ -226,7 +216,7 @@ def main() -> None:
 
     bids_root = Path(args.bids_root).expanduser()
     preproc_root = bids.get_preproc_root(bids_root)
-    reports_root = bids.get_reports_root(bids_root)
+    reports_root = report_paths.default_reports_root(bids_root)
     preproc_root.mkdir(parents=True, exist_ok=True)
     reports_root.mkdir(parents=True, exist_ok=True)
 
@@ -243,7 +233,7 @@ def main() -> None:
         LOGGER.error("No .vhdr EEG files found in BIDS root: %s", bids_root)
         sys.exit(1)
 
-    subjects_found = sorted({bids.parse_subject_id(path) for path in input_files})
+    subjects_found = sorted({bids.parse_bids_components(path)["subject"] for path in input_files})
     subjects_sorted = select_subjects(
         subjects_found=subjects_found,
         selected_subjects=args.subjects,
@@ -269,7 +259,9 @@ def main() -> None:
             sys.exit(1)
 
     selected_input_files = [
-        path for path in input_files if bids.parse_subject_id(path) in set(subjects_sorted)
+        path
+        for path in input_files
+        if bids.parse_bids_components(path)["subject"] in set(subjects_sorted)
     ]
 
     LOGGER.info(
@@ -289,7 +281,6 @@ def main() -> None:
         resample=args.resample,
         line_freq=args.line_freq,
         adaptive=args.adaptive,
-        segments_file=args.segments_file,
     )
     base_overrides = _load_json(args.base_config_json)
     if base_overrides:
@@ -337,9 +328,10 @@ def main() -> None:
     denoise_qc_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
 
     for input_file in selected_input_files:
-        input_ids = bids.build_bids_report_ids(input_file)
+        input_ids = report_paths.build_bids_report_ids(input_file)
         input_comps = bids.parse_bids_components(input_file)
-        subject_id = bids.parse_subject_id(input_file)
+        subject = bids.parse_bids_components(input_file)["subject"]
+        subject_id = bids.bids_subject_label(subject)
         run_label = str(input_ids["run_prefix"])
         effective_task = task_token or input_comps.get("task")
 
@@ -348,7 +340,7 @@ def main() -> None:
         LOGGER.info("%s", "=" * 72)
 
         base_out = bids.get_stage_output_path(
-            subject_id=subject_id,
+            subject=subject,
             preproc_root=preproc_root,
             desc="base",
             session=input_comps.get("session"),
@@ -356,7 +348,7 @@ def main() -> None:
             run=input_comps.get("run"),
         )
         corr_out = bids.get_stage_output_path(
-            subject_id=subject_id,
+            subject=subject,
             preproc_root=preproc_root,
             desc=correct_desc,
             session=input_comps.get("session"),
@@ -364,7 +356,7 @@ def main() -> None:
             run=input_comps.get("run"),
         )
         den_out = bids.get_stage_output_path(
-            subject_id=subject_id,
+            subject=subject,
             preproc_root=preproc_root,
             desc=denoise_desc,
             session=input_comps.get("session"),

@@ -10,7 +10,7 @@ import pandas as pd
 import seaborn as sns
 from coco_pipe.viz import plot_bar, plot_distribution_groups, plot_heatmap
 
-from eeg_adhd_epilepsy.utils.metadata_schema import (
+from eeg_adhd_epilepsy.metadata.schema import (
     EPILEPSY_MED_COLS,
     NORMALIZED_PSYCHOSTIMULANT_CATEGORIES,
     SOURCE_DATASETS,

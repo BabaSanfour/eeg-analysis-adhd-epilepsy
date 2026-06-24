@@ -47,8 +47,8 @@ from eeg_adhd_epilepsy.analysis.utils.foundation import (
     default_foundation_models,
     resolve_foundation_input_plan,
 )
-from eeg_adhd_epilepsy.io.bids import get_reports_root
-from eeg_adhd_epilepsy.io.containers import load_container
+from eeg_adhd_epilepsy.analysis.dataset import build_dataset
+from eeg_adhd_epilepsy.io.report_paths import default_reports_root
 from eeg_adhd_epilepsy.reports.decoding import (
     generate_decoding_summary_report,
     generate_foundation_decoding_report,
@@ -125,7 +125,7 @@ def run(config: dict[str, Any]) -> Path:
         / str(config.get("output_group", "default"))
         / str(config.get("dataset_name", "dataset"))
     )
-    reports_root = Path(config.get("reports_root", get_reports_root(bids_root))).expanduser()
+    reports_root = Path(config.get("reports_root", default_reports_root(bids_root))).expanduser()
     report_root = (
         reports_root
         / "summary"
@@ -159,7 +159,7 @@ def run(config: dict[str, Any]) -> Path:
                 failures.extend(skipped)
                 capability_records.extend(skipped)
                 continue
-            container = load_container(
+            container = build_dataset(
                 _raw_loader_args(config, plan),
                 config.get("subjects"),
                 metadata,
@@ -457,18 +457,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--cohort_config",
-        default=None,
+        required=True,
         help="Cohort/dataset config: subjects + clinical question (configs/cohorts/).",
     )
     parser.add_argument(
         "--analysis_config",
-        default=None,
+        required=True,
         help="Analysis/method config: models, train_modes (configs/analyses/foundation_decoding/).",
-    )
-    parser.add_argument(
-        "--config",
-        default=None,
-        help="[deprecated] single combined config; prefer --cohort_config + --analysis_config.",
     )
     parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
     parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
@@ -483,7 +478,6 @@ def main() -> None:
     config = resolve_cli_config(
         cohort_config=args.cohort_config,
         analysis_config=args.analysis_config,
-        legacy_config=args.config,
         bids_root=args.bids_root,
         metadata=args.metadata,
         overwrite=args.overwrite,

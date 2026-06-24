@@ -1,7 +1,7 @@
 """Cohort-level patient analysis and report generation.
 
 Reads ``patients_metadata_clean.csv`` (produced by ``eeg-build-patients-metadata``,
-see :mod:`eeg_adhd_epilepsy.io.patients`) and generates:
+see :mod:`eeg_adhd_epilepsy.metadata.patients`) and generates:
 
 - a full HTML cohort report with demographics, diagnosis, and medication breakdowns
 - analysis-opportunity tables (all combinations + valid-only filtered)
@@ -9,11 +9,11 @@ see :mod:`eeg_adhd_epilepsy.io.patients`) and generates:
 
 This module is a study-level analysis *script* (the ``eeg-cohort-report`` entry
 point); it has no generic re-usable API. Run via ``eeg-cohort-report`` or
-``python -m eeg_adhd_epilepsy.analysis.cohort``.
+``python -m eeg_adhd_epilepsy.metadata.cohort``.
 
 Where things live (the cohort/metadata concern spans a few modules)
 -------------------------------------------------------------------
-- :mod:`eeg_adhd_epilepsy.io.patients`            — *builds* the canonical metadata CSVs.
+- :mod:`eeg_adhd_epilepsy.metadata.patients`            — *builds* the canonical metadata CSVs.
 - this module                                     — *analyses* the clean cohort,
                                                     builds the tables, drives the report.
 - :mod:`eeg_adhd_epilepsy.reports.cohort_report`  — composes the HTML from those tables.
@@ -42,15 +42,19 @@ import pandas as pd
 import plotly.graph_objects as go
 from coco_pipe.io import read_table
 
-from eeg_adhd_epilepsy.reports.cohort_report import generate_cohort_report
-from eeg_adhd_epilepsy.utils.analysis_opportunities_schema import (
+from eeg_adhd_epilepsy.metadata.analysis_opportunities_schema import (
+    ANALYSIS_BY_NAME,
+    CONSTRAINT_BY_NAME,
     CONSTRAINT_RULES,
+    EXCLUSIVE_DIAGNOSIS_CONSTRAINTS,
+    SINGLE_STIMULANT_CATEGORY_CONSTRAINTS,
     TARGET_ANALYSES,
 )
-from eeg_adhd_epilepsy.utils.metadata_schema import (
+from eeg_adhd_epilepsy.metadata.schema import (
     EPILEPSY_MED_COLS,
     NORMALIZED_PSYCHOSTIMULANT_CATEGORIES,
 )
+from eeg_adhd_epilepsy.reports.cohort_report import generate_cohort_report
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 from eeg_adhd_epilepsy.viz.patients import (
     plot_age_by_diagnosis,
@@ -315,21 +319,6 @@ ANALYSIS_OUTPUT_COLUMNS = [
     "skip_reason",
     "dedupe_key",
 ]
-EXCLUSIVE_DIAGNOSIS_CONSTRAINTS = {
-    "Control_Only",
-    "ADHD_Only",
-    "Epilepsy_Only",
-    "Autism_Only",
-    "ADHD_Epilepsy",
-    "ADHD_Autism",
-    "Epilepsy_Autism",
-    "ADHD_Epilepsy_Autism",
-}
-SINGLE_STIMULANT_CATEGORY_CONSTRAINTS = {
-    "Methylphenidate",
-    "Dextroamphetamine",
-    "Lisdexamfetamine",
-}
 DROP_REASON_DISPLAY = {
     "non_confirmed_diagnosis": "Non-confirmed diagnosis",
     "no_eeg_files": "No EEG files",
@@ -340,6 +329,7 @@ DROP_REASON_DISPLAY = {
 
 
 # === 1. Cohort config + row filtering =========================================
+
 
 def _load_cohort_config(config_path: Path | None) -> dict[str, Any]:
     if config_path is None:
@@ -450,6 +440,7 @@ def _metric_table(rows: list[tuple[str, Any]], value_name: str = "value") -> pd.
 
 
 # === 2. Summary tables ========================================================
+
 
 def _build_cohort_summary_table(
     df: pd.DataFrame,
@@ -609,6 +600,7 @@ def _first_later_patient_sets(df: pd.DataFrame) -> tuple[set[Any], set[Any]]:
 
 
 # === 3. Drug-resistant / source-overlap views =================================
+
 
 def _build_drug_resistant_overview(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -781,6 +773,7 @@ def _build_drug_resistant_first_later_figure(df: pd.DataFrame) -> go.Figure | No
 
 
 # === 4. Recruitment-milestone projection ======================================
+
 
 def _resolve_recruitment_selectors(
     valid_opportunities: pd.DataFrame,
@@ -1167,56 +1160,13 @@ def _build_recruitment_outputs(
 
 # === 5. Analysis-opportunity enumeration ======================================
 
+
 def _constraint_mask(df: pd.DataFrame, name: str) -> pd.Series:
-    if name == "No_Constraint":
-        return pd.Series(True, index=df.index)
-    if name == "No_ADHD":
-        return df["adhd"] == 0
-    if name == "No_Autism":
-        return df["autism"] == 0
-    if name == "No_Epilepsy":
-        return df["epilepsy"] == 0
-    if name == "Psychostim_True":
-        return df["psychostimulant"] == 1
-    if name == "Psychostim_False":
-        return df["psychostimulant"] == 0
-    if name == "ASM_True":
-        return df["asm"] == 1
-    if name == "ASM_False":
-        return df["asm"] == 0
-    if name == "ASM_Resistant_True":
-        return df["asm_resistant"] == 1
-    if name == "ASM_Resistant_False":
-        return df["asm_resistant"] == 0
-    if name == "First_EEG":
-        return df["first_eeg"] == 1
-    if name == "DrugResistant_First_EEG":
-        return df["asm_resistant"].ne(1) | df["first_eeg"].eq(1)
-    if name == "Control_Only":
-        return (df["adhd"] == 0) & (df["autism"] == 0) & (df["epilepsy"] == 0)
-    if name == "ADHD_Only":
-        return (df["adhd"] == 1) & (df["autism"] == 0) & (df["epilepsy"] == 0)
-    if name == "Epilepsy_Only":
-        return (df["adhd"] == 0) & (df["autism"] == 0) & (df["epilepsy"] == 1)
-    if name == "Autism_Only":
-        return (df["adhd"] == 0) & (df["autism"] == 1) & (df["epilepsy"] == 0)
-    if name == "ADHD_Epilepsy":
-        return (df["adhd"] == 1) & (df["autism"] == 0) & (df["epilepsy"] == 1)
-    if name == "ADHD_Autism":
-        return (df["adhd"] == 1) & (df["autism"] == 1) & (df["epilepsy"] == 0)
-    if name == "Epilepsy_Autism":
-        return (df["adhd"] == 0) & (df["autism"] == 1) & (df["epilepsy"] == 1)
-    if name == "ADHD_Epilepsy_Autism":
-        return (df["adhd"] == 1) & (df["autism"] == 1) & (df["epilepsy"] == 1)
-    if name == "Methylphenidate":
-        return df["psychostimulant_category"] == "Methylphenidate"
-    if name == "Dextroamphetamine":
-        return df["psychostimulant_category"] == "Dextroamphetamine"
-    if name == "Lisdexamfetamine":
-        return df["psychostimulant_category"] == "Lisdexamfetamine"
-    if name == "Combined_Amphetamine":
-        return df["psychostimulant_category"].isin(["Lisdexamfetamine", "Dextroamphetamine"])
-    raise KeyError(f"Unknown constraint: {name}")
+    """Boolean membership for a named cohort filter (defined in the schema)."""
+    spec = CONSTRAINT_BY_NAME.get(name)
+    if spec is None:
+        raise KeyError(f"Unknown constraint: {name}")
+    return spec.predicate(df)
 
 
 def _constraint_status(constraint_names: tuple[str, ...]) -> str | None:
@@ -1268,153 +1218,16 @@ def _analysis_group_masks(
     subset: pd.DataFrame,
     analysis_name: str,
 ) -> tuple[pd.Series, pd.Series, str, str] | None:
-    if analysis_name == "DrugResistance_Status":
-        return (
-            (subset["epilepsy"] == 1) & (subset["asm"] == 1) & (subset["asm_resistant"] == 0),
-            (subset["epilepsy"] == 1) & (subset["asm_resistant"] == 1),
-            "Not Resistant",
-            "Resistant",
-        )
-    if analysis_name == "DrugResistance_First_vs_Later":
-        return (
-            (subset["asm_resistant"] == 1) & (subset["first_eeg"] == 1),
-            (subset["asm_resistant"] == 1) & (subset["first_eeg"] == 0),
-            "First EEG",
-            "Later EEG",
-        )
-    if analysis_name == "Epilepsy_ASM_Effect_Any":
-        return (
-            (subset["epilepsy"] == 1) & (subset["asm"] == 0),
-            (subset["epilepsy"] == 1) & (subset["asm"] == 1),
-            "Epilepsy Unmedicated",
-            "Epilepsy on ASM",
-        )
-    if analysis_name == "Epilepsy_ASM_Effect_LEV_Only":
-        return (
-            (subset["epilepsy"] == 1) & (subset["asm"] == 0),
-            (subset["epilepsy"] == 1) & (subset["asm_types"] == "LEV"),
-            "Epilepsy Unmedicated",
-            "LEV Only",
-        )
-    if analysis_name == "Epilepsy_ASM_Effect_VPA_Only":
-        return (
-            (subset["epilepsy"] == 1) & (subset["asm"] == 0),
-            (subset["epilepsy"] == 1) & (subset["asm_types"] == "VPA"),
-            "Epilepsy Unmedicated",
-            "VPA Only",
-        )
-    if analysis_name == "Epilepsy_LEV_vs_VPA_Only":
-        return (
-            (subset["epilepsy"] == 1) & (subset["asm_types"] == "LEV"),
-            (subset["epilepsy"] == 1) & (subset["asm_types"] == "VPA"),
-            "LEV Only",
-            "VPA Only",
-        )
-    if analysis_name == "NonEpilepsy_vs_Epilepsy_Unmedicated":
-        return (
-            subset["epilepsy"] == 0,
-            (subset["epilepsy"] == 1) & (subset["asm"] == 0),
-            "Non Epilepsy",
-            "Epilepsy Unmedicated",
-        )
-    if analysis_name == "NonEpilepsy_vs_Epilepsy_ASM_Any":
-        return (
-            subset["epilepsy"] == 0,
-            (subset["epilepsy"] == 1) & (subset["asm"] == 1),
-            "Non Epilepsy",
-            "Epilepsy on ASM",
-        )
-    if analysis_name == "NonEpilepsy_vs_Epilepsy_LEV_Only":
-        return (
-            subset["epilepsy"] == 0,
-            (subset["epilepsy"] == 1) & (subset["asm_types"] == "LEV"),
-            "Non Epilepsy",
-            "LEV Only",
-        )
-    if analysis_name == "NonEpilepsy_vs_Epilepsy_VPA_Only":
-        return (
-            subset["epilepsy"] == 0,
-            (subset["epilepsy"] == 1) & (subset["asm_types"] == "VPA"),
-            "Non Epilepsy",
-            "VPA Only",
-        )
-    if analysis_name == "ADHD_Psychostim_Effect_Any":
-        return (
-            (subset["adhd"] == 1) & (subset["psychostimulant"] == 0),
-            (subset["adhd"] == 1) & (subset["psychostimulant"] == 1),
-            "ADHD Unmedicated",
-            "ADHD Medicated",
-        )
-    if analysis_name == "ADHD_Psychostim_Effect_Methylphenidate":
-        return (
-            (subset["adhd"] == 1) & (subset["psychostimulant"] == 0),
-            (subset["adhd"] == 1) & (subset["psychostimulant_category"] == "Methylphenidate"),
-            "ADHD Unmedicated",
-            "Methylphenidate",
-        )
-    if analysis_name == "ADHD_Psychostim_Effect_Lisdexamfetamine":
-        return (
-            (subset["adhd"] == 1) & (subset["psychostimulant"] == 0),
-            (subset["adhd"] == 1) & (subset["psychostimulant_category"] == "Lisdexamfetamine"),
-            "ADHD Unmedicated",
-            "Lisdexamfetamine",
-        )
-    if analysis_name == "ADHD_Psychostim_Effect_Dextroamphetamine":
-        return (
-            (subset["adhd"] == 1) & (subset["psychostimulant"] == 0),
-            (subset["adhd"] == 1) & (subset["psychostimulant_category"] == "Dextroamphetamine"),
-            "ADHD Unmedicated",
-            "Dextroamphetamine",
-        )
-    if analysis_name == "ADHD_Methylphenidate_vs_Lisdexamfetamine":
-        return (
-            (subset["adhd"] == 1) & (subset["psychostimulant_category"] == "Methylphenidate"),
-            (subset["adhd"] == 1) & (subset["psychostimulant_category"] == "Lisdexamfetamine"),
-            "Methylphenidate",
-            "Lisdexamfetamine",
-        )
-    if analysis_name == "ADHD_Methylphenidate_vs_Amphetamine":
-        return (
-            (subset["adhd"] == 1) & (subset["psychostimulant_category"] == "Methylphenidate"),
-            (subset["adhd"] == 1)
-            & (subset["psychostimulant_category"].isin(["Lisdexamfetamine", "Dextroamphetamine"])),
-            "Methylphenidate",
-            "Amphetamine",
-        )
-    if analysis_name == "Control_vs_ADHD_Medicated_Any":
-        return (
-            subset["combined_diagnosis"] == "Control",
-            (subset["adhd"] == 1) & (subset["psychostimulant"] == 1),
-            "Controls",
-            "Any Medicated ADHD",
-        )
-    if analysis_name == "Control_vs_ADHD_Methylphenidate":
-        return (
-            subset["combined_diagnosis"] == "Control",
-            (subset["adhd"] == 1) & (subset["psychostimulant_category"] == "Methylphenidate"),
-            "Controls",
-            "Methylphenidate",
-        )
-    if analysis_name == "Control_vs_ADHD_Lisdexamfetamine":
-        return (
-            subset["combined_diagnosis"] == "Control",
-            (subset["adhd"] == 1) & (subset["psychostimulant_category"] == "Lisdexamfetamine"),
-            "Controls",
-            "Lisdexamfetamine",
-        )
-    if analysis_name == "Control_vs_ADHD_Amphetamine":
-        return (
-            subset["combined_diagnosis"] == "Control",
-            (subset["adhd"] == 1)
-            & (subset["psychostimulant_category"].isin(["Lisdexamfetamine", "Dextroamphetamine"])),
-            "Controls",
-            "Amphetamine",
-        )
-    return None
-
-
-def _analysis_applicability_reason(subset: pd.DataFrame, analysis_name: str) -> str | None:
-    return None
+    """Group-1/group-2 masks and labels for an analysis (defined in the schema)."""
+    spec = ANALYSIS_BY_NAME.get(analysis_name)
+    if spec is None:
+        return None
+    return (
+        spec.group_1_predicate(subset),
+        spec.group_2_predicate(subset),
+        spec.group_1,
+        spec.group_2,
+    )
 
 
 def _group_empty_reason(analysis_name: str, n1: int, n2: int) -> str:
@@ -1519,14 +1332,6 @@ def build_analysis_opportunities(df: pd.DataFrame, min_group_n: int) -> pd.DataF
                         rows.append(row)
                         continue
 
-                    applicability_reason = _analysis_applicability_reason(
-                        cohort_df, analysis_spec.name
-                    )
-                    if applicability_reason is not None:
-                        row["skip_reason"] = applicability_reason
-                        rows.append(row)
-                        continue
-
                     group_masks = _analysis_group_masks(cohort_df, analysis_spec.name)
                     if group_masks is None:
                         row["skip_reason"] = "analysis_not_applicable"
@@ -1591,6 +1396,7 @@ def build_analysis_opportunities(df: pd.DataFrame, min_group_n: int) -> pd.DataF
 
 
 # === 6. Figures + entry point =================================================
+
 
 def _create_figures(df: pd.DataFrame, figure_dir: Path) -> dict[str, list[tuple[str, Path]]]:
     figure_dir.mkdir(parents=True, exist_ok=True)

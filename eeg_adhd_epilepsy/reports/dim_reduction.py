@@ -36,9 +36,8 @@ from coco_pipe.viz.interactive.dim_reduction import (
     plot_radar_comparison,
 )
 
-from eeg_adhd_epilepsy.io.containers import load_container
-from eeg_adhd_epilepsy.io.bids import get_reports_root
-from eeg_adhd_epilepsy.utils.metadata_schema import EPILEPSY_MED_COLS
+from eeg_adhd_epilepsy.analysis.dataset import build_dataset
+from eeg_adhd_epilepsy.metadata.schema import EPILEPSY_MED_COLS
 from eeg_adhd_epilepsy.viz.topo import plot_topomap_from_channel_values, plot_topomap_selector
 from eeg_adhd_epilepsy.viz.utils import save_fig
 
@@ -377,7 +376,7 @@ def _overview_container(
     loaded = []
     for condition in args.conditions:
         try:
-            loaded.append(load_container(args, subjects, meta_df, condition, target_col=None))
+            loaded.append(build_dataset(args, subjects, meta_df, condition, target_col=None))
         except Exception:
             continue
     if not loaded:
@@ -778,7 +777,7 @@ def _build_flat_condition_section(
     eval_specs: Sequence[dict[str, Any]],
     reducers: Sequence[str],
 ) -> Section:
-    container = load_container(args, subjects, meta_df, condition, target_col=None)
+    container = build_dataset(args, subjects, meta_df, condition, target_col=None)
     artifacts = {
         str(row["fit_id"]): load_fit_artifact(output_root / row["artifact_path"])
         for _, row in condition_runs.iterrows()
@@ -1159,7 +1158,7 @@ def _build_nonflat_condition_section(
             selection_metric=args.selection_metric,
             selection_eval_name=getattr(args, "selection_eval_name", None),
         )
-        family_container = load_container(args, subjects, meta_df, condition, target_col=None)
+        family_container = build_dataset(args, subjects, meta_df, condition, target_col=None)
         for reducer_name in reducers:
             reducer_runs = merged[merged["reducer"] == reducer_name].copy()
             if reducer_runs.empty:
@@ -1313,7 +1312,7 @@ def _build_nonflat_condition_section(
         selection_eval_name=getattr(args, "selection_eval_name", None),
     )
     if args.analysis_mode == "sensor":
-        sensor_container = load_container(args, subjects, meta_df, condition, target_col=None)
+        sensor_container = build_dataset(args, subjects, meta_df, condition, target_col=None)
         for reducer_name in reducers:
             reducer_runs = merged[merged["reducer"] == reducer_name].copy()
             if reducer_runs.empty:
@@ -1473,7 +1472,7 @@ def _build_pooled_section(
         # Best embedding visualisation per reducer (mirrors per-condition flat sections)
         pooled_container = None
         try:
-            pooled_container = load_container(args, subjects, meta_df, args.conditions[0], target_col=None)
+            pooled_container = build_dataset(args, subjects, meta_df, args.conditions[0], target_col=None)
         except Exception:
             pooled_container = None
         for reducer_name in reducers:

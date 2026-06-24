@@ -1,25 +1,66 @@
-"""Schema definitions for cohort analysis opportunities over clean metadata."""
+"""Schema definitions for cohort analysis opportunities over clean metadata.
+
+This module is the single source of truth for *which* studies are possible and
+*how* each cohort filter and comparison group is defined. Every constraint and
+analysis carries an executable ``predicate`` (a callable over the metadata
+DataFrame); the cohort engine in :mod:`eeg_adhd_epilepsy.metadata.cohort`
+dispatches to these predicates rather than re-implementing the membership logic,
+so there is exactly one definition per concept.
+
+Data invariants (guaranteed by the metadata builder, relied on here)
+--------------------------------------------------------------------
+- ``psychostimulant == 1`` implies ``adhd == 1``
+- ``asm == 1`` implies ``epilepsy == 1``
+- ``asm_resistant == 1`` implies ``asm == 1`` and ``epilepsy == 1``
+- ``asm_types`` is a ``+``-joined set of ASM columns (e.g. ``"LEV"``,
+  ``"LEV+VPA"``) or ``"No_ASM"``; an exact match such as ``asm_types == "LEV"``
+  therefore means *LEV monotherapy*, not "LEV among others".
+
+Deduplication policy (implemented in the cohort engine)
+-------------------------------------------------------
+Opportunities are deduplicated by *comparison meaning*, not display labels:
+two rows are duplicates when they share the same analysis name and the same
+ordered pair of group ``study_id`` membership sets. One representative is kept.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
+
+import pandas as pd
+
+Predicate = Callable[[pd.DataFrame], "pd.Series"]
 
 
 @dataclass(frozen=True)
 class ConstraintSpec:
+    """A cohort filter: a human description plus the executable membership rule."""
+
     name: str
     description: str
-    rule: str
+    predicate: Predicate
 
 
 @dataclass(frozen=True)
 class AnalysisSpec:
+    """A two-group comparison and the constraint backgrounds it is run under.
+
+    ``group_1_predicate``/``group_2_predicate`` are the executable definitions of
+    each comparison arm; ``group_1``/``group_2`` are their display labels.
+    ``applicability`` is a human note on when the comparison is meaningful — it is
+    operationally enforced by the engine's empty/too-small-group validity gates,
+    not by a separate check.
+    """
+
     name: str
     group_1: str
     group_2: str
     description: str
     applicability: str
     constraint_sets: tuple[tuple[str, ...], ...]
+    group_1_predicate: Predicate
+    group_2_predicate: Predicate
 
 
 @dataclass(frozen=True)
@@ -31,85 +72,121 @@ class RuleSpec:
 
 
 TARGET_CONSTRAINTS = (
-    ConstraintSpec("No_Constraint", "No additional cohort filter.", "all rows"),
-    ConstraintSpec("No_ADHD", "Keep rows without ADHD.", "adhd == 0"),
-    ConstraintSpec("No_Autism", "Keep rows without autism.", "autism == 0"),
-    ConstraintSpec("No_Epilepsy", "Keep rows without epilepsy.", "epilepsy == 0"),
-    ConstraintSpec("Psychostim_True", "Keep psychostimulant-exposed rows.", "psychostimulant == 1"),
     ConstraintSpec(
-        "Psychostim_False", "Keep rows without psychostimulant exposure.", "psychostimulant == 0"
+        "No_Constraint",
+        "No additional cohort filter.",
+        lambda df: pd.Series(True, index=df.index),
     ),
-    ConstraintSpec("ASM_True", "Keep ASM-exposed rows.", "asm == 1"),
-    ConstraintSpec("ASM_False", "Keep rows without ASM exposure.", "asm == 0"),
-    ConstraintSpec("ASM_Resistant_True", "Keep drug-resistant rows.", "asm_resistant == 1"),
-    ConstraintSpec("ASM_Resistant_False", "Keep non-resistant rows.", "asm_resistant == 0"),
-    ConstraintSpec("First_EEG", "Keep first-EEG rows only.", "first_eeg == 1"),
+    ConstraintSpec("No_ADHD", "Keep rows without ADHD.", lambda df: df["adhd"] == 0),
+    ConstraintSpec("No_Autism", "Keep rows without autism.", lambda df: df["autism"] == 0),
+    ConstraintSpec("No_Epilepsy", "Keep rows without epilepsy.", lambda df: df["epilepsy"] == 0),
+    ConstraintSpec(
+        "Psychostim_True",
+        "Keep psychostimulant-exposed rows.",
+        lambda df: df["psychostimulant"] == 1,
+    ),
+    ConstraintSpec(
+        "Psychostim_False",
+        "Keep rows without psychostimulant exposure.",
+        lambda df: df["psychostimulant"] == 0,
+    ),
+    ConstraintSpec("ASM_True", "Keep ASM-exposed rows.", lambda df: df["asm"] == 1),
+    ConstraintSpec("ASM_False", "Keep rows without ASM exposure.", lambda df: df["asm"] == 0),
+    ConstraintSpec(
+        "ASM_Resistant_True", "Keep drug-resistant rows.", lambda df: df["asm_resistant"] == 1
+    ),
+    ConstraintSpec(
+        "ASM_Resistant_False", "Keep non-resistant rows.", lambda df: df["asm_resistant"] == 0
+    ),
+    ConstraintSpec("First_EEG", "Keep first-EEG rows only.", lambda df: df["first_eeg"] == 1),
     ConstraintSpec(
         "DrugResistant_First_EEG",
         "Keep resistant rows only when they are first EEG recordings.",
-        "asm_resistant == 0 or first_eeg == 1",
+        lambda df: df["asm_resistant"].ne(1) | df["first_eeg"].eq(1),
     ),
     ConstraintSpec(
         "Control_Only",
         "No ADHD, autism, or epilepsy.",
-        "adhd == 0 and autism == 0 and epilepsy == 0",
+        lambda df: (df["adhd"] == 0) & (df["autism"] == 0) & (df["epilepsy"] == 0),
     ),
     ConstraintSpec(
         "ADHD_Only",
         "ADHD without autism or epilepsy.",
-        "adhd == 1 and autism == 0 and epilepsy == 0",
+        lambda df: (df["adhd"] == 1) & (df["autism"] == 0) & (df["epilepsy"] == 0),
     ),
     ConstraintSpec(
         "Epilepsy_Only",
         "Epilepsy without ADHD or autism.",
-        "adhd == 0 and autism == 0 and epilepsy == 1",
+        lambda df: (df["adhd"] == 0) & (df["autism"] == 0) & (df["epilepsy"] == 1),
     ),
     ConstraintSpec(
         "Autism_Only",
         "Autism without ADHD or epilepsy.",
-        "adhd == 0 and autism == 1 and epilepsy == 0",
+        lambda df: (df["adhd"] == 0) & (df["autism"] == 1) & (df["epilepsy"] == 0),
     ),
     ConstraintSpec(
         "ADHD_Epilepsy",
         "ADHD and epilepsy without autism.",
-        "adhd == 1 and autism == 0 and epilepsy == 1",
+        lambda df: (df["adhd"] == 1) & (df["autism"] == 0) & (df["epilepsy"] == 1),
     ),
     ConstraintSpec(
         "ADHD_Autism",
         "ADHD and autism without epilepsy.",
-        "adhd == 1 and autism == 1 and epilepsy == 0",
+        lambda df: (df["adhd"] == 1) & (df["autism"] == 1) & (df["epilepsy"] == 0),
     ),
     ConstraintSpec(
         "Epilepsy_Autism",
         "Epilepsy and autism without ADHD.",
-        "adhd == 0 and autism == 1 and epilepsy == 1",
+        lambda df: (df["adhd"] == 0) & (df["autism"] == 1) & (df["epilepsy"] == 1),
     ),
     ConstraintSpec(
         "ADHD_Epilepsy_Autism",
         "ADHD, epilepsy, and autism together.",
-        "adhd == 1 and autism == 1 and epilepsy == 1",
+        lambda df: (df["adhd"] == 1) & (df["autism"] == 1) & (df["epilepsy"] == 1),
     ),
     ConstraintSpec(
         "Methylphenidate",
         "Keep methylphenidate rows only.",
-        "psychostimulant_category == 'Methylphenidate'",
+        lambda df: df["psychostimulant_category"] == "Methylphenidate",
     ),
     ConstraintSpec(
         "Dextroamphetamine",
         "Keep dextroamphetamine rows only.",
-        "psychostimulant_category == 'Dextroamphetamine'",
+        lambda df: df["psychostimulant_category"] == "Dextroamphetamine",
     ),
     ConstraintSpec(
         "Lisdexamfetamine",
         "Keep lisdexamfetamine rows only.",
-        "psychostimulant_category == 'Lisdexamfetamine'",
+        lambda df: df["psychostimulant_category"] == "Lisdexamfetamine",
     ),
     ConstraintSpec(
         "Combined_Amphetamine",
         "Keep amphetamine-family stimulant rows.",
-        "psychostimulant_category in {'Lisdexamfetamine', 'Dextroamphetamine'}",
+        lambda df: df["psychostimulant_category"].isin(["Lisdexamfetamine", "Dextroamphetamine"]),
     ),
 )
+
+CONSTRAINT_BY_NAME = {spec.name: spec for spec in TARGET_CONSTRAINTS}
+
+# Diagnosis filters that partition the cohort into mutually exclusive groups; at
+# most one may appear in a single constraint set.
+EXCLUSIVE_DIAGNOSIS_CONSTRAINTS = frozenset(
+    {
+        "Control_Only",
+        "ADHD_Only",
+        "Epilepsy_Only",
+        "Autism_Only",
+        "ADHD_Epilepsy",
+        "ADHD_Autism",
+        "Epilepsy_Autism",
+        "ADHD_Epilepsy_Autism",
+    }
+)
+# Single psychostimulant-category filters; at most one may appear in a set.
+SINGLE_STIMULANT_CATEGORY_CONSTRAINTS = frozenset(
+    {"Methylphenidate", "Dextroamphetamine", "Lisdexamfetamine"}
+)
+
 
 ADHD_MEDICATION_BACKGROUND_CONSTRAINTS = (
     ("No_Epilepsy",),
@@ -177,9 +254,11 @@ TARGET_ANALYSES = (
         "DrugResistance_Status",
         "Not Resistant",
         "Resistant",
-        "Compare non-resistant vs drug-resistant rows.",
+        "Compare ASM-treated but non-resistant epilepsy rows against drug-resistant rows.",
         "Only valid inside epilepsy/ASM cohorts with both resistance groups present.",
         DRUG_RESISTANCE_CONSTRAINTS,
+        lambda s: (s["epilepsy"] == 1) & (s["asm"] == 1) & (s["asm_resistant"] == 0),
+        lambda s: (s["epilepsy"] == 1) & (s["asm_resistant"] == 1),
     ),
     AnalysisSpec(
         "DrugResistance_First_vs_Later",
@@ -189,6 +268,8 @@ TARGET_ANALYSES = (
         "with both first and later recordings.",
         "Only valid for drug-resistant patients with at least one first EEG and one later EEG.",
         DRUG_RESISTANCE_LONGITUDINAL_CONSTRAINTS,
+        lambda s: (s["asm_resistant"] == 1) & (s["first_eeg"] == 1),
+        lambda s: (s["asm_resistant"] == 1) & (s["first_eeg"] == 0),
     ),
     AnalysisSpec(
         "Epilepsy_ASM_Effect_Any",
@@ -197,6 +278,8 @@ TARGET_ANALYSES = (
         "Compare epilepsy rows without ASM against epilepsy rows on any ASM.",
         "Only valid when both epilepsy groups exist after filtering.",
         EPILEPSY_MEDICATION_BACKGROUND_CONSTRAINTS,
+        lambda s: (s["epilepsy"] == 1) & (s["asm"] == 0),
+        lambda s: (s["epilepsy"] == 1) & (s["asm"] == 1),
     ),
     AnalysisSpec(
         "Epilepsy_ASM_Effect_LEV_Only",
@@ -205,6 +288,8 @@ TARGET_ANALYSES = (
         "Compare epilepsy rows without ASM against epilepsy rows on LEV monotherapy.",
         "Only valid when both groups exist after filtering.",
         EPILEPSY_MEDICATION_BACKGROUND_CONSTRAINTS,
+        lambda s: (s["epilepsy"] == 1) & (s["asm"] == 0),
+        lambda s: (s["epilepsy"] == 1) & (s["asm_types"] == "LEV"),
     ),
     AnalysisSpec(
         "Epilepsy_ASM_Effect_VPA_Only",
@@ -213,6 +298,8 @@ TARGET_ANALYSES = (
         "Compare epilepsy rows without ASM against epilepsy rows on VPA monotherapy.",
         "Only valid when both groups exist after filtering.",
         EPILEPSY_MEDICATION_BACKGROUND_CONSTRAINTS,
+        lambda s: (s["epilepsy"] == 1) & (s["asm"] == 0),
+        lambda s: (s["epilepsy"] == 1) & (s["asm_types"] == "VPA"),
     ),
     AnalysisSpec(
         "Epilepsy_LEV_vs_VPA_Only",
@@ -221,6 +308,8 @@ TARGET_ANALYSES = (
         "Compare the two main monotherapy ASM groups in epilepsy.",
         "Only valid when both monotherapy groups exist after filtering.",
         EPILEPSY_MEDICATION_BACKGROUND_CONSTRAINTS,
+        lambda s: (s["epilepsy"] == 1) & (s["asm_types"] == "LEV"),
+        lambda s: (s["epilepsy"] == 1) & (s["asm_types"] == "VPA"),
     ),
     AnalysisSpec(
         "NonEpilepsy_vs_Epilepsy_Unmedicated",
@@ -229,6 +318,8 @@ TARGET_ANALYSES = (
         "Compare non-epilepsy rows against epilepsy rows without ASM.",
         "Only valid when both groups are present.",
         NON_EPILEPSY_VS_EPILEPSY_BACKGROUND_CONSTRAINTS,
+        lambda s: s["epilepsy"] == 0,
+        lambda s: (s["epilepsy"] == 1) & (s["asm"] == 0),
     ),
     AnalysisSpec(
         "NonEpilepsy_vs_Epilepsy_ASM_Any",
@@ -237,6 +328,8 @@ TARGET_ANALYSES = (
         "Compare non-epilepsy rows against epilepsy rows on any ASM.",
         "Only valid when both groups are present.",
         NON_EPILEPSY_VS_EPILEPSY_BACKGROUND_CONSTRAINTS,
+        lambda s: s["epilepsy"] == 0,
+        lambda s: (s["epilepsy"] == 1) & (s["asm"] == 1),
     ),
     AnalysisSpec(
         "NonEpilepsy_vs_Epilepsy_LEV_Only",
@@ -245,6 +338,8 @@ TARGET_ANALYSES = (
         "Compare non-epilepsy rows against epilepsy rows on LEV monotherapy.",
         "Only valid when both groups are present.",
         NON_EPILEPSY_VS_EPILEPSY_BACKGROUND_CONSTRAINTS,
+        lambda s: s["epilepsy"] == 0,
+        lambda s: (s["epilepsy"] == 1) & (s["asm_types"] == "LEV"),
     ),
     AnalysisSpec(
         "NonEpilepsy_vs_Epilepsy_VPA_Only",
@@ -253,6 +348,8 @@ TARGET_ANALYSES = (
         "Compare non-epilepsy rows against epilepsy rows on VPA monotherapy.",
         "Only valid when both groups are present.",
         NON_EPILEPSY_VS_EPILEPSY_BACKGROUND_CONSTRAINTS,
+        lambda s: s["epilepsy"] == 0,
+        lambda s: (s["epilepsy"] == 1) & (s["asm_types"] == "VPA"),
     ),
     AnalysisSpec(
         "ADHD_Psychostim_Effect_Any",
@@ -261,6 +358,8 @@ TARGET_ANALYSES = (
         "Compare unmedicated ADHD rows against any medicated ADHD rows.",
         "Only valid when both ADHD groups exist after filtering.",
         ADHD_MEDICATION_BACKGROUND_CONSTRAINTS,
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant"] == 0),
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant"] == 1),
     ),
     AnalysisSpec(
         "ADHD_Psychostim_Effect_Methylphenidate",
@@ -269,6 +368,8 @@ TARGET_ANALYSES = (
         "Compare unmedicated ADHD rows against methylphenidate ADHD rows.",
         "Only valid when both groups exist after filtering.",
         ADHD_MEDICATION_BACKGROUND_CONSTRAINTS,
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant"] == 0),
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant_category"] == "Methylphenidate"),
     ),
     AnalysisSpec(
         "ADHD_Psychostim_Effect_Lisdexamfetamine",
@@ -277,6 +378,8 @@ TARGET_ANALYSES = (
         "Compare unmedicated ADHD rows against lisdexamfetamine ADHD rows.",
         "Only valid when both groups exist after filtering.",
         ADHD_MEDICATION_BACKGROUND_CONSTRAINTS,
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant"] == 0),
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant_category"] == "Lisdexamfetamine"),
     ),
     AnalysisSpec(
         "ADHD_Psychostim_Effect_Dextroamphetamine",
@@ -285,6 +388,8 @@ TARGET_ANALYSES = (
         "Compare unmedicated ADHD rows against dextroamphetamine ADHD rows.",
         "Only valid when both groups exist after filtering.",
         ADHD_MEDICATION_BACKGROUND_CONSTRAINTS,
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant"] == 0),
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant_category"] == "Dextroamphetamine"),
     ),
     AnalysisSpec(
         "ADHD_Methylphenidate_vs_Lisdexamfetamine",
@@ -293,6 +398,8 @@ TARGET_ANALYSES = (
         "Compare methylphenidate ADHD rows against lisdexamfetamine ADHD rows.",
         "Only valid when both categories exist after filtering.",
         ADHD_MEDICATION_BACKGROUND_CONSTRAINTS,
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant_category"] == "Methylphenidate"),
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant_category"] == "Lisdexamfetamine"),
     ),
     AnalysisSpec(
         "ADHD_Methylphenidate_vs_Amphetamine",
@@ -301,6 +408,9 @@ TARGET_ANALYSES = (
         "Compare methylphenidate ADHD rows against the combined amphetamine family.",
         "Only valid when both categories exist after filtering.",
         ADHD_MEDICATION_BACKGROUND_CONSTRAINTS,
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant_category"] == "Methylphenidate"),
+        lambda s: (s["adhd"] == 1)
+        & (s["psychostimulant_category"].isin(["Lisdexamfetamine", "Dextroamphetamine"])),
     ),
     AnalysisSpec(
         "Control_vs_ADHD_Medicated_Any",
@@ -309,6 +419,8 @@ TARGET_ANALYSES = (
         "Compare controls against any medicated ADHD rows.",
         "Only valid when controls and stimulant-exposed rows are both present.",
         CONTROL_VS_ADHD_BACKGROUND_CONSTRAINTS,
+        lambda s: s["combined_diagnosis"] == "Control",
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant"] == 1),
     ),
     AnalysisSpec(
         "Control_vs_ADHD_Methylphenidate",
@@ -317,6 +429,8 @@ TARGET_ANALYSES = (
         "Compare controls against medicated ADHD rows on methylphenidate.",
         "Only valid when both groups are present.",
         CONTROL_VS_ADHD_BACKGROUND_CONSTRAINTS,
+        lambda s: s["combined_diagnosis"] == "Control",
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant_category"] == "Methylphenidate"),
     ),
     AnalysisSpec(
         "Control_vs_ADHD_Lisdexamfetamine",
@@ -325,6 +439,8 @@ TARGET_ANALYSES = (
         "Compare controls against medicated ADHD rows on lisdexamfetamine.",
         "Only valid when both groups are present.",
         CONTROL_VS_ADHD_BACKGROUND_CONSTRAINTS,
+        lambda s: s["combined_diagnosis"] == "Control",
+        lambda s: (s["adhd"] == 1) & (s["psychostimulant_category"] == "Lisdexamfetamine"),
     ),
     AnalysisSpec(
         "Control_vs_ADHD_Amphetamine",
@@ -333,16 +449,13 @@ TARGET_ANALYSES = (
         "Compare controls against medicated ADHD rows on the combined amphetamine family.",
         "Only valid when both groups are present.",
         CONTROL_VS_ADHD_BACKGROUND_CONSTRAINTS,
+        lambda s: s["combined_diagnosis"] == "Control",
+        lambda s: (s["adhd"] == 1)
+        & (s["psychostimulant_category"].isin(["Lisdexamfetamine", "Dextroamphetamine"])),
     ),
 )
 
-
-DATA_IMPLICATIONS = (
-    "psychostimulant == 1 implies adhd == 1",
-    "asm == 1 implies epilepsy == 1",
-    "asm_resistant == 1 implies epilepsy == 1",
-    "asm_resistant == 1 implies asm == 1",
-)
+ANALYSIS_BY_NAME = {spec.name: spec for spec in TARGET_ANALYSES}
 
 
 CONSTRAINT_RULES = (
@@ -424,6 +537,8 @@ CONSTRAINT_RULES = (
 )
 
 
+# Vocabulary of reasons an enumerated opportunity is not a valid study. The
+# cohort engine asserts every emitted reason is one of these.
 SKIP_REASONS = (
     "contradictory_constraints",
     "redundant_constraint_set",
@@ -434,14 +549,4 @@ SKIP_REASONS = (
     "too_small_group",
     "insufficient_category_support",
     "insufficient_longitudinal_pairs",
-    "subset_specific_choice_required",
-)
-
-
-DEDUPLICATION_POLICY = (
-    "Deduplicate by actual comparison meaning, not display labels alone.",
-    "Use `study_id` membership for group 1 and group 2 as the canonical cohort identity.",
-    "Two rows are duplicates if they share the same analysis name "
-    "and the same ordered pair of group membership sets.",
-    "Keep one representative row and record alternate labels or constraints later if needed.",
 )
