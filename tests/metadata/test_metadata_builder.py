@@ -6,14 +6,14 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from eeg_adhd_epilepsy.io.patients import (
+from eeg_adhd_epilepsy.metadata.patients import (
     _normalize_binary_flag_series,
     _normalize_merged_metadata,
     _rename_adhd_source,
     _rename_drug_resistant_source,
     build_patients_metadata,
 )
-from eeg_adhd_epilepsy.utils.metadata_schema import (
+from eeg_adhd_epilepsy.metadata.schema import (
     EPILEPSY_MED_COLS,
     PATIENTS_METADATA_AUDIT_COLUMNS,
     PATIENTS_METADATA_COLUMNS,

@@ -17,7 +17,4 @@ dimensionality_reduction
     Checkpointed dimensionality-reduction analysis: fit reducers (PCA, UMAP,
     PHATE, …) across analysis units (flat / sensor / family /
     sensor_within_family), evaluate embeddings, and generate HTML reports.
-cohort
-    Cohort-level patient report: summary statistics, analysis-opportunity
-    enumeration, and optional recruitment-milestone projection.
 """

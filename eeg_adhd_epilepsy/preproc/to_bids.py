@@ -6,30 +6,26 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
-import json
 import logging
 import re
 import shutil
 import unicodedata
-from collections import Counter, defaultdict
 from collections.abc import Sequence
 from pathlib import Path
 
 import mne
 import numpy as np
 import pandas as pd
-from joblib import Parallel, cpu_count, delayed
+from joblib import Parallel, delayed, effective_n_jobs
 from mne_bids import BIDSPath, write_raw_bids
 from tqdm import tqdm
 
 import eeg_adhd_epilepsy.qc.raw_qc as qc_raw
 import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
-import eeg_adhd_epilepsy.utils.events as utils_events
-import eeg_adhd_epilepsy.viz.eeg_report as viz_eeg
 from eeg_adhd_epilepsy.io import bids as bids_io
-from eeg_adhd_epilepsy.io import ingest
-from eeg_adhd_epilepsy.utils import constants
-from eeg_adhd_epilepsy.utils.formatting import format_clock_time, format_duration_hms
+from eeg_adhd_epilepsy.io import ingest, readers, report_paths
+from eeg_adhd_epilepsy.reports._common import clean_scalar
+from eeg_adhd_epilepsy.utils import constants, events
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 
 LOGGER = logging.getLogger(__name__)
@@ -157,7 +153,7 @@ def _build_segment_record(
     eye_state: str,
     start: float,
     stop: float,
-    freq_hz: float | None = np.nan,
+    freq_hz: float | None = None,
 ) -> dict[str, object]:
     return {
         "segment_type": segment_type,
@@ -352,7 +348,7 @@ def extract_condition_segments(raw: mne.io.BaseRaw) -> pd.DataFrame:
     hv_blocks = _find_hv_blocks(entries)
     photo_blocks = _find_photo_blocks(entries, raw_end)
     post_hv_blocks = _compute_post_hv_blocks(hv_blocks, photo_blocks, entries, raw_end)
-    exclusion_intervals = bids_io.merge_intervals(
+    exclusion_intervals = events.merge_intervals(
         [
             (block["t_start"], block["t_stop"])
             for block in (*hv_blocks, *post_hv_blocks, *photo_blocks)
@@ -411,317 +407,6 @@ def extract_condition_segments(raw: mne.io.BaseRaw) -> pd.DataFrame:
     )
 
 
-def _eeg_event_counts(
-    raw: mne.io.BaseRaw,
-    segments_df: pd.DataFrame,
-    summary: dict[str, object],
-) -> dict[str, int]:
-    raw_counts = utils_events.summarize_annotations(raw)
-    event_counts = {
-        "HV Start": int(summary.get("hv_block_count", 0)),
-        "HV End": int(summary.get("hv_block_count", 0)),
-        "Photo": int(summary.get("photo_block_count", 0)),
-        "Post-HV": int(summary.get("post_hv_block_count", 0)),
-        "Eyes Open": 0,
-        "Eyes Closed": 0,
-    }
-    if not segments_df.empty:
-        eye_states = segments_df["eye_state"].fillna("unknown").astype(str).str.lower()
-        event_counts["Eyes Open"] = int(eye_states.eq("eo").sum())
-        event_counts["Eyes Closed"] = int(eye_states.eq("ec").sum())
-    for desc, count in raw_counts.items():
-        clean_desc = str(desc).strip().lower()
-        if (
-            clean_desc
-            in {"eyes_open", "eyes_closed", "hv_start", "hv_end", "post_hv", "recording_start"}
-            or clean_desc == "photo"
-            or clean_desc.startswith("photo_")
-            or str(desc).startswith("BLOCK_")
-        ):
-            continue
-        event_counts[desc] = event_counts.get(desc, 0) + int(count)
-    return event_counts
-
-
-def _clean_scalar(value: object) -> object:
-    return None if pd.isna(value) else value
-
-
-def _record_value(record: object, key: str) -> object:
-    if isinstance(record, dict):
-        return record.get(key)
-    return getattr(record, key)
-
-
-def _build_run_summary_row(record: dict[str, object]) -> dict[str, object]:
-    return {
-        "subject_id": record["subject_id"],
-        "session_id": record["session_id"],
-        "run_id": record["run_id"],
-        "subject_session_prefix": record["subject_session_prefix"],
-        "run_prefix": record["run_prefix"],
-        "study_id": record["study_id"],
-        "source_dataset": record["source_dataset"],
-        "record_date": record["record_date"],
-        "meas_datetime": record["meas_datetime"],
-        "filepath": record["filepath"],
-        "raw_duration": float(record["raw_duration"]),
-        "n_channels": int(record["n_channels"]),
-        "age_group": record["age_group"],
-        "sex": record["sex"],
-        "combined_diagnosis": record["combined_diagnosis"],
-        **record["summary"],
-    }
-
-
-def _build_subject_summary_row(record: dict[str, object]) -> dict[str, object]:
-    return {
-        "subject_id": record["subject_id"],
-        "session_id": record["session_id"],
-        "subject_session_prefix": record["subject_session_prefix"],
-        "study_id": record["study_id"],
-        "source_dataset": record["source_dataset"],
-        "raw_duration": float(record["raw_duration"]),
-        "n_runs": int(record["n_runs"]),
-        "age_group": record["age_group"],
-        "sex": record["sex"],
-        "combined_diagnosis": record["combined_diagnosis"],
-        **record["summary"],
-    }
-
-
-def _build_eeg_report_record(
-    *,
-    ids: dict[str, object],
-    record,
-    metadata: dict[str, object] | None,
-    raw: mne.io.BaseRaw,
-    segments_df: pd.DataFrame,
-    summary: dict[str, object],
-    event_counts: dict[str, int],
-    raw_duration: float,
-) -> dict[str, object]:
-    metadata = metadata or {}
-    eeg_record = {
-        **ids,
-        "study_id": int(_record_value(record, "study_id")),
-        "source_dataset": _clean_scalar(metadata.get("source_dataset"))
-        or _clean_scalar(_record_value(record, "source_dataset")),
-        "record_date": _clean_scalar(_record_value(record, "record_date")),
-        "meas_datetime": _clean_scalar(_record_value(record, "meas_datetime")),
-        "filepath": str(ids.get("filepath") or ""),
-        "raw_duration": float(raw_duration),
-        "n_channels": len(raw.ch_names),
-        "age_group": _clean_scalar(metadata.get("age_group")),
-        "sex": _clean_scalar(metadata.get("sex")),
-        "combined_diagnosis": _clean_scalar(metadata.get("combined_diagnosis")),
-        "segments_df": segments_df,
-        "summary": summary,
-        "event_counts": event_counts,
-    }
-    eeg_record["summary_row"] = _build_run_summary_row(eeg_record)
-    return eeg_record
-
-
-def _collect_existing_eeg_report_record(
-    bids_path: BIDSPath,
-    bids_root: Path,
-    record,
-    metadata: dict[str, object] | None,
-) -> dict[str, object] | None:
-    raw = bids_io.load_bids_raw(filepath=bids_path.fpath, bids_root=bids_root)
-    segments_df = bids_io.load_segments_for_raw(raw)
-    ids = bids_io.build_bids_report_ids(bids_path.fpath)
-    ids["filepath"] = str(bids_path.fpath)
-    summary = report_eeg.summarize_condition_segments(segments_df)
-    event_counts = _eeg_event_counts(raw, segments_df, summary)
-    raw_duration = raw.times[-1] if raw.n_times > 0 else 0.0
-    return _build_eeg_report_record(
-        ids=ids,
-        record=record,
-        metadata=metadata,
-        raw=raw,
-        segments_df=segments_df,
-        summary=summary,
-        event_counts=event_counts,
-        raw_duration=raw_duration,
-    )
-
-
-def _missingness_payload(records: list[dict[str, object]], label_key: str) -> dict[str, list[str]]:
-    payload = {
-        "no_conditions": [],
-        "no_eyes_open": [],
-        "no_eyes_closed": [],
-        "no_hv": [],
-        "no_photo": [],
-    }
-    for record in records:
-        label = str(record[label_key])
-        summary = record["summary"]
-        if (
-            summary.get("total_eyes_open_duration", 0) <= 0
-            and summary.get("total_eyes_closed_duration", 0) <= 0
-            and summary.get("hv_block_count", 0) == 0
-            and summary.get("photo_block_count", 0) == 0
-        ):
-            payload["no_conditions"].append(label)
-        if summary.get("total_eyes_open_duration", 0) <= 0:
-            payload["no_eyes_open"].append(label)
-        if summary.get("total_eyes_closed_duration", 0) <= 0:
-            payload["no_eyes_closed"].append(label)
-        if summary.get("hv_block_count", 0) == 0:
-            payload["no_hv"].append(label)
-        if summary.get("photo_block_count", 0) == 0:
-            payload["no_photo"].append(label)
-    return payload
-
-
-def _write_subject_eeg_report(
-    reports_root: Path,
-    records: list[dict[str, object]],
-) -> dict[str, object]:
-    ids = records[0]
-    subject_prefix = str(ids["subject_session_prefix"])
-    subject_dir = bids_io.get_subject_session_stage_dir(
-        reports_root,
-        str(ids["subject_id"]),
-        str(ids["session_id"]),
-        "eeg_pre_base",
-        create_dir=True,
-    )
-    fig_dir = subject_dir / "figures"
-    segments_df = pd.concat(
-        [record["segments_df"].assign(run_id=record["run_id"]) for record in records],
-        ignore_index=True,
-    )
-    summary = report_eeg.summarize_condition_segments(segments_df)
-    event_counter: Counter = Counter()
-    for record in records:
-        event_counter.update(record["event_counts"] or {})
-    event_counts = dict(event_counter)
-    raw_duration = float(sum(float(record["raw_duration"]) for record in records))
-    figure_paths = viz_eeg.save_eeg_report_figures(segments_df, fig_dir)
-    report_path = bids_io.get_subject_session_stage_report_path(
-        reports_root=reports_root,
-        subject_id=str(ids["subject_id"]),
-        session_id=str(ids["session_id"]),
-        stage="eeg_pre_base",
-        report_stem=subject_prefix,
-        create_dir=True,
-    )
-    subject_record = {
-        "subject_id": str(ids["subject_id"]),
-        "session_id": str(ids["session_id"]),
-        "subject_session_prefix": subject_prefix,
-        "study_id": ids["study_id"],
-        "source_dataset": ids["source_dataset"],
-        "summary": summary,
-        "event_counts": event_counts,
-        "raw_duration": raw_duration,
-        "n_runs": len(records),
-        "age_group": ids["age_group"],
-        "sex": ids["sex"],
-        "combined_diagnosis": ids["combined_diagnosis"],
-    }
-    run_inventory_df = pd.DataFrame(
-        [
-            {
-                "Run": record["run_id"],
-                "Recording Date": record["record_date"],
-                "Recording Time": format_clock_time(record["meas_datetime"]),
-                "Duration": format_duration_hms(record["raw_duration"]),
-                "EEG Channels": int(record["n_channels"]),
-            }
-            for record in records
-        ]
-    )
-    run_summary_df = pd.DataFrame(
-        [
-            {
-                "Run": record["run_id"],
-                "Analysis Duration": format_duration_hms(record["summary"]["total_duration"]),
-                "EO": format_duration_hms(record["summary"]["total_eyes_open_duration"]),
-                "EC": format_duration_hms(record["summary"]["total_eyes_closed_duration"]),
-                "HV Blocks": int(record["summary"]["hv_block_count"]),
-                "PHOTO Blocks": int(record["summary"]["photo_block_count"]),
-            }
-            for record in records
-        ]
-    )
-    report_eeg.generate_eeg_subject_report(
-        record=subject_record,
-        run_inventory_df=run_inventory_df.sort_values("Run")
-        if len(records) > 1
-        else pd.DataFrame(),
-        run_summary_df=run_summary_df.sort_values("Run") if len(records) > 1 else pd.DataFrame(),
-        figure_paths=figure_paths,
-        output_path=report_path,
-    )
-    return subject_record
-
-
-def _write_eeg_aggregate_reports(
-    reports_root: Path,
-    run_records: list[dict[str, object]],
-) -> None:
-    if not run_records:
-        return
-
-    summary_dir = bids_io.get_stage_summary_dir(reports_root, "eeg_pre_base", create_dir=True)
-
-    runs_df = pd.DataFrame([record["summary_row"] for record in run_records]).sort_values(
-        ["subject_id", "session_id", "run_id", "filepath"],
-        na_position="last",
-    )
-    runs_df.to_csv(summary_dir / "eeg_runs.csv", index=False)
-
-    subject_groups: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
-    for record in run_records:
-        subject_groups[record["subject_session_key"]].append(record)
-
-    subject_records: list[dict[str, object]] = []
-    subject_rows: list[dict[str, object]] = []
-    for (_subject_id, _session_id), records in sorted(subject_groups.items()):
-        subject_record = _write_subject_eeg_report(reports_root, records)
-        subject_records.append(subject_record)
-        subject_rows.append(_build_subject_summary_row(subject_record))
-
-    subjects_df = pd.DataFrame(subject_rows).sort_values(
-        ["subject_id", "session_id"],
-        na_position="last",
-    )
-    subjects_df.to_csv(summary_dir / "eeg_subjects.csv", index=False)
-
-    dataset_tables = report_eeg.build_dataset_report_tables(runs_df, subjects_df, run_records)
-    dataset_tables["dataset_summary_df"].to_csv(
-        summary_dir / "eeg_dataset_summary.csv", index=False
-    )
-    figure_paths = viz_eeg.save_dataset_eeg_figures(
-        runs_df,
-        [record["event_counts"] for record in run_records],
-        summary_dir,
-    )
-    report_eeg.generate_eeg_dataset_report(
-        tables=dataset_tables,
-        figure_paths=figure_paths,
-        output_path=summary_dir / "eeg_pre_base_dataset_report.html",
-    )
-
-    missing_export = {
-        "metadata": {
-            "generated_at": pd.Timestamp.now().isoformat(),
-            "total_runs_processed": len(run_records),
-            "total_subject_sessions": len(subject_records),
-            "total_subjects": int(runs_df["subject_id"].nunique()) if not runs_df.empty else 0,
-        },
-        "runs": _missingness_payload(run_records, "run_prefix"),
-        "subjects": _missingness_payload(subject_records, "subject_session_prefix"),
-    }
-    with open(summary_dir / "eeg_missingness.json", "w") as f:
-        json.dump(missing_export, f, indent=2)
-
-
 def process_record(
     record,
     bids_root: Path,
@@ -732,13 +417,14 @@ def process_record(
     raw_qc_analysis_level: str = "both",
 ) -> dict[str, object]:
     """Read, standardize, and export one selected recording to BIDS."""
-    eeg_path = Path(_record_value(record, "eeg_path"))
-    study_id = int(_record_value(record, "study_id"))
-    run = str(_record_value(record, "run"))
-    subject_id = bids_io.normalize_subject_id(f"{study_id:04d}")
+    eeg_path = Path(record["eeg_path"])
+    study_id = int(record["study_id"])
+    run = str(record["run"])
+    subject = bids_io.study_id_to_bids_subject(study_id)
+    subject_id = bids_io.bids_subject_label(subject)
     bids_path = BIDSPath(
         root=str(bids_root),
-        subject=subject_id[4:],
+        subject=subject,
         session="01",
         task="clinical",
         run=run,
@@ -758,40 +444,50 @@ def process_record(
         LOGGER.info("Skipping %s run-%s (exists)", subject_id, run)
         result["skipped"] = True
         result["success"] = True
+        if eeg_reports_dir is None and raw_qc_reports_dir is None:
+            return result
+        try:
+            existing_raw = readers.read_bids_raw(
+                bids_root=bids_root,
+                subject=bids_path.subject,
+                task=bids_path.task,
+                session=bids_path.session,
+                run=bids_path.run,
+            )
+            existing_segments = events.segments_from_block_annotations(existing_raw)
+        except Exception as exc:
+            LOGGER.warning(
+                "Could not load existing BIDS run for %s: %s", subject_id, exc, exc_info=True
+            )
+            return result
         if eeg_reports_dir is not None:
-            try:
-                result["eeg_report_record"] = _collect_existing_eeg_report_record(
-                    bids_path=bids_path,
-                    bids_root=bids_root,
-                    record=record,
-                    metadata=metadata,
-                )
-            except Exception as exc:
-                LOGGER.warning(
-                    "Could not gather existing EEG report record for %s: %s", subject_id, exc
-                )
+            result["eeg_report_record"] = report_eeg.build_eeg_run_record(
+                raw=existing_raw,
+                bids_path=bids_path,
+                segments_df=existing_segments,
+                record=record,
+                metadata=metadata,
+            )
         if raw_qc_reports_dir is not None:
-            try:
-                result["raw_qc_record"] = qc_raw.collect_existing_raw_qc_record(
-                    bids_path=bids_path,
-                    bids_root=bids_root,
-                    metadata=metadata,
-                    analysis_level=raw_qc_analysis_level,
-                )
-            except Exception as exc:
-                LOGGER.warning(
-                    "Could not gather existing raw QC record for %s: %s", subject_id, exc
-                )
+            existing_summary = report_eeg.summarize_condition_segments(existing_segments)
+            result["raw_qc_record"] = qc_raw.build_raw_qc_run_record(
+                raw=existing_raw,
+                bids_path=bids_path,
+                condition_segments_df=existing_segments,
+                condition_summary=existing_summary,
+                metadata=metadata,
+                analysis_level=raw_qc_analysis_level,
+            )
         return result
 
     try:
         raw = mne.io.read_raw_nihon(str(eeg_path), preload=False)
     except Exception as exc:
-        LOGGER.error("Failed to read EEG %s: %s", eeg_path, exc)
+        LOGGER.error("Failed to read EEG %s: %s", eeg_path, exc, exc_info=True)
         return result
 
     raw.info["line_freq"] = 60
-    meas_datetime = pd.to_datetime(_record_value(record, "meas_datetime"), errors="coerce")
+    meas_datetime = pd.to_datetime(record["meas_datetime"], errors="coerce")
     if pd.notna(meas_datetime):
         raw.set_meas_date(meas_datetime.to_pydatetime())
 
@@ -844,24 +540,16 @@ def process_record(
             verbose=False,
         )
     except Exception as exc:
-        LOGGER.error("Failed writing %s run-%s: %s", subject_id, run, exc)
+        LOGGER.error("Failed writing %s run-%s: %s", subject_id, run, exc, exc_info=True)
         return result
 
     if eeg_reports_dir is not None:
-        ids = bids_io.build_bids_report_ids(bids_path.fpath)
-        ids["filepath"] = str(bids_path.fpath)
-        summary = report_eeg.summarize_condition_segments(segments_df)
-        event_counts = _eeg_event_counts(raw, segments_df, summary)
-        raw_duration = raw.times[-1] if raw.n_times > 0 else 0.0
-        result["eeg_report_record"] = _build_eeg_report_record(
-            ids=ids,
+        result["eeg_report_record"] = report_eeg.build_eeg_run_record(
+            raw=raw,
+            bids_path=bids_path,
+            segments_df=segments_df,
             record=record,
             metadata=metadata,
-            raw=raw,
-            segments_df=segments_df,
-            summary=summary,
-            event_counts=event_counts,
-            raw_duration=raw_duration,
         )
     if raw_qc_reports_dir is not None:
         summary = report_eeg.summarize_condition_segments(segments_df)
@@ -902,13 +590,86 @@ def _consume_record_result(
         raw_qc_run_records.append(record_result["raw_qc_record"])
 
 
-def _resolve_n_jobs(n_jobs: int) -> int:
-    """Normalize CLI worker count while preserving joblib's ``-1`` semantics."""
-    if n_jobs == -1:
-        return cpu_count()
-    if n_jobs == 0 or n_jobs < -1:
-        raise ValueError("--n_jobs must be -1 or a positive integer")
-    return max(1, int(n_jobs))
+def _build_metadata_lookup(metadata_df: pd.DataFrame) -> dict[int, dict[str, object]]:
+    """Map ``study_id`` to the canonical metadata fields surfaced in reports."""
+    return {
+        int(row.study_id): {
+            "source_dataset": clean_scalar(getattr(row, "source_dataset", None)),
+            "age_group": clean_scalar(getattr(row, "age_group", None)),
+            "sex": clean_scalar(getattr(row, "sex", None)),
+            "combined_diagnosis": clean_scalar(getattr(row, "combined_diagnosis", None)),
+        }
+        for row in metadata_df[
+            ["study_id", "source_dataset", "age_group", "sex", "combined_diagnosis"]
+        ]
+        .dropna(subset=["study_id"])
+        .drop_duplicates("study_id")
+        .itertuples(index=False)
+    }
+
+
+def _build_run_inventory(
+    raw_root: Path,
+    metadata_df: pd.DataFrame,
+    selected_study_ids: set[int] | None,
+) -> pd.DataFrame:
+    """Discover raw records and assign per-subject, chronological run numbers."""
+    inventory_df = pd.DataFrame.from_records(
+        ingest.discover_raw_records(raw_root, metadata_df),
+        columns=[
+            "source_dataset",
+            "study_id",
+            "patient_id",
+            "resolved_by",
+            "record_stem",
+            "pnt_path",
+            "eeg_path",
+            "meas_datetime",
+            "record_date",
+        ],
+    )
+    inventory_df["study_id"] = pd.to_numeric(inventory_df["study_id"], errors="coerce").astype(
+        "Int64"
+    )
+    inventory_df["run"] = pd.Series([None] * len(inventory_df), dtype=object)
+
+    selected_rows = inventory_df.loc[
+        inventory_df["study_id"].isin(metadata_df["study_id"]) & inventory_df["eeg_path"].notna()
+    ].copy()
+    if not selected_rows.empty:
+        selected_rows = selected_rows.assign(
+            record_date_dt=pd.to_datetime(selected_rows["record_date"], errors="coerce"),
+            meas_datetime_dt=pd.to_datetime(selected_rows["meas_datetime"], errors="coerce"),
+        )
+        selected_rows = selected_rows.sort_values(
+            ["study_id", "record_date_dt", "meas_datetime_dt", "record_stem"],
+            na_position="last",
+        )
+        inventory_df.loc[selected_rows.index, "run"] = (
+            selected_rows.groupby("study_id").cumcount().add(1).map(lambda value: f"{value:02d}")
+        )
+
+    if selected_study_ids is not None:
+        inventory_df = inventory_df.loc[inventory_df["study_id"].isin(selected_study_ids)].copy()
+    return inventory_df
+
+
+def _write_participants_tsv(
+    bids_root: Path, metadata_df: pd.DataFrame, successful_ids: set[int]
+) -> None:
+    """Write ``participants.tsv`` for the successfully converted subjects."""
+    converted_meta = metadata_df[metadata_df["study_id"].isin(sorted(successful_ids))].copy()
+    participants_df = converted_meta[["study_id", "age", "sex"]].dropna(subset=["study_id"]).copy()
+    participants_df["participant_id"] = participants_df["study_id"].apply(
+        lambda value: bids_io.bids_subject_label(bids_io.study_id_to_bids_subject(int(value)))
+    )
+    participants_df = (
+        participants_df[["participant_id", "age", "sex"]]
+        .drop_duplicates("participant_id")
+        .sort_values("participant_id")
+        .reset_index(drop=True)
+    )
+    participants_df.to_csv(bids_root / "participants.tsv", sep="\t", index=False)
 
 
 def main() -> None:
@@ -951,7 +712,9 @@ def main() -> None:
     )
     args = parser.parse_args()
     reports_root = (
-        args.reports_root if args.reports_root else bids_io.get_reports_root(Path(args.bids_root))
+        args.reports_root
+        if args.reports_root
+        else report_paths.default_reports_root(Path(args.bids_root))
     )
     eeg_reports_dir = reports_root if args.with_eeg_reports else None
     raw_qc_reports_dir = reports_root if args.with_raw_qc else None
@@ -965,45 +728,12 @@ def main() -> None:
         "Int64"
     )
     LOGGER.info("Loaded metadata CSV with %d rows", len(metadata_df))
-    metadata_lookup = {
-        int(row.study_id): {
-            "source_dataset": _clean_scalar(getattr(row, "source_dataset", None)),
-            "age_group": _clean_scalar(getattr(row, "age_group", None)),
-            "sex": _clean_scalar(getattr(row, "sex", None)),
-            "combined_diagnosis": _clean_scalar(getattr(row, "combined_diagnosis", None)),
-        }
-        for row in metadata_df[
-            ["study_id", "source_dataset", "age_group", "sex", "combined_diagnosis"]
-        ]
-        .dropna(subset=["study_id"])
-        .drop_duplicates("study_id")
-        .itertuples(index=False)
-    }
-
-    inventory_df = pd.DataFrame.from_records(
-        ingest.discover_raw_records(args.raw_root, metadata_df),
-        columns=[
-            "source_dataset",
-            "study_id",
-            "patient_id",
-            "resolved_by",
-            "record_stem",
-            "pnt_path",
-            "eeg_path",
-            "meas_datetime",
-            "record_date",
-        ],
-    )
-    inventory_df["study_id"] = pd.to_numeric(inventory_df["study_id"], errors="coerce").astype(
-        "Int64"
-    )
-    inventory_df["run"] = pd.Series([None] * len(inventory_df), dtype=object)
+    metadata_lookup = _build_metadata_lookup(metadata_df)
 
     selected_study_ids: set[int] | None = None
     if args.subjects:
         selected_study_ids = {
-            int(bids_io.normalize_subject_id(subject).replace("sub-", ""))
-            for subject in args.subjects
+            int(bids_io.study_id_to_bids_subject(subject)) for subject in args.subjects
         }
         LOGGER.info(
             "Filtering to %d selected subject(s): %s",
@@ -1011,24 +741,7 @@ def main() -> None:
             sorted(selected_study_ids),
         )
 
-    selected_rows = inventory_df.loc[
-        inventory_df["study_id"].isin(metadata_df["study_id"]) & inventory_df["eeg_path"].notna()
-    ].copy()
-    if not selected_rows.empty:
-        selected_rows = selected_rows.assign(
-            record_date_dt=pd.to_datetime(selected_rows["record_date"], errors="coerce"),
-            meas_datetime_dt=pd.to_datetime(selected_rows["meas_datetime"], errors="coerce"),
-        )
-        selected_rows = selected_rows.sort_values(
-            ["study_id", "record_date_dt", "meas_datetime_dt", "record_stem"],
-            na_position="last",
-        )
-        inventory_df.loc[selected_rows.index, "run"] = (
-            selected_rows.groupby("study_id").cumcount().add(1).map(lambda value: f"{value:02d}")
-        )
-
-    if selected_study_ids is not None:
-        inventory_df = inventory_df.loc[inventory_df["study_id"].isin(selected_study_ids)].copy()
+    inventory_df = _build_run_inventory(args.raw_root, metadata_df, selected_study_ids)
 
     args.bids_root.mkdir(parents=True, exist_ok=True)
     inventory_path = args.bids_root / "raw_record_inventory.csv"
@@ -1039,7 +752,7 @@ def main() -> None:
         for study_id in sorted(
             inventory_df.loc[inventory_df["run"].notna(), "study_id"].dropna().astype(int).unique()
         ):
-            subject_id = bids_io.normalize_subject_id(f"{int(study_id):04d}")
+            subject_id = bids_io.bids_subject_label(bids_io.study_id_to_bids_subject(int(study_id)))
             sub_dir = args.bids_root / subject_id
             if sub_dir.exists():
                 LOGGER.info("Overwriting %s", subject_id)
@@ -1051,65 +764,36 @@ def main() -> None:
     eeg_run_records: list[dict[str, object]] = []
     raw_qc_run_records: list[dict[str, object]] = []
     selected_records = inventory_df.loc[inventory_df["run"].notna()].to_dict("records")
-    n_jobs = _resolve_n_jobs(args.n_jobs)
-    LOGGER.info("Using %d worker(s) for BIDS conversion", n_jobs)
-    if n_jobs == 1:
-        for record in tqdm(
-            selected_records, total=len(selected_records), desc="Converting records"
-        ):
-            record_result = process_record(
+    LOGGER.info("Using %d worker(s) for BIDS conversion", effective_n_jobs(args.n_jobs))
+
+    with tqdm_joblib(tqdm(total=len(selected_records), desc="Converting records")):
+        record_results = Parallel(n_jobs=args.n_jobs, backend="loky", batch_size=1)(
+            delayed(process_record)(
                 record,
-                args.bids_root,
+                bids_root=args.bids_root,
                 overwrite=args.overwrite,
                 metadata=metadata_lookup.get(int(record["study_id"]), {}),
                 eeg_reports_dir=eeg_reports_dir,
                 raw_qc_reports_dir=raw_qc_reports_dir,
                 raw_qc_analysis_level=args.raw_qc_analysis_level,
             )
-            _consume_record_result(
-                record,
-                record_result,
-                failed_ids=failed_ids,
-                successful_ids=successful_ids,
-                skipped_ids=skipped_ids,
-                eeg_run_records=eeg_run_records,
-                raw_qc_run_records=raw_qc_run_records,
-            )
-    else:
-        with tqdm_joblib(tqdm(total=len(selected_records), desc="Converting records")):
-            record_results = Parallel(
-                n_jobs=n_jobs,
-                backend="loky",
-                batch_size=1,
-                pre_dispatch=n_jobs,
-            )(
-                delayed(process_record)(
-                    record,
-                    args.bids_root,
-                    args.overwrite,
-                    metadata_lookup.get(int(record["study_id"]), {}),
-                    eeg_reports_dir,
-                    raw_qc_reports_dir,
-                    args.raw_qc_analysis_level,
-                )
-                for record in selected_records
-            )
-        for record, record_result in zip(selected_records, record_results):
-            if record_result is None:
-                LOGGER.error(
-                    "Failed processing study_id %s: no result returned", record["study_id"]
-                )
-                failed_ids.add(int(record["study_id"]))
-                continue
-            _consume_record_result(
-                record,
-                record_result,
-                failed_ids=failed_ids,
-                successful_ids=successful_ids,
-                skipped_ids=skipped_ids,
-                eeg_run_records=eeg_run_records,
-                raw_qc_run_records=raw_qc_run_records,
-            )
+            for record in selected_records
+        )
+
+    for record, record_result in zip(selected_records, record_results):
+        if record_result is None:
+            LOGGER.error("Failed processing study_id %s: no result returned", record["study_id"])
+            failed_ids.add(int(record["study_id"]))
+            continue
+        _consume_record_result(
+            record,
+            record_result,
+            failed_ids=failed_ids,
+            successful_ids=successful_ids,
+            skipped_ids=skipped_ids,
+            eeg_run_records=eeg_run_records,
+            raw_qc_run_records=raw_qc_run_records,
+        )
 
     if failed_ids:
         LOGGER.warning("Failed study_ids: %s", sorted(failed_ids))
@@ -1122,23 +806,10 @@ def main() -> None:
         LOGGER.info("No new recordings needed conversion.")
 
     if successful_ids:
-        converted_meta = metadata_df[metadata_df["study_id"].isin(sorted(successful_ids))].copy()
-        participants_df = (
-            converted_meta[["study_id", "age", "sex"]].dropna(subset=["study_id"]).copy()
-        )
-        participants_df["participant_id"] = participants_df["study_id"].apply(
-            lambda value: bids_io.normalize_subject_id(f"{int(value):04d}")
-        )
-        participants_df = (
-            participants_df[["participant_id", "age", "sex"]]
-            .drop_duplicates("participant_id")
-            .sort_values("participant_id")
-            .reset_index(drop=True)
-        )
-        participants_df.to_csv(args.bids_root / "participants.tsv", sep="\t", index=False)
+        _write_participants_tsv(args.bids_root, metadata_df, successful_ids)
         if args.with_eeg_reports:
             LOGGER.info("Generating EEG aggregate reports in %s", eeg_reports_dir)
-            _write_eeg_aggregate_reports(eeg_reports_dir, eeg_run_records)
+            report_eeg.write_eeg_aggregate_reports(eeg_reports_dir, eeg_run_records)
         if args.with_raw_qc:
             LOGGER.info("Generating raw QC aggregate reports in %s", raw_qc_reports_dir)
             qc_raw.write_raw_qc_aggregate_reports(raw_qc_reports_dir, raw_qc_run_records)

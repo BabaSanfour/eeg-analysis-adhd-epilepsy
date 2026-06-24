@@ -11,7 +11,7 @@ from coco_pipe.descriptors import build_descriptor_tables
 from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis import extract_descriptors, merge_descriptors
-from eeg_adhd_epilepsy.io.recording import add_recording_group_columns
+from eeg_adhd_epilepsy.io.bids import add_recording_id
 
 
 def _demo_container() -> DataContainer:
@@ -29,6 +29,7 @@ def _demo_container() -> DataContainer:
             "obs": np.array(["0001_ep0", "0001_ep1", "0002_ep0", "0002_ep1"], dtype=object),
             "channel": np.array(["Fz", "Cz"], dtype=object),
             "time": time,
+            "subject": np.array(["0001", "0001", "0002", "0002"], dtype=object),
             "study_id": np.array(["0001", "0001", "0002", "0002"], dtype=object),
             "session": np.array(["01", "01", "01", "01"], dtype=object),
             "run": np.array(["01", "02", "01", "01"], dtype=object),
@@ -74,6 +75,7 @@ def _demo_container_for_subjects(subjects: list[str] | None = None) -> DataConta
             "obs": np.array(ep_ids, dtype=object),
             "channel": np.array(["Fz", "Cz"], dtype=object),
             "time": time,
+            "subject": np.array(all_subjects, dtype=object),
             "study_id": np.array(all_subjects, dtype=object),
             "session": np.array(sessions, dtype=object),
             "run": np.array(runs, dtype=object),
@@ -202,24 +204,23 @@ def test_epoch_metadata_frame_requires_container_ids() -> None:
 
 
 def test_feature_outputs_preserve_run_level_aggregation() -> None:
-    metadata_df = pd.DataFrame(
-        {
-            "obs_id": ["sub-0001_ses-01_run-01_ep-0", "sub-0001_ses-01_run-02_ep-0"],
-            "subject": ["0001", "0001"],
-            "session": ["01", "01"],
-            "run": ["01", "02"],
-            "condition": ["EO_baseline", "EO_baseline"],
-        }
-    )
-    metadata_df = add_recording_group_columns(metadata_df)
     container = DataContainer(
         X=np.asarray([[1.0, 2.0], [10.0, 20.0]]),
         dims=("obs", "feature"),
         coords={
-            "feature": np.asarray(["band_abs_alpha_ch-Fz", "band_abs_beta_ch-Fz"], dtype=object)
+            "subject": np.asarray(["0001", "0001"], dtype=object),
+            "session": np.asarray(["01", "01"], dtype=object),
+            "run": np.asarray(["01", "02"], dtype=object),
+            "feature": np.asarray(["band_abs_alpha_ch-Fz", "band_abs_beta_ch-Fz"], dtype=object),
         },
-        ids=metadata_df["obs_id"].to_numpy(dtype=object),
+        ids=np.asarray(
+            ["sub-0001_ses-01_run-01_ep-0", "sub-0001_ses-01_run-02_ep-0"], dtype=object
+        ),
     )
+    container = add_recording_id(container)
+    metadata_df = container.obs_table(include_ids=True)
+    metadata_df["obs_id"] = metadata_df["obs_id"].astype(str)
+    metadata_df["condition"] = "EO_baseline"
 
     outputs = build_descriptor_tables(
         container,
@@ -232,8 +233,8 @@ def test_feature_outputs_preserve_run_level_aggregation() -> None:
     assert subject_df["subject"].tolist() == ["0001", "0001"]
     assert subject_df["run"].tolist() == ["01", "02"]
     assert subject_df["recording_id"].tolist() == [
-        "0001_ses-01_run-01",
-        "0001_ses-01_run-02",
+        "subject-0001_session-01_run-01",
+        "subject-0001_session-01_run-02",
     ]
     assert subject_df["epoch_count"].tolist() == [1, 1]
 
@@ -287,16 +288,10 @@ aggregation:
         "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
+
     monkeypatch.setattr(
         extract_descriptors,
-        "validate_bids_coverage",
-        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
-            "present_subjects": ["0001", "0002"]
-        },
-    )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "load_eeg_data",
+        "build_container",
         lambda **kwargs: _demo_container_for_subjects(kwargs.get("subjects")),
     )
 
@@ -346,6 +341,7 @@ aggregation:
         assert (shard_root / "qc" / "family_summary.csv").exists()
     assert (
         reports_root
+        / "subjects"
         / "sub-0001"
         / "ses-01"
         / "descriptor_qc"
@@ -353,6 +349,7 @@ aggregation:
     ).exists()
     assert (
         reports_root
+        / "subjects"
         / "sub-0002"
         / "ses-01"
         / "descriptor_qc"
@@ -441,16 +438,10 @@ aggregation:
         "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
+
     monkeypatch.setattr(
         extract_descriptors,
-        "validate_bids_coverage",
-        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
-            "present_subjects": ["0001", "0002"]
-        },
-    )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "load_eeg_data",
+        "build_container",
         lambda **kwargs: _demo_container_for_subjects(kwargs.get("subjects")),
     )
 
@@ -564,13 +555,6 @@ aggregation:
         "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "validate_bids_coverage",
-        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
-            "present_subjects": ["0001"]
-        },
-    )
 
     def _load_demo_data(**kwargs):
         condition = kwargs.get("condition")
@@ -578,7 +562,7 @@ aggregation:
             raise RuntimeError("No valid data found in /tmp/mock_preproc")
         return _demo_container_for_subjects(kwargs.get("subjects"))
 
-    monkeypatch.setattr(extract_descriptors, "load_eeg_data", _load_demo_data)
+    monkeypatch.setattr(extract_descriptors, "build_container", _load_demo_data)
 
     bids_root = tmp_path / "BIDS"
     monkeypatch.setattr(
@@ -641,13 +625,6 @@ aggregation:
         "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "validate_bids_coverage",
-        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
-            "present_subjects": ["0001", "0002"]
-        },
-    )
 
     load_calls: list[tuple[str, ...]] = []
 
@@ -656,7 +633,7 @@ aggregation:
         load_calls.append(subjects)
         return _demo_container_for_subjects(list(subjects))
 
-    monkeypatch.setattr(extract_descriptors, "load_eeg_data", _load_demo_data)
+    monkeypatch.setattr(extract_descriptors, "build_container", _load_demo_data)
 
     bids_root = tmp_path / "BIDS"
     argv = [
@@ -690,7 +667,7 @@ aggregation:
     rerun_calls: list[tuple[str, ...]] = []
     monkeypatch.setattr(
         extract_descriptors,
-        "load_eeg_data",
+        "build_container",
         lambda **kwargs: rerun_calls.append(tuple(kwargs.get("subjects") or []))
         or _demo_container_for_subjects(kwargs.get("subjects")),
     )
@@ -735,16 +712,10 @@ aggregation:
         "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
+
     monkeypatch.setattr(
         extract_descriptors,
-        "validate_bids_coverage",
-        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
-            "present_subjects": ["0001", "0002"]
-        },
-    )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "load_eeg_data",
+        "build_container",
         lambda **kwargs: _demo_container_for_subjects(kwargs.get("subjects")),
     )
 
@@ -822,18 +793,11 @@ aggregation:
         "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "validate_bids_coverage",
-        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
-            "present_subjects": ["0001"]
-        },
-    )
 
-    def _unexpected_load(**kwargs):
-        raise AssertionError("load_eeg_data should not be called when no subjects match")
+    def _raise_missing_data(**kwargs):
+        raise RuntimeError("No valid data found in BIDS root")
 
-    monkeypatch.setattr(extract_descriptors, "load_eeg_data", _unexpected_load)
+    monkeypatch.setattr(extract_descriptors, "build_container", _raise_missing_data)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -890,20 +854,14 @@ aggregation:
         "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "validate_bids_coverage",
-        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
-            "present_subjects": ["0001", "0002"]
-        },
-    )
+
     load_calls = []
 
-    def _load_eeg_data(**kwargs):
+    def _build_container(**kwargs):
         load_calls.append(tuple(kwargs.get("subjects") or []))
         return _demo_container_for_subjects(kwargs.get("subjects"))
 
-    monkeypatch.setattr(extract_descriptors, "load_eeg_data", _load_eeg_data)
+    monkeypatch.setattr(extract_descriptors, "build_container", _build_container)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -964,18 +922,11 @@ aggregation:
         "read_table",
         lambda metadata_path, sep=None: _demo_raw_metadata(),
     )
-    monkeypatch.setattr(
-        extract_descriptors,
-        "validate_bids_coverage",
-        lambda raw_meta_df, coverage_root, desc, suffix, subject_col: {
-            "present_subjects": ["0001"]
-        },
-    )
 
-    def _unexpected_load(**kwargs):
-        raise AssertionError("load_eeg_data should not be called for an unavailable metadata row")
+    def _raise_missing_data(**kwargs):
+        raise RuntimeError("No valid data found in BIDS root")
 
-    monkeypatch.setattr(extract_descriptors, "load_eeg_data", _unexpected_load)
+    monkeypatch.setattr(extract_descriptors, "build_container", _raise_missing_data)
     monkeypatch.setattr(
         sys,
         "argv",

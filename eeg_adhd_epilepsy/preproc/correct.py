@@ -23,8 +23,9 @@ import numpy as np
 import scipy.linalg
 
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
-from eeg_adhd_epilepsy.io import bids
+from eeg_adhd_epilepsy.io import bids, report_paths
 from eeg_adhd_epilepsy.qc import preproc_qc
+from eeg_adhd_epilepsy.utils import events
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 
 from .utils import NumpyEncoder, benchmark_step, select_subjects
@@ -142,7 +143,7 @@ def run_source_correction(
     # 1. Determine Target Data (Data to be Corrected)
     if condition_name:
         LOGGER.info("Selecting data for condition: %s", condition_name)
-        all_blocks = bids._collect_block_windows(raw)
+        all_blocks = events.collect_block_windows(raw)
         cond_blocks = [b for b in all_blocks if b.name == condition_name]
 
         if not cond_blocks:
@@ -454,12 +455,12 @@ def run_correction_pipeline(
     """
     result: dict[str, object] = {
         "success": False,
-        "subject_id": bids.normalize_subject_id(subject_id),
+        "subject_id": bids.bids_subject_label(subject_id),
         "qc_record": None,
         "error": "",
     }
     try:
-        subject_id = bids.normalize_subject_id(subject_id)
+        subject = subject_id
         output_desc = bids.validate_stage_desc(output_desc)
         bids_root = Path(bids_root).expanduser()
 
@@ -468,19 +469,19 @@ def run_correction_pipeline(
         else:
             preproc_root = Path(preproc_root).expanduser()
         if reports_root is None:
-            reports_root = bids.get_reports_root(bids_root)
+            reports_root = report_paths.default_reports_root(bids_root)
         else:
             reports_root = Path(reports_root).expanduser()
 
         if input_path is None:
             input_path = bids.get_stage_output_path(
-                subject_id=subject_id,
+                subject=subject,
                 preproc_root=preproc_root,
                 desc="base",
                 task=condition_name if condition_name else None,
             )
         input_path = Path(input_path)
-        input_ids = bids.build_bids_report_ids(input_path)
+        input_ids = report_paths.build_bids_report_ids(input_path)
         input_comps = bids.parse_bids_components(input_path)
         session_id = input_comps.get("session")
         run_id = input_comps.get("run")
@@ -495,13 +496,15 @@ def run_correction_pipeline(
         raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
 
         stage_name = preproc_qc.get_preproc_qc_stage_name("correct", output_desc)
-        subject_report_path = bids.get_subject_session_stage_report_path(
+        report_dir = report_paths.subject_report_dir(
             reports_root=reports_root,
-            subject_id=subject_id,
-            session_id=session_id,
+            subject=subject,
+            session=session_id or "01",
             stage=stage_name,
-            report_stem=str(input_ids["subject_session_prefix"]),
-            create_dir=True,
+            create=True,
+        )
+        subject_report_path = report_dir / (
+            f"{input_ids['subject_session_prefix']}_{stage_name.value}_report.html"
         )
         figures_dir = subject_report_path.parent / "figures" / record_label
         figures_dir.mkdir(parents=True, exist_ok=True)
@@ -517,7 +520,7 @@ def run_correction_pipeline(
         fit_segments = None
         if train_condition:
             LOGGER.info("Extracting training segments from condition: %s", train_condition)
-            windows = bids._collect_block_windows(raw)
+            windows = events.collect_block_windows(raw)
             train_blocks = [b for b in windows if b.name == train_condition]
             if train_blocks:
                 fit_segments = [(b.onset, b.duration) for b in train_blocks]
@@ -552,7 +555,7 @@ def run_correction_pipeline(
 
         task_token = condition_name if condition_name else input_comps.get("task")
         out_path = bids.get_stage_output_path(
-            subject_id=subject_id,
+            subject=subject,
             preproc_root=preproc_root,
             desc=output_desc,
             session=session_id,
@@ -560,15 +563,7 @@ def run_correction_pipeline(
             run=run_id,
             create_dir=True,
         )
-        prov_path = bids.get_stage_provenance_path(
-            subject_id=subject_id,
-            preproc_root=preproc_root,
-            desc=output_desc,
-            session=session_id,
-            task=task_token,
-            run=run_id,
-            create_dir=True,
-        )
+        prov_path = out_path.with_name(out_path.name.replace("_eeg.fif", "_provenance.json"))
 
         # Enrich provenance schema.
         provenance["subject_id"] = subject_id
@@ -737,7 +732,7 @@ def main():
 
     bids_root = Path(args.bids_root).expanduser()
     preproc_root = bids.get_preproc_root(bids_root)
-    reports_root = bids.get_reports_root(bids_root)
+    reports_root = report_paths.default_reports_root(bids_root)
     preproc_root.mkdir(parents=True, exist_ok=True)
     reports_root.mkdir(parents=True, exist_ok=True)
 
@@ -785,7 +780,7 @@ def main():
         )
         sys.exit(1)
 
-    subjects_found = sorted({bids.parse_subject_id(f) for f in files})
+    subjects_found = sorted({bids.parse_bids_components(f)["subject"] for f in files})
     LOGGER.info("Found %d base-stage runs across %d subjects.", len(files), len(subjects_found))
 
     # Filter Logic
@@ -799,9 +794,7 @@ def main():
     )
     if not subjects_to_process:
         if args.start_from:
-            LOGGER.error(
-                "No subjects found starting from %s.", bids.normalize_subject_id(args.start_from)
-            )
+            LOGGER.error("No subjects found starting from study_id %s.", args.start_from)
             sys.exit(1)
         LOGGER.warning(
             "No selection criteria provided (use --all, --test, --subjects, or --start-from)."
@@ -825,12 +818,12 @@ def main():
 
         existing_runs = 0
         for input_file in files:
-            sid = bids.parse_subject_id(input_file)
+            sid = bids.parse_bids_components(input_file)["subject"]
             if sid not in subjects_to_process:
                 continue
             comps = bids.parse_bids_components(input_file)
             out_file = bids.get_stage_output_path(
-                subject_id=sid,
+                subject=sid,
                 preproc_root=preproc_root,
                 desc=bids.validate_stage_desc(args.output_desc),
                 session=comps.get("session"),
@@ -878,10 +871,10 @@ def main():
         if isinstance(record, dict):
             existing_run_keys.add(record.get("run_key"))
     for input_file in files:
-        sid = bids.parse_subject_id(input_file)
+        sid = bids.parse_bids_components(input_file)["subject"]
         if sid not in subjects_to_process:
             continue
-        ids = bids.build_bids_report_ids(input_file)
+        ids = report_paths.build_bids_report_ids(input_file)
         if ids["run_key"] in existing_run_keys:
             continue
         files_to_process.append(input_file)
@@ -918,8 +911,8 @@ def main():
             failed_ids.append(str(result["subject_id"]))
 
     for input_file in files_to_process:
-        sid = bids.parse_subject_id(input_file)
-        run_label = str(bids.build_bids_report_ids(input_file)["run_prefix"])
+        sid = bids.parse_bids_components(input_file)["subject"]
+        run_label = str(report_paths.build_bids_report_ids(input_file)["run_prefix"])
         LOGGER.info("Processing %s...", run_label)
         try:
             result = run_correction_pipeline(

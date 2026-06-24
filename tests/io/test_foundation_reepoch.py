@@ -3,9 +3,11 @@
 import mne
 import numpy as np
 import pandas as pd
+import pytest
 
-import eeg_adhd_epilepsy.io.bids as bids
 from eeg_adhd_epilepsy.analysis.utils.foundation import resolve_foundation_input_plan
+from eeg_adhd_epilepsy.io import readers
+from eeg_adhd_epilepsy.analysis import dataset
 
 _CHANNELS = [
     "Fp1",
@@ -59,7 +61,7 @@ def test_reepoch_plan_uses_cleaned_continuous_source():
 
 def test_load_cleaned_continuous_container(tmp_path, monkeypatch):
     raw = _synthetic_block_raw()
-    monkeypatch.setattr(bids, "load_stage_artifacts", lambda *a, **k: (raw, {}, []))
+    monkeypatch.setattr(dataset, "read_preproc_stage", lambda *a, **k: (raw, {}, []))
     metadata = pd.DataFrame(
         {
             "study_id": [1],
@@ -68,7 +70,7 @@ def test_load_cleaned_continuous_container(tmp_path, monkeypatch):
         }
     )
 
-    container = bids.load_cleaned_continuous_container(
+    container = dataset.reepoch_eeg(
         bids_root=tmp_path,
         subjects=["0001"],
         task="clinical",
@@ -93,10 +95,12 @@ def test_load_cleaned_continuous_container(tmp_path, monkeypatch):
 
 def test_load_cleaned_continuous_missing_condition_raises(tmp_path, monkeypatch):
     raw = _synthetic_block_raw()
-    monkeypatch.setattr(bids, "load_stage_artifacts", lambda *a, **k: (raw, {}, []))
-    # No EC_baseline block exists in the synthetic raw -> no epochs -> error.
-    try:
-        bids.load_cleaned_continuous_container(
+    monkeypatch.setattr(dataset, "read_preproc_stage", lambda *a, **k: (raw, {}, []))
+    # No EC_baseline block exists
+    with pytest.raises(
+        RuntimeError, match="No cleaned-continuous epochs.*First issues.*EC_baseline"
+    ):
+        dataset.reepoch_eeg(
             bids_root=tmp_path,
             subjects=["0001"],
             task="clinical",
@@ -106,7 +110,3 @@ def test_load_cleaned_continuous_missing_condition_raises(tmp_path, monkeypatch)
             metadata_df=None,
             subject_col="study_id",
         )
-    except RuntimeError as exc:
-        assert "EC_baseline" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("expected RuntimeError for missing condition")

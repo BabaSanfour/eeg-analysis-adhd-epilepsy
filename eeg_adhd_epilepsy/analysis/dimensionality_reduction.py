@@ -45,19 +45,19 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     condition_load_failure_record,
     pool_containers,
 )
-from eeg_adhd_epilepsy.io.bids import (
-    get_reports_root,
-    get_stage_summary_dir,
-)
-from eeg_adhd_epilepsy.io.containers import (
+from eeg_adhd_epilepsy.analysis.dataset import build_dataset
+from eeg_adhd_epilepsy.analysis.utils.units import (
     apply_family_qc_mask,
     families_for_analysis_unit,
-    load_container,
+)
+from eeg_adhd_epilepsy.io.report_paths import (
+    ReportStage,
+    default_reports_root,
+    summary_report_dir,
 )
 from eeg_adhd_epilepsy.reports.dim_reduction import generate_dataset_report
 from eeg_adhd_epilepsy.utils.config import load_cohort_analysis_config
 from eeg_adhd_epilepsy.utils.constants import DEFAULT_ANALYSIS_CONDITIONS
-from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,6 @@ def main() -> None:
     )
 
     pre_parser = argparse.ArgumentParser(add_help=False)
-    pre_parser.add_argument("--config", default=None)
     pre_parser.add_argument("--cohort_config", default=None)
     pre_parser.add_argument("--analysis_config", default=None)
     bootstrap_args, _ = pre_parser.parse_known_args()
@@ -219,18 +218,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run checkpointed EEG dimensionality reduction.")
     parser.add_argument(
         "--cohort_config",
-        default=None,
+        required=True,
         help="Cohort/dataset config: subjects + clinical question (configs/cohorts/).",
     )
     parser.add_argument(
         "--analysis_config",
-        default=None,
+        required=True,
         help="Analysis/method config: reducers, sweep (configs/analyses/dim_reduction/).",
-    )
-    parser.add_argument(
-        "--config",
-        default=None,
-        help="[deprecated] single combined config; prefer --cohort_config + --analysis_config.",
     )
 
     dataset_group = parser.add_argument_group("Dataset")
@@ -274,15 +268,12 @@ def main() -> None:
             "epoch_native",
             "epoch_flat",
             "epoch_time_as_sample",
-            "epoch_scalar_mean",
             "subject_native",
             "subject_flat",
             "subject_time_as_sample",
-            "subject_scalar_mean",
             "recording_native",
             "recording_flat",
             "recording_time_as_sample",
-            "recording_scalar_mean",
         ],
         default="epoch_flat",
     )
@@ -375,17 +366,10 @@ def main() -> None:
     )
 
     config_eval_specs = None
-    using_pair = bool(bootstrap_args.cohort_config or bootstrap_args.analysis_config)
-    if using_pair:
-        if not (bootstrap_args.cohort_config and bootstrap_args.analysis_config):
-            parser.error("--cohort_config and --analysis_config must be provided together.")
-        if bootstrap_args.config:
-            parser.error("Pass either --config or --cohort_config + --analysis_config, not both.")
+    if bootstrap_args.cohort_config and bootstrap_args.analysis_config:
         raw_config = load_cohort_analysis_config(
             bootstrap_args.cohort_config, bootstrap_args.analysis_config
         )
-    elif bootstrap_args.config:
-        raw_config = load_yaml_config(Path(bootstrap_args.config).expanduser())
     else:
         raw_config = None
     if raw_config is not None:
@@ -579,7 +563,7 @@ def main() -> None:
             for condition in args.conditions:
                 logger.info("Loading input for condition '%s' (%s).", condition, args.input_mode)
                 try:
-                    base_container = load_container(
+                    base_container = build_dataset(
                         args, subjects, meta_df, condition, target_col=None
                     )
                 except Exception as exc:
@@ -740,8 +724,8 @@ def main() -> None:
             eval_specs=eval_specs,
             pooled_condition=POOLED_CONDITION,
         )
-        reports_root = get_reports_root(bids_root)
-        summary_dir = get_stage_summary_dir(reports_root, "dim_reduction", create_dir=True)
+        reports_root = default_reports_root(bids_root)
+        summary_dir = summary_report_dir(reports_root, ReportStage.DIM_REDUCTION, create=True)
         if args.output_group:
             summary_dir = summary_dir / Path(str(args.output_group))
         summary_dir = summary_dir / output_dataset_name

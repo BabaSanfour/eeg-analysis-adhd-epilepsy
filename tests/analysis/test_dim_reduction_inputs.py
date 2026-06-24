@@ -18,12 +18,9 @@ from eeg_adhd_epilepsy.analysis.dimensionality_reduction import (
     _collect_scope_fit_requests,
 )
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import pool_containers
-from eeg_adhd_epilepsy.io.containers import (
-    apply_family_qc_mask,
-    families_for_analysis_unit,
-    load_container,
-)
-from eeg_adhd_epilepsy.io.recording import ensure_recording_id
+from eeg_adhd_epilepsy.analysis.dataset import build_dataset
+from eeg_adhd_epilepsy.analysis.utils.units import apply_family_qc_mask
+from eeg_adhd_epilepsy.analysis.utils.units import families_for_analysis_unit
 
 
 def test_descriptor_loader_filters_subjects(tmp_path):
@@ -81,7 +78,7 @@ def test_descriptor_analysis_attaches_family_qc(tmp_path):
         aggregation_unit=None,
     )
 
-    container = load_container(
+    container = build_dataset(
         args,
         subjects=None,
         meta_df=None,
@@ -127,7 +124,7 @@ def test_sensor_descriptor_analysis_attaches_family_qc(tmp_path):
         aggregation_unit=None,
     )
 
-    container = load_container(
+    container = build_dataset(
         args,
         subjects=None,
         meta_df=None,
@@ -182,7 +179,7 @@ def test_family_scoped_qc_keeps_band_outlier_for_complexity(tmp_path):
         },
     )
 
-    container = load_container(args, None, None, "EO_baseline")
+    container = build_dataset(args, None, None, "EO_baseline")
     # One row per subject ⇒ the epoch-level (L2) MAD pass is short-circuited.
     qc_result = container.meta["qc_result"]
     assert qc_result.thresholds["subject_aggregated"] is True
@@ -248,7 +245,7 @@ def test_measure_grouping_keeps_alpha_outlier_for_beta(tmp_path):
         },
     )
 
-    container = load_container(args, None, None, "EO_baseline")
+    container = build_dataset(args, None, None, "EO_baseline")
     assert container.meta["qc_result"].thresholds["group_by"] == "measure"
     retained = {}
     for unit in iter_analysis_units(container, "feature", "descriptors"):
@@ -306,7 +303,7 @@ def test_subfamily_grouping_keeps_logabs_outlier_for_relative(tmp_path):
         },
     )
 
-    container = load_container(args, None, None, "EO_baseline")
+    container = build_dataset(args, None, None, "EO_baseline")
     assert container.meta["qc_result"].thresholds["group_by"] == "subfamily"
     # bad ids are keyed by sub-family label
     assert set(container.meta["family_qc_bad_ids"]) == {"log_abs", "rel"}
@@ -366,7 +363,7 @@ def test_column_prune_removes_all_nan_feature_without_row_drop(tmp_path):
         },
     )
 
-    container = load_container(args, None, None, "EO_baseline")
+    container = build_dataset(args, None, None, "EO_baseline")
 
     assert container.X.shape == (3, 1)
     assert container.meta["qc_result"].n_dropped_nan_inf == 0
@@ -412,7 +409,7 @@ def test_foundation_embedding_loader_filters_condition_and_subject(tmp_path):
         aggregation_unit=None,
     )
 
-    container = load_container(
+    container = build_dataset(
         args,
         subjects=["0002"],
         meta_df=None,
@@ -421,32 +418,6 @@ def test_foundation_embedding_loader_filters_condition_and_subject(tmp_path):
 
     assert container.X.shape == (1, 3)
     assert container.coords["study_id"].tolist() == ["0002"]
-
-
-def test_run_aware_recording_id_is_added_from_ids():
-    container = DataContainer(
-        X=np.zeros((2, 2, 3)),
-        dims=("obs", "channel", "time"),
-        ids=np.asarray(
-            [
-                "sub-0001_ses-01_task-clinical_run-01_ep-0",
-                "sub-0001_ses-01_task-clinical_run-02_ep-0",
-            ],
-            dtype=object,
-        ),
-        coords={
-            "study_id": np.asarray(["0001", "0001"], dtype=object),
-            "channel": np.asarray(["Fz", "Cz"], dtype=object),
-            "time": np.arange(3),
-        },
-    )
-
-    out = ensure_recording_id(container, "study_id")
-
-    assert out.coords["recording_id"].tolist() == [
-        "0001_ses-01_run-01",
-        "0001_ses-01_run-02",
-    ]
 
 
 def test_fit_request_collection_skips_invalid_n_components(tmp_path):
@@ -553,7 +524,6 @@ def test_pooled_container_preserves_fine_grained_qc_metadata():
                 meta={
                     "condition": condition,
                     "family_qc_group_by": "subfamily",
-                    "family_qc_descriptor_names": ["band_log_abs_alpha_ch-Fz"],
                     "family_qc_bad_ids": {"log_abs": [bad_id]},
                 },
             )
@@ -562,7 +532,7 @@ def test_pooled_container_preserves_fine_grained_qc_metadata():
     pooled = pool_containers(containers)
 
     assert pooled.meta["family_qc_group_by"] == "subfamily"
-    assert pooled.meta["family_qc_descriptor_names"] == ["band_log_abs_alpha_ch-Fz"]
+    assert "family_qc_descriptor_names" not in pooled.meta
     assert pooled.meta["family_qc_bad_ids"] == {"log_abs": ["r1", "r2"]}
 
 

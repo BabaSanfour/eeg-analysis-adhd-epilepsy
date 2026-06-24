@@ -7,7 +7,7 @@ to import from the specific submodule directly, e.g.::
     from eeg_adhd_epilepsy.preproc.utils.subjects import select_subjects
 """
 
-from eeg_adhd_epilepsy.io.bids import load_stage_artifacts
+from eeg_adhd_epilepsy.io.readers import read_preproc_stage
 
 from . import thresholds  # expose sub-module for callers that do `from .utils import thresholds`
 from .artifacts import _compute_artifact_overlap, inflate_bad_annotations
@@ -39,7 +39,7 @@ __all__ = [
     "ReportingConfig",
     "PreprocConfig",
     # io
-    "load_stage_artifacts",
+    "read_preproc_stage",
     # artifacts
     "_compute_artifact_overlap",
     "inflate_bad_annotations",

@@ -67,7 +67,7 @@ def compute_signal_qc_metrics(
     noise_info = detect_flat_and_noisy_channels(signal, picks)
     duration_sec = float(signal.times[-1]) if signal.times.size else float("nan")
 
-    psd, freqs, alpha_peak, _band_powers = compute_spectral_metrics(
+    psd, freqs, alpha_peak, band_powers = compute_spectral_metrics(
         signal, picks, fmin=0.5, fmax=99.5
     )
 
@@ -94,6 +94,7 @@ def compute_signal_qc_metrics(
         "hf_lf_ratio": hf_ratio_mean,
         "line_noise_ratio": line_noise_mean,
         "aperiodic_slope": slope_mean,
+        "band_powers": band_powers,
     }
 
     if include_channel_metrics:

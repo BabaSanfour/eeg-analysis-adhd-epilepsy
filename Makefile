@@ -34,7 +34,7 @@ ADHD_CSV             ?=
 DRUG_RESISTANT_CSV   ?=
 METADATA_DIR         ?=
 REPORTS_DIR          ?=
-FOUNDATION_EMB_CFG   ?= configs/foundation_embeddings.example.yaml
+FOUNDATION_EMB_CFG   ?=
 
 # Only pass flags whose variable is set, so unset paths don't become "." .
 RUN_ARGS = \
@@ -93,6 +93,7 @@ classical-decode: ## combined descriptors -> classical decoding
 
 # --- Non-core stages (direct console scripts) ---------------------------------
 foundation-embeddings: ## Extract foundation-model embeddings (dataset-wide)
+	$(if $(FOUNDATION_EMB_CFG),,$(error Set FOUNDATION_EMB_CFG to the dataset-wide embedding config))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings --config $(FOUNDATION_EMB_CFG)
 
 foundation-decode: ## Foundation-model probing / fine-tuning (cohort + analysis)

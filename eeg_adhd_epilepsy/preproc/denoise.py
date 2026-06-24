@@ -17,7 +17,7 @@ from meegkit import asr
 from mne_denoise.dss import IterativeDSS, WienerMaskDenoiser
 from mne_denoise.viz import plot_component_summary, plot_score_curve
 
-from eeg_adhd_epilepsy.io import bids
+from eeg_adhd_epilepsy.io import bids, report_paths
 from eeg_adhd_epilepsy.qc import preproc_qc
 from eeg_adhd_epilepsy.utils.logs import setup_logging
 
@@ -383,12 +383,12 @@ def run_denoising_pipeline(
     """Run Stage 2 on one subject (Stage 1 -> Stage 2 handoff)."""
     result: dict[str, object] = {
         "success": False,
-        "subject_id": bids.normalize_subject_id(subject_id),
+        "subject_id": bids.bids_subject_label(subject_id),
         "qc_record": None,
         "error": "",
     }
     try:
-        subject_id = bids.normalize_subject_id(subject_id)
+        subject = subject_id
         input_desc = bids.validate_stage_desc(input_desc)
         output_desc = bids.validate_stage_desc(output_desc)
         bids_root = Path(bids_root).expanduser()
@@ -398,19 +398,19 @@ def run_denoising_pipeline(
         else:
             preproc_root = Path(preproc_root).expanduser()
         if reports_root is None:
-            reports_root = bids.get_reports_root(bids_root)
+            reports_root = report_paths.default_reports_root(bids_root)
         else:
             reports_root = Path(reports_root).expanduser()
 
         if input_path is None:
             input_path = bids.get_stage_output_path(
-                subject_id=subject_id,
+                subject=subject,
                 preproc_root=preproc_root,
                 desc=input_desc,
                 task=condition_name if condition_name else None,
             )
         input_path = Path(input_path)
-        input_ids = bids.build_bids_report_ids(input_path)
+        input_ids = report_paths.build_bids_report_ids(input_path)
         input_comps = bids.parse_bids_components(input_path)
         session_id = input_comps.get("session")
         run_id = input_comps.get("run")
@@ -424,13 +424,15 @@ def run_denoising_pipeline(
         raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
 
         stage_name = preproc_qc.get_preproc_qc_stage_name("denoise", output_desc)
-        subject_report_path = bids.get_subject_session_stage_report_path(
+        report_dir = report_paths.subject_report_dir(
             reports_root=reports_root,
-            subject_id=subject_id,
-            session_id=session_id,
+            subject=subject,
+            session=session_id or "01",
             stage=stage_name,
-            report_stem=str(input_ids["subject_session_prefix"]),
-            create_dir=True,
+            create=True,
+        )
+        subject_report_path = report_dir / (
+            f"{input_ids['subject_session_prefix']}_{stage_name.value}_report.html"
         )
         figures_dir = subject_report_path.parent / "figures" / record_label
         figures_dir.mkdir(parents=True, exist_ok=True)
@@ -444,7 +446,7 @@ def run_denoising_pipeline(
 
         task_token = condition_name if condition_name else input_comps.get("task")
         out_path = bids.get_stage_output_path(
-            subject_id=subject_id,
+            subject=subject,
             preproc_root=preproc_root,
             desc=output_desc,
             session=session_id,
@@ -452,15 +454,7 @@ def run_denoising_pipeline(
             run=run_id,
             create_dir=True,
         )
-        prov_path = bids.get_stage_provenance_path(
-            subject_id=subject_id,
-            preproc_root=preproc_root,
-            desc=output_desc,
-            session=session_id,
-            task=task_token,
-            run=run_id,
-            create_dir=True,
-        )
+        prov_path = out_path.with_name(out_path.name.replace("_eeg.fif", "_provenance.json"))
 
         provenance["subject_id"] = subject_id
         provenance["input_file"] = str(input_path)
@@ -560,7 +554,7 @@ def main() -> None:
 
     bids_root = Path(args.bids_root).expanduser()
     preproc_root = bids.get_preproc_root(bids_root)
-    reports_root = bids.get_reports_root(bids_root)
+    reports_root = report_paths.default_reports_root(bids_root)
     preproc_root.mkdir(parents=True, exist_ok=True)
     reports_root.mkdir(parents=True, exist_ok=True)
 
@@ -594,7 +588,7 @@ def main() -> None:
         LOGGER.error("No Stage 1 FIF files found in %s (pattern: %s)", preproc_root, pattern)
         sys.exit(1)
 
-    subjects_found = sorted({bids.parse_subject_id(f) for f in files})
+    subjects_found = sorted({bids.parse_bids_components(f)["subject"] for f in files})
     LOGGER.info("Found %d stage-1 runs across %d subjects.", len(files), len(subjects_found))
 
     subjects_to_process = select_subjects(
@@ -607,9 +601,7 @@ def main() -> None:
     )
     if not subjects_to_process:
         if args.start_from:
-            LOGGER.error(
-                "No subjects found starting from %s.", bids.normalize_subject_id(args.start_from)
-            )
+            LOGGER.error("No subjects found starting from study_id %s.", args.start_from)
             sys.exit(1)
         LOGGER.warning(
             "No selection criteria provided (use --all, --test, --subjects, or --start-from)."
@@ -630,12 +622,12 @@ def main() -> None:
     if args.skip_existing or args.reports_only:
         existing_runs = 0
         for input_file in files:
-            sid = bids.parse_subject_id(input_file)
+            sid = bids.parse_bids_components(input_file)["subject"]
             if sid not in subjects_to_process:
                 continue
             comps = bids.parse_bids_components(input_file)
             out_file = bids.get_stage_output_path(
-                subject_id=sid,
+                subject=sid,
                 preproc_root=preproc_root,
                 desc=output_desc,
                 session=comps.get("session"),
@@ -683,10 +675,10 @@ def main() -> None:
         if isinstance(record, dict):
             existing_run_keys.add(record.get("run_key"))
     for input_file in files:
-        sid = bids.parse_subject_id(input_file)
+        sid = bids.parse_bids_components(input_file)["subject"]
         if sid not in subjects_to_process:
             continue
-        ids = bids.build_bids_report_ids(input_file)
+        ids = report_paths.build_bids_report_ids(input_file)
         if ids["run_key"] in existing_run_keys:
             continue
         files_to_process.append(input_file)
@@ -719,8 +711,8 @@ def main() -> None:
             failed_ids.append(str(result["subject_id"]))
 
     for input_file in files_to_process:
-        sid = bids.parse_subject_id(input_file)
-        run_label = str(bids.build_bids_report_ids(input_file)["run_prefix"])
+        sid = bids.parse_bids_components(input_file)["subject"]
+        run_label = str(report_paths.build_bids_report_ids(input_file)["run_prefix"])
         LOGGER.info("Processing %s...", run_label)
         result = run_denoising_pipeline(
             subject_id=sid,

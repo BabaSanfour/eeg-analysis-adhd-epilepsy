@@ -21,8 +21,8 @@ patient CSVs ─▶ metadata ─▶ cohort report
 
 | Stage | Console script | Module |
 |-------|----------------|--------|
-| Build patient metadata | `eeg-build-patients-metadata` | `io.patients` |
-| Cohort report | `eeg-cohort-report` | `analysis.cohort` |
+| Build patient metadata | `eeg-build-patients-metadata` | `metadata.patients` |
+| Cohort report | `eeg-cohort-report` | `metadata.cohort` |
 | Raw → BIDS + raw QC | `eeg-to-bids` | `preproc.to_bids` |
 | Preprocess (cleaning + QC) | `eeg-preprocess` | `preproc.base` |
 | Epoch | `eeg-save-epochs` | `preproc.epochs` |
@@ -100,8 +100,7 @@ eeg-classical-decode \
 The two files are validated and deep-merged (the analysis config overrides the
 cohort on overlap, e.g. `conditions`), so one cohort is reused across analyses and
 one analysis across cohorts. A missing/misspelled key raises an actionable error
-instead of a deep `KeyError`. A single combined `--config` is still accepted for
-back-compat. See [configs/README.md](configs/README.md).
+instead of a deep `KeyError`. See [configs/README.md](configs/README.md).
 
 ## Prerequisites
 
@@ -119,7 +118,7 @@ back-compat. See [configs/README.md](configs/README.md).
 
 Metadata starts from two CSVs collected by students William and Jeanne
 (`EEG_Psychostimulants_PatientList_08-2025.csv` and `IRSC_data_final.csv`). The
-builder in [io/patients.py](eeg_adhd_epilepsy/io/patients.py) merges them into one
+builder in [metadata/patients.py](eeg_adhd_epilepsy/metadata/patients.py) merges them into one
 canonical schema, applies the agreed cleaning rules, assigns a `patient_group_id`
 for repeated recordings, and writes `patients_metadata.csv`,
 `patients_metadata_clean.csv`, and `patients_metadata_removed.json`.
@@ -142,13 +141,19 @@ eeg-cohort-report --metadata_csv /path/to/patients_metadata_clean.csv --output_d
 Builds `cohort_report.html` (demographics, diagnosis, medication breakdowns,
 analysis-opportunity tables), optionally with `--with_recruitment` milestones. It
 can also apply a cohort filter from a YAML file. See
-[analysis/cohort.py](eeg_adhd_epilepsy/analysis/cohort.py).
+[metadata/cohort.py](eeg_adhd_epilepsy/metadata/cohort.py).
+
+The set of *possible studies* — every comparison, the cohort filters it runs
+under, and the membership rule for each group — is declared in one place,
+[metadata/analysis_opportunities_schema.py](eeg_adhd_epilepsy/metadata/analysis_opportunities_schema.py).
+Each constraint and analysis carries an executable predicate, so the schema is
+the single source of truth and the engine never re-implements the logic.
 
 ## BIDS conversion and raw QC
 
 [preproc/to_bids.py](eeg_adhd_epilepsy/preproc/to_bids.py) is the single stage to
 run before preprocessing. It does raw discovery, raw→BIDS conversion, canonical
-annotation rewrite, condition-block derivation with sibling `_segments.csv`, and
+annotation rewrite, canonical `BLOCK_*` condition annotations, and
 optional pre-base EEG and raw-QC reports.
 
 ```bash
@@ -161,8 +166,8 @@ eeg-to-bids \
 ```
 
 Without `--overwrite` it resumes (skips existing runs, rebuilds summary reports
-from written files). Outputs: BIDS EEG under `BIDS/`, sibling `_segments.csv`, and
-subject/summary reports under a sibling `reports/` directory.
+from written files). Outputs: BIDS EEG under `BIDS/`, embedded canonical block
+annotations, and subject/summary reports under a sibling `reports/` directory.
 
 ## Preprocessing and post-clean QC
 
@@ -258,11 +263,11 @@ inventories from reusable checkpoints. `--n_jobs` controls outer-task parallelis
 
 ```bash
 # Dataset-wide embedding extraction (CBraMod, LaBraM, REVE, LUNA).
-eeg-foundation-embeddings --config configs/foundation_embeddings.example.yaml
+eeg-foundation-embeddings --config /path/to/foundation_embeddings.yaml
 
 # Decoding (two-config). Classical = descriptors/embeddings; foundation = direct probing/fine-tune/LoRA.
 eeg-classical-decode  --cohort_config <cohort.yaml> --analysis_config configs/analyses/decoding/<x>.yaml --bids_root … --metadata …
-eeg-foundation-decode --cohort_config <cohort.yaml> --analysis_config <foundation_decoding.yaml> --bids_root … --metadata …
+eeg-foundation-decode --cohort_config <cohort.yaml> --analysis_config configs/analyses/foundation_decoding/default.yaml --bids_root … --metadata …
 ```
 
 Each model declares its own EEG window requirements; the example configs use
@@ -297,16 +302,19 @@ pip install -e '/Users/hamzaabdelhedi/Projects/packages/coco-pipe[decoding,found
 
 ```text
 eeg_adhd_epilepsy/
-├── io/           # BIDS layout/paths (bids), raw ingest (ingest, recording),
-│                 # metadata builder (patients), analysis-input loading (containers)
+├── io/           # BIDS layout/paths + recording-id grouping (bids), raw ingest
+│                 # (ingest), analysis-input loading (containers)
+├── metadata/     # clinical patient-metadata concern: builder (patients), cohort
+│                 # analysis + possible-study enumeration (cohort), the study
+│                 # schema (analysis_opportunities_schema), shared constants (schema)
 ├── preproc/      # to_bids, base (canonical cleaning), epochs  [+ experimental Part-2]
 ├── analysis/     # the pipeline entry points (descriptors, merge, dim-reduction,
-│                 # decoding, foundation, cohort) + analysis/utils
+│                 # decoding, foundation) + analysis/utils
 ├── signal_quality/  # primitive QC metrics (spectral, time-domain)
 ├── qc/           # stage-level QC orchestration (raw_qc, preproc_qc, descriptor_qc)
 ├── reports/      # HTML report composition (one per stage)
 ├── viz/          # figures embedded in the reports
-└── utils/        # config (two-config loader), yaml, constants, schemas, logging
+└── utils/        # config (two-config loader), yaml, constants, logging
 ```
 
 Per-stage QC follows a consistent split: `qc/` computes metrics, `viz/` draws the
@@ -316,7 +324,7 @@ figures, `reports/` assembles the HTML.
 
 ```text
 .
-├── eeg_adhd_epilepsy/   # Main package (io, preproc, analysis, qc, signal_quality, reports, viz, utils)
+├── eeg_adhd_epilepsy/   # Main package (io, metadata, preproc, analysis, qc, signal_quality, reports, viz, utils)
 ├── configs/             # cohorts/ (dataset+question) and analyses/ (method); descriptors.yaml; examples
 ├── cluster/             # Numbered SLURM scripts, one per stage (see cluster/README.md)
 ├── scripts/             # One-off maintenance scripts (e.g. split_configs.py)

@@ -13,12 +13,10 @@ configs/
 │   └── medicated_adhd_vs_controls/  # populations and clinical questions
 ├── analyses/
 │   ├── dim_reduction/              # reducers and selection settings
-│   └── decoding/                   # models, CV, tuning, and inputs
+│   ├── decoding/                   # classical models, CV, and inputs
+│   └── foundation_decoding/        # foundation models and training modes
 ├── descriptors.yaml                    # dataset-wide descriptor extraction
 ├── annotations.yaml                    # annotation normalization
-├── foundation_embeddings.example.yaml # dataset-wide embedding producer
-├── foundation_decoding.example.yaml   # legacy combined example
-└── decoding.example.yaml              # legacy combined example
 ```
 
 A **cohort config** answers "who and which clinical question?" It owns fields
@@ -46,9 +44,6 @@ For an `eeg-run` range containing both consumer stages, pass the method files
 separately as `--dim_analysis_config` and `--decode_analysis_config`. The generic
 `--analysis_config` remains convenient for a range containing only one consumer.
 
-The consumer commands still accept one legacy `--config`, but new work should
-use the two-config interface.
-
 ## Create a run configuration
 
 1. Copy the closest file under `cohorts/` and change its dataset name, output
@@ -71,5 +66,4 @@ match the name of an entry in the cohort's `evals`; validation fails early when
 they do not match.
 
 Cluster jobs use the same pairing through `COHORT_CONFIG`, `ANALYSIS_CONFIG`,
-`BIDS_ROOT`, and `METADATA_PATH`. See [`../cluster/README.md`](../cluster/README.md)
-for submission order and array-job details.
+`BIDS_ROOT`, and `METADATA_PATH`. See [`../cluster/README.md`](../cluster/README.md) for submission order and array-job details.

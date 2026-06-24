@@ -85,12 +85,11 @@ class ProcessingConfig(TypedDict):
     highpass_hz: float
     lowpass_hz: float
     resample_hz: float | None
-    epoch_type: Literal["fixed", "events", "segments"]
+    epoch_type: Literal["fixed", "events"]
     epoch_length: float
     epoch_tmin: float
     epoch_tmax: float
     epoch_event_id: dict[str, int] | None
-    segments_file: str | None
 
 
 class BadChannelsConfig(TypedDict):

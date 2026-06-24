@@ -20,7 +20,7 @@ import pandas as pd
 
 import eeg_adhd_epilepsy.signal_quality.spectral as spectral
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
-from eeg_adhd_epilepsy.io import bids
+from eeg_adhd_epilepsy.io import bids, report_paths
 from eeg_adhd_epilepsy.reports.compare import (
     create_compare_dataset_report,
     create_compare_subject_report,
@@ -30,7 +30,7 @@ from eeg_adhd_epilepsy.utils.logs import setup_logging
 from .correct import ArtifactCorrectionConfig, run_correction_pipeline
 from .denoise import ArtifactDenoisingConfig, run_denoising_pipeline
 from .utils import (
-    load_stage_artifacts,
+    read_preproc_stage,
     select_subjects,
 )
 
@@ -197,7 +197,7 @@ def run_comparison(
         LOGGER.info("COMPARING: %s (%s)", subject_id, compare_mode)
         LOGGER.info("%s", "=" * 60)
 
-        raw_orig, _, base_issues = load_stage_artifacts(
+        raw_orig, _, base_issues = read_preproc_stage(
             subject_id=subject_id,
             preproc_root=preproc_root,
             desc="base",
@@ -218,7 +218,7 @@ def run_comparison(
             compare_desc = dss_compare_desc if method_name == "dss" else ica_compare_desc
 
             if compare_mode == "reuse":
-                raw_obj, prov_obj, issues = load_stage_artifacts(
+                raw_obj, prov_obj, issues = read_preproc_stage(
                     subject_id=subject_id,
                     preproc_root=preproc_root,
                     desc=compare_desc,
@@ -249,7 +249,7 @@ def run_comparison(
                     subject_issues.append(f"run_failed:{method_name}")
                     continue
 
-                raw_obj, prov_obj, issues = load_stage_artifacts(
+                raw_obj, prov_obj, issues = read_preproc_stage(
                     subject_id=subject_id,
                     preproc_root=preproc_root,
                     desc=compare_desc,
@@ -298,7 +298,7 @@ def run_comparison(
                     subject_issues.append(f"run_failed:denoise:{method_name}")
                     continue
 
-                raw_obj, prov_obj, issues = load_stage_artifacts(
+                raw_obj, prov_obj, issues = read_preproc_stage(
                     subject_id=subject_id,
                     preproc_root=preproc_root,
                     desc=compare_desc,
@@ -308,7 +308,7 @@ def run_comparison(
                     method_raws[method_name] = raw_obj
                     method_provs[method_name] = prov_obj
                     # For component counts in full mode, keep Stage 1 correction provenance.
-                    _, corr_prov, _ = load_stage_artifacts(
+                    _, corr_prov, _ = read_preproc_stage(
                         subject_id=subject_id,
                         preproc_root=preproc_root,
                         desc=corr_desc,
@@ -440,15 +440,18 @@ def run_comparison(
                 }
             )
 
-        subject_report_path = bids.get_subject_report_path(
+        report_dir = report_paths.subject_report_dir(
             reports_root=reports_root,
-            stage="compare",
-            subject_id=subject_id,
-            create_dir=True,
+            stage=report_paths.ReportStage.COMPARE,
+            subject=subject_id,
+            session="01",
+            create=True,
         )
+        subject_label = bids.bids_subject_label(subject_id)
+        subject_report_path = report_dir / f"{subject_label}_compare_report.html"
         if compare_mode != "stage1":
             subject_report_path = subject_report_path.with_name(
-                f"{subject_id}_compare_{compare_mode}_report.html"
+                f"{subject_label}_compare_{compare_mode}_report.html"
             )
 
         subject_plots_dir = subject_report_path.parent / "figures"
@@ -511,7 +514,14 @@ def run_comparison(
 
     metrics_df = pd.DataFrame(all_metrics)
 
-    compare_paths = bids.get_compare_summary_paths(reports_root=reports_root, create_dir=True)
+    compare_summary_dir = report_paths.summary_report_dir(
+        reports_root, report_paths.ReportStage.COMPARE, create=True
+    )
+    compare_paths = {
+        "report_html": compare_summary_dir / "compare_dataset_summary.html",
+        "metrics_csv": compare_summary_dir / "compare_metrics.csv",
+        "run_metadata_json": compare_summary_dir / "compare_run_metadata.json",
+    }
     if compare_mode == "stage1":
         summary_report_path = compare_paths["report_html"]
         metrics_csv_path = compare_paths["metrics_csv"]
@@ -675,7 +685,7 @@ def main() -> None:
 
     bids_root = Path(args.bids_root).expanduser()
     preproc_root = bids.get_preproc_root(bids_root)
-    reports_root = bids.get_reports_root(bids_root)
+    reports_root = report_paths.default_reports_root(bids_root)
     preproc_root.mkdir(parents=True, exist_ok=True)
     reports_root.mkdir(parents=True, exist_ok=True)
 
@@ -698,7 +708,7 @@ def main() -> None:
         LOGGER.error("No base FIF files found in %s (pattern: %s)", preproc_root, base_pattern)
         sys.exit(1)
 
-    subjects_found = sorted({bids.parse_subject_id(f) for f in files})
+    subjects_found = sorted({bids.parse_bids_components(f)["subject"] for f in files})
     LOGGER.info("Found %d base subjects.", len(subjects_found))
 
     subjects_to_process = select_subjects(
@@ -711,9 +721,7 @@ def main() -> None:
     )
     if not subjects_to_process:
         if args.start_from:
-            LOGGER.error(
-                "No subjects found starting from %s.", bids.normalize_subject_id(args.start_from)
-            )
+            LOGGER.error("No subjects found starting from study_id %s.", args.start_from)
             sys.exit(1)
         parser.print_help()
         sys.exit(0)

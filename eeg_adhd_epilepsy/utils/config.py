@@ -114,9 +114,7 @@ def _validate_merged(merged: Mapping[str, Any], cohort_path: str | Path) -> None
     selection_eval = merged.get("selection_eval_name")
     if selection_eval is not None:
         eval_names = {
-            spec.get("name")
-            for spec in (merged.get("evals") or [])
-            if isinstance(spec, Mapping)
+            spec.get("name") for spec in (merged.get("evals") or []) if isinstance(spec, Mapping)
         }
         if selection_eval not in eval_names:
             raise ConfigError(
@@ -161,30 +159,18 @@ def resolve_cli_config(
     *,
     cohort_config: str | Path | None,
     analysis_config: str | Path | None,
-    legacy_config: str | Path | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
-    """Resolve a consumer CLI's config from the two-config flags (or legacy single).
+    """Resolve a consumer CLI's config from the required two-config flags.
 
-    Preferred: ``--cohort_config`` + ``--analysis_config``. A single
-    ``--config`` (``legacy_config``) is still accepted for back-compat. Non-``None``
-    ``overrides`` (e.g. CLI ``--bids_root``) are layered on last.
+    Non-``None`` overrides (e.g. CLI ``--bids_root``) are layered on last.
     """
-    if legacy_config is not None:
-        if cohort_config is not None or analysis_config is not None:
-            raise ConfigError(
-                "Pass either --config (single, deprecated) or "
-                "--cohort_config + --analysis_config, not both."
-            )
-        config = load_yaml_config(legacy_config)
-    elif cohort_config is not None and analysis_config is not None:
-        config = load_cohort_analysis_config(cohort_config, analysis_config)
-    else:
+    if cohort_config is None or analysis_config is None:
         raise ConfigError(
             "Provide --cohort_config and --analysis_config "
-            "(the cohort defines the dataset/question, the analysis defines the "
-            "method). A single --config is still accepted for back-compat."
+            "(the cohort defines the dataset/question and the analysis defines the method)."
         )
+    config = load_cohort_analysis_config(cohort_config, analysis_config)
     apply_overrides(config, **overrides)
     if not config.get("bids_root"):
         raise ConfigError(

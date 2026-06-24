@@ -42,8 +42,8 @@ Homepage = "https://github.com/"
 # Top-level orchestrator that sequences the stages below (see also the Makefile).
 eeg-run = "eeg_adhd_epilepsy.run:main"
 # Producers (dataset-wide, single config / CLI args), in pipeline order.
-eeg-build-patients-metadata = "eeg_adhd_epilepsy.io.patients:main"
-eeg-cohort-report = "eeg_adhd_epilepsy.analysis.cohort:main"
+eeg-build-patients-metadata = "eeg_adhd_epilepsy.metadata.patients:main"
+eeg-cohort-report = "eeg_adhd_epilepsy.metadata.cohort:main"
 eeg-to-bids = "eeg_adhd_epilepsy.preproc.to_bids:main"
 eeg-preprocess = "eeg_adhd_epilepsy.preproc.base:main"
 eeg-save-epochs = "eeg_adhd_epilepsy.preproc.epochs:main"

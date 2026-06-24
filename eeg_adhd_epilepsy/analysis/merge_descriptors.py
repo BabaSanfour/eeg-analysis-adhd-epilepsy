@@ -17,11 +17,11 @@ from coco_pipe.descriptors import (
 )
 from coco_pipe.io import read_table, write_json
 
-from eeg_adhd_epilepsy.io.bids import get_reports_root
-from eeg_adhd_epilepsy.io.descriptor_layout import (
+from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import (
     FEATURE_COLUMN_FILES,
     required_descriptor_files,
 )
+from eeg_adhd_epilepsy.io.report_paths import default_reports_root
 from eeg_adhd_epilepsy.qc.descriptor_qc import run_descriptor_dataset_qc
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
@@ -78,7 +78,7 @@ def main() -> None:
     )
 
     bids_root = Path(args.bids_root)
-    reports_root = get_reports_root(bids_root)
+    reports_root = default_reports_root(bids_root)
     derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
 
     config_path = derivative_root / "config_used.yaml"

@@ -159,23 +159,12 @@ def test_resolve_cli_config_requires_bids_root(tmp_path):
         resolve_cli_config(cohort_config=cohort, analysis_config=analysis)
 
 
-def test_resolve_cli_config_rejects_config_and_pair_together(tmp_path):
+def test_resolve_cli_config_requires_both_config_roles(tmp_path):
     cohort = _write(tmp_path / "cohort.yaml", _cohort_yaml())
-    analysis = _write(tmp_path / "analysis.yaml", _analysis_yaml())
-    legacy = _write(tmp_path / "legacy.yaml", _cohort_yaml("models:\n      m: {}"))
 
-    with pytest.raises(ConfigError, match="not both"):
+    with pytest.raises(ConfigError, match="--cohort_config and --analysis_config"):
         resolve_cli_config(
-            cohort_config=cohort, analysis_config=analysis, legacy_config=legacy
+            cohort_config=cohort,
+            analysis_config=None,
+            bids_root="/data/BIDS",
         )
-
-
-def test_resolve_cli_config_legacy_single(tmp_path):
-    legacy = _write(
-        tmp_path / "legacy.yaml",
-        _cohort_yaml("bids_root: /data/BIDS\n    models:\n      m: {}"),
-    )
-    config = resolve_cli_config(
-        cohort_config=None, analysis_config=None, legacy_config=legacy
-    )
-    assert config["bids_root"] == "/data/BIDS"

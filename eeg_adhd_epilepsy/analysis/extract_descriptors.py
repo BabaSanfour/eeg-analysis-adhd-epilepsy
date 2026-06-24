@@ -42,16 +42,20 @@ from coco_pipe.descriptors import (
 from coco_pipe.io import DataContainer, read_table, save_npz, write_json
 from coco_pipe.io.quality import drop_epoch_outliers
 
+from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import required_descriptor_files
 from eeg_adhd_epilepsy.io.bids import (
-    get_reports_root,
-    get_subject_session_stage_report_path,
-    load_eeg_data,
-    normalize_subject_id,
+    add_recording_id,
+    bids_session_label,
+    bids_subject_label,
     parse_bids_components,
-    validate_bids_coverage,
+    study_id_to_bids_subject,
 )
-from eeg_adhd_epilepsy.io.descriptor_layout import required_descriptor_files
-from eeg_adhd_epilepsy.io.recording import add_recording_group_columns
+from eeg_adhd_epilepsy.analysis.dataset import build_container
+from eeg_adhd_epilepsy.io.report_paths import (
+    ReportStage,
+    default_reports_root,
+    subject_report_dir,
+)
 from eeg_adhd_epilepsy.qc.descriptor_qc import run_descriptor_subject_qc
 from eeg_adhd_epilepsy.utils.constants import DEFAULT_ANALYSIS_CONDITIONS
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
@@ -73,13 +77,15 @@ def _shard_complete(
         for relative_path in required_descriptor_files(include_pooled, include_qc=True)
     ]
     required_paths.append(
-        get_subject_session_stage_report_path(
+        subject_report_dir(
             reports_root=reports_root,
-            subject_id=subject,
-            session_id=session,
-            stage="descriptor_qc",
-            report_stem=f"sub-{subject}_ses-{session}_{condition}",
-            create_dir=False,
+            subject=subject,
+            session=session,
+            stage=ReportStage.DESCRIPTOR_QC,
+        )
+        / (
+            f"{bids_subject_label(subject)}_{bids_session_label(session)}_"
+            f"{condition}_descriptor_qc_report.html"
         )
     )
     return all(path.exists() for path in required_paths)
@@ -105,12 +111,10 @@ def _apply_mad_rejection(
     if container.X.shape[0] == 0:
         return container, metadata_df
 
-    descriptor_names = [str(value) for value in container.coords["feature"]]
     clean_or_masks, qc_result = drop_epoch_outliers(
         container,
         z_threshold=mad_threshold,
         outlier_fraction_threshold=fraction_thresh,
-        descriptor_names=descriptor_names,
         group_by=group_by,
         min_obs=min_epochs,
     )
@@ -311,7 +315,9 @@ def main() -> None:
     )
     bids_root = Path(args.bids_root).expanduser()
     reports_root = (
-        Path(args.reports_root).expanduser() if args.reports_root else get_reports_root(bids_root)
+        Path(args.reports_root).expanduser()
+        if args.reports_root
+        else default_reports_root(bids_root)
     )
     reports_root.mkdir(parents=True, exist_ok=True)
     metadata_path = Path(args.metadata).expanduser()
@@ -369,8 +375,8 @@ def main() -> None:
         aggregated_ratio_pairs = []
         aggregated_ratio_floor = 0.0
 
-    coverage_root = bids_root / "derivatives" / "preproc"
     meta_df = read_table(metadata_path, sep=None)
+    valid_subjects = set(meta_df[args.subject_col].map(lambda value: f"{int(value):04d}"))
     row_requested_subjects: list[str] | None = None
     if args.metadata_row is not None:
         row_position = args.metadata_row - 1
@@ -389,51 +395,14 @@ def main() -> None:
             args.subject_col,
             row_requested_subjects[0],
         )
-    coverage = validate_bids_coverage(
-        meta_df,
-        coverage_root,
-        desc=None,
-        suffix="epo",
-        subject_col=args.subject_col,
-    )
-    available_subjects = list(coverage["present_subjects"])
-    meta_df = meta_df[
-        meta_df[args.subject_col].map(lambda value: f"{int(value):04d}").isin(available_subjects)
-    ].copy()
-    valid_subjects = set(meta_df[args.subject_col].map(lambda value: f"{int(value):04d}"))
-    available_subjects = [subject for subject in available_subjects if subject in valid_subjects]
 
-    available_subject_set = set(available_subjects)
     if row_requested_subjects is not None:
-        requested_subjects = row_requested_subjects
-        subjects = [subject for subject in requested_subjects if subject in available_subject_set]
-        missing_subjects = [
-            subject for subject in requested_subjects if subject not in available_subject_set
-        ]
-        if missing_subjects:
-            LOGGER.warning(
-                "Skipping metadata row %d because %s=%s has no saved derivatives.",
-                args.metadata_row,
-                args.subject_col,
-                ", ".join(missing_subjects),
-            )
-            return
+        subjects = [subject for subject in row_requested_subjects if subject in valid_subjects]
     elif args.subjects:
-        requested_subjects = [
-            normalize_subject_id(subject).replace("sub-", "") for subject in args.subjects
-        ]
-        subjects = [subject for subject in requested_subjects if subject in available_subject_set]
-        missing_subjects = [
-            subject for subject in requested_subjects if subject not in available_subject_set
-        ]
-        if missing_subjects:
-            LOGGER.warning(
-                "Skipping %d requested subjects with no saved derivatives: %s",
-                len(missing_subjects),
-                ", ".join(missing_subjects),
-            )
+        requested_subjects = [study_id_to_bids_subject(subject) for subject in args.subjects]
+        subjects = [subject for subject in requested_subjects if subject in valid_subjects]
     else:
-        subjects = available_subjects
+        subjects = sorted(list(valid_subjects))
 
     if not subjects:
         raise ValueError(
@@ -443,7 +412,7 @@ def main() -> None:
 
     for subject in subjects:
         epochs_root = bids_root / "derivatives" / "preproc"
-        files = list(epochs_root.rglob(f"sub-{subject}*_desc-base_epo.fif"))
+        files = list(epochs_root.rglob(f"{bids_subject_label(subject)}*_desc-base_epo.fif"))
 
         sessions = sorted(list({parse_bids_components(f).get("session", "01") for f in files}))
         if not sessions:
@@ -464,7 +433,13 @@ def main() -> None:
             subject_conditions = args.conditions
 
         for session, condition in itertools.product(sessions, subject_conditions):
-            shard_root = derivative_root / f"sub-{subject}" / f"ses-{session}" / "eeg" / condition
+            shard_root = (
+                derivative_root
+                / bids_subject_label(subject)
+                / bids_session_label(session)
+                / "eeg"
+                / condition
+            )
             if _shard_complete(
                 shard_root, include_pooled, reports_root, subject, session, condition
             ):
@@ -479,7 +454,7 @@ def main() -> None:
 
             LOGGER.info("Loading %s for %s (ses %s)", condition, subject, session)
             try:
-                dc_loaded = load_eeg_data(
+                dc_loaded = build_container(
                     bids_root=bids_root,
                     use_derivatives=True,
                     subjects=[subject],
@@ -511,6 +486,7 @@ def main() -> None:
             if ids.size == 0:
                 raise ValueError("Loaded EEG container did not include any epochs.")
 
+            dc_loaded = add_recording_id(dc_loaded)
             metadata_df = dc_loaded.obs_table(
                 include_ids=True,
                 include_y=bool(args.target_col),
@@ -519,9 +495,6 @@ def main() -> None:
             metadata_df["obs_id"] = metadata_df["obs_id"].astype(str)
             metadata_df["condition"] = condition
             metadata_df["subject"] = subject
-            if "session" not in metadata_df.columns:
-                metadata_df["session"] = session
-            metadata_df = add_recording_group_columns(metadata_df)
             metadata_front = ["obs_id", "subject", "session", "run", "recording_id", "condition"]
             metadata_df = metadata_df[
                 metadata_front
