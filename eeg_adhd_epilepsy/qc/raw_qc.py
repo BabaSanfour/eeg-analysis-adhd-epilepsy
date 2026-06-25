@@ -11,7 +11,6 @@ import numpy as np
 import pandas as pd
 from mne_bids import BIDSPath
 
-import eeg_adhd_epilepsy.io.bids as bids_io
 import eeg_adhd_epilepsy.io.report_paths as report_paths
 import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
 import eeg_adhd_epilepsy.reports.raw_qc as report_raw_qc
@@ -31,7 +30,7 @@ from eeg_adhd_epilepsy.qc.utils import (
     evaluate_signal_qc_flag,
 )
 from eeg_adhd_epilepsy.utils.events import crop_raw_to_recording_start
-
+from eeg_adhd_epilepsy.utils.constants import BASIC_1020_CHANNELS
 WEIGHTED_METRICS = (*_BASE_WEIGHTED_METRICS, "coverage_pct")
 
 
@@ -43,7 +42,7 @@ def _prepare_analysis_raw(
     analysis_raw = raw.copy().load_data()
     target_channels = [
         channel
-        for channel in bids_io.config.BASIC_1020_CHANNELS
+        for channel in BASIC_1020_CHANNELS
         if channel in analysis_raw.ch_names
     ]
     if target_channels:

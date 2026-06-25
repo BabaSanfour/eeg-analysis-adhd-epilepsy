@@ -25,6 +25,8 @@ VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 # NOTE: --array (line 13) must equal CONFIG_COUNT * MODE_COUNT (guarded below).
 CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/cohorts}
 ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/dim_reduction/default.yaml}
+SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
+REPORTS_ROOT="$SCRATCH_ROOT/reports"
 OVERWRITE=${OVERWRITE:-0}
 
 # Descriptor Data Paths
@@ -105,6 +107,7 @@ echo "==========================================================================
 cmd=(
     python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction
     --bids_root "$BIDS_ROOT"
+    --reports_root "$REPORTS_ROOT"
     --metadata "$METADATA_PATH"
     --cohort_config "$config"
     --analysis_config "$ANALYSIS_CONFIG"

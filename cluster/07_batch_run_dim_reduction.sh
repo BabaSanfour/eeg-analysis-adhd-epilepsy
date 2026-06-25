@@ -21,6 +21,8 @@ PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
 METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
+SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
+REPORTS_ROOT="$SCRATCH_ROOT/reports"
 # Cohort configs (one per dataset/cohort/strata), each paired with the single
 # analysis config below. Point CONFIGS_DIR at a subtree to narrow the sweep.
 # NOTE: --array (line 9) must equal CONFIG_COUNT * MODE_COUNT (guarded below).
@@ -88,6 +90,7 @@ echo "==========================================================================
 
 python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
     --bids_root "$BIDS_ROOT" \
+    --reports_root "$REPORTS_ROOT" \
     --metadata "$METADATA_PATH" \
     --cohort_config "$config" \
     --analysis_config "$ANALYSIS_CONFIG" \
