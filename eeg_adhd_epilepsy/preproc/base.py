@@ -383,6 +383,7 @@ def run_base_pipeline(
         n_jobs = int(config.get("n_jobs", 1))
 
         LOGGER.info("Applying Bandpass filter: %s-%s Hz (n_jobs=%d)", hp_hz, h_f, n_jobs)
+        raw.load_data()
         raw.filter(l_freq=hp_hz, h_freq=h_f, verbose="ERROR", n_jobs=n_jobs)
         provenance["steps_completed"].append("bandpass_filter")
 
