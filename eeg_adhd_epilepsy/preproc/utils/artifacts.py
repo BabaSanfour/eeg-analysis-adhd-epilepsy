@@ -52,7 +52,7 @@ def _compute_artifact_overlap(
     n_existing = int(mask_existing.sum())
     if n_existing == 0:
         return 0.0
-    return float(mask_existing & mask_detected).sum() / n_existing * 100.0
+    return float((mask_existing & mask_detected).sum()) / n_existing * 100.0
 
 
 def inflate_bad_annotations(
