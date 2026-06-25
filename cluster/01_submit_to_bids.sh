@@ -3,7 +3,7 @@
 #SBATCH --account=rrg-kjerbi
 #SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.out
 #SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.err
-#SBATCH --time=08:00:00
+#SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=32G
 #SBATCH --mail-type=ALL
@@ -18,6 +18,7 @@ PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
 METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 RAW_ROOT=${RAW_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/raw_data}
+SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 OVERWRITE=${OVERWRITE:-1}
 
@@ -50,6 +51,7 @@ cmd=(
   --raw_root "$RAW_ROOT"
   --bids_root "$BIDS_ROOT"
   --metadata_csv "$METADATA_PATH"
+  --reports_root "$SCRATCH_ROOT/reports"
   --with_eeg_reports
   --with_raw_qc
   --raw_qc_analysis_level both

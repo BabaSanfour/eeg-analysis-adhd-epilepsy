@@ -70,6 +70,7 @@ def main() -> None:
             "the whole merge."
         ),
     )
+    parser.add_argument("--reports_root", type=str, default=None, help="Custom root directory for reports (defaults to sibling of bids_root)")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -78,7 +79,7 @@ def main() -> None:
     )
 
     bids_root = Path(args.bids_root)
-    reports_root = default_reports_root(bids_root)
+    reports_root = Path(args.reports_root) if args.reports_root else default_reports_root(bids_root)
     derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
 
     config_path = derivative_root / "config_used.yaml"

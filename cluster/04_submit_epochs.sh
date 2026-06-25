@@ -16,6 +16,7 @@ module load gcc arrow/23.0.1 python/3.11
 
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
+SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 SEGMENT_DURATION=${SEGMENT_DURATION:-10.0}
 OVERLAP=${OVERLAP:-0.0}
@@ -48,6 +49,7 @@ cmd=(
   --desc base
   --segment_duration "$SEGMENT_DURATION"
   --overlap "$OVERLAP"
+  --reports_root "$SCRATCH_ROOT/reports"
   --ignore_annotations
 )
 

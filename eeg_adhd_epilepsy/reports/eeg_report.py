@@ -77,7 +77,7 @@ def summarize_condition_segments(df: pd.DataFrame) -> dict[str, object]:
 
     def merged_duration(frame: pd.DataFrame) -> float:
         intervals = sorted(frame[["t_start", "t_stop"]].itertuples(index=False, name=None))
-        return sum(stop - start for start, stop in bids_io.merge_intervals(list(intervals)))
+        return sum(stop - start for start, stop in utils_events.merge_intervals(list(intervals)))
 
     summary = {
         "total_duration": merged_duration(valid),

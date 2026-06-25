@@ -18,7 +18,8 @@ module load gcc arrow/23.0.1 python/3.11
 
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 # Point BIDS_ROOT to your scratch BIDS because that's where the descriptors are saved!
-SCRATCH_BIDS_ROOT=${SCRATCH_BIDS_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd/BIDS}
+SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
+SCRATCH_BIDS_ROOT=${SCRATCH_BIDS_ROOT:-$SCRATCH_ROOT/BIDS}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 
 cd "$PROJECT_ROOT"
@@ -29,4 +30,5 @@ export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 python -m eeg_adhd_epilepsy.analysis.merge_descriptors \
   --bids_root "$SCRATCH_BIDS_ROOT" \
+  --reports_root "$SCRATCH_ROOT/reports" \
   --skip_inconsistent
