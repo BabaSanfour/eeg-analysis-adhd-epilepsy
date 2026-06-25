@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import mne
 import numpy as np
 import plotly.graph_objects as go
-from coco_pipe.viz import plot_topomap as coco_plot_topomap
+from coco_pipe.viz import info_from_montage, plot_topomap as coco_plot_topomap
 
 LOGGER = logging.getLogger(__name__)
 
@@ -40,48 +40,29 @@ def plot_topomap_from_channel_values(
     if arr.size == 0 or len(channel_names) != arr.size:
         return None
 
-    montage = mne.channels.make_standard_montage("standard_1020")
-    montage_names = set(montage.ch_names)
-    kept = [
-        (str(channel), float(value))
-        for channel, value in zip(channel_names, arr.tolist())
-        if str(channel) in montage_names
-    ]
-    if len(kept) < 3:
+    names = [str(channel) for channel in channel_names]
+    info = info_from_montage(names, montage="standard_1020")
+    if len(info.ch_names) < 3:
         return None
 
-    kept_names = [channel for channel, _ in kept]
-    kept_values = np.asarray([value for _, value in kept], dtype=float)
-    info = mne.create_info(kept_names, sfreq=100.0, ch_types="eeg")
-    try:
-        info.set_montage(montage, on_missing="raise")
-    except Exception:
-        return None
-
-    # Delegate the actual topomap rendering to coco_pipe's generic helper,
-    # which handles MNE info-based layouts, symmetric color limits, and the
-    # colorbar/title styling.
-    try:
-        fig, ax = coco_plot_topomap(
-            values=kept_values,
-            index=kept_names,
-            info=info,
-            cmap=cmap,
-            symmetric=False,
-            title=title,
-            cbar=True,
-            cbar_label=unit,
-            figsize=(4.0, 3.2),
-        )
-    except Exception:
-        return None
+    fig, ax = coco_plot_topomap(
+        values=arr,
+        index=names,
+        info=info,
+        cmap=cmap,
+        symmetric=False,
+        title=title,
+        cbar=True,
+        cbar_label=unit,
+        figsize=(4.0, 3.2),
+    )
 
     # Mark bad channels with an 'X', as the generic helper has no concept of
     # this project's "bad channel" annotation.
     if bad_channels:
         picks = mne.pick_types(info, eeg=True, exclude=[])
         pos = mne.channels.layout._find_topomap_coords(info, picks)
-        for i, ch in enumerate(kept_names):
+        for i, ch in enumerate(info.ch_names):
             if ch in bad_channels:
                 ax.plot(pos[i, 0], pos[i, 1], "kx", markersize=8, markeredgewidth=1.5)
 
@@ -188,42 +169,4 @@ def plot_topomap_selector(
             }
         ],
     )
-    return fig
-
-
-def plot_bad_channels_topo(
-    raw: mne.io.BaseRaw,
-    global_bads: list[str],
-    artifact_stats: dict | None = None,
-    title: str = "Bad Channels & Artifact Frequency",
-    show: bool = False,
-) -> plt.Figure:
-    """Generate a topographic map showing global bads and local artifact frequency.
-
-    This function leverages the new plot_topomap_from_channel_values but with
-    additional raw-specific annotations logic.
-    """
-    info = raw.info
-    picks = mne.pick_types(info, eeg=True, exclude=[])
-    ch_names = [info["ch_names"][i] for i in picks]
-
-    freqs = np.zeros(len(ch_names))
-    ch_to_idx = {name: i for i, name in enumerate(ch_names)}
-    for annot in raw.annotations:
-        if annot["description"].startswith("BAD_") and annot["ch_names"]:
-            for ch in annot["ch_names"]:
-                if ch in ch_to_idx:
-                    freqs[ch_to_idx[ch]] += 1
-
-    fig = plot_topomap_from_channel_values(
-        channel_names=ch_names,
-        values=freqs,
-        title=title,
-        cmap="YlOrRd",
-        unit="Artifact Count",
-        bad_channels=global_bads,
-    )
-
-    if fig and show:
-        plt.show()
     return fig

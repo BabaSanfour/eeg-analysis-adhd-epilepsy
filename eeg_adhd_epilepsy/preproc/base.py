@@ -4,9 +4,9 @@ This module provides the core pipeline for preprocessing EEG data using MNE-Pyth
 PyPREP, and AutoReject. The pipeline includes:
 
 1.  Block Awareness: Uses embedded `BLOCK_*` annotations already present in BIDS.
-2.  Resampling: Adjusts sampling rate.
-3.  Filtering: Applies high-pass and low-pass filters.
-4.  Line Noise Removal: Detects and removes power line noise (ZapLine).
+2.  Filtering: Applies high-pass and low-pass filters.
+3.  Line Noise Removal: Detects and removes power line noise (ZapLine).
+4.  Resampling: Adjusts sampling rate (downsampled last, after band-limiting).
 5.  Global Bad Channel Detection: Identifies broken channels using RANSAC.
 6.  Reference: Applies Common Average Reference (CAR).
 7.  Artifact Annotation: Detects and annotates bad epochs and channels using AutoReject,
@@ -23,7 +23,7 @@ import json
 import logging
 import sys
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -262,49 +262,54 @@ def _run_autoreject_chunk(
 def _compute_clean_stats(raw: mne.io.BaseRaw) -> dict[str, float]:
     """Compute clean-data fraction and per-type bad fractions from raw annotations.
 
-    Iterates over global (channel-less) BAD_ annotations and categorises them as
+    Considers only global (channel-less) BAD_ annotations and categorises them as
     autoreject-generated (`BAD_epoch_*`) or manual (`BAD_movement`, `BAD_yawn`,
-    etc.), ignoring technical ones (`BAD_ACQ_SKIP`, `BAD_boundary`).
+    etc.); technical spans (`BAD_ACQ_SKIP`, `BAD_boundary`) reduce clean time but
+    are counted as neither manual nor autoreject. Channel-specific spans are
+    excluded because they do not remove the whole-recording time window.
+
+    Bad time per category is computed by merging overlapping intervals (shared
+    ``events.merge_intervals`` helper, the same primitive used by the QC stage).
 
     Returns:
         Dict with keys ``clean_duration_s``, ``clean_fraction``,
         ``manual_bad_fraction``, ``autoreject_bad_fraction``.
     """
-    total_samples = raw.n_times
-    mask_all_bad = np.zeros(total_samples, dtype=bool)
-    mask_manual = np.zeros(total_samples, dtype=bool)
-    mask_autoreject = np.zeros(total_samples, dtype=bool)
+    total_duration_s = float(raw.times[-1]) if raw.times.size else 0.0
+    if total_duration_s <= 0:
+        return {
+            "clean_duration_s": 0.0,
+            "clean_fraction": 0.0,
+            "manual_bad_fraction": 0.0,
+            "autoreject_bad_fraction": 0.0,
+        }
 
+    all_bad: list[tuple[float, float]] = []
+    manual_bad: list[tuple[float, float]] = []
+    autoreject_bad: list[tuple[float, float]] = []
     for annot in raw.annotations:
-        desc = annot["description"]
-        if not desc.startswith("BAD_"):
+        desc = str(annot["description"])
+        if not desc.startswith("BAD_") or annot["ch_names"]:
+            continue  # non-BAD or channel-specific span
+        start = max(float(annot["onset"]), 0.0)
+        stop = min(float(annot["onset"]) + float(annot["duration"]), total_duration_s)
+        if stop <= start:
             continue
-        if annot.get("ch_names", []):
-            continue  # channel-specific span — skip for global stats
-
-        start_idx = max(0, raw.time_as_index(annot["onset"])[0])
-        end_idx = min(total_samples, raw.time_as_index(annot["onset"] + annot["duration"])[0])
-        if end_idx <= start_idx:
-            continue
-
-        mask_all_bad[start_idx:end_idx] = True
+        all_bad.append((start, stop))
         if desc.startswith("BAD_epoch_"):
-            mask_autoreject[start_idx:end_idx] = True
-        elif desc.startswith(("BAD_ACQ_SKIP", "BAD_boundary")):
-            pass  # technical — don't count as manual or autoreject
-        else:
-            mask_manual[start_idx:end_idx] = True
+            autoreject_bad.append((start, stop))
+        elif not desc.startswith(("BAD_ACQ_SKIP", "BAD_boundary")):
+            manual_bad.append((start, stop))
 
-    clean_samples = total_samples - int(mask_all_bad.sum())
+    def _summed(intervals: list[tuple[float, float]]) -> float:
+        return sum(stop - start for start, stop in events.merge_intervals(intervals))
+
+    clean_duration_s = max(total_duration_s - _summed(all_bad), 0.0)
     return {
-        "clean_duration_s": float(clean_samples / raw.info["sfreq"]),
-        "clean_fraction": float(clean_samples / total_samples) if total_samples > 0 else 0.0,
-        "manual_bad_fraction": float(mask_manual.sum() / total_samples)
-        if total_samples > 0
-        else 0.0,
-        "autoreject_bad_fraction": float(mask_autoreject.sum() / total_samples)
-        if total_samples > 0
-        else 0.0,
+        "clean_duration_s": clean_duration_s,
+        "clean_fraction": clean_duration_s / total_duration_s,
+        "manual_bad_fraction": _summed(manual_bad) / total_duration_s,
+        "autoreject_bad_fraction": _summed(autoreject_bad) / total_duration_s,
     }
 
 
@@ -312,9 +317,6 @@ def run_base_pipeline(
     raw: mne.io.BaseRaw,
     config: PreprocConfig,
     subject_id: str = "unknown",
-    session_id: str | None = None,
-    task: str | None = None,
-    run_id: str | None = None,
     record_label: str | None = None,
     figures_dir: Path | None = None,
 ) -> tuple[mne.io.BaseRaw, dict]:
@@ -335,14 +337,13 @@ def run_base_pipeline(
             - The processed MNE Raw object.
             - A dictionary containing processing provenance and statistics.
     """
-    subject = subject_id
-    subject_id = bids.bids_subject_label(subject)
+    subject_id = bids.bids_subject_label(subject_id)
     record_label = record_label or subject_id
 
     LOGGER.info("Starting base pipeline for %s", record_label)
 
     provenance: dict[str, Any] = {
-        "subject_id": bids.bids_subject_label(subject_id),
+        "subject_id": subject_id,
         "config": config,
         "steps_completed": [],
         "pipeline_warnings": [],
@@ -365,22 +366,17 @@ def run_base_pipeline(
 
     provenance["steps_completed"].append("embedded_blocks")
 
-    # 2. Resample
-    target_sfreq = config.get("processing", {}).get("resample_hz", None)
-    if target_sfreq:
-        with benchmark_step("resample", provenance):
-            raw.resample(target_sfreq, n_jobs=int(config.get("n_jobs", 1)))
-        provenance["steps_completed"].append("resample")
-
-    # 3. Filtering and Line Noise Removal
-    # ----------------------------------
+    # 2-3. Filtering and Line Noise Removal
+    # --------------------------------------
+    # Run on the full-rate signal, before any downsampling, so the high-pass and
+    # line-noise estimates are computed at the original temporal resolution.
     with benchmark_step("filtering_and_denoising", provenance):
         hp_hz = config.get("processing", {}).get("highpass_hz", DEFAULT_HIGHPASS_HZ)
         lp_hz = config.get("processing", {}).get("lowpass_hz", DEFAULT_LOWPASS_HZ)
         line_noise_cfg = config.get("line_noise", {})
         line_freq = line_noise_cfg.get("line_freq", 60.0)
 
-        # 3a. Bandpass Filter
+        # 2. Bandpass Filter
         # Ensure lowpass is strictly less than Nyquist (sfreq/2)
         nyquist = raw.info["sfreq"] / 2.0
         h_f = min(lp_hz, nyquist - 0.1) if lp_hz else None
@@ -390,7 +386,7 @@ def run_base_pipeline(
         raw.filter(l_freq=hp_hz, h_freq=h_f, verbose="ERROR", n_jobs=n_jobs)
         provenance["steps_completed"].append("bandpass_filter")
 
-        # 3b. Line Noise Removal
+        # 3. Line Noise Removal
         adaptive = line_noise_cfg.get("adaptive", False)
 
         from mne_denoise.zapline import ZapLine
@@ -409,6 +405,15 @@ def run_base_pipeline(
             "adaptive": adaptive,
             "n_removed": int(zapline_obj.n_removed_),
         }
+
+    # 4. Resample
+    # Downsample last among the band-limiting steps (filter-then-downsample
+    # convention). MNE applies its own anti-alias low-pass during resampling.
+    target_sfreq = config.get("processing", {}).get("resample_hz", None)
+    if target_sfreq:
+        with benchmark_step("resample", provenance):
+            raw.resample(target_sfreq, n_jobs=int(config.get("n_jobs", 1)))
+        provenance["steps_completed"].append("resample")
 
     # 5. Global Bad Channel Detection
     with benchmark_step("detect_global_bads", provenance):
@@ -516,7 +521,7 @@ def annotate_artifacts_blockwise(
     config: PreprocConfig,
     figures_dir: Path | None = None,
     record_label: str = "record",
-    n_interpolate: list[int] = None,
+    n_interpolate: list[int] | None = None,
 ) -> tuple[mne.io.BaseRaw, dict]:
     """Run condition-wise AutoReject and add non-destructive BAD annotations.
 
@@ -707,22 +712,18 @@ def run_base_record(
         figures_dir = subject_report_path.parent / "figures" / record_label
         figures_dir.mkdir(parents=True, exist_ok=True)
 
-        source_entities = bids.parse_bids_components(source_path)
         raw = readers.read_bids_raw(
             bids_root=Path(bids_root),
-            subject=source_entities["subject"],
-            task=source_entities.get("task", task),
-            session=source_entities.get("session", session_id),
-            run=source_entities.get("run", run_id),
+            subject=comps["subject"],
+            task=task,
+            session=session_id,
+            run=run_id,
         )
 
         cleaned_raw, _provenance = run_base_pipeline(
             raw,
             config=config,
-            subject=subject,
-            session_id=session_id,
-            task=task,
-            run_id=run_id,
+            subject_id=subject,
             record_label=record_label,
             figures_dir=figures_dir,
         )
@@ -758,6 +759,98 @@ def run_base_record(
         LOGGER.error("Failed processing %s: %s", source_path.name, exc, exc_info=True)
         result["error"] = str(exc)
         return result
+
+
+def _build_pipeline_config(args: argparse.Namespace, *, n_jobs: int) -> dict[str, Any]:
+    """Assemble the per-record preprocessing config consumed by run_base_pipeline.
+
+    Only the keys actually read downstream are included: ``n_jobs`` plus the
+    ``processing`` and ``line_noise`` blocks.
+    """
+    return {
+        "n_jobs": n_jobs,
+        "processing": {
+            "highpass_hz": args.highpass,
+            "lowpass_hz": args.lowpass,
+            "resample_hz": args.resample,
+        },
+        "line_noise": {
+            "line_freq": args.line_freq,
+            "adaptive": args.adaptive,
+        },
+    }
+
+
+def _scan_durations(files: Sequence[Path]) -> list[tuple[float, Path]]:
+    """Return ``(duration_minutes, file)`` for each file.
+
+    Unreadable recordings are assigned ``+inf`` so longest-first dispatch sends
+    them first rather than letting them starve behind many short jobs.
+    """
+    scanned: list[tuple[float, Path]] = []
+    for f in tqdm(files, desc="Checking Durations"):
+        try:
+            raw_info = mne.io.read_raw_brainvision(f, preload=False, verbose="ERROR")
+            minutes = (raw_info.n_times / raw_info.info["sfreq"]) / 60.0
+        except Exception as exc:
+            LOGGER.warning(
+                "Could not read duration for %s; treating as longest. Error: %s", f.name, exc
+            )
+            minutes = float("inf")
+        scanned.append((minutes, f))
+    return scanned
+
+
+def _resolve_concurrency(args: argparse.Namespace) -> int:
+    """Number of subjects to run in parallel, bounded by cores and memory.
+
+    Precedence: explicit ``--concurrency``; else derived from ``--max-mem-gb`` /
+    ``--mem-per-subject-gb``; else the full core budget. Always clamped to
+    ``[1, n_jobs // internal_n_jobs]`` so worker cores never exceed ``--n_jobs``.
+    """
+    core_cap = max(1, args.n_jobs // max(1, args.internal_n_jobs))
+    if args.concurrency is not None:
+        concurrency = args.concurrency
+    elif args.max_mem_gb is not None:
+        concurrency = int(args.max_mem_gb // max(args.mem_per_subject_gb, 0.1))
+    else:
+        concurrency = core_cap
+    return max(1, min(concurrency, core_cap))
+
+
+def _measure_peak_rss(
+    file: Path,
+    *,
+    bids_root: Path,
+    reports_root: Path,
+    raw_lookup: Mapping[str, Mapping[str, object]] | None,
+    config: dict[str, Any],
+) -> float:
+    """Process one recording in a child process and return its peak RSS in GB.
+
+    Runs the real base pipeline (so the subject's output is written), isolating
+    memory in a forked child measured via ``RUSAGE_CHILDREN`` — used to calibrate
+    ``--mem-per-subject-gb`` from data rather than estimates.
+    """
+    import multiprocessing as mp
+    import resource
+
+    proc = mp.get_context("fork").Process(
+        target=run_base_record,
+        kwargs={
+            "subject_id": bids.parse_bids_components(file)["subject"],
+            "source_path": file,
+            "bids_root": bids_root,
+            "config": config,
+            "reports_root": reports_root,
+            "raw_lookup": raw_lookup,
+        },
+    )
+    proc.start()
+    proc.join()
+    maxrss = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+    # ru_maxrss is bytes on macOS, kilobytes on Linux.
+    return maxrss / (1024**3 if sys.platform == "darwin" else 1024**2)
 
 
 def main():
@@ -800,6 +893,42 @@ def main():
         type=str,
         default=None,
         help="Custom root directory for reports (defaults to sibling of bids_root)",
+    )
+    parser.add_argument(
+        "--internal-n-jobs",
+        type=int,
+        default=1,
+        help="Cores per subject (internal n_jobs). Keep at 1 for subject-level "
+        "parallelism; only raise it to fill cores when few subjects remain "
+        "(default: 1).",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=None,
+        help="Subjects to process in parallel. Overrides memory-based sizing; "
+        "clamped so concurrency * internal_n_jobs <= n_jobs.",
+    )
+    parser.add_argument(
+        "--max-mem-gb",
+        type=float,
+        default=None,
+        help="Total memory budget (GB). When --concurrency is unset, derives "
+        "concurrency = max_mem_gb // mem_per_subject_gb.",
+    )
+    parser.add_argument(
+        "--mem-per-subject-gb",
+        type=float,
+        default=4.0,
+        help="Estimated peak memory (GB) of the LARGEST recording; sizes "
+        "concurrency from --max-mem-gb (default: 4.0). Tune with "
+        "--measure-peak-rss.",
+    )
+    parser.add_argument(
+        "--measure-peak-rss",
+        action="store_true",
+        help="Process only the single largest selected recording in a child "
+        "process, report its peak RSS, then exit (calibrates --mem-per-subject-gb).",
     )
 
     args = parser.parse_args()
@@ -951,112 +1080,66 @@ def main():
         LOGGER.warning("No files matched the final selection criteria.")
         sys.exit(0)
 
-    LOGGER.info("Scanning file durations to optimize parallelization...")
-    short_files = []
-    long_files = []
+    LOGGER.info("Scanning recording durations (for longest-first ordering)...")
+    file_durations = _scan_durations(files_to_process)
 
-    for f in tqdm(files_to_process, desc="Checking Durations"):
-        try:
-            raw_info = mne.io.read_raw_brainvision(f, preload=False, verbose="ERROR")
-            duration_min = (raw_info.n_times / raw_info.info["sfreq"]) / 60.0
-
-            if duration_min >= 30.0:
-                long_files.append(f)
-            else:
-                short_files.append(f)
-        except Exception as e:
-            LOGGER.warning(
-                "Could not read duration for %s, treating as long file. Error: %s", f.name, e
+    # Calibration mode: measure peak RSS of the largest recording, then exit so
+    # the operator can set --mem-per-subject-gb from data.
+    if args.measure_peak_rss:
+        if not file_durations:
+            LOGGER.error("No files available to measure peak RSS.")
+            sys.exit(1)
+        largest = max(file_durations, key=lambda item: item[0])[1]
+        core_cap = max(1, args.n_jobs // max(1, args.internal_n_jobs))
+        LOGGER.info("Measuring peak RSS on the largest selected recording: %s", largest.name)
+        peak_gb = _measure_peak_rss(
+            largest,
+            bids_root=bids_root,
+            reports_root=reports_root,
+            raw_lookup=raw_lookup,
+            config=_build_pipeline_config(args, n_jobs=args.internal_n_jobs),
+        )
+        LOGGER.info("Peak RSS for %s: %.2f GB", largest.name, peak_gb)
+        if args.max_mem_gb:
+            recommended = max(1, min(core_cap, int(args.max_mem_gb // max(peak_gb, 0.1))))
+            LOGGER.info(
+                "For a %.0f GB budget: recommended --concurrency=%d (core cap %d); "
+                "use --mem-per-subject-gb ~%.1f.",
+                args.max_mem_gb,
+                recommended,
+                core_cap,
+                peak_gb,
             )
-            long_files.append(f)
+        sys.exit(0)
 
-    LOGGER.info(
-        "Optimization Strategy: %d short files (<30m), %d long files (>=30m)",
-        len(short_files),
-        len(long_files),
-    )
+    # Longest-first: the biggest (and most memory-hungry) recordings start early
+    # and short ones backfill the tail, minimizing makespan and idle cores.
+    ordered_files = [f for _, f in sorted(file_durations, key=lambda item: item[0], reverse=True)]
 
-    # ---------------------------------------------------------
-    # Phase 1: Process Short Files (Parallel Subjects)
-    # ---------------------------------------------------------
-    if short_files:
+    if ordered_files:
+        concurrency = _resolve_concurrency(args)
+        pipeline_config = _build_pipeline_config(args, n_jobs=args.internal_n_jobs)
         LOGGER.info(
-            "--- Phase 1: Processing %d short files in parallel (n_jobs=%d) ---",
-            len(short_files),
+            "Processing %d recordings: concurrency=%d, internal n_jobs=%d (cores=%d).",
+            len(ordered_files),
+            concurrency,
+            args.internal_n_jobs,
             args.n_jobs,
         )
-
-        pipeline_config_short = {
-            "n_jobs": 1,  # 1 core per subject internally
-            "bids_root": str(bids_root),
-            "preproc_root": str(preproc_root),
-            "reports_root": str(reports_root),
-            "pre_base_raw_lookup": raw_lookup,
-            "processing": {
-                "highpass_hz": args.highpass,
-                "lowpass_hz": args.lowpass,
-                "resample_hz": args.resample,
-            },
-            "line_noise": {
-                "line_freq": args.line_freq,
-                "adaptive": args.adaptive,
-            },
-        }
-
-        with tqdm_joblib(tqdm(total=len(short_files), desc="Processing Short Files")):
-            results_short = Parallel(n_jobs=args.n_jobs)(
+        with tqdm_joblib(tqdm(total=len(ordered_files), desc="Processing recordings")):
+            results = Parallel(n_jobs=concurrency, backend="loky")(
                 delayed(run_base_record)(
                     subject_id=bids.parse_bids_components(f)["subject"],
                     source_path=f,
                     bids_root=bids_root,
-                    config=pipeline_config_short,
+                    config=pipeline_config,
                     reports_root=reports_root,
                     raw_lookup=raw_lookup,
                 )
-                for f in short_files
+                for f in ordered_files
             )
-        for fpath, result in zip(short_files, results_short):
+        for fpath, result in zip(ordered_files, results):
             consume_result(result, subject_id=bids.parse_bids_components(fpath)["subject"])
-
-    # ---------------------------------------------------------
-    # Phase 2: Process Long Files (Sequential Subjects, Parallel Internal)
-    # ---------------------------------------------------------
-    if long_files:
-        LOGGER.info(
-            "--- Phase 2: Processing %d long files sequentially (internal n_jobs=%d) ---",
-            len(long_files),
-            args.n_jobs,
-        )
-
-        pipeline_config_long = {
-            "n_jobs": args.n_jobs,  # Full power per subject
-            "bids_root": str(bids_root),
-            "preproc_root": str(preproc_root),
-            "reports_root": str(reports_root),
-            "pre_base_raw_lookup": raw_lookup,
-            "processing": {
-                "highpass_hz": args.highpass,
-                "lowpass_hz": args.lowpass,
-                "resample_hz": args.resample,
-            },
-            "line_noise": {
-                "line_freq": args.line_freq,
-                "adaptive": args.adaptive,
-            },
-        }
-
-        # Simple loop, no Parallel (or Parallel(n_jobs=1))
-        # We use a loop to ensure strictly sequential execution to save memory
-        for f in tqdm(long_files, desc="Processing Long Files"):
-            res = run_base_record(
-                subject_id=bids.parse_bids_components(f)["subject"],
-                source_path=f,
-                bids_root=bids_root,
-                config=pipeline_config_long,
-                reports_root=reports_root,
-                raw_lookup=raw_lookup,
-            )
-            consume_result(res, subject_id=bids.parse_bids_components(f)["subject"])
 
     success_ids = sorted(
         [sid for sid, ok in subject_status.items() if ok and not subject_skipped.get(sid, False)]
@@ -1082,6 +1165,16 @@ def main():
         LOGGER.info("Skipped (already processed) subjects: %s", skipped_ids)
     if failed_ids:
         LOGGER.info("Failed subjects: %s", failed_ids)
+
+    # Fail loudly on systemic failure: if subjects were processed but none
+    # succeeded or skipped, the cause is almost certainly a wiring/environment
+    # error rather than per-subject data issues, so exit non-zero.
+    if fail_count and not success_count and not skipped_count:
+        LOGGER.error(
+            "All %d subject(s) failed the base stage — aborting (likely a systemic error).",
+            fail_count,
+        )
+        sys.exit(1)
 
     LOGGER.info("Generating shared base QC dataset report...")
     preproc_qc.write_preproc_qc_aggregate_reports(

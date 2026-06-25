@@ -5,7 +5,7 @@
 #SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.err
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=32
-#SBATCH --mem=64G
+#SBATCH --mem=192G
 #SBATCH --mail-type=ALL
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -21,6 +21,14 @@ VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 OVERWRITE=${OVERWRITE:-0}
 
 THREADS=${SLURM_CPUS_PER_TASK:-32}
+
+# Memory-aware concurrency: cap simultaneous subjects to the RAM budget, keeping
+# ~15% headroom for the main process, report writing, and the OS. Tune
+# MEM_PER_SUBJECT_GB from data with: python -m eeg_adhd_epilepsy.preproc.base
+# ... --measure-peak-rss --max-mem-gb <budget>
+MEM_PER_SUBJECT_GB=${MEM_PER_SUBJECT_GB:-4}
+SLURM_MEM_MB=${SLURM_MEM_PER_NODE:-196608}
+MAX_MEM_GB=$(( SLURM_MEM_MB / 1024 * 85 / 100 ))
 
 [ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
 [ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
@@ -45,11 +53,15 @@ export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
 export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
 mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 
+echo "Memory budget: ${MAX_MEM_GB} GB usable (~${MEM_PER_SUBJECT_GB} GB/subject) across ${THREADS} cores."
+
 cmd=(
   python -m eeg_adhd_epilepsy.preproc.base
   --bids_root "$BIDS_ROOT"
   --reports_root "$SCRATCH_ROOT/reports"
   --n_jobs "$THREADS"
+  --max-mem-gb "$MAX_MEM_GB"
+  --mem-per-subject-gb "$MEM_PER_SUBJECT_GB"
 )
 
 if [ "$OVERWRITE" = "1" ]; then

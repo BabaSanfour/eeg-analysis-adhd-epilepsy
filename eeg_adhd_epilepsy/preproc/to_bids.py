@@ -9,6 +9,7 @@ import fnmatch
 import logging
 import re
 import shutil
+import sys
 import unicodedata
 from collections.abc import Sequence
 from pathlib import Path
@@ -804,6 +805,13 @@ def main() -> None:
         LOGGER.info("Successfully converted study_ids: %s", sorted(successful_ids))
     elif not failed_ids:
         LOGGER.info("No new recordings needed conversion.")
+
+    if selected_records and not successful_ids and not skipped_ids:
+        LOGGER.error(
+            "All %d selected record(s) failed conversion — aborting (likely a systemic error).",
+            len(selected_records),
+        )
+        sys.exit(1)
 
     if successful_ids:
         _write_participants_tsv(args.bids_root, metadata_df, successful_ids)

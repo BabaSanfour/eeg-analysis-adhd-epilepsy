@@ -41,22 +41,14 @@ def build_stage_overview_table(record: Mapping[str, object], *, stage_display_na
     )
 
 
-def build_channel_diagnostics_tables(
+def build_top_channels_table(
     channel_diagnostics: Mapping[str, object],
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Return (channel_list_df, top_channels_df) from a channel_diagnostics dict.
+) -> pd.DataFrame:
+    """Return the top-5 amplitude and top-5 line-noise channel ranking table.
 
-    channel_list_df — one row per channel type with count and names.
-    top_channels_df — top-5 amplitude and top-5 line-noise channels ranked.
+    Flat/noisy channel names are surfaced in the residual-metrics table, so only
+    the ranked problem-channel view is built here.
     """
-    flat = [str(ch) for ch in (channel_diagnostics.get("flat_channels") or [])]
-    noisy = [str(ch) for ch in (channel_diagnostics.get("noisy_channels") or [])]
-    list_rows = [
-        {"Type": "Flat", "Count": len(flat), "Channels": ", ".join(flat) or "—"},
-        {"Type": "Noisy", "Count": len(noisy), "Channels": ", ".join(noisy) or "—"},
-    ]
-    list_df = pd.DataFrame(list_rows, columns=["Type", "Count", "Channels"])
-
     top_amp = list(channel_diagnostics.get("top_amplitude_channels") or [])
     top_noise = list(channel_diagnostics.get("top_line_noise_channels") or [])
     rank_rows = []
@@ -75,7 +67,7 @@ def build_channel_diagnostics_tables(
         columns=["Rank", "High Amplitude Channel", "Amplitude PTP (uV)",
                  "High Line-Noise Channel", "Line-Noise Ratio"]
     )
-    return list_df, rank_df
+    return rank_df
 
 
 def build_condition_comparison_table(segment_comparison: pd.DataFrame) -> pd.DataFrame:
@@ -219,8 +211,8 @@ def build_dataset_summary_table(
 
 def build_dataset_effect_table(runs_df: pd.DataFrame, *, suffix: str, reference_label: str) -> pd.DataFrame:
     specs = (
-        ("Mean amplitude", f"amplitude_mean_delta_{suffix}", " uV"),
-        ("Max amplitude", f"amplitude_max_delta_{suffix}", " uV"),
+        ("Mean amplitude", f"amplitude_mean_uv_delta_{suffix}", " uV"),
+        ("Max amplitude", f"amplitude_max_uv_delta_{suffix}", " uV"),
         ("Bad channels", f"pct_bad_channels_delta_{suffix}", "%"),
         ("Line-noise ratio", f"line_noise_ratio_delta_{suffix}", ""),
         ("HF/LF ratio", f"hf_lf_ratio_delta_{suffix}", ""),
@@ -315,7 +307,7 @@ def generate_subject_report(
     # Channel diagnostics — only top-5 ranking table (flat/noisy names are now in residual metrics)
     if channel_diagnostics:
         ch_diag = Section("Channel Diagnostics", icon="📡")
-        _, rank_df = build_channel_diagnostics_tables(channel_diagnostics)
+        rank_df = build_top_channels_table(channel_diagnostics)
         _add_optional_table(ch_diag, rank_df, "Top 5 Problematic Channels")
         report.add_section(ch_diag)
 
@@ -421,7 +413,7 @@ def generate_dataset_report(
             effect_prev,
             figures,
             (
-                "amplitude_mean_delta_prev",
+                "amplitude_mean_uv_delta_prev",
                 "pct_bad_channels_delta_prev",
                 "line_noise_ratio_delta_prev",
                 "hf_lf_ratio_delta_prev",
@@ -437,7 +429,7 @@ def generate_dataset_report(
         effect_raw,
         figures,
         (
-            "amplitude_mean_delta_raw",
+            "amplitude_mean_uv_delta_raw",
             "pct_bad_channels_delta_raw",
             "line_noise_ratio_delta_raw",
             "hf_lf_ratio_delta_raw",

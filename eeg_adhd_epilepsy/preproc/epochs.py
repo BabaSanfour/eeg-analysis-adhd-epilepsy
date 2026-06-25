@@ -84,12 +84,14 @@ def make_epochs_from_preproc_raw(
     events = np.concatenate(remapped)
     events = events[events[:, 0].argsort()]
 
+    epoch_tmax = max(segment_duration - 1.0 / raw.info["sfreq"], 0.0)
+
     epochs = mne.Epochs(
         raw,
         events=events,
         event_id=event_id,
         tmin=0.0,
-        tmax=segment_duration,
+        tmax=epoch_tmax,
         baseline=None,
         reject=None,
         verbose="ERROR",
