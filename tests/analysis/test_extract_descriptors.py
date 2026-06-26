@@ -816,7 +816,7 @@ aggregation:
         ],
     )
 
-    with pytest.raises(ValueError, match="No matching saved-derivative subjects"):
+    with pytest.raises(ValueError, match="No metadata-cohort subjects matched"):
         extract_descriptors.main()
 
 

@@ -156,7 +156,7 @@ def main() -> None:
     args = parser.parse_args()
 
     bids_root = Path(args.bids_root)
-    preproc_root = bids_io.get_preproc_root(bids_root)
+    preproc_root = bids_io.get_derivative_root(bids_root, bids_io.DerivativeStage.PREPROC)
     reports_root = Path(args.reports_root) if args.reports_root else default_reports_root(bids_root)
     log_file = reports_root / "logs" / "epochs.log"
     log_file.parent.mkdir(parents=True, exist_ok=True)

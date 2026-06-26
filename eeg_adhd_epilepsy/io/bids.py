@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -61,9 +62,28 @@ def validate_stage_desc(desc: str, allowed: set[str] | None = None) -> str:
     return desc_token
 
 
-def get_preproc_root(bids_root: Path) -> Path:
-    """Return the canonical derivatives/preproc root for a BIDS dataset."""
-    return Path(bids_root).expanduser() / "derivatives" / "preproc"
+class DerivativeStage(StrEnum):
+    """Canonical ``derivatives/<...>`` subtrees for a BIDS dataset.
+
+    The value encodes the full sub-path (including nesting), so the location of
+    each stage is defined exactly once here instead of at every call site.
+    """
+
+    PREPROC = "preproc"
+    DESCRIPTORS = "signal_features/descriptors"
+    FOUNDATION_EMBEDDINGS = "eeg_foundation_embeddings"
+
+
+def get_derivative_root(bids_root: Path, stage: DerivativeStage) -> Path:
+    """Return the canonical ``derivatives/<stage>`` root for a BIDS dataset.
+
+    One join point with typed stages (mirroring ``ReportStage``/``summary_report_dir``).
+    Downstream stages resolve a derivative tree to the same default location as
+    the producer.
+    """
+    if not isinstance(stage, DerivativeStage):
+        raise TypeError(f"stage must be a DerivativeStage, got {stage!r}")
+    return Path(bids_root).expanduser() / "derivatives" / stage.value
 
 
 def get_stage_output_path(

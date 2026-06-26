@@ -35,6 +35,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
+from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+
 PKG = "eeg_adhd_epilepsy"
 
 
@@ -66,7 +68,7 @@ class Stage:
 
 def _descriptor_combined(ctx: Context) -> Path:
     assert ctx.bids_root is not None
-    return ctx.bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
+    return get_derivative_root(ctx.bids_root, DerivativeStage.DESCRIPTORS) / "combined"
 
 
 def _glob_exists(root: Path | None, pattern: str) -> bool:
@@ -95,7 +97,7 @@ STAGES: list[Stage] = [
         module=f"{PKG}.preproc.base",
         build=lambda c: ["--bids_root", str(c.bids_root), "--n_jobs", str(c.n_jobs)],
         done=lambda c: _glob_exists(
-            c.bids_root / "derivatives" / "preproc" if c.bids_root else None,
+            get_derivative_root(c.bids_root, DerivativeStage.PREPROC) if c.bids_root else None,
             "**/*desc-base_eeg.fif",
         ),
         note="needs --bids_root",
@@ -129,9 +131,7 @@ STAGES: list[Stage] = [
             "all",
         ],
         done=lambda c: _glob_exists(
-            c.bids_root / "derivatives" / "signal_features" / "descriptors"
-            if c.bids_root
-            else None,
+            get_derivative_root(c.bids_root, DerivativeStage.DESCRIPTORS) if c.bids_root else None,
             "sub-*/**/_SUCCESS",
         ),
         note="runs all subjects sequentially (use cluster/05 for the array form)",

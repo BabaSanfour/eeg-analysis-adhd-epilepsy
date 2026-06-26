@@ -17,17 +17,10 @@ import pandas as pd
 from coco_pipe.decoding import (
     ChanceAssessmentConfig,
     StatisticalAssessmentConfig,
-    completed_for_config,
-    config_hash,
-    load_completed_result_records,
     prepare_target,
-    redact_sensitive,
     safe_group_n_splits,
-    write_run_status,
 )
 from coco_pipe.io import DataContainer
-
-from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 DEFAULT_METRICS = [
     "accuracy",
@@ -76,12 +69,45 @@ def grouped_accuracy_assessment(
     )
 
 
-def require_conditions(config: Mapping[str, Any]) -> list[str]:
-    """Require explicitly configured experimental conditions."""
+def require_conditions(config: dict[str, Any]) -> list[str]:
+    """Require explicitly configured conditions."""
     conditions = config.get("conditions")
-    if not conditions or not all(str(value).strip() for value in conditions):
-        raise ValueError("conditions must be an explicit non-empty config list.")
-    return [str(value) for value in conditions]
+    if not conditions or not isinstance(conditions, list):
+        raise ValueError("conditions must be explicitly configured as a non-empty list.")
+    return [str(c) for c in conditions]
+
+
+def require_models(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """Require explicitly configured models."""
+    models = config.get("models")
+    if not models or not isinstance(models, list):
+        raise ValueError("models must be explicitly configured as a non-empty config list.")
+    return models
+
+
+def foundation_provenance(
+    model_cfg: Mapping[str, Any],
+    spec: Any,
+    *,
+    config_hash: str,
+) -> dict[str, Any]:
+    """Provenance row shared by the foundation extraction and decoding sweeps.
+
+    Centralizing the model/window/spec fields keeps the embedding-extraction and
+    decoding manifests byte-for-byte comparable; if they drift, joins across the
+    two derivative trees stop lining up.
+    """
+    return {
+        "config_hash": config_hash,
+        "model_key": str(model_cfg["model_key"]),
+        "segment_duration": float(model_cfg["segment_duration"]),
+        "overlap": float(model_cfg["overlap"]),
+        "use_derivatives": bool(model_cfg["use_derivatives"]),
+        "window_source": str(model_cfg["window_source"]),
+        "expected_n_times": spec.pretrained_n_times,
+        "expected_sfreq": float(spec.pretrained_sfreq),
+        "expected_duration": spec.pretrained_window_seconds,
+    }
 
 
 def cohort_signature(groups: Any) -> str:
@@ -158,17 +184,11 @@ def result_records(
 __all__ = [
     "DEFAULT_METRICS",
     "cohort_signature",
-    "completed_for_config",
-    "config_hash",
+    "foundation_provenance",
     "grouped_accuracy_assessment",
-    "load_completed_result_records",
-    "load_yaml_config",
     "prepare_decoding_scope",
-    "prepare_target",
-    "redact_sensitive",
     "require_conditions",
+    "require_models",
     "result_records",
-    "safe_group_n_splits",
     "slug",
-    "write_run_status",
 ]

@@ -47,10 +47,16 @@ from coco_pipe.io.quality import drop_epoch_outliers
 
 from eeg_adhd_epilepsy.analysis.dataset import build_container
 from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import required_descriptor_files
+from eeg_adhd_epilepsy.analysis.utils.subject_resolution import (
+    resolve_cohort_subjects,
+    resolve_metadata_row,
+)
 from eeg_adhd_epilepsy.io.bids import (
+    DerivativeStage,
     add_recording_id,
     bids_session_label,
     bids_subject_label,
+    get_derivative_root,
     parse_bids_components,
     study_id_to_bids_subject,
 )
@@ -347,7 +353,7 @@ def main() -> None:
     if args.derivative_root:
         derivative_root = Path(args.derivative_root).expanduser()
     else:
-        derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
+        derivative_root = get_derivative_root(bids_root, DerivativeStage.DESCRIPTORS)
 
     raw_config = load_yaml_config(config_path)
     aggregation_config = raw_config.pop("aggregation", None) or {}
@@ -405,42 +411,19 @@ def main() -> None:
         aggregated_ratio_floor = 0.0
 
     meta_df = read_table(metadata_path, sep=None)
-    valid_subjects = set(meta_df[args.subject_col].map(study_id_to_bids_subject))
-    row_requested_subjects: list[str] | None = None
+    requested: list[Any] | None = list(args.subjects) if args.subjects else None
     if args.metadata_row is not None:
-        row_position = args.metadata_row - 1
-        if row_position >= len(meta_df):
-            LOGGER.warning(
-                "Metadata row %d is outside the metadata table with %d rows; nothing to do.",
-                args.metadata_row,
-                len(meta_df),
-            )
+        subject = resolve_metadata_row(meta_df, args.metadata_row, args.subject_col)
+        if subject is None:
             return
-        row_value = meta_df.iloc[row_position][args.subject_col]
-        row_requested_subjects = [study_id_to_bids_subject(row_value)]
-        LOGGER.info(
-            "Resolved metadata row %d to %s=%s.",
-            args.metadata_row,
-            args.subject_col,
-            row_requested_subjects[0],
-        )
+        requested = [subject]
+        LOGGER.info("Resolved metadata row %d to %s.", args.metadata_row, subject)
 
-    if row_requested_subjects is not None:
-        subjects = [subject for subject in row_requested_subjects if subject in valid_subjects]
-    elif args.subjects:
-        requested_subjects = [study_id_to_bids_subject(subject) for subject in args.subjects]
-        subjects = [subject for subject in requested_subjects if subject in valid_subjects]
-    else:
-        subjects = sorted(list(valid_subjects))
-
-    if not subjects:
-        raise ValueError(
-            "No matching saved-derivative subjects were found for descriptor extraction."
-        )
+    subjects = resolve_cohort_subjects(meta_df, args.subject_col, requested)
     LOGGER.info("Using %d subjects from saved derivatives.", len(subjects))
 
     for subject in subjects:
-        epochs_root = bids_root / "derivatives" / "preproc"
+        epochs_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
         files = list(epochs_root.rglob(f"{bids_subject_label(subject)}*_desc-base_epo.fif"))
 
         sessions = sorted(list({parse_bids_components(f).get("session", "01") for f in files}))

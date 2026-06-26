@@ -9,8 +9,8 @@ drift, across `raw_qc.py`, `eeg_report.py`, `preproc_qc.py`, and
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Mapping, Sequence
 
 import pandas as pd
 from coco_pipe.report.core import ImageElement, Section, TableElement

@@ -18,11 +18,12 @@ sbatch --export=ALL,BIDS_ROOT=/my/BIDS,METADATA_PATH=/my/meta.csv 03_submit_base
 | 05 | `05_submit_extract_descriptors_array.sh` | epochs → descriptor shards | array (per metadata row) |
 | 06 | `06_verify_descriptors.sh` | audit shard completeness + QC before merge | single |
 | 07 | `07_submit_merge_descriptors.sh` | shards → combined tables | single |
-| 08 | `08_submit_foundation_embeddings.sh` | foundation embeddings | single (GPU) |
-| 09 | `09_batch_run_dim_reduction.sh` | raw dim-reduction | array (cohorts × modes) |
-| 10 | `10_batch_run_dim_reduction_descriptors.sh` | descriptor dim-reduction | array (cohorts × modes) |
-| 11 | `11_submit_classical_decode.sh` | classical decoding | single (one cohort × analysis) |
-| 12 | `12_submit_foundation_decode.sh` | foundation decoding | single (GPU) |
+| 08 | `08_submit_foundation_embeddings.sh` | epochs → embedding shards | array (per metadata row, GPU) |
+| 09 | `09_submit_merge_foundation_embeddings.sh` | shards → manifest + report | single |
+| 10 | `10_batch_run_dim_reduction.sh` | raw dim-reduction | array (cohorts × modes) |
+| 11 | `11_batch_run_dim_reduction_descriptors.sh` | descriptor dim-reduction | array (cohorts × modes) |
+| 12 | `12_submit_classical_decode.sh` | classical decoding | single (one cohort × analysis) |
+| 13 | `13_submit_foundation_decode.sh` | foundation decoding | single (GPU) |
 
 
 ## Common environment variables

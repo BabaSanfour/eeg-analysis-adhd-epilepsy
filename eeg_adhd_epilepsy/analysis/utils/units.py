@@ -1,6 +1,6 @@
-import numpy as np
 from collections.abc import Sequence
 
+import numpy as np
 from coco_pipe.io import DataContainer
 from coco_pipe.io.quality import group_labels
 
