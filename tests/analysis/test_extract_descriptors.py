@@ -1002,6 +1002,41 @@ def test_apply_mad_rejection_raises_when_too_few_remain():
         )
 
 
+def test_write_text_atomic_is_concurrency_safe(tmp_path: Path) -> None:
+    """Many tasks writing the same shared file must not race on a shared temp.
+
+    Reproduces the Slurm-array startup contention on ``dataset_description.json``
+    / ``config_used.yaml``: with a shared ``.tmp`` name this raised
+    ``FileNotFoundError`` on rename; with a process-unique temp + ``os.replace``
+    it is safe and leaves the destination fully written.
+    """
+    import threading
+
+    target = tmp_path / "dataset_description.json"
+    text = json.dumps({"Name": "Signal Features", "pad": "x" * 5000}) + "\n"
+    errors: list[BaseException] = []
+    barrier = threading.Barrier(16)
+
+    def worker() -> None:
+        try:
+            barrier.wait()
+            for _ in range(25):
+                extract_descriptors._write_text_atomic(target, text)
+        except BaseException as exc:  # noqa: BLE001 - record any race failure
+            errors.append(exc)
+
+    threads = [threading.Thread(target=worker) for _ in range(16)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert not errors, errors[0]
+    assert target.read_text(encoding="utf-8") == text
+    # No orphaned temp files left behind by the atomic writer.
+    assert not list(tmp_path.glob(".dataset_description.json.*.tmp"))
+
+
 def test_apply_mad_rejection_per_family_tags_failures():
     metadata = pd.DataFrame({"obs_id": [f"obs-{index}" for index in range(6)]})
 
