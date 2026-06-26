@@ -15,7 +15,6 @@ import pandas as pd
 from coco_pipe.report.core import Report, Section
 from mne_bids import BIDSPath
 
-from eeg_adhd_epilepsy.io import bids as bids_io
 from eeg_adhd_epilepsy.io import report_paths
 from eeg_adhd_epilepsy.reports._common import (
     add_images as _add_images,

@@ -32,26 +32,3 @@ on_unsupported: skip
 overwrite: false
 detailed_unit_reports: true
 report_asset_urls: inline
-train_modes: [linear_probe, full, lora]
-training_defaults:
-  linear_probe:
-    max_epochs: 20
-    lr: 0.001
-    batch_size: 16
-    early_stopping_patience: 5
-  full:
-    max_epochs: 10
-    lr: 0.00001
-    batch_size: 8
-    early_stopping_patience: 3
-  lora:
-    max_epochs: 15
-    lr: 0.0001
-    batch_size: 8
-    early_stopping_patience: 4
-cv:
-  n_splits: 5
-chance_method: permutation
-n_permutations: 100
-store_null_distribution: false
-class_weight: balanced

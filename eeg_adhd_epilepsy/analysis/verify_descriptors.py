@@ -42,7 +42,11 @@ import pandas as pd
 from coco_pipe.io import read_table
 
 from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import required_descriptor_files
-from eeg_adhd_epilepsy.io.bids import study_id_to_bids_subject
+from eeg_adhd_epilepsy.io.bids import (
+    DerivativeStage,
+    get_derivative_root,
+    study_id_to_bids_subject,
+)
 from eeg_adhd_epilepsy.io.report_paths import (
     ReportStage,
     default_reports_root,
@@ -276,11 +280,8 @@ def main() -> None:
     if args.derivative_root:
         derivative_root = Path(args.derivative_root).expanduser()
     elif args.bids_root:
-        derivative_root = (
-            Path(args.bids_root).expanduser()
-            / "derivatives"
-            / "signal_features"
-            / "descriptors"
+        derivative_root = get_derivative_root(
+            Path(args.bids_root).expanduser(), DerivativeStage.DESCRIPTORS
         )
     else:
         parser.error("Provide --derivative_root or --bids_root.")

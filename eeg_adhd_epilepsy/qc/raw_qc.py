@@ -29,8 +29,9 @@ from eeg_adhd_epilepsy.qc.utils import (
     compute_qc_score,
     evaluate_signal_qc_flag,
 )
-from eeg_adhd_epilepsy.utils.events import crop_raw_to_recording_start
 from eeg_adhd_epilepsy.utils.constants import BASIC_1020_CHANNELS
+from eeg_adhd_epilepsy.utils.events import crop_raw_to_recording_start
+
 WEIGHTED_METRICS = (*_BASE_WEIGHTED_METRICS, "coverage_pct")
 
 

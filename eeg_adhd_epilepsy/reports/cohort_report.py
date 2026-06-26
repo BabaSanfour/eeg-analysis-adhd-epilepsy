@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Mapping, Sequence
 
 import pandas as pd
 from coco_pipe.report.core import Report, Section
-
 from coco_pipe.report.elements import (
     ImageElement,
+    InteractiveTableElement,
     PlotlyElement,
     TableElement,
-    InteractiveTableElement, 
 )
 
 from eeg_adhd_epilepsy.reports._common import add_image_list as _add_images

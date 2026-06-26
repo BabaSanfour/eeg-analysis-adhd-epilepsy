@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Optional, Sequence
+from typing import Any
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from coco_pipe.dim_reduction import (
-    DimReduction,
     EVAL_METRIC_COLUMNS,
     SEPARATION_METRIC_KEY,
+    DimReduction,
     grouped_condition_stats,
     load_fit_artifact,
     load_fit_runs,
@@ -32,14 +33,15 @@ from coco_pipe.report.qc import build_qc_section
 from coco_pipe.viz import dim_reduction as viz
 from coco_pipe.viz.interactive.dim_reduction import (
     plot_component_loadings,
-    plot_embedding as plot_embedding_interactive,
     plot_radar_comparison,
+)
+from coco_pipe.viz.interactive.dim_reduction import (
+    plot_embedding as plot_embedding_interactive,
 )
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.metadata.schema import EPILEPSY_MED_COLS
 from eeg_adhd_epilepsy.viz.topo import plot_topomap_from_channel_values, plot_topomap_selector
-from eeg_adhd_epilepsy.viz.utils import save_fig
 
 logger = logging.getLogger(__name__)
 
@@ -132,7 +134,7 @@ def _family_label(args: Any) -> str:
     return ""
 
 
-def _get_feature_names(container) -> Optional[list[str]]:
+def _get_feature_names(container) -> list[str] | None:
     """Return the feature-axis names from a container, or None if unavailable."""
     if container is None:
         return None
@@ -185,7 +187,7 @@ def _build_condition_stats_section(
     args: Any,
     fit_eval_ranking: pd.DataFrame,
     metrics: list[str],
-) -> Optional[Section]:
+) -> Section | None:
     """Build a paired-stats section comparing embedding quality across conditions.
 
     Runs ``paired_condition_stats`` across all condition pairs and, when both
@@ -312,7 +314,7 @@ def _filter_runs(
     return filtered
 
 
-def _plot_meta(meta: Optional[dict[str, np.ndarray]], n_samples: int) -> Optional[dict[str, np.ndarray]]:
+def _plot_meta(meta: dict[str, np.ndarray] | None, n_samples: int) -> dict[str, np.ndarray] | None:
     if not meta:
         return None
     filtered = {}
@@ -326,7 +328,7 @@ def _plot_meta(meta: Optional[dict[str, np.ndarray]], n_samples: int) -> Optiona
 def _selection_view(
     frame: pd.DataFrame,
     selection_metric: str,
-    selection_eval_name: Optional[str],
+    selection_eval_name: str | None,
 ) -> pd.DataFrame:
     if frame.empty:
         return frame
@@ -341,7 +343,7 @@ def _selection_view(
     return frame
 
 
-def _primary_eval_spec(args: Any, eval_specs: Sequence[dict[str, Any]]) -> Optional[dict[str, Any]]:
+def _primary_eval_spec(args: Any, eval_specs: Sequence[dict[str, Any]]) -> dict[str, Any] | None:
     if not eval_specs:
         return None
     selection_eval_name = getattr(args, "selection_eval_name", None)
@@ -354,9 +356,9 @@ def _primary_eval_spec(args: Any, eval_specs: Sequence[dict[str, Any]]) -> Optio
 
 def _overview_container(
     args: Any,
-    subjects: Optional[Sequence[str]],
-    meta_df: Optional[pd.DataFrame],
-    containers_by_scope: Optional[dict[tuple[str, str], Any]],
+    subjects: Sequence[str] | None,
+    meta_df: pd.DataFrame | None,
+    containers_by_scope: dict[tuple[str, str], Any] | None,
     pooled_condition: str,
 ):
     if containers_by_scope:
@@ -405,9 +407,9 @@ def _add_overview_cohort_summary(
     overview_sec: Section,
     args: Any,
     eval_specs: Sequence[dict[str, Any]],
-    subjects: Optional[Sequence[str]],
-    meta_df: Optional[pd.DataFrame],
-    containers_by_scope: Optional[dict[tuple[str, str], Any]],
+    subjects: Sequence[str] | None,
+    meta_df: pd.DataFrame | None,
+    containers_by_scope: dict[tuple[str, str], Any] | None,
     pooled_condition: str,
 ) -> None:
     primary_spec = _primary_eval_spec(args, eval_specs)
@@ -514,7 +516,7 @@ def _add_overview_cohort_summary(
 def _add_data_availability_summary(
     overview_sec: Section,
     args: Any,
-    containers_by_scope: Optional[dict[tuple[str, str], Any]],
+    containers_by_scope: dict[tuple[str, str], Any] | None,
     fit_runs_df: pd.DataFrame,
     pooled_condition: str,
 ) -> None:
@@ -560,7 +562,7 @@ def _add_data_availability_summary(
 def _add_embedding_plot(
     section: Section,
     embedding: np.ndarray,
-    meta: Optional[dict[str, np.ndarray]],
+    meta: dict[str, np.ndarray] | None,
     title: str,
     dimensions: int,
     interactive: bool,
@@ -599,7 +601,7 @@ def _add_best_fit_plots(
     meta_dict: dict[str, np.ndarray],
     interactive: bool,
     compress_viz_with_pca: bool = False,
-    feature_names: Optional[list[str]] = None,
+    feature_names: list[str] | None = None,
 ) -> None:
     embedding = np.asarray(artifact["embedding"])
     if embedding.ndim != 2:
@@ -666,7 +668,7 @@ def _container_obs_frame(container) -> pd.DataFrame:
     return pd.DataFrame(data)
 
 
-def _align_obs_frame(container, ids: Optional[np.ndarray]) -> pd.DataFrame:
+def _align_obs_frame(container, ids: np.ndarray | None) -> pd.DataFrame:
     frame = _container_obs_frame(container)
     if ids is None or "obs_id" not in frame.columns:
         return frame.reset_index(drop=True)
@@ -702,7 +704,7 @@ def _align_obs_frame(container, ids: Optional[np.ndarray]) -> pd.DataFrame:
 
 def _build_meta_dict(
     container,
-    ids: Optional[np.ndarray] = None,
+    ids: np.ndarray | None = None,
     eval_specs: Sequence[dict[str, Any]] = (),
 ) -> dict[str, np.ndarray]:
     frame = _align_obs_frame(container, ids)
@@ -772,8 +774,8 @@ def _build_flat_condition_section(
     condition: str,
     condition_runs: pd.DataFrame,
     eval_frame: pd.DataFrame,
-    subjects: Optional[Sequence[str]],
-    meta_df: Optional[pd.DataFrame],
+    subjects: Sequence[str] | None,
+    meta_df: pd.DataFrame | None,
     eval_specs: Sequence[dict[str, Any]],
     reducers: Sequence[str],
 ) -> Section:
@@ -785,12 +787,12 @@ def _build_flat_condition_section(
     fam_label = _family_label(args)
     section = Section(condition, icon="🧠")
     section.add_markdown(
-        (
+        
             f"Input mode: **{args.input_mode}**. "
             f"{f'Descriptor families: **{fam_label}**. ' if fam_label else ''}"
             f"Representation: **{args.representation}**. "
             f"Loaded observations: **{container.meta.get('loaded_obs', container.X.shape[0])}**."
-        )
+        
     )
 
     ranking_df = condition_runs.merge(
@@ -913,15 +915,15 @@ def _add_unit_summary(
     *,
     args: Any,
     eval_specs: Sequence[dict[str, Any]],
-    meta_df: Optional[pd.DataFrame],
+    meta_df: pd.DataFrame | None,
     artifacts: dict[str, Any],
     output_root: Path,
-    subjects: Optional[Sequence[str]],
+    subjects: Sequence[str] | None,
     unit_label: str,
     title_prefix: str,
     input_mode: str,
     selection_metric: str,
-    selection_eval_name: Optional[str] = None,
+    selection_eval_name: str | None = None,
 ) -> None:
     if unit_runs.empty:
         return
@@ -1116,8 +1118,8 @@ def _build_nonflat_condition_section(
     condition_runs: pd.DataFrame,
     eval_frame: pd.DataFrame,
     metric_columns: Sequence[str],
-    subjects: Optional[Sequence[str]],
-    meta_df: Optional[pd.DataFrame],
+    subjects: Sequence[str] | None,
+    meta_df: pd.DataFrame | None,
     eval_specs: Sequence[dict[str, Any]],
     reducers: Sequence[str],
 ) -> Section:
@@ -1130,11 +1132,11 @@ def _build_nonflat_condition_section(
     }
     intro = f"Primary analysis unit: **{_unit_intro(args.analysis_mode)}**."
     section.add_markdown(
-        (
+        
             f"Input mode: **{args.input_mode}**. "
             f"{f'Descriptor families: **{fam_label}**. ' if fam_label else ''}"
             f"{intro}"
-        )
+        
     )
 
     merged = condition_runs.merge(
@@ -1363,11 +1365,11 @@ def _build_pooled_section(
     pooled_runs: pd.DataFrame,
     pooled_eval_runs: pd.DataFrame,
     metric_columns: Sequence[str],
-    subjects: Optional[Sequence[str]],
-    meta_df: Optional[pd.DataFrame],
+    subjects: Sequence[str] | None,
+    meta_df: pd.DataFrame | None,
     eval_specs: Sequence[dict[str, Any]],
     reducers: Sequence[str],
-) -> Optional[Section]:
+) -> Section | None:
     if pooled_runs.empty:
         return None
     fam_label = _family_label(args)
@@ -1377,11 +1379,11 @@ def _build_pooled_section(
         for _, row in pooled_runs.iterrows()
     }
     section.add_markdown(
-        (
+        
             "Shared fits across all requested conditions. "
             f"{f'Descriptor families: **{fam_label}**. ' if fam_label else ''}"
             "Condition-separation scores show EO vs EC-style pooled separability when available."
-        )
+        
     )
     merged = pooled_runs.merge(
         pooled_eval_runs.loc[:, ["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]] if not pooled_eval_runs.empty else pd.DataFrame(columns=["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]),
@@ -1560,9 +1562,9 @@ def generate_dataset_report(
     fit_runs_path: Path,
     eval_runs_path: Path,
     reducers: Sequence[str],
-    subjects: Optional[Sequence[str]],
-    meta_df: Optional[pd.DataFrame],
-    containers_by_scope: Optional[dict[tuple[str, str], Any]],
+    subjects: Sequence[str] | None,
+    meta_df: pd.DataFrame | None,
+    containers_by_scope: dict[tuple[str, str], Any] | None,
     metric_columns: Sequence[str],
     eval_specs: Sequence[dict[str, Any]],
     pooled_condition: str,

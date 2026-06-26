@@ -40,12 +40,12 @@ from coco_pipe.io import (
 )
 from coco_pipe.utils import resolve_n_jobs, run_task_batch, slug, stable_hash
 
+from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     build_run_config_payload,
     condition_load_failure_record,
     pool_containers,
 )
-from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.units import (
     apply_family_qc_mask,
     families_for_analysis_unit,

@@ -11,7 +11,8 @@ import matplotlib.pyplot as plt
 import mne
 import numpy as np
 import plotly.graph_objects as go
-from coco_pipe.viz import info_from_montage, plot_topomap as coco_plot_topomap
+from coco_pipe.viz import info_from_montage
+from coco_pipe.viz import plot_topomap as coco_plot_topomap
 
 LOGGER = logging.getLogger(__name__)
 

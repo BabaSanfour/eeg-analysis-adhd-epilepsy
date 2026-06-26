@@ -3,21 +3,27 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping, Sequence
 from functools import partial
 from pathlib import Path
-from typing import Mapping, Sequence
 
 import pandas as pd
 from coco_pipe.report.core import ImageElement, Report, Section
 
+from eeg_adhd_epilepsy.reports._common import add_images as _add_images_base
 from eeg_adhd_epilepsy.reports._common import (
     add_optional_table as _add_optional_table,
+)
+from eeg_adhd_epilepsy.reports._common import (
     build_dataset_mean_metric_table,
-    build_flag_reason_table as _build_flag_reason_table,
     build_record_metric_table,
+)
+from eeg_adhd_epilepsy.reports._common import (
+    build_flag_reason_table as _build_flag_reason_table,
+)
+from eeg_adhd_epilepsy.reports._common import (
     format_value as _format_value,
 )
-from eeg_adhd_epilepsy.reports._common import add_images as _add_images_base
 from eeg_adhd_epilepsy.utils.formatting import format_duration_hms
 
 # preproc_qc figures are not individually captioned (unlike raw_qc/eeg_report).

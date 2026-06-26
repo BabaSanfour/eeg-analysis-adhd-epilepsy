@@ -695,7 +695,9 @@ def run_base_record(
         LOGGER.info("Processing %s (Record: %s)...", source_path.name, record_label)
 
         # Resolve roots and setup report/figures directories
-        preproc_root = bids.get_preproc_root(Path(bids_root).expanduser())
+        preproc_root = bids.get_derivative_root(
+            Path(bids_root).expanduser(), bids.DerivativeStage.PREPROC
+        )
         if reports_root is None:
             reports_root = report_paths.default_reports_root(Path(bids_root).expanduser())
         else:
@@ -935,7 +937,7 @@ def main():
     args = parser.parse_args()
 
     bids_root = Path(args.bids_root).expanduser()
-    preproc_root = bids.get_preproc_root(bids_root)
+    preproc_root = bids.get_derivative_root(bids_root, bids.DerivativeStage.PREPROC)
     reports_root = (
         Path(args.reports_root).expanduser()
         if args.reports_root

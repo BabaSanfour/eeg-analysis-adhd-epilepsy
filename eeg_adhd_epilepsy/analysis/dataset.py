@@ -3,23 +3,24 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
-from collections.abc import Sequence
 
 import numpy as np
 import pandas as pd
 from coco_pipe.descriptors import KNOWN_FAMILY_TOKENS, load_descriptor_table
+from coco_pipe.descriptors.qc import aggregate_family_qc
 from coco_pipe.io import BIDSConfig, DataContainer, load_data
 from coco_pipe.io.embeddings import load_embedding_derivatives
-from coco_pipe.io.quality import run_qc, GROUP_BY_COLUMN
-from coco_pipe.descriptors.qc import aggregate_family_qc
+from coco_pipe.io.quality import GROUP_BY_COLUMN, run_qc
 
 from eeg_adhd_epilepsy.io.bids import (
+    DerivativeStage,
     add_recording_id,
     bids_session_label,
     bids_subject_label,
-    get_preproc_root,
+    get_derivative_root,
 )
 from eeg_adhd_epilepsy.io.readers import read_preproc_stage
 from eeg_adhd_epilepsy.preproc.epochs import make_epochs_from_preproc_raw
@@ -65,7 +66,7 @@ def build_container(
         )
 
     if use_derivatives:
-        epochs_root = bids_root / "derivatives" / "preproc"
+        epochs_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
         logger.info(f"Loading saved epochs from {epochs_root}")
         config = BIDSConfig(
             path=epochs_root,
@@ -117,7 +118,7 @@ def reepoch_eeg(
     session: str = "01",
 ) -> DataContainer:
     """Re-epoch the cleaned continuous ``desc`` derivative at ``segment_duration``."""
-    preproc_root = get_preproc_root(bids_root)
+    preproc_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
     meta_lookup: pd.DataFrame | None = None
     if metadata_df is not None:
         meta_lookup = metadata_df.copy()

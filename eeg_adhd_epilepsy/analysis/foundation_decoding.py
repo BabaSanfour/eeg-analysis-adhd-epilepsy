@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Mapping
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,6 +22,12 @@ from coco_pipe.decoding import (
     LoRAConfig,
     NeuralFineTuneConfig,
     TrainerConfig,
+    completed_for_config,
+    config_hash,
+    get_foundation_model_spec,
+    load_completed_result_records,
+    redact_sensitive,
+    write_run_status,
 )
 from coco_pipe.decoding.foundation_models import (
     check_capability,
@@ -29,28 +36,20 @@ from coco_pipe.decoding.foundation_models import (
 from coco_pipe.io import read_table
 from coco_pipe.report import make_foundation_decoding_report
 
+from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.decoding import (
     DEFAULT_METRICS,
     cohort_signature,
-    completed_for_config,
+    foundation_provenance,
     grouped_accuracy_assessment,
-    load_completed_result_records,
     prepare_decoding_scope,
-    redact_sensitive,
     require_conditions,
+    require_models,
     result_records,
     slug,
-    write_run_status,
 )
-from eeg_adhd_epilepsy.analysis.utils.foundation import (
-    FoundationInputPlan,
-    default_foundation_models,
-    resolve_foundation_input_plan,
-)
-from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.io.report_paths import default_reports_root
 from eeg_adhd_epilepsy.reports.decoding import (
-    generate_decoding_summary_report,
     generate_foundation_decoding_report,
     generate_head_to_head_report,
 )
@@ -59,45 +58,69 @@ from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 LOGGER = logging.getLogger(__name__)
 
 
+def _skipped_row(
+    base: Mapping[str, Any],
+    *,
+    reason: str | None,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Build one ``status="skipped"`` row from a context/provenance base.
+
+    Single source of truth for skipped-row shape so the pre-scope (window
+    mismatch) and per-mode (capability) skip paths land identical schemas in
+    ``foundation_results.csv`` and ``failures.csv``.
+    """
+    row: dict[str, Any] = {**dict(base), "status": "skipped", "reason": reason}
+    if "train_mode" in row:
+        row["primary"] = row["train_mode"] == "linear_probe"
+    if output_dir is not None:
+        row["output_dir"] = str(output_dir)
+    return row
+
+
 def _skip_records(
     evals: list[dict[str, Any]],
     train_modes: list[str],
     *,
     condition: str,
-    model_key: str,
     reason: str | None,
     provenance: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Build one skipped row per (target, train_mode) for a skipped model."""
+    """One skipped row per (target, train_mode) for a model skipped pre-scope."""
     rows: list[dict[str, Any]] = []
     for eval_spec in evals:
         target_name = eval_spec.get("name", eval_spec["target_col"])
         for train_mode in train_modes:
             rows.append(
-                {
-                    "condition": condition,
-                    "target": target_name,
-                    "model_key": model_key,
-                    "train_mode": train_mode,
-                    "status": "skipped",
-                    "reason": reason,
-                    "primary": train_mode == "linear_probe",
-                    **provenance,
-                }
+                _skipped_row(
+                    {
+                        **provenance,
+                        "condition": condition,
+                        "target": target_name,
+                        "train_mode": train_mode,
+                    },
+                    reason=reason,
+                )
             )
     return rows
 
 
-def _raw_loader_args(config: dict[str, Any], plan: FoundationInputPlan):
+def _raw_loader_args(
+    config: dict[str, Any], 
+    segment_duration: float, 
+    overlap: float, 
+    use_derivatives: bool, 
+    window_source: str
+):
     filters = config.get("filters", {})
     return SimpleNamespace(
         input_mode="raw",
         analysis_mode="sensor",
         bids_root=config["bids_root"],
-        use_derivatives=plan.use_derivatives,
+        use_derivatives=use_derivatives,
         task=config.get("task", "clinical"),
-        segment_duration=plan.segment_duration,
-        overlap=plan.overlap,
+        segment_duration=segment_duration,
+        overlap=overlap,
         subject_col=config.get("subject_col", "study_id"),
         desc=config.get("desc", "base"),
         filter_col=list(filters),
@@ -107,7 +130,7 @@ def _raw_loader_args(config: dict[str, Any], plan: FoundationInputPlan):
         balance_strategy="undersample",
         representation="epoch_native",
         aggregation_unit="recording",
-        window_source=plan.window_source,
+        window_source=window_source,
     )
 
 
@@ -123,7 +146,7 @@ def run(config: dict[str, Any]) -> Path:
         / "derivatives"
         / "foundation_decoding"
         / str(config.get("output_group", "default"))
-        / str(config.get("dataset_name", "dataset"))
+        / str(config["dataset_name"])
     )
     reports_root = Path(config.get("reports_root", default_reports_root(bids_root))).expanduser()
     report_root = (
@@ -131,36 +154,29 @@ def run(config: dict[str, Any]) -> Path:
         / "summary"
         / "foundation_decoding"
         / str(config.get("output_group", "default"))
-        / str(config.get("dataset_name", "dataset"))
+        / str(config["dataset_name"])
     )
     records: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     capability_records: list[dict[str, Any]] = []
-    model_configs = config.get("models", default_foundation_models())
+    model_configs = require_models(config)
     train_modes = config.get("train_modes", ["linear_probe", "full", "lora"])
     evals = config.get("evals", [])
     if not evals:
         raise ValueError("At least one target specification is required in evals.")
+    cfg_hash = config_hash(config)
 
     for condition in require_conditions(config):
         for model_cfg in model_configs:
             model_key = str(model_cfg["model_key"])
-            plan = resolve_foundation_input_plan(config, model_cfg)
-            if plan.skip_reason is not None:
-                skipped = _skip_records(
-                    evals,
-                    train_modes,
-                    condition=condition,
-                    model_key=model_key,
-                    reason=plan.skip_reason,
-                    provenance=plan.to_provenance(),
-                )
-                records.extend(skipped)
-                failures.extend(skipped)
-                capability_records.extend(skipped)
-                continue
+            segment_duration = float(model_cfg["segment_duration"])
+            overlap = float(model_cfg["overlap"])
+            use_derivatives = bool(model_cfg["use_derivatives"])
+            window_source = str(model_cfg["window_source"])
+            spec = get_foundation_model_spec(model_key)
+            provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
             container = build_dataset(
-                _raw_loader_args(config, plan),
+                _raw_loader_args(config, segment_duration, overlap, use_derivatives, window_source),
                 config.get("subjects"),
                 metadata,
                 condition,
@@ -168,23 +184,21 @@ def run(config: dict[str, Any]) -> Path:
             )
             container, window_reason = normalize_inclusive_endpoint(
                 container,
-                segment_duration=plan.segment_duration,
-                expected_sfreq=plan.expected_sfreq,
-                model_key=plan.model_key,
-                on_mismatch=plan.window_mismatch_policy,
+                segment_duration=segment_duration,
+                expected_sfreq=float(spec.pretrained_sfreq),
+                model_key=model_key,
+                on_mismatch=model_cfg.get("window_mismatch_policy", "raise"),
             )
             if container is None:
                 skipped = _skip_records(
                     evals,
                     train_modes,
                     condition=condition,
-                    model_key=model_key,
                     reason=window_reason,
-                    provenance=plan.to_provenance(),
+                    provenance=provenance,
                 )
                 records.extend(skipped)
                 failures.extend(skipped)
-                capability_records.extend(skipped)
                 continue
             sfreq = float(container.meta.get("sfreq", config.get("sfreq", 200.0)))
             channels = [str(value) for value in container.coords["channel"]]
@@ -214,7 +228,7 @@ def run(config: dict[str, Any]) -> Path:
                             "model_key": model_key,
                             "status": "failed",
                             "reason": f"{type(exc).__name__}: {exc}",
-                            **plan.to_provenance(),
+                            **provenance,
                         }
                     )
                     continue
@@ -232,7 +246,7 @@ def run(config: dict[str, Any]) -> Path:
                     capability_record = {
                         "condition": condition,
                         "target": target_name,
-                        **plan.to_provenance(),
+                        **provenance,
                         **capability.to_dict(),
                     }
                     capability_records.append(capability_record)
@@ -242,9 +256,11 @@ def run(config: dict[str, Any]) -> Path:
                         "model_key": model_key,
                         "train_mode": train_mode,
                         "primary": train_mode == "linear_probe",
-                        "segment_duration": plan.segment_duration,
-                        "window_source": plan.window_source,
-                        "window_mismatch_policy": plan.window_mismatch_policy,
+                        "segment_duration": segment_duration,
+                        "window_source": window_source,
+                        "window_mismatch_policy": str(
+                            model_cfg.get("window_mismatch_policy", "raise")
+                        ),
                         "cv_strategy": "stratified_group_kfold",
                         "effective_n_splits": n_splits,
                         "cv_random_state": int(config.get("random_state", 42)),
@@ -262,12 +278,9 @@ def run(config: dict[str, Any]) -> Path:
                         / slug(train_mode)
                     )
                     if capability.status != "available":
-                        skipped = {
-                            **context,
-                            "status": "skipped",
-                            "reason": capability.reason,
-                            "output_dir": str(output_dir),
-                        }
+                        skipped = _skipped_row(
+                            context, reason=capability.reason, output_dir=output_dir
+                        )
                         records.append(skipped)
                         failures.append(skipped)
                         if config.get("on_unsupported", "skip") == "error":
@@ -388,6 +401,7 @@ def run(config: dict[str, Any]) -> Path:
                                 result,
                                 context=context,
                                 output_dir=output_dir,
+                                include_p_values=True,
                             )
                         )
                     except Exception as exc:
@@ -429,16 +443,10 @@ def run(config: dict[str, Any]) -> Path:
     )
     write_run_status(derivative_root, status)
     summary_records = result_frame.to_dict("records")
-    generate_decoding_summary_report(
+    generate_foundation_decoding_report(
         report_root / "dataset_summary.html",
         summary_records,
         title=f"Foundation Decoding: {config.get('dataset_name', 'dataset')}",
-        config=redact_sensitive(config),
-    )
-    generate_foundation_decoding_report(
-        report_root / "dataset_visual_report.html",
-        summary_records,
-        title=f"Foundation Decoding Figures: {config.get('dataset_name', 'dataset')}",
         config=redact_sensitive(config),
         capability_records=capability_records,
         figures_dir=report_root / "figures",
@@ -447,7 +455,7 @@ def run(config: dict[str, Any]) -> Path:
         bids_root=bids_root,
         reports_root=reports_root,
         output_group=str(config.get("output_group", "default")),
-        dataset_name=str(config.get("dataset_name", "dataset")),
+        dataset_name=str(config["dataset_name"]),
         asset_urls=config.get("report_asset_urls", "inline"),
     )
     return derivative_root

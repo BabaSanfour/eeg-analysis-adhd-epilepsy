@@ -25,6 +25,7 @@ from coco_pipe.decoding import (
 from coco_pipe.io import DataContainer, iter_analysis_units, read_table
 from coco_pipe.report import make_decoding_report
 
+from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.decoding import (
     DEFAULT_METRICS,
     cohort_signature,
@@ -39,7 +40,6 @@ from eeg_adhd_epilepsy.analysis.utils.decoding import (
     slug,
     write_run_status,
 )
-from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.units import (
     apply_family_qc_mask,
     families_for_analysis_unit,
@@ -158,7 +158,7 @@ def run(config: dict[str, Any]) -> Path:
         / "derivatives"
         / "decoding"
         / str(config.get("output_group", "default"))
-        / str(config.get("dataset_name", "dataset"))
+        / str(config["dataset_name"])
         / input_mode
     )
     reports_root = Path(config.get("reports_root", default_reports_root(bids_root))).expanduser()
@@ -167,7 +167,7 @@ def run(config: dict[str, Any]) -> Path:
         / "summary"
         / "decoding"
         / str(config.get("output_group", "default"))
-        / str(config.get("dataset_name", "dataset"))
+        / str(config["dataset_name"])
         / input_mode
     )
     conditions = require_conditions(config)
@@ -615,7 +615,7 @@ def run(config: dict[str, Any]) -> Path:
         bids_root=bids_root,
         reports_root=reports_root,
         output_group=str(config.get("output_group", "default")),
-        dataset_name=str(config.get("dataset_name", "dataset")),
+        dataset_name=str(config["dataset_name"]),
         asset_urls=config.get("report_asset_urls", "inline"),
     )
     return derivative_root

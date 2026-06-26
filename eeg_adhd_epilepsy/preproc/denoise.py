@@ -394,7 +394,7 @@ def run_denoising_pipeline(
         bids_root = Path(bids_root).expanduser()
 
         if preproc_root is None:
-            preproc_root = bids.get_preproc_root(bids_root)
+            preproc_root = bids.get_derivative_root(bids_root, bids.DerivativeStage.PREPROC)
         else:
             preproc_root = Path(preproc_root).expanduser()
         if reports_root is None:
@@ -553,7 +553,7 @@ def main() -> None:
     args = parser.parse_args()
 
     bids_root = Path(args.bids_root).expanduser()
-    preproc_root = bids.get_preproc_root(bids_root)
+    preproc_root = bids.get_derivative_root(bids_root, bids.DerivativeStage.PREPROC)
     reports_root = report_paths.default_reports_root(bids_root)
     preproc_root.mkdir(parents=True, exist_ok=True)
     reports_root.mkdir(parents=True, exist_ok=True)

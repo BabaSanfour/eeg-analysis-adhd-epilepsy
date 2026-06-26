@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import matplotlib
 import pandas as pd
@@ -68,12 +68,12 @@ def calculate_comparison_scores(metrics_df: pd.DataFrame) -> pd.DataFrame:
 
 def create_compare_subject_report(
     subject_id: str,
-    metrics_rows: List[Dict[str, Any]],
-    correlation_map: Optional[Dict[str, float]],
-    plot_paths: Dict[str, str],
+    metrics_rows: list[dict[str, Any]],
+    correlation_map: dict[str, float] | None,
+    plot_paths: dict[str, str],
     subject_report_path: Path,
     mode: str,
-    metadata: Optional[Dict[str, Any]] = None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     """Create per-subject compare report (Original vs DSS vs ICA)."""
     out_path = _normalize_html_report_path(subject_report_path, "subject_report_path")
@@ -167,11 +167,11 @@ def create_compare_dataset_report(
     metrics_df: pd.DataFrame,
     summary_report_path: Path,
     mode: str,
-    subject_reports: Dict[str, Path],
-    global_plot_paths: Dict[str, str],
-    missing_subjects: Optional[List[str]] = None,
-    run_metadata: Optional[Dict[str, Any]] = None,
-    metrics_csv_path: Optional[Path] = None,
+    subject_reports: dict[str, Path],
+    global_plot_paths: dict[str, str],
+    missing_subjects: list[str] | None = None,
+    run_metadata: dict[str, Any] | None = None,
+    metrics_csv_path: Path | None = None,
 ) -> None:
     """Create dataset compare summary report."""
     out_path = _normalize_html_report_path(summary_report_path, "summary_report_path")

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_foundation_emb
 #SBATCH --account=rrg-kjerbi
-#SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.out
-#SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.err
-#SBATCH --time=12:00:00
-#SBATCH --cpus-per-task=8
+#SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.out
+#SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.err
+#SBATCH --time=02:00:00
 #SBATCH --mem=64G
 #SBATCH --gres=gpu:1
-#SBATCH --mail-type=FAIL,END
+#SBATCH --array=1-1000
+#SBATCH --mail-type=FAIL
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 set -euo pipefail
@@ -15,11 +15,16 @@ set -euo pipefail
 module purge
 module load gcc arrow/23.0.1 python/3.11
 
-# Dataset-wide producer: set FOUNDATION_CONFIG to its dataset config.
-# REVE is gated — set HF_TOKEN / `hf auth login` first.
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 FOUNDATION_CONFIG=${FOUNDATION_CONFIG:?Set FOUNDATION_CONFIG to the dataset-wide embedding config}
+SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.foundation_array_state}
+AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-1}
+FIRST_BATCH_SIZE=${FIRST_BATCH_SIZE:-1000}
+SECOND_BATCH_SIZE=${SECOND_BATCH_SIZE:-218}
+
+ROW_OFFSET=${ROW_OFFSET:-0}
+METADATA_ROW=$((SLURM_ARRAY_TASK_ID + ROW_OFFSET))
 
 [ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
 [ -f "$FOUNDATION_CONFIG" ] || { echo "Foundation config not found: $FOUNDATION_CONFIG"; exit 1; }
@@ -34,4 +39,22 @@ export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
 export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
 mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 
-python -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings --config "$FOUNDATION_CONFIG"
+python -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings \
+  --config "$FOUNDATION_CONFIG" \
+  --metadata_row "$METADATA_ROW"
+
+if [[ "$AUTO_SUBMIT_NEXT" == "1" && "$ROW_OFFSET" == "0" ]]; then
+  batch_state_dir="$SUBMIT_STATE_DIR/${SLURM_ARRAY_JOB_ID:-manual}"
+  mkdir -p "$batch_state_dir"
+  touch "$batch_state_dir/${SLURM_ARRAY_TASK_ID}.done"
+
+  done_count=$(find "$batch_state_dir" -maxdepth 1 -name '*.done' | wc -l | tr -d ' ')
+  if [[ "$done_count" -ge "$FIRST_BATCH_SIZE" ]]; then
+    if mkdir "$batch_state_dir/submit_second.lock" 2>/dev/null; then
+      sbatch \
+        --array=1-"$SECOND_BATCH_SIZE" \
+        --export=ALL,ROW_OFFSET="$FIRST_BATCH_SIZE",AUTO_SUBMIT_NEXT=0 \
+        "$0"
+    fi
+  fi
+fi
