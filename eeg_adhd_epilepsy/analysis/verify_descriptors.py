@@ -35,6 +35,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from collections import Counter
 from pathlib import Path
 
 import pandas as pd
@@ -146,6 +147,74 @@ def collect_shard_records(
         "shard",
     ]
     return pd.DataFrame(records, columns=columns)
+
+
+def summarize_reasons(derivative_root: Path, shard_df: pd.DataFrame) -> dict[str, Counter]:
+    """Roll up *why* shards fail: QC flag codes and extractor-failure breakdown.
+
+    Reads each shard's ``qc/flags.csv`` and ``failures.csv`` and accumulates:
+
+    - ``flags``       : ``(severity, code)`` -> occurrences across shards
+    - ``flag_scope``  : ``(code, scope)`` -> occurrences (scope = family, etc.)
+    - ``fail_family`` : extractor-failure ``family`` -> occurrences
+    - ``fail_exc``    : extractor-failure ``exception_type`` -> occurrences
+    - ``fail_msg``    : extractor-failure ``message`` (truncated) -> occurrences
+    """
+    flags: Counter = Counter()
+    flag_scope: Counter = Counter()
+    fail_family: Counter = Counter()
+    fail_exc: Counter = Counter()
+    fail_msg: Counter = Counter()
+
+    def _read(path: Path) -> pd.DataFrame | None:
+        if not path.exists():
+            return None
+        try:
+            df = read_table(path)
+        except Exception:  # empty/corrupt CSV
+            return None
+        return df if not df.empty else None
+
+    for rel in shard_df["shard"]:
+        shard_dir = derivative_root / rel
+
+        flags_df = _read(shard_dir / "qc" / "flags.csv")
+        if flags_df is not None and "code" in flags_df.columns:
+            severity = flags_df.get("severity", pd.Series([""] * len(flags_df))).astype(str)
+            code = flags_df["code"].astype(str)
+            flags.update(zip(severity, code))
+            if "scope" in flags_df.columns:
+                scope = flags_df["scope"].astype(str)
+                flag_scope.update(
+                    (c, s) for c, s in zip(code, scope) if s and s.lower() != "nan"
+                )
+
+        fail_df = _read(shard_dir / "failures.csv")
+        if fail_df is not None:
+            if "family" in fail_df.columns:
+                fail_family.update(fail_df["family"].astype(str))
+            if "exception_type" in fail_df.columns:
+                fail_exc.update(fail_df["exception_type"].astype(str))
+            if "message" in fail_df.columns:
+                fail_msg.update(fail_df["message"].astype(str).str.slice(0, 80))
+
+    return {
+        "flags": flags,
+        "flag_scope": flag_scope,
+        "fail_family": fail_family,
+        "fail_exc": fail_exc,
+        "fail_msg": fail_msg,
+    }
+
+
+def _print_counter(title: str, counter: Counter, top_n: int = 15) -> None:
+    print(f"{title} (top {top_n}):" if len(counter) > top_n else f"{title}:")
+    if not counter:
+        print("  (none)")
+        return
+    for key, count in counter.most_common(top_n):
+        label = " / ".join(str(part) for part in key) if isinstance(key, tuple) else str(key)
+        print(f"  {count:>9,}  {label}")
 
 
 def expected_subjects(metadata_path: Path, subject_col: str, rows: list[int]) -> list[str]:
@@ -263,6 +332,21 @@ def main() -> None:
     total_failures = int(failures_series.sum())
     print(f"Total extractor failures across shards: {total_failures}")
 
+    # Aggregate *why* across all shards — the actionable signal when failures
+    # are systematic rather than a handful of bad subjects.
+    reasons = summarize_reasons(derivative_root, shard_df)
+    print("-" * 72)
+    _print_counter("QC flags raised  [severity / code]", reasons["flags"])
+    if reasons["flag_scope"]:
+        print()
+        _print_counter("QC flags by  [code / scope]", reasons["flag_scope"])
+    print()
+    _print_counter("Extractor failures by family", reasons["fail_family"])
+    print()
+    _print_counter("Extractor failures by exception_type", reasons["fail_exc"])
+    print()
+    _print_counter("Extractor failures by message", reasons["fail_msg"])
+
     if not incomplete_df.empty:
         print("-" * 72)
         print("INCOMPLETE shards (no _SUCCESS or missing required files/report):")
@@ -276,13 +360,14 @@ def main() -> None:
                 reason.append("missing QC report")
             print(f"  {row['shard']}: {'; '.join(reason)}")
 
-    if args.strict or (shard_df["qc_status"] == "fail").any():
-        failed = shard_df[shard_df["qc_status"] == "fail"]
-        if not failed.empty:
-            print("-" * 72)
-            print(f"Shards with QC status 'fail' ({len(failed)}):")
-            for _, row in failed.iterrows():
-                print(f"  {row['shard']}")
+    failed = shard_df[shard_df["qc_status"] == "fail"]
+    if not failed.empty:
+        print("-" * 72)
+        print(f"Shards with QC status 'fail' ({len(failed)}; full list in CSV):")
+        for _, row in failed.head(20).iterrows():
+            print(f"  {row['shard']}")
+        if len(failed) > 20:
+            print(f"  … and {len(failed) - 20} more")
 
     missing_subjects: list[str] = []
     if args.metadata and args.rows:
