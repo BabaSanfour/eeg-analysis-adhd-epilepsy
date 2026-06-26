@@ -23,7 +23,10 @@ from __future__ import annotations
 
 import argparse
 import itertools
+import json
 import logging
+import os
+import tempfile
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -39,7 +42,7 @@ from coco_pipe.descriptors import (
     mad_failures_from_qc,
     save_descriptor_table,
 )
-from coco_pipe.io import DataContainer, read_table, save_npz, write_json
+from coco_pipe.io import DataContainer, read_table, save_npz
 from coco_pipe.io.quality import drop_epoch_outliers
 
 from eeg_adhd_epilepsy.analysis.dataset import build_container
@@ -64,6 +67,28 @@ from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    """Atomically write *text* to *path* using a process-unique temp file.
+
+    Many Slurm array tasks share one derivative root and would otherwise race on
+    the top-level ``config_used.yaml`` / ``dataset_description.json``. A unique
+    temp name (``mkstemp``) avoids the shared-".tmp" rename collision, and
+    ``os.replace`` is atomic, so any concurrent reader sees either the old file
+    or the fully-written new one — never a partial write.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
 
 
 def _shard_complete(
@@ -342,12 +367,14 @@ def main() -> None:
     derivative_root.mkdir(parents=True, exist_ok=True)
     config_used_path = derivative_root / "config_used.yaml"
     config_text = yaml.safe_dump(config_snapshot, sort_keys=True)
-    if config_used_path.exists() and config_used_path.read_text(encoding="utf-8") != config_text:
-        raise ValueError(
-            "Existing descriptor derivative root was generated with a different "
-            "configuration. Clear the derivative root."
-        )
-    config_used_path.write_text(config_text, encoding="utf-8")
+    if config_used_path.exists():
+        if config_used_path.read_text(encoding="utf-8") != config_text:
+            raise ValueError(
+                "Existing descriptor derivative root was generated with a different "
+                "configuration. Clear the derivative root."
+            )
+    else:
+        _write_text_atomic(config_used_path, config_text)
 
     dataset_description = {
         "Name": "Signal Features",
@@ -361,7 +388,12 @@ def main() -> None:
         ],
         "SourceDatasets": [{"URL": bids_root.resolve().as_uri()}],
     }
-    write_json(derivative_root / "dataset_description.json", dataset_description)
+    dataset_description_path = derivative_root / "dataset_description.json"
+    if not dataset_description_path.exists():
+        _write_text_atomic(
+            dataset_description_path,
+            json.dumps(dataset_description, indent=2) + "\n",
+        )
 
     descriptor_config = DescriptorConfig.model_validate(raw_config)
     pipeline = DescriptorPipeline(descriptor_config)
