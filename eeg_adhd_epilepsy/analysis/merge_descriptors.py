@@ -28,6 +28,11 @@ from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 LOGGER = logging.getLogger(__name__)
 
 
+def _nunique_or_none(df: pd.DataFrame, column: str) -> int | None:
+    """Distinct-value count for *column*, or ``None`` when it is absent."""
+    return int(df[column].nunique()) if column in df.columns else None
+
+
 def _check_shard_feature_columns(
     shard_root: Path,
     include_pooled: bool,
@@ -70,7 +75,12 @@ def main() -> None:
             "the whole merge."
         ),
     )
-    parser.add_argument("--reports_root", type=str, default=None, help="Custom root directory for reports (defaults to sibling of bids_root)")
+    parser.add_argument(
+        "--reports_root",
+        type=str,
+        default=None,
+        help="Custom root directory for reports (defaults to sibling of bids_root).",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -206,12 +216,10 @@ def main() -> None:
     combined_sensor_epoch_df = _merge_family("sensor_epoch_features")
     combined_sensor_subject_df = _merge_family("sensor_subject_features")
 
-    combined_pooled_epoch_df = None
-    combined_pooled_subject_df = None
     if include_pooled:
         LOGGER.info("Combining pooled families...")
-        combined_pooled_epoch_df = _merge_family("pooled_epoch_features")
-        combined_pooled_subject_df = _merge_family("pooled_subject_features")
+        _merge_family("pooled_epoch_features")
+        _merge_family("pooled_subject_features")
 
     # Some shards may have zero-row failures.csv; concatenating only the
     # non-empty frames avoids dtype-mismatch warnings from pd.concat while
@@ -233,15 +241,9 @@ def main() -> None:
         "n_shards_merged": len(shard_roots),
         "n_shards_excluded": len(excluded_shards),
         "skip_inconsistent": bool(args.skip_inconsistent),
-        "n_subjects": int(combined_sensor_subject_df["subject"].nunique())
-        if "subject" in combined_sensor_subject_df.columns
-        else None,
-        "n_sessions": int(combined_sensor_subject_df["session"].nunique())
-        if "session" in combined_sensor_subject_df.columns
-        else None,
-        "n_conditions": int(combined_sensor_subject_df["condition"].nunique())
-        if "condition" in combined_sensor_subject_df.columns
-        else None,
+        "n_subjects": _nunique_or_none(combined_sensor_subject_df, "subject"),
+        "n_sessions": _nunique_or_none(combined_sensor_subject_df, "session"),
+        "n_conditions": _nunique_or_none(combined_sensor_subject_df, "condition"),
         "n_sensor_epoch_rows": int(len(combined_sensor_epoch_df)),
         "n_sensor_subject_rows": int(len(combined_sensor_subject_df)),
         "n_failures_total": int(len(combined_failures_df)),
@@ -249,24 +251,15 @@ def main() -> None:
         "merged_shards": shard_manifest_rows,
     }
 
-    combined_sensor_subject_df.attrs["qc_dir"] = str(combined_root / "qc")
     dataset_qc = run_descriptor_dataset_qc(
-        derivative_root=derivative_root,
         reports_root=reports_root,
+        qc_dir=combined_root / "qc",
         merged_sensor_epoch_df=combined_sensor_epoch_df,
         merged_sensor_subject_df=combined_sensor_subject_df,
         merged_sensor_epoch_feature_columns_path=combined_root
         / "sensor_epoch_features_feature_columns.json",
         merged_sensor_subject_feature_columns_path=combined_root
         / "sensor_subject_features_feature_columns.json",
-        merged_pooled_epoch_df=combined_pooled_epoch_df,
-        merged_pooled_subject_df=combined_pooled_subject_df,
-        merged_pooled_epoch_feature_columns_path=None
-        if not include_pooled
-        else combined_root / "pooled_epoch_features_feature_columns.json",
-        merged_pooled_subject_feature_columns_path=None
-        if not include_pooled
-        else combined_root / "pooled_subject_features_feature_columns.json",
         shard_qc_rows_df=pd.concat(shard_qc_rows, ignore_index=True) if shard_qc_rows else None,
         merged_failures_df=combined_failures_df,
         config_snapshot=config_used,

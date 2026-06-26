@@ -3,8 +3,20 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 
 import pandas as pd
+
+
+def reorder_columns_front(df: pd.DataFrame, front: Sequence[str]) -> pd.DataFrame:
+    """Return *df* with *front* columns first, remaining columns in order.
+
+    Front columns that are absent from *df* are skipped, so callers can pass a
+    canonical front-ordering without first checking which columns exist.
+    """
+    front_present = [column for column in front if column in df.columns]
+    rest = [column for column in df.columns if column not in front_present]
+    return df[front_present + rest]
 
 
 def format_duration_hms(seconds: float | None) -> str:

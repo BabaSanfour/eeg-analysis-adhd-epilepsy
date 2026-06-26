@@ -7,7 +7,7 @@ and writes checkpointed per-subject outputs under a derivative-style root.
 Outputs
 -------
 For each processed subject-condition pair, the script writes a shard under
-``<derivative_root>/sub-<subject>/eeg/<condition>/`` containing:
+``<derivative_root>/sub-<subject>/ses-<session>/eeg/<condition>/`` containing:
 
 - a sensor descriptor bundle (`.npz`)
 - a sensor epoch-level feature table (`.parquet` and `.csv`)
@@ -42,6 +42,7 @@ from coco_pipe.descriptors import (
 from coco_pipe.io import DataContainer, read_table, save_npz, write_json
 from coco_pipe.io.quality import drop_epoch_outliers
 
+from eeg_adhd_epilepsy.analysis.dataset import build_container
 from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import required_descriptor_files
 from eeg_adhd_epilepsy.io.bids import (
     add_recording_id,
@@ -50,14 +51,15 @@ from eeg_adhd_epilepsy.io.bids import (
     parse_bids_components,
     study_id_to_bids_subject,
 )
-from eeg_adhd_epilepsy.analysis.dataset import build_container
 from eeg_adhd_epilepsy.io.report_paths import (
     ReportStage,
     default_reports_root,
+    descriptor_qc_report_name,
     subject_report_dir,
 )
 from eeg_adhd_epilepsy.qc.descriptor_qc import run_descriptor_subject_qc
 from eeg_adhd_epilepsy.utils.constants import DEFAULT_ANALYSIS_CONDITIONS
+from eeg_adhd_epilepsy.utils.formatting import reorder_columns_front
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
@@ -83,10 +85,7 @@ def _shard_complete(
             session=session,
             stage=ReportStage.DESCRIPTOR_QC,
         )
-        / (
-            f"{bids_subject_label(subject)}_{bids_session_label(session)}_"
-            f"{condition}_descriptor_qc_report.html"
-        )
+        / descriptor_qc_report_name(subject, session, condition)
     )
     return all(path.exists() for path in required_paths)
 
@@ -193,9 +192,7 @@ def _build_failure_df(
         "exception_type",
         "message",
     ]
-    return failure_df[
-        failure_front + [column for column in failure_df.columns if column not in failure_front]
-    ]
+    return reorder_columns_front(failure_df, failure_front)
 
 
 def _save_subject_shard(
@@ -376,7 +373,7 @@ def main() -> None:
         aggregated_ratio_floor = 0.0
 
     meta_df = read_table(metadata_path, sep=None)
-    valid_subjects = set(meta_df[args.subject_col].map(lambda value: f"{int(value):04d}"))
+    valid_subjects = set(meta_df[args.subject_col].map(study_id_to_bids_subject))
     row_requested_subjects: list[str] | None = None
     if args.metadata_row is not None:
         row_position = args.metadata_row - 1
@@ -388,7 +385,7 @@ def main() -> None:
             )
             return
         row_value = meta_df.iloc[row_position][args.subject_col]
-        row_requested_subjects = [f"{int(row_value):04d}"]
+        row_requested_subjects = [study_id_to_bids_subject(row_value)]
         LOGGER.info(
             "Resolved metadata row %d to %s=%s.",
             args.metadata_row,
@@ -449,7 +446,7 @@ def main() -> None:
                 continue
 
             subject_meta_df = meta_df[
-                meta_df[args.subject_col].map(lambda v: f"{int(v):04d}") == subject
+                meta_df[args.subject_col].map(study_id_to_bids_subject) == subject
             ].copy()
 
             LOGGER.info("Loading %s for %s (ses %s)", condition, subject, session)
@@ -496,10 +493,7 @@ def main() -> None:
             metadata_df["condition"] = condition
             metadata_df["subject"] = subject
             metadata_front = ["obs_id", "subject", "session", "run", "recording_id", "condition"]
-            metadata_df = metadata_df[
-                metadata_front
-                + [column for column in metadata_df.columns if column not in metadata_front]
-            ]
+            metadata_df = reorder_columns_front(metadata_df, metadata_front)
             sensor_result = pipeline.extract(
                 X=dc_loaded.X,
                 ids=ids,
@@ -508,16 +502,10 @@ def main() -> None:
             )
 
             outlier_config = qc_config.get("outlier", {})
-            if qc_config:
-                mad_threshold = float(outlier_config.get("z_threshold", 5.0))
-                fraction_threshold = float(outlier_config.get("epoch_outlier_fraction", 0.30))
-                min_epochs = int(qc_config.get("min_obs", 5))
-                group_by = outlier_config.get("group_by", "family")
-            else:
-                mad_threshold = 10.0
-                fraction_threshold = 0.05
-                min_epochs = 5
-                group_by = None
+            mad_threshold = float(outlier_config.get("z_threshold", 5.0))
+            fraction_threshold = float(outlier_config.get("epoch_outlier_fraction", 0.30))
+            min_epochs = int(qc_config.get("min_obs", 5))
+            group_by = outlier_config.get("group_by", "family")
             failure_metadata_df = metadata_df.copy()
             try:
                 sensor_result, metadata_df = _apply_mad_rejection(
@@ -583,12 +571,6 @@ def main() -> None:
                 / "sensor_subject_features_feature_columns.json",
                 pooled_epoch_df=None if pooled_outputs is None else pooled_outputs["epoch_df"],
                 pooled_subject_df=None if pooled_outputs is None else pooled_outputs["subject_df"],
-                pooled_epoch_feature_columns_path=None
-                if pooled_outputs is None
-                else shard_root / "pooled_epoch_features_feature_columns.json",
-                pooled_subject_feature_columns_path=None
-                if pooled_outputs is None
-                else shard_root / "pooled_subject_features_feature_columns.json",
                 failure_df=failure_df,
                 config_snapshot=config_snapshot,
             )

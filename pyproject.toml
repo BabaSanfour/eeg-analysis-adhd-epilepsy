@@ -48,6 +48,7 @@ eeg-to-bids = "eeg_adhd_epilepsy.preproc.to_bids:main"
 eeg-preprocess = "eeg_adhd_epilepsy.preproc.base:main"
 eeg-save-epochs = "eeg_adhd_epilepsy.preproc.epochs:main"
 eeg-descriptors = "eeg_adhd_epilepsy.analysis.extract_descriptors:main"
+eeg-verify-descriptors = "eeg_adhd_epilepsy.analysis.verify_descriptors:main"
 eeg-merge-descriptors = "eeg_adhd_epilepsy.analysis.merge_descriptors:main"
 eeg-foundation-embeddings = "eeg_adhd_epilepsy.analysis.extract_foundation_embeddings:main"
 # Analysis consumers (cohort + analysis config).

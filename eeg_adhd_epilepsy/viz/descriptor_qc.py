@@ -92,7 +92,7 @@ def save_subject_descriptor_qc_figures(
         else pd.DataFrame()
     )
     path = _bar_plot(
-        family_failures.rename(columns={"value": "family", "count": "count"}),
+        family_failures.rename(columns={"value": "family"}),
         x="family",
         y="count",
         title="Failure Counts by Family",
