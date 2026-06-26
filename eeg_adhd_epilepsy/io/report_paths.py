@@ -64,6 +64,19 @@ def summary_report_dir(
     return path
 
 
+def descriptor_qc_report_name(subject: str, session: str, condition: str) -> str:
+    """Filename for a per-subject descriptor-QC HTML report.
+
+    Shared by the producer (``extract_descriptors`` resume check) and the QC
+    writer (``run_descriptor_subject_qc``) so the naming convention lives in
+    one place.
+    """
+    return (
+        f"{bids_subject_label(subject)}_{bids_session_label(session)}_"
+        f"{condition}_descriptor_qc_report.html"
+    )
+
+
 def build_bids_report_ids(
     filepath: Path,
 ) -> dict[str, str | tuple[str | None, str | None] | tuple[str | None, str | None, str | None]]:

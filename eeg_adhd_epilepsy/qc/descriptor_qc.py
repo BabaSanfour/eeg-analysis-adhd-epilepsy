@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -29,12 +30,188 @@ from coco_pipe.report.descriptor_qc import (
     generate_descriptor_subject_report,
 )
 
-import eeg_adhd_epilepsy.io.bids as bids_io
 import eeg_adhd_epilepsy.io.report_paths as report_paths
 import eeg_adhd_epilepsy.viz.descriptor_qc as viz_descriptor_qc
-from eeg_adhd_epilepsy.qc.utils import DEFAULT_DESCRIPTOR_THRESHOLDS
+from eeg_adhd_epilepsy.qc.utils import DEFAULT_DESCRIPTOR_THRESHOLDS, DescriptorQCThresholds
 
 LOGGER = logging.getLogger(__name__)
+
+# Descriptor family token -> config sub-key that enables it.
+_FAMILY_CONFIG_KEYS: tuple[tuple[str, str], ...] = (
+    ("band", "bands"),
+    ("param", "parametric"),
+    ("complexity", "complexity"),
+)
+
+
+def _expected_families(config_snapshot: dict[str, Any]) -> list[str]:
+    """Family tokens enabled in *config_snapshot* (``band``/``param``/``complexity``)."""
+    families_config = (
+        (config_snapshot.get("families") or {}) if isinstance(config_snapshot, dict) else {}
+    )
+    return [
+        family
+        for family, config_key in _FAMILY_CONFIG_KEYS
+        if bool((families_config.get(config_key) or {}).get("enabled"))
+    ]
+
+
+def _column_matches_family(column: object, families: Iterable[str]) -> bool:
+    text = str(column)
+    return any(text.startswith(f"{family}_") or f"_{family}_" in text for family in families)
+
+
+def _select_family_feature_cols(
+    feature_columns: Iterable[object],
+    families: Sequence[str],
+    present_columns: Iterable[object],
+) -> list[object]:
+    """Feature columns belonging to *families* that are also present in the table."""
+    present = {str(column) for column in present_columns}
+    return [
+        column
+        for column in feature_columns
+        if _column_matches_family(column, families) and str(column) in present
+    ]
+
+
+def _missing_family_flags(
+    feature_missingness_df: pd.DataFrame,
+    expected_families: Sequence[str],
+    *,
+    noun: str,
+) -> list[dict[str, Any]]:
+    """Fail flag per expected family that produced no columns."""
+    actual_families = set(
+        feature_missingness_df.get("family", pd.Series(dtype=str)).dropna().astype(str)
+    )
+    return [
+        make_qc_flag(
+            "fail",
+            "missing_expected_family",
+            f"Expected family '{family}' has no {noun} columns.",
+            scope=family,
+        )
+        for family in expected_families
+        if family not in actual_families
+    ]
+
+
+def _missingness_flags(
+    max_missingness: float,
+    *,
+    thresh: DescriptorQCThresholds,
+    fail_code: str,
+    warn_code: str,
+    fail_msg: str,
+    warn_msg: str,
+    nan_rate: float | None = None,
+) -> list[dict[str, Any]]:
+    """Fail/warn flag for feature missingness against the configured thresholds.
+
+    When *nan_rate* is supplied (subject scope) the per-subject average NaN rate
+    also contributes to the fail/warn decision; the flagged value is always the
+    per-feature ``max_missingness`` for consistency with the threshold reported.
+    """
+    fail_hit = max_missingness >= thresh.fail_feature_missingness or (
+        nan_rate is not None and nan_rate >= thresh.fail_nan_rate
+    )
+    warn_hit = max_missingness >= thresh.warn_feature_missingness or (
+        nan_rate is not None and nan_rate >= thresh.warn_nan_rate
+    )
+    if fail_hit:
+        return [
+            make_qc_flag(
+                "fail",
+                fail_code,
+                fail_msg,
+                value=max_missingness,
+                threshold=thresh.fail_feature_missingness,
+            )
+        ]
+    if warn_hit:
+        return [
+            make_qc_flag(
+                "warn",
+                warn_code,
+                warn_msg,
+                value=max_missingness,
+                threshold=thresh.warn_feature_missingness,
+            )
+        ]
+    return []
+
+
+def _zero_variance_flags(
+    fraction: float,
+    *,
+    thresh: DescriptorQCThresholds,
+    fail_code: str,
+    warn_code: str,
+    fail_msg: str,
+    warn_msg: str,
+) -> list[dict[str, Any]]:
+    """Fail/warn flag for the fraction of constant (zero-variance) features."""
+    if fraction >= thresh.fail_zero_variance_fraction:
+        return [
+            make_qc_flag(
+                "fail",
+                fail_code,
+                fail_msg,
+                value=fraction,
+                threshold=thresh.fail_zero_variance_fraction,
+            )
+        ]
+    if fraction >= thresh.warn_zero_variance_fraction:
+        return [
+            make_qc_flag(
+                "warn",
+                warn_code,
+                warn_msg,
+                value=fraction,
+                threshold=thresh.warn_zero_variance_fraction,
+            )
+        ]
+    return []
+
+
+def _family_failure_flags(
+    family_summary_df: pd.DataFrame,
+    *,
+    thresh: DescriptorQCThresholds,
+    fail_code: Callable[[str], str],
+    warn_code: Callable[[str], str],
+    fail_msg: str,
+    warn_msg: str,
+) -> list[dict[str, Any]]:
+    """Per-family fail/warn flags driven by each family's failure rate."""
+    flags: list[dict[str, Any]] = []
+    for row in family_summary_df.to_dict("records"):
+        family = str(row["family"])
+        failure_rate = float(row.get("failure_rate") or 0.0)
+        if failure_rate >= thresh.fail_family_failure_rate:
+            flags.append(
+                make_qc_flag(
+                    "fail",
+                    fail_code(family),
+                    fail_msg,
+                    value=failure_rate,
+                    threshold=thresh.fail_family_failure_rate,
+                    scope=family,
+                )
+            )
+        elif failure_rate >= thresh.warn_family_failure_rate:
+            flags.append(
+                make_qc_flag(
+                    "warn",
+                    warn_code(family),
+                    warn_msg,
+                    value=failure_rate,
+                    threshold=thresh.warn_family_failure_rate,
+                    scope=family,
+                )
+            )
+    return flags
 
 
 def run_descriptor_subject_qc(
@@ -49,8 +226,6 @@ def run_descriptor_subject_qc(
     sensor_subject_feature_columns_path: Path,
     pooled_epoch_df: pd.DataFrame | None,
     pooled_subject_df: pd.DataFrame | None,
-    pooled_epoch_feature_columns_path: Path | None,
-    pooled_subject_feature_columns_path: Path | None,
     failure_df: pd.DataFrame,
     config_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
@@ -62,36 +237,17 @@ def run_descriptor_subject_qc(
         stage=report_paths.ReportStage.DESCRIPTOR_QC,
         create=True,
     )
-    families_config = (
-        (config_snapshot.get("families") or {}) if isinstance(config_snapshot, dict) else {}
+    expected_families = _expected_families(config_snapshot)
+    feature_cols = _select_family_feature_cols(
+        read_json(sensor_epoch_feature_columns_path),
+        expected_families,
+        sensor_epoch_df.columns,
     )
-    expected_families = [
-        family
-        for family, config_key in (
-            ("band", "bands"),
-            ("param", "parametric"),
-            ("complexity", "complexity"),
-        )
-        if bool((families_config.get(config_key) or {}).get("enabled"))
-    ]
-    feature_cols = [
-        column
-        for column in read_json(sensor_epoch_feature_columns_path)
-        if any(
-            str(column).startswith(f"{family}_") or f"_{family}_" in str(column)
-            for family in expected_families
-        )
-        and str(column) in sensor_epoch_df.columns
-    ]
-    subject_feature_cols = [
-        column
-        for column in read_json(sensor_subject_feature_columns_path)
-        if any(
-            str(column).startswith(f"{family}_") or f"_{family}_" in str(column)
-            for family in expected_families
-        )
-        and str(column) in sensor_subject_df.columns
-    ]
+    subject_feature_cols = _select_family_feature_cols(
+        read_json(sensor_subject_feature_columns_path),
+        expected_families,
+        sensor_subject_df.columns,
+    )
     feature_df = (
         sensor_epoch_df.loc[:, feature_cols].replace([np.inf, -np.inf], np.nan)
         if feature_cols
@@ -156,47 +312,18 @@ def run_descriptor_subject_qc(
                 scope="sensor",
             )
         )
-    actual_families = set(
-        feature_missingness_df.get("family", pd.Series(dtype=str)).dropna().astype(str)
+    flags.extend(_missing_family_flags(feature_missingness_df, expected_families, noun="extracted"))
+    flags.extend(
+        _missingness_flags(
+            metrics["max_feature_missingness"],
+            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            fail_code="high_missingness",
+            warn_code="elevated_missingness",
+            fail_msg="Feature missingness is too high.",
+            warn_msg="Feature missingness is elevated.",
+            nan_rate=metrics["nan_rate_sensor_epoch"],
+        )
     )
-    for family in expected_families:
-        if family not in actual_families:
-            flags.append(
-                make_qc_flag(
-                    "fail",
-                    "missing_expected_family",
-                    f"Expected family '{family}' has no extracted columns.",
-                    scope=family,
-                )
-            )
-    if (
-        metrics["nan_rate_sensor_epoch"] >= DEFAULT_DESCRIPTOR_THRESHOLDS.fail_nan_rate
-        or metrics["max_feature_missingness"]
-        >= DEFAULT_DESCRIPTOR_THRESHOLDS.fail_feature_missingness
-    ):
-        flags.append(
-            make_qc_flag(
-                "fail",
-                "high_missingness",
-                "Feature missingness is too high.",
-                value=metrics["max_feature_missingness"],
-                threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.fail_feature_missingness,
-            )
-        )
-    elif (
-        metrics["nan_rate_sensor_epoch"] >= DEFAULT_DESCRIPTOR_THRESHOLDS.warn_nan_rate
-        or metrics["max_feature_missingness"]
-        >= DEFAULT_DESCRIPTOR_THRESHOLDS.warn_feature_missingness
-    ):
-        flags.append(
-            make_qc_flag(
-                "warn",
-                "elevated_missingness",
-                "Feature missingness is elevated.",
-                value=metrics["max_feature_missingness"],
-                threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.warn_feature_missingness,
-            )
-        )
     if metrics["n_all_nan_features"] > 0:
         flags.append(
             make_qc_flag(
@@ -208,51 +335,28 @@ def run_descriptor_subject_qc(
             )
         )
     constant_fraction = metrics["n_constant_features"] / max(len(feature_cols), 1)
-    if constant_fraction >= DEFAULT_DESCRIPTOR_THRESHOLDS.fail_zero_variance_fraction:
-        flags.append(
-            make_qc_flag(
-                "fail",
-                "many_constant_features",
-                "Too many descriptor features are constant.",
-                value=constant_fraction,
-                threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.fail_zero_variance_fraction,
-            )
+    flags.extend(
+        _zero_variance_flags(
+            constant_fraction,
+            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            fail_code="many_constant_features",
+            warn_code="constant_features_present",
+            fail_msg="Too many descriptor features are constant.",
+            warn_msg="Some descriptor features are constant.",
         )
-    elif constant_fraction >= DEFAULT_DESCRIPTOR_THRESHOLDS.warn_zero_variance_fraction:
-        flags.append(
-            make_qc_flag(
-                "warn",
-                "constant_features_present",
-                "Some descriptor features are constant.",
-                value=constant_fraction,
-                threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.warn_zero_variance_fraction,
-            )
+    )
+    flags.extend(
+        _family_failure_flags(
+            family_summary_df,
+            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            fail_code=lambda family: f"{family}_family_failure_high",
+            warn_code=lambda family: f"{family}_family_failure_warn",
+            fail_msg="Family failure rate is high.",
+            warn_msg="Family failure rate is elevated.",
         )
+    )
     for row in family_summary_df.to_dict("records"):
         family = str(row["family"])
-        failure_rate = float(row.get("failure_rate") or 0.0)
-        if failure_rate >= DEFAULT_DESCRIPTOR_THRESHOLDS.fail_family_failure_rate:
-            flags.append(
-                make_qc_flag(
-                    "fail",
-                    f"{family}_family_failure_high",
-                    "Family failure rate is high.",
-                    value=failure_rate,
-                    threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.fail_family_failure_rate,
-                    scope=family,
-                )
-            )
-        elif failure_rate >= DEFAULT_DESCRIPTOR_THRESHOLDS.warn_family_failure_rate:
-            flags.append(
-                make_qc_flag(
-                    "warn",
-                    f"{family}_family_failure_warn",
-                    "Family failure rate is elevated.",
-                    value=failure_rate,
-                    threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.warn_family_failure_rate,
-                    scope=family,
-                )
-            )
         if family == "band" and float(row.get("band_rel_out_of_range_rate") or 0.0) > 0:
             flags.append(
                 make_qc_flag(
@@ -301,17 +405,7 @@ def run_descriptor_subject_qc(
             )
 
     qc_status = resolve_qc_status(flags)
-    report_dir = report_paths.subject_report_dir(
-        reports_root=reports_root,
-        subject=subject,
-        session=session,
-        stage=report_paths.ReportStage.DESCRIPTOR_QC,
-        create=True,
-    )
-    report_path = report_dir / (
-        f"{bids_io.bids_subject_label(subject)}_{bids_io.bids_session_label(session)}_"
-        f"{condition}_descriptor_qc_report.html"
-    )
+    report_path = report_dir / report_paths.descriptor_qc_report_name(subject, session, condition)
     summary_row = {
         "subject": subject,
         "session": session,
@@ -370,72 +464,36 @@ def run_descriptor_subject_qc(
 
 
 def run_descriptor_dataset_qc(
-    derivative_root: Path,
+    *,
     reports_root: Path,
+    qc_dir: Path,
     merged_sensor_epoch_df: pd.DataFrame | None,
     merged_sensor_subject_df: pd.DataFrame,
     merged_sensor_epoch_feature_columns_path: Path | None,
     merged_sensor_subject_feature_columns_path: Path,
-    merged_pooled_epoch_df: pd.DataFrame | None,
-    merged_pooled_subject_df: pd.DataFrame | None,
-    merged_pooled_epoch_feature_columns_path: Path | None,
-    merged_pooled_subject_feature_columns_path: Path | None,
     shard_qc_rows_df: pd.DataFrame | None,
     merged_failures_df: pd.DataFrame | None,
     config_snapshot: dict[str, Any],
     manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    del (
-        derivative_root,
-        merged_pooled_epoch_df,
-        merged_pooled_subject_df,
-        merged_pooled_epoch_feature_columns_path,
-        merged_pooled_subject_feature_columns_path,
-    )
-    qc_dir = Path(merged_sensor_subject_df.attrs.get("qc_dir", ""))
-    if not str(qc_dir):
-        raise ValueError(
-            "Merged sensor subject table must carry qc_dir in attrs for descriptor QC."
-        )
+    qc_dir = Path(qc_dir)
     summary_dir = report_paths.summary_report_dir(
         reports_root, report_paths.ReportStage.DESCRIPTOR_QC, create=True
     )
 
-    families_config = (
-        (config_snapshot.get("families") or {}) if isinstance(config_snapshot, dict) else {}
+    expected_families = _expected_families(config_snapshot)
+    subject_feature_cols = _select_family_feature_cols(
+        read_json(merged_sensor_subject_feature_columns_path),
+        expected_families,
+        merged_sensor_subject_df.columns,
     )
-    expected_families = [
-        family
-        for family, config_key in (
-            ("band", "bands"),
-            ("param", "parametric"),
-            ("complexity", "complexity"),
-        )
-        if bool((families_config.get(config_key) or {}).get("enabled"))
-    ]
-    subject_feature_cols = [
-        column
-        for column in read_json(merged_sensor_subject_feature_columns_path)
-        if any(
-            str(column).startswith(f"{family}_") or f"_{family}_" in str(column)
-            for family in expected_families
-        )
-        and str(column) in merged_sensor_subject_df.columns
-    ]
-    epoch_feature_cols = [
-        column
-        for column in (
-            read_json(merged_sensor_epoch_feature_columns_path)
-            if merged_sensor_epoch_feature_columns_path is not None
-            else []
-        )
-        if any(
-            str(column).startswith(f"{family}_") or f"_{family}_" in str(column)
-            for family in expected_families
-        )
-        and merged_sensor_epoch_df is not None
-        and str(column) in merged_sensor_epoch_df.columns
-    ]
+    epoch_feature_cols = _select_family_feature_cols(
+        read_json(merged_sensor_epoch_feature_columns_path)
+        if merged_sensor_epoch_feature_columns_path is not None
+        else [],
+        expected_families,
+        merged_sensor_epoch_df.columns if merged_sensor_epoch_df is not None else [],
+    )
     feature_missingness_df = compute_family_missingness(
         merged_sensor_subject_df,
         subject_feature_cols,
@@ -542,23 +600,12 @@ def run_descriptor_dataset_qc(
         if shard_qc_rows_df is not None
         else pd.DataFrame(columns=["subject", "session", "condition", "qc_status"])
     )
+    shard_status = shard_summary_df.get("qc_status", pd.Series(dtype=str))
     metrics = {
         "n_shards": int(len(shard_summary_df)),
-        "n_shards_pass": int(
-            (shard_summary_df.get("qc_status", pd.Series(dtype=str)) == "pass").sum()
-        )
-        if not shard_summary_df.empty
-        else 0,
-        "n_shards_warn": int(
-            (shard_summary_df.get("qc_status", pd.Series(dtype=str)) == "warn").sum()
-        )
-        if not shard_summary_df.empty
-        else 0,
-        "n_shards_fail": int(
-            (shard_summary_df.get("qc_status", pd.Series(dtype=str)) == "fail").sum()
-        )
-        if not shard_summary_df.empty
-        else 0,
+        "n_shards_pass": int((shard_status == "pass").sum()) if not shard_summary_df.empty else 0,
+        "n_shards_warn": int((shard_status == "warn").sum()) if not shard_summary_df.empty else 0,
+        "n_shards_fail": int((shard_status == "fail").sum()) if not shard_summary_df.empty else 0,
         "n_failures_total": int(len(failure_df)),
         "n_subjects": int(merged_sensor_subject_df["subject"].nunique())
         if "subject" in merged_sensor_subject_df.columns
@@ -600,62 +647,28 @@ def run_descriptor_dataset_qc(
                 threshold=0,
             )
         )
-    actual_families = set(
-        feature_missingness_df.get("family", pd.Series(dtype=str)).dropna().astype(str)
+    flags.extend(_missing_family_flags(feature_missingness_df, expected_families, noun="merged"))
+    flags.extend(
+        _missingness_flags(
+            metrics["max_feature_missingness"],
+            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            fail_code="high_global_missingness",
+            warn_code="global_missingness_warn",
+            fail_msg="Global descriptor missingness is too high.",
+            warn_msg="Global descriptor missingness is elevated.",
+        )
     )
-    for family in expected_families:
-        if family not in actual_families:
-            flags.append(
-                make_qc_flag(
-                    "fail",
-                    "missing_expected_family",
-                    f"Expected family '{family}' has no merged columns.",
-                    scope=family,
-                )
-            )
-    if metrics["max_feature_missingness"] >= DEFAULT_DESCRIPTOR_THRESHOLDS.fail_feature_missingness:
-        flags.append(
-            make_qc_flag(
-                "fail",
-                "high_global_missingness",
-                "Global descriptor missingness is too high.",
-                value=metrics["max_feature_missingness"],
-                threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.fail_feature_missingness,
-            )
-        )
-    elif (
-        metrics["max_feature_missingness"] >= DEFAULT_DESCRIPTOR_THRESHOLDS.warn_feature_missingness
-    ):
-        flags.append(
-            make_qc_flag(
-                "warn",
-                "global_missingness_warn",
-                "Global descriptor missingness is elevated.",
-                value=metrics["max_feature_missingness"],
-                threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.warn_feature_missingness,
-            )
-        )
     zero_variance_fraction = metrics["n_zero_variance_features"] / max(len(subject_feature_cols), 1)
-    if zero_variance_fraction >= DEFAULT_DESCRIPTOR_THRESHOLDS.fail_zero_variance_fraction:
-        flags.append(
-            make_qc_flag(
-                "fail",
-                "many_zero_variance_features",
-                "Too many merged features are zero-variance.",
-                value=zero_variance_fraction,
-                threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.fail_zero_variance_fraction,
-            )
+    flags.extend(
+        _zero_variance_flags(
+            zero_variance_fraction,
+            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            fail_code="many_zero_variance_features",
+            warn_code="near_zero_variance_features",
+            fail_msg="Too many merged features are zero-variance.",
+            warn_msg="Merged features include near-zero variance columns.",
         )
-    elif zero_variance_fraction >= DEFAULT_DESCRIPTOR_THRESHOLDS.warn_zero_variance_fraction:
-        flags.append(
-            make_qc_flag(
-                "warn",
-                "near_zero_variance_features",
-                "Merged features include near-zero variance columns.",
-                value=zero_variance_fraction,
-                threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.warn_zero_variance_fraction,
-            )
-        )
+    )
     if not outlier_df.empty:
         max_outlier_fraction = float(outlier_df["outlier_fraction"].max())
         if max_outlier_fraction >= DEFAULT_DESCRIPTOR_THRESHOLDS.fail_subject_outlier_fraction:
@@ -678,31 +691,16 @@ def run_descriptor_dataset_qc(
                     threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.warn_subject_outlier_fraction,
                 )
             )
-    for row in family_summary_df.to_dict("records"):
-        failure_rate = float(row.get("failure_rate") or 0.0)
-        family = str(row["family"])
-        if failure_rate >= DEFAULT_DESCRIPTOR_THRESHOLDS.fail_family_failure_rate:
-            flags.append(
-                make_qc_flag(
-                    "fail",
-                    "family_failure_concentration",
-                    "Family failure concentration is high.",
-                    value=failure_rate,
-                    threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.fail_family_failure_rate,
-                    scope=family,
-                )
-            )
-        elif failure_rate >= DEFAULT_DESCRIPTOR_THRESHOLDS.warn_family_failure_rate:
-            flags.append(
-                make_qc_flag(
-                    "warn",
-                    "family_failure_concentration",
-                    "Family failure concentration is elevated.",
-                    value=failure_rate,
-                    threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.warn_family_failure_rate,
-                    scope=family,
-                )
-            )
+    flags.extend(
+        _family_failure_flags(
+            family_summary_df,
+            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            fail_code=lambda _family: "family_failure_concentration",
+            warn_code=lambda _family: "family_failure_concentration",
+            fail_msg="Family failure concentration is high.",
+            warn_msg="Family failure concentration is elevated.",
+        )
+    )
 
     qc_status = resolve_qc_status(flags)
     report_path = summary_dir / "descriptor_qc_dataset_summary.html"
