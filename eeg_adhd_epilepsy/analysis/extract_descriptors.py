@@ -563,6 +563,7 @@ def main() -> None:
                 aggregation_groups=aggregation_descriptors,
                 ratio_pairs=aggregated_ratio_pairs,
                 ratio_floor=aggregated_ratio_floor,
+                on_insufficient="warn",
             )
             pooled_outputs = None
             if include_pooled:
@@ -576,6 +577,7 @@ def main() -> None:
                     aggregation_groups=aggregation_descriptors,
                     ratio_pairs=aggregated_ratio_pairs,
                     ratio_floor=aggregated_ratio_floor,
+                    on_insufficient="warn",
                 )
             failure_df = _build_failure_df(
                 sensor_result.meta.get("failures", []),
