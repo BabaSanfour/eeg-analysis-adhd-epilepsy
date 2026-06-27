@@ -134,7 +134,14 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
             use_derivatives = bool(model_cfg["use_derivatives"])
             # Only models needing a non-default window length (e.g. labram at 15s)
             # re-epoch; the rest reuse the saved 10s epoch derivatives.
-            window_source = str(model_cfg.get("window_source", "auto"))
+            if "window_source" not in model_cfg:
+                raise ValueError(f"model '{model_key}' must explicitly define 'window_source'")
+            window_source = str(model_cfg["window_source"])
+            if window_source not in ("re_epoch", "derivative"):
+                raise ValueError(
+                    f"model '{model_key}' window_source must be 're_epoch' or 'derivative', "
+                    f"got: '{window_source}'"
+                )
             spec = get_foundation_model_spec(model_key)
             provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
 

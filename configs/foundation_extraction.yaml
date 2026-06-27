@@ -8,6 +8,7 @@ models:
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
+    window_source: derivative
   - model_key: labram
     segment_duration: 15.0
     overlap: 0.0
@@ -19,26 +20,32 @@ models:
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
+    window_source: derivative
   - model_key: luna
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
+    window_source: derivative
   - model_key: biot
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
+    window_source: derivative
   - model_key: signaljepa
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
+    window_source: derivative
   - model_key: eegpt
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
+    window_source: derivative
   - model_key: bendr
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
+    window_source: derivative
 device: auto
 precision: fp32
 on_unsupported: skip
