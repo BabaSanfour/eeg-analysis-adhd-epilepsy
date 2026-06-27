@@ -62,6 +62,8 @@ def read_preproc_stage(
     preproc_root: Path,
     desc: str = "base",
     task: str = "clinical",
+    session: str | None = None,
+    run: str | None = None,
 ) -> tuple[mne.io.BaseRaw | None, dict[str, Any], list[str]]:
     """Load continuous preprocessed EEG data and metadata for a specific stage.
 
@@ -91,6 +93,8 @@ def read_preproc_stage(
         preproc_root=preproc_root,
         desc=desc,
         task=task,
+        session=session,
+        run=run,
     )
     if not eeg_path.exists():
         parsed = parse_bids_components(eeg_path)
