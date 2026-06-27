@@ -23,8 +23,8 @@ module load gcc arrow/23.0.1 python/3.11
 
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-FOUNDATION_CONFIG=${FOUNDATION_CONFIG:?Set FOUNDATION_CONFIG to the dataset-wide embedding config}
-BIDS_ROOT=${BIDS_ROOT:?Set BIDS_ROOT to the BIDS dataset}
+FOUNDATION_CONFIG=${FOUNDATION_CONFIG:-$PROJECT_ROOT/configs/foundation_extraction.yaml}
+BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
 SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
 DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 REPORTS_ROOT=${REPORTS_ROOT:-$SCRATCH_ROOT/reports}

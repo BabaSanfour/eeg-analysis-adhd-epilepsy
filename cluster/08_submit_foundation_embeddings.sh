@@ -17,9 +17,9 @@ module load gcc arrow/23.0.1 python/3.11
 
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-FOUNDATION_CONFIG=${FOUNDATION_CONFIG:?Set FOUNDATION_CONFIG to the dataset-wide embedding config}
-BIDS_ROOT=${BIDS_ROOT:?Set BIDS_ROOT to the BIDS dataset}
-METADATA=${METADATA:?Set METADATA to the metadata CSV}
+FOUNDATION_CONFIG=${FOUNDATION_CONFIG:-$PROJECT_ROOT/configs/foundation_extraction.yaml}
+BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
+METADATA=${METADATA:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
 DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.foundation_array_state}
