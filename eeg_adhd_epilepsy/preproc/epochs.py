@@ -152,7 +152,12 @@ def main() -> None:
         help="Ignore BAD_ annotations during epoching",
     )
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing epoch files")
-    parser.add_argument("--reports_root", type=str, default=None, help="Custom root directory for reports (defaults to sibling of bids_root)")
+    parser.add_argument(
+        "--reports_root",
+        type=str,
+        default=None,
+        help="Custom root directory for reports (defaults to sibling of bids_root)",
+    )
     args = parser.parse_args()
 
     bids_root = Path(args.bids_root)

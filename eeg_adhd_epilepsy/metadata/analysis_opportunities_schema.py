@@ -409,8 +409,10 @@ TARGET_ANALYSES = (
         "Only valid when both categories exist after filtering.",
         ADHD_MEDICATION_BACKGROUND_CONSTRAINTS,
         lambda s: (s["adhd"] == 1) & (s["psychostimulant_category"] == "Methylphenidate"),
-        lambda s: (s["adhd"] == 1)
-        & (s["psychostimulant_category"].isin(["Lisdexamfetamine", "Dextroamphetamine"])),
+        lambda s: (
+            (s["adhd"] == 1)
+            & (s["psychostimulant_category"].isin(["Lisdexamfetamine", "Dextroamphetamine"]))
+        ),
     ),
     AnalysisSpec(
         "Control_vs_ADHD_Medicated_Any",
@@ -450,8 +452,10 @@ TARGET_ANALYSES = (
         "Only valid when both groups are present.",
         CONTROL_VS_ADHD_BACKGROUND_CONSTRAINTS,
         lambda s: s["combined_diagnosis"] == "Control",
-        lambda s: (s["adhd"] == 1)
-        & (s["psychostimulant_category"].isin(["Lisdexamfetamine", "Dextroamphetamine"])),
+        lambda s: (
+            (s["adhd"] == 1)
+            & (s["psychostimulant_category"].isin(["Lisdexamfetamine", "Dextroamphetamine"]))
+        ),
     ),
 )
 

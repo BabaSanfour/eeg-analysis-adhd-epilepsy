@@ -132,11 +132,19 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
             segment_duration = float(model_cfg["segment_duration"])
             overlap = float(model_cfg["overlap"])
             use_derivatives = bool(model_cfg["use_derivatives"])
-            window_source = str(model_cfg["window_source"])
+            # Only models needing a non-default window length (e.g. labram at 15s)
+            # re-epoch; the rest reuse the saved 10s epoch derivatives.
+            window_source = str(model_cfg.get("window_source", "auto"))
             spec = get_foundation_model_spec(model_key)
             provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
 
-            LOGGER.info("Processing %s for %s (segment_duration: %gs, source: %s)", model_key, condition, segment_duration, window_source)
+            LOGGER.info(
+                "Processing %s for %s (segment_duration: %gs, source: %s)",
+                model_key,
+                condition,
+                segment_duration,
+                window_source,
+            )
             load_key = (condition, segment_duration, overlap, use_derivatives, window_source)
             raw = container_cache.get(load_key)
             if raw is None:
@@ -152,6 +160,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     desc=config.get("desc", "base"),
                     condition=condition,
                     window_source=window_source,
+                    units="uV",
                 )
                 container_cache[load_key] = raw
 
@@ -199,9 +208,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                         "filter": container.meta.get("filter"),
                         "reference": container.meta.get("reference"),
                     },
-                    "window_mismatch_policy": str(
-                        model_cfg.get("window_mismatch_policy", "raise")
-                    ),
+                    "window_mismatch_policy": str(model_cfg.get("window_mismatch_policy", "raise")),
                 }
                 artifact = BIDSPath(
                     subject=_sanitize_bids_token(row[subject_col], "subject"),
@@ -228,7 +235,11 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                             "reason": "resumed",
                         }
                     )
-                    LOGGER.info("Skipping %s for %s: artifact already exists (resumed)", recording_id, model_key)
+                    LOGGER.info(
+                        "Skipping %s for %s: artifact already exists (resumed)",
+                        recording_id,
+                        model_key,
+                    )
                     continue
 
                 capability = check_capability(
@@ -241,7 +252,12 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     backend_kwargs=model_cfg.get("backend_kwargs", {}),
                 )
                 if capability.status != "available":
-                    LOGGER.info("Skipping %s for %s: unsupported configuration (%s)", recording_id, model_key, capability.reason)
+                    LOGGER.info(
+                        "Skipping %s for %s: unsupported configuration (%s)",
+                        recording_id,
+                        model_key,
+                        capability.reason,
+                    )
                     records.append(
                         {
                             **base_metadata,
@@ -260,26 +276,29 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                             device=model_cfg.get("device", config.get("device", "auto")),
                             pooling=pooling,
                             recording_pooling=model_cfg.get("recording_pooling", "mean"),
-                            normalize_embeddings=bool(
-                                model_cfg.get("normalize_embeddings", True)
-                            ),
+                            normalize_embeddings=bool(model_cfg.get("normalize_embeddings", True)),
                             resample=bool(model_cfg.get("resample", True)),
                             backend_kwargs=model_cfg.get("backend_kwargs", {}),
                         )
                     n_times = recording.X.shape[-1]
                     starts = np.arange(len(recording.X), dtype=int) * n_times
+                    # Foundation models expect microvolts, and we natively loaded in uV.
                     result = extractor.extract(
-                        recording.X,
+                        np.asarray(recording.X, dtype=np.float32),
                         signal_metadata=SignalMetadata(sfreq=sfreq, ch_names=channels),
                         window_start=starts,
                         window_stop=starts + n_times,
-                        metadata=base_metadata,
+                        metadata={**base_metadata, "input_units": recording.meta["units"]},
                     )
                     save_embedding_derivative(
                         result, artifact, overwrite=bool(config.get("overwrite", False))
                     )
-                    (artifact.parent / "_SUCCESS").write_text("", encoding="utf-8")
-                    LOGGER.info("Successfully extracted %s for %s (shape: %s)", model_key, recording_id, result.window_embeddings.shape)
+                    LOGGER.info(
+                        "Successfully extracted %s for %s (shape: %s)",
+                        model_key,
+                        recording_id,
+                        result.window_embeddings.shape,
+                    )
                     records.append(
                         {**result.metadata, "artifact_path": str(artifact), "status": "success"}
                     )
@@ -317,15 +336,17 @@ def main() -> None:
     parser.add_argument("--config", required=True)
     parser.add_argument("--bids_root", required=True, help="Path to BIDS dataset")
     parser.add_argument("--metadata", default=None, help="Path to metadata CSV")
-    parser.add_argument("--derivative_root", type=str, default=None, help="Explicit path to write output derivatives")
+    parser.add_argument(
+        "--derivative_root",
+        type=str,
+        default=None,
+        help="Explicit path to write output derivatives",
+    )
     parser.add_argument(
         "--metadata_row",
         type=int,
         default=None,
-        help=(
-            "One-based metadata-CSV row to process a single subject "
-            "(SLURM_ARRAY_TASK_ID)."
-        ),
+        help=("One-based metadata-CSV row to process a single subject (SLURM_ARRAY_TASK_ID)."),
     )
     parser.add_argument(
         "--subjects",

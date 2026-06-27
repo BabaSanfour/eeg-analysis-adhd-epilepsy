@@ -30,7 +30,9 @@ from eeg_adhd_epilepsy.utils.formatting import format_duration_hms
 _add_images = partial(_add_images_base, caption_from_key=False)
 
 
-def build_stage_overview_table(record: Mapping[str, object], *, stage_display_name: str, previous_stage_label: str) -> pd.DataFrame:
+def build_stage_overview_table(
+    record: Mapping[str, object], *, stage_display_name: str, previous_stage_label: str
+) -> pd.DataFrame:
     return pd.DataFrame(
         [
             {
@@ -62,16 +64,27 @@ def build_top_channels_table(
     for rank in range(max_rank):
         amp_ch, amp_val = top_amp[rank] if rank < len(top_amp) else ("", float("nan"))
         noise_ch, noise_val = top_noise[rank] if rank < len(top_noise) else ("", float("nan"))
-        rank_rows.append({
-            "Rank": rank + 1,
-            "High Amplitude Channel": amp_ch,
-            "Amplitude PTP (uV)": f"{amp_val:.1f}" if math.isfinite(amp_val) else "—",
-            "High Line-Noise Channel": noise_ch,
-            "Line-Noise Ratio": f"{noise_val:.3f}" if math.isfinite(noise_val) else "—",
-        })
-    rank_df = pd.DataFrame(rank_rows) if rank_rows else pd.DataFrame(
-        columns=["Rank", "High Amplitude Channel", "Amplitude PTP (uV)",
-                 "High Line-Noise Channel", "Line-Noise Ratio"]
+        rank_rows.append(
+            {
+                "Rank": rank + 1,
+                "High Amplitude Channel": amp_ch,
+                "Amplitude PTP (uV)": f"{amp_val:.1f}" if math.isfinite(amp_val) else "—",
+                "High Line-Noise Channel": noise_ch,
+                "Line-Noise Ratio": f"{noise_val:.3f}" if math.isfinite(noise_val) else "—",
+            }
+        )
+    rank_df = (
+        pd.DataFrame(rank_rows)
+        if rank_rows
+        else pd.DataFrame(
+            columns=[
+                "Rank",
+                "High Amplitude Channel",
+                "Amplitude PTP (uV)",
+                "High Line-Noise Channel",
+                "Line-Noise Ratio",
+            ]
+        )
     )
     return rank_df
 
@@ -88,26 +101,41 @@ def build_condition_comparison_table(segment_comparison: pd.DataFrame) -> pd.Dat
     out["Condition"] = segment_comparison.get("segment_type", pd.Series(dtype=str))
 
     if "n_usable_runs" in segment_comparison.columns:
-        out["N Runs Usable"] = pd.to_numeric(segment_comparison["n_usable_runs"], errors="coerce").fillna(0).astype(int)
+        out["N Runs Usable"] = (
+            pd.to_numeric(segment_comparison["n_usable_runs"], errors="coerce")
+            .fillna(0)
+            .astype(int)
+        )
     if "total_duration_post_sec" in segment_comparison.columns:
-        out["Mean Dur (s)"] = _fmt(pd.to_numeric(segment_comparison["total_duration_post_sec"], errors="coerce").fillna(float("nan")), 1)
+        out["Mean Dur (s)"] = _fmt(
+            pd.to_numeric(segment_comparison["total_duration_post_sec"], errors="coerce").fillna(
+                float("nan")
+            ),
+            1,
+        )
 
     for label, pre_col, post_col in [
-        ("Ampl uV",      "mean_amplitude_pre",        "mean_amplitude_post"),
-        ("Line noise",   "mean_line_noise_pre",        "mean_line_noise_post"),
-        ("HF/LF",        "mean_hf_lf_pre",            "mean_hf_lf_post"),
-        ("Bad ch %",     "mean_pct_bad_channels_pre", "mean_pct_bad_channels_post"),
-        ("Slope",        "mean_aperiodic_slope_pre",  "mean_aperiodic_slope_post"),
+        ("Ampl uV", "mean_amplitude_pre", "mean_amplitude_post"),
+        ("Line noise", "mean_line_noise_pre", "mean_line_noise_post"),
+        ("HF/LF", "mean_hf_lf_pre", "mean_hf_lf_post"),
+        ("Bad ch %", "mean_pct_bad_channels_pre", "mean_pct_bad_channels_post"),
+        ("Slope", "mean_aperiodic_slope_pre", "mean_aperiodic_slope_post"),
     ]:
         if pre_col in segment_comparison.columns:
-            out[f"{label} (pre)"] = _fmt(pd.to_numeric(segment_comparison[pre_col], errors="coerce").fillna(float("nan")))
+            out[f"{label} (pre)"] = _fmt(
+                pd.to_numeric(segment_comparison[pre_col], errors="coerce").fillna(float("nan"))
+            )
         if post_col in segment_comparison.columns:
-            out[f"{label} (post)"] = _fmt(pd.to_numeric(segment_comparison[post_col], errors="coerce").fillna(float("nan")))
+            out[f"{label} (post)"] = _fmt(
+                pd.to_numeric(segment_comparison[post_col], errors="coerce").fillna(float("nan"))
+            )
 
     return out.reset_index(drop=True)
 
 
-def build_delta_table(record: Mapping[str, object], *, suffix: str, reference_label: str) -> pd.DataFrame:
+def build_delta_table(
+    record: Mapping[str, object], *, suffix: str, reference_label: str
+) -> pd.DataFrame:
     specs = (
         ("Mean amplitude", f"amplitude_mean_uv_delta_{suffix}", " uV"),
         ("Max amplitude", f"amplitude_max_uv_delta_{suffix}", " uV"),
@@ -138,17 +166,18 @@ def build_retention_table(record: Mapping[str, object]) -> pd.DataFrame:
     )
 
 
-
 def build_residual_metrics_table(
     record: Mapping[str, object],
     channel_diagnostics: Mapping[str, object] | None = None,
 ) -> pd.DataFrame:
-    flat_names = ", ".join(
-        str(ch) for ch in ((channel_diagnostics or {}).get("flat_channels") or [])
-    ) or "None"
-    noisy_names = ", ".join(
-        str(ch) for ch in ((channel_diagnostics or {}).get("noisy_channels") or [])
-    ) or "None"
+    flat_names = (
+        ", ".join(str(ch) for ch in ((channel_diagnostics or {}).get("flat_channels") or []))
+        or "None"
+    )
+    noisy_names = (
+        ", ".join(str(ch) for ch in ((channel_diagnostics or {}).get("noisy_channels") or []))
+        or "None"
+    )
     base = build_record_metric_table(
         record,
         (
@@ -158,8 +187,14 @@ def build_residual_metrics_table(
     )
     extra = pd.DataFrame(
         [
-            {"Metric": "Flat channels", "Value": f"{int(record.get('n_flat_channels', 0) or 0)}  \u2192  {flat_names}"},
-            {"Metric": "Noisy channels", "Value": f"{int(record.get('n_noisy_channels', 0) or 0)}  \u2192  {noisy_names}"},
+            {
+                "Metric": "Flat channels",
+                "Value": f"{int(record.get('n_flat_channels', 0) or 0)}  \u2192  {flat_names}",
+            },
+            {
+                "Metric": "Noisy channels",
+                "Value": f"{int(record.get('n_noisy_channels', 0) or 0)}  \u2192  {noisy_names}",
+            },
         ]
     )
     rest = build_record_metric_table(
@@ -200,7 +235,9 @@ def build_dataset_summary_table(
     *,
     stage_display_name: str,
 ) -> pd.DataFrame:
-    status_counts = runs_df.get("qc_flag", pd.Series(dtype=str)).fillna("unknown").astype(str).value_counts()
+    status_counts = (
+        runs_df.get("qc_flag", pd.Series(dtype=str)).fillna("unknown").astype(str).value_counts()
+    )
     return pd.DataFrame(
         [
             {
@@ -215,7 +252,9 @@ def build_dataset_summary_table(
     )
 
 
-def build_dataset_effect_table(runs_df: pd.DataFrame, *, suffix: str, reference_label: str) -> pd.DataFrame:
+def build_dataset_effect_table(
+    runs_df: pd.DataFrame, *, suffix: str, reference_label: str
+) -> pd.DataFrame:
     specs = (
         ("Mean amplitude", f"amplitude_mean_uv_delta_{suffix}", " uV"),
         ("Max amplitude", f"amplitude_max_uv_delta_{suffix}", " uV"),
@@ -225,18 +264,34 @@ def build_dataset_effect_table(runs_df: pd.DataFrame, *, suffix: str, reference_
         ("Alpha peak", f"alpha_peak_hz_delta_{suffix}", " Hz"),
         ("Aperiodic slope", f"aperiodic_slope_delta_{suffix}", ""),
     )
-    return build_dataset_mean_metric_table(runs_df, specs, value_col=f"Mean delta vs {reference_label}")
+    return build_dataset_mean_metric_table(
+        runs_df, specs, value_col=f"Mean delta vs {reference_label}"
+    )
 
 
 def build_dataset_retention_table(runs_df: pd.DataFrame) -> pd.DataFrame:
     duration_retention = pd.to_numeric(runs_df.get("duration_retention_pct"), errors="coerce")
-    coverage_retention = pd.to_numeric(runs_df.get("condition_coverage_retention_pct"), errors="coerce")
+    coverage_retention = pd.to_numeric(
+        runs_df.get("condition_coverage_retention_pct"), errors="coerce"
+    )
     return pd.DataFrame(
         [
-            {"Metric": "Mean recording retention", "Value": _format_value(duration_retention.mean(), suffix="%")},
-            {"Metric": "Median recording retention", "Value": _format_value(duration_retention.median(), suffix="%")},
-            {"Metric": "Mean condition coverage retention", "Value": _format_value(coverage_retention.mean(), suffix="%")},
-            {"Metric": "Median condition coverage retention", "Value": _format_value(coverage_retention.median(), suffix="%")},
+            {
+                "Metric": "Mean recording retention",
+                "Value": _format_value(duration_retention.mean(), suffix="%"),
+            },
+            {
+                "Metric": "Median recording retention",
+                "Value": _format_value(duration_retention.median(), suffix="%"),
+            },
+            {
+                "Metric": "Mean condition coverage retention",
+                "Value": _format_value(coverage_retention.mean(), suffix="%"),
+            },
+            {
+                "Metric": "Median condition coverage retention",
+                "Value": _format_value(coverage_retention.median(), suffix="%"),
+            },
         ]
     )
 
@@ -255,7 +310,9 @@ def build_dataset_residual_metrics_table(runs_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_flag_reason_table(runs_df: pd.DataFrame) -> pd.DataFrame:
-    return _build_flag_reason_table(runs_df, reasons_column="qc_flag_reasons", count_label="Records")
+    return _build_flag_reason_table(
+        runs_df, reasons_column="qc_flag_reasons", count_label="Records"
+    )
 
 
 def generate_subject_report(
@@ -271,12 +328,15 @@ def generate_subject_report(
     autoreject_figures: Mapping[str, Path] | None = None,
     segment_comparison: pd.DataFrame | None = None,
 ) -> Path:
-    report = Report(title=f"{stage_display_name} QC - {record.get('subject_session_prefix', record.get('subject_id', 'unknown'))}")
+    prefix = record.get("subject_session_prefix", record.get("subject_id", "unknown"))
+    report = Report(title=f"{stage_display_name} QC - {prefix}")
 
     overview = Section("Stage Overview", icon="🧭")
     _add_optional_table(
         overview,
-        build_stage_overview_table(record, stage_display_name=stage_display_name, previous_stage_label=previous_stage_label),
+        build_stage_overview_table(
+            record, stage_display_name=stage_display_name, previous_stage_label=previous_stage_label
+        ),
         "Overview",
     )
     report.add_section(overview)
@@ -287,19 +347,28 @@ def generate_subject_report(
         formatted_warnings = "- " + warnings_raw.replace("; ", "\n- ")
         warn_section = Section("Pipeline Warnings", icon="⚠️")
         warn_section.add_markdown(
-            "The following non-fatal issues were encountered during processing. Specific pipeline steps "
-            "may have been skipped to ensure the rest of the subject run could complete:\n\n"
+            "The following non-fatal issues were encountered during processing. "
+            "Specific pipeline steps may have been skipped to ensure the rest "
+            "of the subject run could complete:\n\n"
             f"{formatted_warnings}"
         )
         report.add_section(warn_section)
 
     if previous_stage_label != raw_reference_label:
         effect_prev = Section("Effect Vs Previous Stage", icon="↔️")
-        _add_optional_table(effect_prev, build_delta_table(record, suffix="prev", reference_label=previous_stage_label), "Primary Deltas")
+        _add_optional_table(
+            effect_prev,
+            build_delta_table(record, suffix="prev", reference_label=previous_stage_label),
+            "Primary Deltas",
+        )
         report.add_section(effect_prev)
 
     effect_raw = Section("Effect Vs Raw", icon="📏")
-    _add_optional_table(effect_raw, build_delta_table(record, suffix="raw", reference_label=raw_reference_label), "Raw Reference Deltas")
+    _add_optional_table(
+        effect_raw,
+        build_delta_table(record, suffix="raw", reference_label=raw_reference_label),
+        "Raw Reference Deltas",
+    )
     report.add_section(effect_raw)
 
     retention = Section("Retention", icon="🧩")
@@ -307,7 +376,11 @@ def generate_subject_report(
     report.add_section(retention)
 
     residual = Section("Residual Artifact Burden", icon="📉")
-    _add_optional_table(residual, build_residual_metrics_table(record, channel_diagnostics=channel_diagnostics), "Residual Metrics")
+    _add_optional_table(
+        residual,
+        build_residual_metrics_table(record, channel_diagnostics=channel_diagnostics),
+        "Residual Metrics",
+    )
     report.add_section(residual)
 
     # Channel diagnostics — only top-5 ranking table (flat/noisy names are now in residual metrics)
@@ -318,14 +391,20 @@ def generate_subject_report(
         report.add_section(ch_diag)
 
     # Per-condition comparison: pre-base vs cleaned signal quality
-    if segment_comparison is not None and not (isinstance(segment_comparison, pd.DataFrame) and segment_comparison.empty):
+    if segment_comparison is not None and not (
+        isinstance(segment_comparison, pd.DataFrame) and segment_comparison.empty
+    ):
         cond_section = Section("Per-Condition: Pre vs Post", icon="🔬")
         cond_section.add_markdown(
             "Mean signal-quality metrics per experimental condition block. "
             "Metrics are computed on the full segment window (same basis as pre-base) "
             "and compared against the pre-base stage values from raw_qc_segments.csv."
         )
-        _add_optional_table(cond_section, build_condition_comparison_table(segment_comparison), "Condition-Level Comparison")
+        _add_optional_table(
+            cond_section,
+            build_condition_comparison_table(segment_comparison),
+            "Condition-Level Comparison",
+        )
         report.add_section(cond_section)
 
     if run_summary_df is not None and not run_summary_df.empty and len(run_summary_df) > 1:
@@ -340,9 +419,7 @@ def generate_subject_report(
         "indicate segments flagged as bad by the automated diagnostics."
     )
     _add_images(
-        temporal,
-        figures,
-        ("temporal_amplitude", "temporal_line_noise", "temporal_hf_lf_ratio")
+        temporal, figures, ("temporal_amplitude", "temporal_line_noise", "temporal_hf_lf_ratio")
     )
     report.add_section(temporal)
 
@@ -393,9 +470,14 @@ def generate_dataset_report(
 
     definition = Section("QC Definition", icon="🎯")
     definition.add_markdown(
-        f"{stage_display_name} QC summarizes cleaning effect, residual artifact burden, retention, and readiness."
+        f"{stage_display_name} QC summarizes cleaning effect, residual artifact "
+        "burden, retention, and readiness."
     )
-    _add_optional_table(definition, build_dataset_summary_table(runs_df, subjects_df, stage_display_name=stage_display_name), "Dataset Summary")
+    _add_optional_table(
+        definition,
+        build_dataset_summary_table(runs_df, subjects_df, stage_display_name=stage_display_name),
+        "Dataset Summary",
+    )
     report.add_section(definition)
 
     usability = Section("Usability Summary", icon="🧪")
@@ -406,15 +488,26 @@ def generate_dataset_report(
     if condition_summary_df is not None and not condition_summary_df.empty:
         cond_section = Section("Usability & Signal Quality per Condition", icon="🔬")
         cond_section.add_markdown(
-            "Usability counts (number of runs retaining clean data) and mean signal-quality metrics "
-            "per experimental condition. Pre = pre-base stage; Post = after cleaning."
+            "Usability counts (number of runs retaining clean data) and mean "
+            "signal-quality metrics per experimental condition. Pre = pre-base "
+            "stage; Post = after cleaning."
         )
-        _add_optional_table(cond_section, build_condition_comparison_table(condition_summary_df), "Condition-Level Averages")
+        _add_optional_table(
+            cond_section,
+            build_condition_comparison_table(condition_summary_df),
+            "Condition-Level Averages",
+        )
         report.add_section(cond_section)
 
     if previous_stage_label != raw_reference_label:
         effect_prev = Section("Effect Vs Previous Stage", icon="↔️")
-        _add_optional_table(effect_prev, build_dataset_effect_table(runs_df, suffix="prev", reference_label=previous_stage_label), "Primary Deltas")
+        _add_optional_table(
+            effect_prev,
+            build_dataset_effect_table(
+                runs_df, suffix="prev", reference_label=previous_stage_label
+            ),
+            "Primary Deltas",
+        )
         _add_images(
             effect_prev,
             figures,
@@ -430,7 +523,11 @@ def generate_dataset_report(
         report.add_section(effect_prev)
 
     effect_raw = Section("Effect Vs Raw", icon="📏")
-    _add_optional_table(effect_raw, build_dataset_effect_table(runs_df, suffix="raw", reference_label=raw_reference_label), "Raw Reference Deltas")
+    _add_optional_table(
+        effect_raw,
+        build_dataset_effect_table(runs_df, suffix="raw", reference_label=raw_reference_label),
+        "Raw Reference Deltas",
+    )
     _add_images(
         effect_raw,
         figures,

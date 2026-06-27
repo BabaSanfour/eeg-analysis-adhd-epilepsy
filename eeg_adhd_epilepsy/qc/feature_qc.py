@@ -37,7 +37,12 @@ def _build_grouped_qc_summary(
         descriptor_names, known_families=KNOWN_FAMILY_TOKENS, feature_schema=feature_schema
     )
     column_family = classification["family"].fillna("unknown").astype(str).to_numpy()
-    column_group = classification[GROUP_BY_COLUMN.get(group_by, "family")].fillna("unknown").astype(str).to_numpy()
+    column_group = (
+        classification[GROUP_BY_COLUMN.get(group_by, "family")]
+        .fillna("unknown")
+        .astype(str)
+        .to_numpy()
+    )
     matrix = np.asarray(scoring_container.X)
     n_rows = matrix.shape[0]
     summaries = []

@@ -42,9 +42,7 @@ def _prepare_analysis_raw(
 ) -> tuple[mne.io.BaseRaw, list[int]]:
     analysis_raw = raw.copy().load_data()
     target_channels = [
-        channel
-        for channel in BASIC_1020_CHANNELS
-        if channel in analysis_raw.ch_names
+        channel for channel in BASIC_1020_CHANNELS if channel in analysis_raw.ch_names
     ]
     if target_channels:
         analysis_raw.pick(target_channels)

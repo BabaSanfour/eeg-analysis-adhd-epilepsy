@@ -7,7 +7,7 @@ import numpy as np
 
 
 def compute_channel_amplitude_stats(
-    raw: mne.io.BaseRaw | None, picks: list[str]
+    raw: mne.io.BaseRaw | None, picks: list[str], units: str = "uV"
 ) -> dict[str, object]:
     """Peak-to-peak amplitude per channel."""
     if raw is None or picks is None or len(picks) == 0:
@@ -19,7 +19,7 @@ def compute_channel_amplitude_stats(
             "max": float("nan"),
             "per_channel": np.array([]),
         }
-    data = raw.get_data(picks=picks) * 1e6  # uV
+    data = raw.get_data(picks=picks, units=units)
     ptp = np.ptp(data, axis=1)
     return {
         "mean": float(ptp.mean()),
@@ -32,7 +32,7 @@ def compute_channel_amplitude_stats(
 
 
 def detect_flat_and_noisy_channels(
-    raw: mne.io.BaseRaw | None, picks: list[str]
+    raw: mne.io.BaseRaw | None, picks: list[str], units: str = "uV"
 ) -> dict[str, object]:
     """Detect flat/noisy channels using variance percentiles."""
     if raw is None or picks is None or len(picks) == 0:
@@ -44,7 +44,7 @@ def detect_flat_and_noisy_channels(
             "pct_bad_channels": float("nan"),
             "variances": np.array([]),
         }
-    data = raw.get_data(picks=picks) * 1e6  # uV
+    data = raw.get_data(picks=picks, units=units)
     variances = np.var(data, axis=1)
     low_thresh = np.percentile(variances, 1)
     high_thresh = np.percentile(variances, 99)
@@ -64,11 +64,12 @@ def detect_flat_and_noisy_channels(
 def compute_epoch_amplitude_stats(
     epochs: mne.Epochs | None,
     picks: list[str] | None = None,
+    units: str = "uV",
 ) -> dict[str, float]:
     """Peak-to-peak amplitude statistics across epochs."""
     if epochs is None:
         return {"mean_ptp_uv": float("nan"), "max_ptp_uv": float("nan")}
-    data = epochs.get_data(picks=picks) * 1e6
+    data = epochs.get_data(picks=picks, units=units)
     ptp = np.ptp(data, axis=2)  # shape (n_epochs, n_channels)
     ptp_epoch = ptp.mean(axis=1)
     return {"mean_ptp_uv": float(np.nanmean(ptp_epoch)), "max_ptp_uv": float(np.nanmax(ptp_epoch))}

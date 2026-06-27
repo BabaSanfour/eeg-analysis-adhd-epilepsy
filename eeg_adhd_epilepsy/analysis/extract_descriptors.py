@@ -319,6 +319,11 @@ def main() -> None:
         help="Optional canonical metadata column to also expose as container y during aggregation.",
     )
     parser.add_argument(
+        "--units",
+        default="V",
+        help="Units to load the EEG data in (e.g. 'V' or 'uV').",
+    )
+    parser.add_argument(
         "--derivative_root",
         default=None,
         help=(
@@ -476,6 +481,7 @@ def main() -> None:
                     desc="base",
                     condition=condition,
                     session=session,
+                    units=args.units,
                 )
             except RuntimeError as error:
                 if str(error).startswith("No valid data found in "):

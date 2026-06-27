@@ -31,17 +31,25 @@ def calculate_comparison_scores(metrics_df: pd.DataFrame) -> pd.DataFrame:
     # 1. Signal Preservation Score (0.4) - Favor high correlation
     corr = pd.to_numeric(df.get("mean_dss_ica_corr"), errors="coerce")
     df["score_corr"] = corr.map(
-        lambda x: 0.4 if x > 0.98 else 0.3 if x > 0.95 else 0.15 if x > 0.9 else 0.0
-        if pd.notna(x)
-        else 0.0
+        lambda x: (
+            0.4
+            if x > 0.98
+            else 0.3
+            if x > 0.95
+            else 0.15
+            if x > 0.9
+            else 0.0
+            if pd.notna(x)
+            else 0.0
+        )
     )
 
     # 2. Spectral Distortion Score (0.3) - Favor low slope shift
     slope = pd.to_numeric(df.get("slope_distortion"), errors="coerce")
     df["score_slope"] = slope.map(
-        lambda x: 0.3 if x < 0.15 else 0.2 if x < 0.3 else 0.1 if x < 0.5 else 0.0
-        if pd.notna(x)
-        else 0.0
+        lambda x: (
+            0.3 if x < 0.15 else 0.2 if x < 0.3 else 0.1 if x < 0.5 else 0.0 if pd.notna(x) else 0.0
+        )
     )
 
     # 3. Component Sanity (0.2) - Penalize aggressive removal
@@ -57,9 +65,9 @@ def calculate_comparison_scores(metrics_df: pd.DataFrame) -> pd.DataFrame:
     # 4. Variance Efficiency (0.1) - Favor moderate variance reduction
     variance_removed = pd.to_numeric(df.get("variance_removed_pct"), errors="coerce")
     df["score_var"] = variance_removed.map(
-        lambda x: 0.1 if 5 <= x <= 25 else 0.05 if x < 5 or 25 < x <= 40 else 0.0
-        if pd.notna(x)
-        else 0.0
+        lambda x: (
+            0.1 if 5 <= x <= 25 else 0.05 if x < 5 or 25 < x <= 40 else 0.0 if pd.notna(x) else 0.0
+        )
     )
 
     df["total_score"] = df["score_corr"] + df["score_slope"] + df["score_comps"] + df["score_var"]
@@ -80,10 +88,7 @@ def create_compare_subject_report(
     report = Report(title=f"Compare Report - {subject_id} ({mode})")
 
     summary = Section("Summary", icon="🆚")
-    summary.add_markdown(
-        f"**Subject ID:** {subject_id}\n\n"
-        f"**Compare Mode:** {mode}"
-    )
+    summary.add_markdown(f"**Subject ID:** {subject_id}\n\n**Compare Mode:** {mode}")
 
     if metadata:
         trace_lines = []
@@ -127,17 +132,25 @@ def create_compare_subject_report(
         if cols:
             display_df = df[cols].copy()
             if "duration_sec" in display_df:
-                display_df["duration_sec"] = display_df["duration_sec"].map(lambda v: f"{float(v):.2f}")
+                display_df["duration_sec"] = display_df["duration_sec"].map(
+                    lambda v: f"{float(v):.2f}"
+                )
             if "variance_removed_pct" in display_df:
-                display_df["variance_removed_pct"] = display_df["variance_removed_pct"].map(lambda v: f"{float(v):.3f}")
+                display_df["variance_removed_pct"] = display_df["variance_removed_pct"].map(
+                    lambda v: f"{float(v):.3f}"
+                )
             if "mean_dss_ica_corr" in display_df:
                 display_df["mean_dss_ica_corr"] = display_df["mean_dss_ica_corr"].map(
                     lambda v: "-" if pd.isna(v) else f"{float(v):.4f}"
                 )
             if "slope_distortion" in display_df:
-                display_df["slope_distortion"] = display_df["slope_distortion"].map(lambda v: f"{float(v):.4f}")
+                display_df["slope_distortion"] = display_df["slope_distortion"].map(
+                    lambda v: f"{float(v):.4f}"
+                )
             if "alpha_peak_shift" in display_df:
-                display_df["alpha_peak_shift"] = display_df["alpha_peak_shift"].map(lambda v: f"{float(v):.2f} Hz")
+                display_df["alpha_peak_shift"] = display_df["alpha_peak_shift"].map(
+                    lambda v: f"{float(v):.2f} Hz"
+                )
 
             summary.add_element(TableElement(display_df, title="Per-Method Metrics"))
 
@@ -153,7 +166,9 @@ def create_compare_subject_report(
         plot_path = Path(path_str)
         if plot_path.exists():
             try:
-                plots.add_element(ImageElement(str(plot_path), caption=name.replace("_", " ").title()))
+                plots.add_element(
+                    ImageElement(str(plot_path), caption=name.replace("_", " ").title())
+                )
             except Exception as exc:
                 LOGGER.warning("Failed to add plot %s: %s", plot_path, exc)
     if plots.children:
@@ -214,7 +229,15 @@ def create_compare_dataset_report(
 
     if run_metadata:
         trace_rows = []
-        for key in ["mode", "dss_desc", "ica_desc", "strict_existing", "use_provenance_metrics", "condition", "train_condition"]:
+        for key in [
+            "mode",
+            "dss_desc",
+            "ica_desc",
+            "strict_existing",
+            "use_provenance_metrics",
+            "condition",
+            "train_condition",
+        ]:
             if key in run_metadata:
                 trace_rows.append({"Field": key, "Value": run_metadata[key]})
         if trace_rows:
@@ -247,7 +270,9 @@ def create_compare_dataset_report(
                     exc,
                 )
                 href = str(report_path)
-            rows.append({"Subject": subject_id, "Report": f"<a href='{href}'>{report_path.name}</a>"})
+            rows.append(
+                {"Subject": subject_id, "Report": f"<a href='{href}'>{report_path.name}</a>"}
+            )
         idx_df = pd.DataFrame(rows)
         overview.add_element(TableElement(idx_df, title="Subject Report Index"))
 
@@ -258,7 +283,9 @@ def create_compare_dataset_report(
         path = Path(path_str)
         if path.exists():
             try:
-                global_stats.add_element(ImageElement(str(path), caption=name.replace("_", " ").title()))
+                global_stats.add_element(
+                    ImageElement(str(path), caption=name.replace("_", " ").title())
+                )
             except Exception as exc:
                 LOGGER.warning("Failed to add global plot %s: %s", path, exc)
     if global_stats.children:

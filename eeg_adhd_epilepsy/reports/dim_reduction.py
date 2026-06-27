@@ -170,12 +170,14 @@ def _build_condition_scalar_df(
         condition = str(row.get("condition", ""))
         for metric in metrics:
             if metric in row.index and pd.notna(row[metric]):
-                rows.append({
-                    "subject": subject,
-                    "condition": condition,
-                    "metric": metric,
-                    "value": float(row[metric]),
-                })
+                rows.append(
+                    {
+                        "subject": subject,
+                        "condition": condition,
+                        "metric": metric,
+                        "value": float(row[metric]),
+                    }
+                )
     return (
         pd.DataFrame(rows)
         if rows
@@ -198,9 +200,7 @@ def _build_condition_stats_section(
     if len(args.conditions) < 2:
         return None
 
-    available_metrics = [
-        m for m in metrics if m in fit_eval_ranking.columns
-    ]
+    available_metrics = [m for m in metrics if m in fit_eval_ranking.columns]
     if not available_metrics:
         return None
 
@@ -232,7 +232,9 @@ def _build_condition_stats_section(
             )
         )
     else:
-        section.add_markdown("*No valid condition pairs for paired t-test (insufficient matched replicates).*")
+        section.add_markdown(
+            "*No valid condition pairs for paired t-test (insufficient matched replicates).*"
+        )
 
     # Eye-state grouped test: EO vs EC when both families are present
     eo_conds = [c for c in args.conditions if "EO" in c.upper()]
@@ -276,8 +278,9 @@ def _filter_runs(
     if run_config_hash and "input_signature" in filtered.columns:
         filtered = filtered[
             filtered["input_signature"].apply(
-                lambda value: isinstance(value, dict)
-                and value.get("run_config_hash") == run_config_hash
+                lambda value: (
+                    isinstance(value, dict) and value.get("run_config_hash") == run_config_hash
+                )
             )
         ].copy()
     if "representation" in filtered.columns:
@@ -292,24 +295,26 @@ def _filter_runs(
             ("embedding_aggregate_by", getattr(args, "embedding_aggregate_by", None)),
         ):
             if column in filtered.columns:
-                filtered = filtered[
-                    filtered[column].fillna("") == (desired or "")
-                ].copy()
+                filtered = filtered[filtered[column].fillna("") == (desired or "")].copy()
 
     desired_families = list(args.descriptor_families or [])
     if args.input_mode == "descriptors" and "descriptor_families" in filtered.columns:
         filtered = filtered[
             filtered["descriptor_families"].apply(
-                lambda value: list(value or []) == desired_families
-                if isinstance(value, list)
-                else desired_families == []
+                lambda value: (
+                    list(value or []) == desired_families
+                    if isinstance(value, list)
+                    else desired_families == []
+                )
             )
         ].copy()
     if args.input_mode == "descriptors" and "descriptor_max_abs_value" in filtered.columns:
         desired_max_abs = getattr(args, "descriptor_max_abs_value", None)
         if desired_max_abs is not None:
             filtered = filtered[
-                pd.to_numeric(filtered["descriptor_max_abs_value"], errors="coerce").eq(float(desired_max_abs))
+                pd.to_numeric(filtered["descriptor_max_abs_value"], errors="coerce").eq(
+                    float(desired_max_abs)
+                )
             ].copy()
     return filtered
 
@@ -430,8 +435,9 @@ def _add_overview_cohort_summary(
     if frame["_primary_class"].nunique(dropna=True) <= 1:
         return
 
+    n_subj = frame[args.subject_col].nunique() if args.subject_col in frame.columns else len(frame)
     overview_sec.add_markdown(
-        f"Primary cohort summary for **{primary_spec['name']}** using **{frame[args.subject_col].nunique() if args.subject_col in frame.columns else len(frame)}** unique subjects."
+        f"Primary cohort summary for **{primary_spec['name']}** using **{n_subj}** unique subjects."
     )
 
     summary_rows = []
@@ -447,9 +453,7 @@ def _add_overview_cohort_summary(
                 row["mean_age"] = round(float(age.mean()), 2)
                 row["sd_age"] = round(float(age.std(ddof=0)), 2)
         summary_rows.append(row)
-    overview_sec.add_element(
-        TableElement(pd.DataFrame(summary_rows), title="Primary class counts")
-    )
+    overview_sec.add_element(TableElement(pd.DataFrame(summary_rows), title="Primary class counts"))
 
     if "sex" in frame.columns:
         sex_table = (
@@ -524,7 +528,9 @@ def _add_data_availability_summary(
     for scope, condition in [("condition", condition) for condition in args.conditions] + (
         [("pooled", pooled_condition)] if getattr(args, "run_pooled", False) else []
     ):
-        container = None if containers_by_scope is None else containers_by_scope.get((scope, condition))
+        container = (
+            None if containers_by_scope is None else containers_by_scope.get((scope, condition))
+        )
         condition_runs = (
             fit_runs_df[
                 (fit_runs_df["scope"] == scope)
@@ -544,16 +550,26 @@ def _add_data_availability_summary(
             "unique_subjects": "",
             "unique_recordings": "",
             "successful_fits": int(len(condition_runs)),
-            "reducers": ", ".join(sorted(condition_runs["reducer"].dropna().astype(str).unique())) if "reducer" in condition_runs else "",
-            "valid_n_components": ", ".join(map(str, sorted(condition_runs["n_components"].dropna().astype(int).unique()))) if "n_components" in condition_runs and not condition_runs.empty else "",
+            "reducers": ", ".join(sorted(condition_runs["reducer"].dropna().astype(str).unique()))
+            if "reducer" in condition_runs
+            else "",
+            "valid_n_components": ", ".join(
+                map(str, sorted(condition_runs["n_components"].dropna().astype(int).unique()))
+            )
+            if "n_components" in condition_runs and not condition_runs.empty
+            else "",
         }
         if container is not None:
             row["loaded_observations"] = int(container.meta.get("loaded_obs", container.X.shape[0]))
             row["samples_used"] = int(container.X.shape[0])
             if getattr(args, "subject_col", None) in container.coords:
-                row["unique_subjects"] = int(pd.Index(np.asarray(container.coords[args.subject_col]).astype(str)).nunique())
+                row["unique_subjects"] = int(
+                    pd.Index(np.asarray(container.coords[args.subject_col]).astype(str)).nunique()
+                )
             if "recording_id" in container.coords:
-                row["unique_recordings"] = int(pd.Index(np.asarray(container.coords["recording_id"]).astype(str)).nunique())
+                row["unique_recordings"] = int(
+                    pd.Index(np.asarray(container.coords["recording_id"]).astype(str)).nunique()
+                )
         rows.append(row)
     if rows:
         overview_sec.add_element(TableElement(pd.DataFrame(rows), title="Data Availability"))
@@ -635,11 +651,11 @@ def _add_best_fit_plots(
     if components is not None:
         try:
             comp_arr = np.asarray(components, dtype=float)
-            # sklearn convention: (n_components, n_features) → transpose to (n_features, n_components)
+            # sklearn convention: (n_components, n_features)
+            # transpose to (n_features, n_components)
             if comp_arr.ndim == 2:
                 loadings = comp_arr.T
                 n_comp = loadings.shape[1]
-                reducer_name = (artifact.get("fit") or {}).get("reducer", "")
                 section.add_element(
                     PlotlyElement(
                         plot_component_loadings(
@@ -694,7 +710,11 @@ def _align_obs_frame(container, ids: np.ndarray | None) -> pd.DataFrame:
         requested_keys.append(f"{obs_id}__{occurrence}")
         counts[obs_id] = occurrence + 1
 
-    keyed = frame.assign(_obs_key=frame_keys).drop_duplicates("_obs_key", keep="first").set_index("_obs_key")
+    keyed = (
+        frame.assign(_obs_key=frame_keys)
+        .drop_duplicates("_obs_key", keep="first")
+        .set_index("_obs_key")
+    )
     if all(key in keyed.index for key in requested_keys):
         return keyed.loc[requested_keys].drop(columns=[], errors="ignore").reset_index(drop=True)
     if len(frame) == len(requested_ids):
@@ -787,12 +807,10 @@ def _build_flat_condition_section(
     fam_label = _family_label(args)
     section = Section(condition, icon="🧠")
     section.add_markdown(
-        
-            f"Input mode: **{args.input_mode}**. "
-            f"{f'Descriptor families: **{fam_label}**. ' if fam_label else ''}"
-            f"Representation: **{args.representation}**. "
-            f"Loaded observations: **{container.meta.get('loaded_obs', container.X.shape[0])}**."
-        
+        f"Input mode: **{args.input_mode}**. "
+        f"{f'Descriptor families: **{fam_label}**. ' if fam_label else ''}"
+        f"Representation: **{args.representation}**. "
+        f"Loaded observations: **{container.meta.get('loaded_obs', container.X.shape[0])}**."
     )
 
     ranking_df = condition_runs.merge(
@@ -804,7 +822,14 @@ def _build_flat_condition_section(
         InteractiveTableElement(
             ranking_df.loc[
                 :,
-                ["reducer", "n_components", "trustworthiness", "continuity", "eval_name", SEPARATION_METRIC_KEY],
+                [
+                    "reducer",
+                    "n_components",
+                    "trustworthiness",
+                    "continuity",
+                    "eval_name",
+                    SEPARATION_METRIC_KEY,
+                ],
             ].round(4),
             title="Fit ranking",
             selector_columns=["reducer", "eval_name"],
@@ -820,9 +845,9 @@ def _build_flat_condition_section(
         best_row = (
             _selection_view(
                 reducer_runs.merge(
-                eval_frame.loc[:, ["fit_id", "eval_name", SEPARATION_METRIC_KEY]],
-                on="fit_id",
-                how="left",
+                    eval_frame.loc[:, ["fit_id", "eval_name", SEPARATION_METRIC_KEY]],
+                    on="fit_id",
+                    how="left",
                 ),
                 args.selection_metric,
                 getattr(args, "selection_eval_name", None),
@@ -869,7 +894,9 @@ def _build_flat_condition_section(
                 )
             # Separation metrics (Eval level)
             if not sweep_df.empty and SEPARATION_METRIC_KEY in sweep_df.columns:
-                for eval_name, eval_group in sweep_df.dropna(subset=[SEPARATION_METRIC_KEY]).groupby("eval_name"):
+                for eval_name, eval_group in sweep_df.dropna(
+                    subset=[SEPARATION_METRIC_KEY]
+                ).groupby("eval_name"):
                     eval_group = eval_group.sort_values("n_components")
                     fig.add_trace(
                         go.Scatter(
@@ -929,9 +956,7 @@ def _add_unit_summary(
         return
 
     unit_runs = _selection_view(unit_runs, selection_metric, selection_eval_name)
-    unit_column = (
-        "unit_key" if args.analysis_mode == "descriptor_sensor" else "unit_name"
-    )
+    unit_column = "unit_key" if args.analysis_mode == "descriptor_sensor" else "unit_name"
 
     group_columns = [
         column
@@ -965,14 +990,10 @@ def _add_unit_summary(
             best_units.loc[:, display_columns].round(4),
             title=f"{title_prefix} {unit_label} ranking",
             selector_columns=[
-                column
-                for column in [*group_columns, "reducer"]
-                if column in best_units.columns
+                column for column in [*group_columns, "reducer"] if column in best_units.columns
             ],
             default_sort=(
-                {"column": sort_columns[0], "direction": "desc"}
-                if sort_columns
-                else None
+                {"column": sort_columns[0], "direction": "desc"} if sort_columns else None
             ),
             page_size=5,
         )
@@ -1013,11 +1034,7 @@ def _add_unit_summary(
             continue
         if not isinstance(group_key, tuple):
             group_key = (group_key,)
-        label_parts = [
-            str(value)
-            for value in group_key
-            if pd.notna(value) and str(value) != ""
-        ]
+        label_parts = [str(value) for value in group_key if pd.notna(value) and str(value) != ""]
         trace_label = " / ".join(label_parts) if label_parts else plot_metric
         bar_fig.add_trace(
             go.Bar(
@@ -1059,11 +1076,7 @@ def _add_unit_summary(
         )
     if bar_fig.data:
         first_bar_label = bar_fig.data[0].name
-        title_suffix = (
-            f" - {first_bar_label}"
-            if first_bar_label and len(bar_fig.data) > 1
-            else ""
-        )
+        title_suffix = f" - {first_bar_label}" if first_bar_label and len(bar_fig.data) > 1 else ""
         bar_fig.update_layout(
             title=f"{title_prefix} best {plot_metric} by {unit_label}{title_suffix}",
             xaxis_title=unit_label,
@@ -1079,9 +1092,7 @@ def _add_unit_summary(
             if not isinstance(group_key, tuple):
                 group_key = (group_key,)
             label_parts = [
-                str(value)
-                for value in group_key
-                if pd.notna(value) and str(value) != ""
+                str(value) for value in group_key if pd.notna(value) and str(value) != ""
             ]
             topo_label = " / ".join(label_parts) if label_parts else plot_metric
             topo_groups[topo_label] = (
@@ -1132,11 +1143,9 @@ def _build_nonflat_condition_section(
     }
     intro = f"Primary analysis unit: **{_unit_intro(args.analysis_mode)}**."
     section.add_markdown(
-        
-            f"Input mode: **{args.input_mode}**. "
-            f"{f'Descriptor families: **{fam_label}**. ' if fam_label else ''}"
-            f"{intro}"
-        
+        f"Input mode: **{args.input_mode}**. "
+        f"{f'Descriptor families: **{fam_label}**. ' if fam_label else ''}"
+        f"{intro}"
     )
 
     merged = condition_runs.merge(
@@ -1185,7 +1194,9 @@ def _build_nonflat_condition_section(
                     na_position="last",
                 )
                 family_best_by_n = (
-                    family_best_by_n.groupby("n_components", dropna=False).head(1).sort_values("n_components")
+                    family_best_by_n.groupby("n_components", dropna=False)
+                    .head(1)
+                    .sort_values("n_components")
                 )
                 for metric_name in comparison_metrics:
                     metric_df = family_best_by_n.dropna(subset=[metric_name])
@@ -1210,7 +1221,11 @@ def _build_nonflat_condition_section(
                 InteractiveTableElement(
                     reducer_runs.loc[
                         :,
-                        list(dict.fromkeys(["family", "n_components", *comparison_metrics, "eval_name"])),
+                        list(
+                            dict.fromkeys(
+                                ["family", "n_components", *comparison_metrics, "eval_name"]
+                            )
+                        ),
                     ].round(4),
                     title=f"{condition} - {reducer_name} family sweep",
                     selector_columns=["family", "eval_name"],
@@ -1223,7 +1238,8 @@ def _build_nonflat_condition_section(
                     family_runs,
                     args.selection_metric,
                     getattr(args, "selection_eval_name", None),
-                ).sort_values(
+                )
+                .sort_values(
                     [args.selection_metric, "trustworthiness", "continuity"],
                     ascending=[False, False, False],
                     na_position="last",
@@ -1255,11 +1271,19 @@ def _build_nonflat_condition_section(
                                     "n_components",
                                     *[
                                         metric
-                                        for metric in ["trustworthiness", "continuity", "shepard_correlation"]
+                                        for metric in [
+                                            "trustworthiness",
+                                            "continuity",
+                                            "shepard_correlation",
+                                        ]
                                         if metric in family_runs.columns
                                     ],
                                     "eval_name",
-                                    *([SEPARATION_METRIC_KEY] if SEPARATION_METRIC_KEY in family_runs.columns else []),
+                                    *(
+                                        [SEPARATION_METRIC_KEY]
+                                        if SEPARATION_METRIC_KEY in family_runs.columns
+                                        else []
+                                    ),
                                 ]
                             )
                         ),
@@ -1272,10 +1296,7 @@ def _build_nonflat_condition_section(
         return section
     if args.analysis_mode in {"sensor_within_family", "sensor_within_subfamily"}:
         group_columns = ["family"]
-        if (
-            args.analysis_mode == "sensor_within_subfamily"
-            and "subfamily" in merged.columns
-        ):
+        if args.analysis_mode == "sensor_within_subfamily" and "subfamily" in merged.columns:
             group_columns.append("subfamily")
         for group_key, family_runs in merged.groupby(group_columns, dropna=False):
             group_values = group_key if isinstance(group_key, tuple) else (group_key,)
@@ -1324,14 +1345,19 @@ def _build_nonflat_condition_section(
                 for column in ["eval_name", "target_col"]
                 if column in reducer_runs.columns and reducer_runs[column].notna().any()
             ]
-            sensor_groups = list(reducer_runs.groupby(sensor_group_columns, dropna=False)) if sensor_group_columns else [((), reducer_runs)]
+            sensor_groups = (
+                list(reducer_runs.groupby(sensor_group_columns, dropna=False))
+                if sensor_group_columns
+                else [((), reducer_runs)]
+            )
             for group_key, group_df in sensor_groups:
                 best_row = (
                     _selection_view(
                         group_df,
                         args.selection_metric,
                         getattr(args, "selection_eval_name", None),
-                    ).sort_values(
+                    )
+                    .sort_values(
                         [args.selection_metric, "trustworthiness", "continuity"],
                         ascending=[False, False, False],
                         na_position="last",
@@ -1342,10 +1368,13 @@ def _build_nonflat_condition_section(
                 sensor_meta = _build_meta_dict(sensor_container, best_artifact["ids"], eval_specs)
                 if not isinstance(group_key, tuple):
                     group_key = (group_key,)
-                label_parts = [str(value) for value in group_key if pd.notna(value) and str(value) != ""]
+                label_parts = [
+                    str(value) for value in group_key if pd.notna(value) and str(value) != ""
+                ]
                 label_suffix = f" [{' / '.join(label_parts)}]" if label_parts else ""
                 section.add_markdown(
-                    f"### {reducer_name}{label_suffix} best sensor: {best_row['unit_name']} (n={int(best_row['n_components'])})"
+                    f"### {reducer_name}{label_suffix} best sensor: {best_row['unit_name']} "
+                    f"(n={int(best_row['n_components'])})"
                 )
                 _add_best_fit_plots(
                     section,
@@ -1379,14 +1408,14 @@ def _build_pooled_section(
         for _, row in pooled_runs.iterrows()
     }
     section.add_markdown(
-        
-            "Shared fits across all requested conditions. "
-            f"{f'Descriptor families: **{fam_label}**. ' if fam_label else ''}"
-            "Condition-separation scores show EO vs EC-style pooled separability when available."
-        
+        "Shared fits across all requested conditions. "
+        f"{f'Descriptor families: **{fam_label}**. ' if fam_label else ''}"
+        "Condition-separation scores show EO vs EC-style pooled separability when available."
     )
     merged = pooled_runs.merge(
-        pooled_eval_runs.loc[:, ["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]] if not pooled_eval_runs.empty else pd.DataFrame(columns=["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]),
+        pooled_eval_runs.loc[:, ["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]]
+        if not pooled_eval_runs.empty
+        else pd.DataFrame(columns=["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]),
         on="fit_id",
         how="left",
     )
@@ -1425,7 +1454,8 @@ def _build_pooled_section(
                         family_runs,
                         args.selection_metric,
                         getattr(args, "selection_eval_name", None),
-                    ).sort_values(
+                    )
+                    .sort_values(
                         [args.selection_metric, "trustworthiness", "continuity"],
                         ascending=[False, False, False],
                         na_position="last",
@@ -1460,8 +1490,15 @@ def _build_pooled_section(
                 merged.loc[
                     :,
                     [
-                        col for col in
-                        ["reducer", "n_components", "trustworthiness", "continuity", "eval_name", SEPARATION_METRIC_KEY]
+                        col
+                        for col in [
+                            "reducer",
+                            "n_components",
+                            "trustworthiness",
+                            "continuity",
+                            "eval_name",
+                            SEPARATION_METRIC_KEY,
+                        ]
                         if col in merged.columns
                     ],
                 ].round(4),
@@ -1474,11 +1511,17 @@ def _build_pooled_section(
         # Best embedding visualisation per reducer (mirrors per-condition flat sections)
         pooled_container = None
         try:
-            pooled_container = build_dataset(args, subjects, meta_df, args.conditions[0], target_col=None)
+            pooled_container = build_dataset(
+                args, subjects, meta_df, args.conditions[0], target_col=None
+            )
         except Exception:
             pooled_container = None
         for reducer_name in reducers:
-            reducer_runs = merged[merged["reducer"] == reducer_name].copy() if not merged.empty else pd.DataFrame()
+            reducer_runs = (
+                merged[merged["reducer"] == reducer_name].copy()
+                if not merged.empty
+                else pd.DataFrame()
+            )
             if reducer_runs.empty:
                 continue
             best_row = (
@@ -1512,10 +1555,7 @@ def _build_pooled_section(
             )
     elif args.analysis_mode in {"sensor_within_family", "sensor_within_subfamily"}:
         group_columns = ["family"]
-        if (
-            args.analysis_mode == "sensor_within_subfamily"
-            and "subfamily" in merged.columns
-        ):
+        if args.analysis_mode == "sensor_within_subfamily" and "subfamily" in merged.columns:
             group_columns.append("subfamily")
         for group_key, family_runs in merged.groupby(group_columns, dropna=False):
             group_values = group_key if isinstance(group_key, tuple) else (group_key,)
@@ -1569,10 +1609,17 @@ def generate_dataset_report(
     eval_specs: Sequence[dict[str, Any]],
     pooled_condition: str,
 ) -> Report:
-    fit_runs_df = _filter_runs(pd.DataFrame(load_fit_runs(fit_runs_path)), args, reducers, pooled_condition)
+    fit_runs_df = _filter_runs(
+        pd.DataFrame(load_fit_runs(fit_runs_path)), args, reducers, pooled_condition
+    )
 
     if eval_runs_path.exists():
-        eval_runs_df = _filter_runs(pd.DataFrame(json.loads(eval_runs_path.read_text(encoding="utf-8"))), args, reducers, pooled_condition)
+        eval_runs_df = _filter_runs(
+            pd.DataFrame(json.loads(eval_runs_path.read_text(encoding="utf-8"))),
+            args,
+            reducers,
+            pooled_condition,
+        )
     else:
         eval_runs_df = pd.DataFrame()
     if not eval_runs_df.empty and eval_specs:
@@ -1585,17 +1632,35 @@ def generate_dataset_report(
         eval_frame = pd.DataFrame()
     else:
         _eval_base_cols = [
-            "fit_id", "scope", "condition", "analysis_mode",
-            "family", "unit_name", "eval_name", "target_col", "reducer", "n_components",
+            "fit_id",
+            "scope",
+            "condition",
+            "analysis_mode",
+            "family",
+            "unit_name",
+            "eval_name",
+            "target_col",
+            "reducer",
+            "n_components",
         ]
         eval_frame = eval_runs_df.loc[
             eval_runs_df["status"] == "success",
-            [col for col in [*_eval_base_cols, *_available_eval_metrics] if col in eval_runs_df.columns],
+            [
+                col
+                for col in [*_eval_base_cols, *_available_eval_metrics]
+                if col in eval_runs_df.columns
+            ],
         ].copy()
-    fit_eval_ranking = fit_runs_df[fit_runs_df["status"] == "success"].copy().merge(
-        eval_frame.loc[:, ["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]] if not eval_frame.empty else pd.DataFrame(columns=["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]),
-        on="fit_id",
-        how="left",
+    fit_eval_ranking = (
+        fit_runs_df[fit_runs_df["status"] == "success"]
+        .copy()
+        .merge(
+            eval_frame.loc[:, ["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]]
+            if not eval_frame.empty
+            else pd.DataFrame(columns=["fit_id", "eval_name", "target_col", SEPARATION_METRIC_KEY]),
+            on="fit_id",
+            how="left",
+        )
     )
 
     fam_label = _family_label(args)
@@ -1632,7 +1697,9 @@ def generate_dataset_report(
                         "reducers": ", ".join(reducers),
                         "n_components_sweep": ", ".join(map(str, args.n_components_sweep)),
                         "conditions": ", ".join(args.conditions),
-                        "eval_names": ", ".join(spec["name"] for spec in eval_specs) if eval_specs else "",
+                        "eval_names": ", ".join(spec["name"] for spec in eval_specs)
+                        if eval_specs
+                        else "",
                         "selection_metric": args.selection_metric,
                         "selection_eval_name": getattr(args, "selection_eval_name", None) or "",
                         "run_pooled": args.run_pooled,
@@ -1653,13 +1720,19 @@ def generate_dataset_report(
     # --- Best overall summary (headline numbers without digging into condition sections) ---
     success_runs = fit_eval_ranking[fit_eval_ranking["status"] == "success"].copy()
     if not success_runs.empty:
-        sort_metric = args.selection_metric if args.selection_metric in success_runs.columns else "trustworthiness"
-        best_overall = (
-            success_runs.sort_values(sort_metric, ascending=False, na_position="last").iloc[0]
+        sort_metric = (
+            args.selection_metric
+            if args.selection_metric in success_runs.columns
+            else "trustworthiness"
         )
+        best_overall = success_runs.sort_values(
+            sort_metric, ascending=False, na_position="last"
+        ).iloc[0]
         best_row_dict: dict[str, Any] = {
             "best_reducer": best_overall.get("reducer", ""),
-            "best_n_components": int(best_overall.get("n_components", 0)) if pd.notna(best_overall.get("n_components")) else "",
+            "best_n_components": int(best_overall.get("n_components", 0))
+            if pd.notna(best_overall.get("n_components"))
+            else "",
             "best_condition": best_overall.get("condition", ""),
         }
         for col in ["trustworthiness", "continuity", SEPARATION_METRIC_KEY]:
@@ -1689,10 +1762,18 @@ def generate_dataset_report(
         failures_sec = Section("Fit Failures", icon="⚠️")
         failures_sec.add_element(
             InteractiveTableElement(
-                fit_failures.loc[:, [column for column in _FIT_FAILURE_COLUMNS if column in fit_failures.columns]],
+                fit_failures.loc[
+                    :, [column for column in _FIT_FAILURE_COLUMNS if column in fit_failures.columns]
+                ],
                 title="Failed fits",
-                selector_columns=[column for column in ["scope", "condition", "family", "unit_name", "reducer"] if column in fit_failures.columns],
-                default_sort={"column": "condition", "direction": "asc"} if "condition" in fit_failures.columns else None,
+                selector_columns=[
+                    column
+                    for column in ["scope", "condition", "family", "unit_name", "reducer"]
+                    if column in fit_failures.columns
+                ],
+                default_sort={"column": "condition", "direction": "asc"}
+                if "condition" in fit_failures.columns
+                else None,
                 page_size=5,
             )
         )
@@ -1703,23 +1784,54 @@ def generate_dataset_report(
         failures_sec = Section("Eval Failures", icon="⚠️")
         failures_sec.add_element(
             InteractiveTableElement(
-                eval_failures.loc[:, [column for column in _EVAL_FAILURE_COLUMNS if column in eval_failures.columns]],
+                eval_failures.loc[
+                    :,
+                    [column for column in _EVAL_FAILURE_COLUMNS if column in eval_failures.columns],
+                ],
                 title="Failed evals",
-                selector_columns=[column for column in ["scope", "condition", "family", "unit_name", "reducer", "eval_name"] if column in eval_failures.columns],
-                default_sort={"column": "condition", "direction": "asc"} if "condition" in eval_failures.columns else None,
+                selector_columns=[
+                    column
+                    for column in [
+                        "scope",
+                        "condition",
+                        "family",
+                        "unit_name",
+                        "reducer",
+                        "eval_name",
+                    ]
+                    if column in eval_failures.columns
+                ],
+                default_sort={"column": "condition", "direction": "asc"}
+                if "condition" in eval_failures.columns
+                else None,
                 page_size=5,
             )
         )
         report.add_section(failures_sec)
 
     if not eval_frame.empty:
-        _default_eval_sort_col = SEPARATION_METRIC_KEY if SEPARATION_METRIC_KEY in eval_frame.columns else (eval_frame.columns[-1] if len(eval_frame.columns) else "eval_name")
+        _default_eval_sort_col = (
+            SEPARATION_METRIC_KEY
+            if SEPARATION_METRIC_KEY in eval_frame.columns
+            else (eval_frame.columns[-1] if len(eval_frame.columns) else "eval_name")
+        )
         eval_sec = Section("Evaluation Results", icon="🧪")
         eval_sec.add_element(
             InteractiveTableElement(
                 eval_frame.round(4),
                 title="Post-hoc evaluations",
-                selector_columns=[column for column in ["scope", "condition", "family", "unit_name", "reducer", "eval_name"] if column in eval_frame.columns],
+                selector_columns=[
+                    column
+                    for column in [
+                        "scope",
+                        "condition",
+                        "family",
+                        "unit_name",
+                        "reducer",
+                        "eval_name",
+                    ]
+                    if column in eval_frame.columns
+                ],
                 default_sort={"column": _default_eval_sort_col, "direction": "desc"},
                 page_size=5,
             )
@@ -1732,7 +1844,17 @@ def generate_dataset_report(
     ].copy()
     ranking_cols = [
         column
-        for column in ["condition", "family", "unit_name", "reducer", "n_components", "trustworthiness", "continuity", "eval_name", SEPARATION_METRIC_KEY]
+        for column in [
+            "condition",
+            "family",
+            "unit_name",
+            "reducer",
+            "n_components",
+            "trustworthiness",
+            "continuity",
+            "eval_name",
+            SEPARATION_METRIC_KEY,
+        ]
         if column in condition_runs.columns
     ]
     ranking_sec = Section("Condition Ranking", icon="🏁")
@@ -1740,26 +1862,35 @@ def generate_dataset_report(
         InteractiveTableElement(
             condition_runs.loc[:, ranking_cols].round(4),
             title="Condition ranking",
-            selector_columns=[column for column in ["condition", "family", "unit_name", "reducer", "eval_name"] if column in ranking_cols],
+            selector_columns=[
+                column
+                for column in ["condition", "family", "unit_name", "reducer", "eval_name"]
+                if column in ranking_cols
+            ],
             default_sort={"column": "trustworthiness", "direction": "desc"},
             page_size=5,
         )
     )
     # Cross-condition comparison bar chart: best metric per (condition × reducer)
     if not condition_runs.empty and len(args.conditions) > 1:
-        compare_metric = args.selection_metric if args.selection_metric in condition_runs.columns else "trustworthiness"
+        compare_metric = (
+            args.selection_metric
+            if args.selection_metric in condition_runs.columns
+            else "trustworthiness"
+        )
         cond_compare_fig = go.Figure()
         for reducer_name in reducers:
             reducer_cond_runs = condition_runs[condition_runs["reducer"] == reducer_name].copy()
             if reducer_cond_runs.empty:
                 continue
             best_per_condition = (
-                reducer_cond_runs
-                .sort_values(compare_metric, ascending=False, na_position="last")
+                reducer_cond_runs.sort_values(compare_metric, ascending=False, na_position="last")
                 .groupby("condition", dropna=False)
                 .head(1)
             )
-            best_per_condition = best_per_condition.set_index("condition").reindex(args.conditions).reset_index()
+            best_per_condition = (
+                best_per_condition.set_index("condition").reindex(args.conditions).reset_index()
+            )
             cond_compare_fig.add_trace(
                 go.Bar(
                     name=reducer_name,
@@ -1783,7 +1914,8 @@ def generate_dataset_report(
 
     # Radar chart: reducer × metric comparison (best value per reducer across all conditions)
     radar_metric_cols = [
-        m for m in ["trustworthiness", "continuity", "shepard_correlation", SEPARATION_METRIC_KEY]
+        m
+        for m in ["trustworthiness", "continuity", "shepard_correlation", SEPARATION_METRIC_KEY]
         if m in condition_runs.columns
     ]
     if len(reducers) > 1 and len(radar_metric_cols) >= 3:
@@ -1828,7 +1960,9 @@ def generate_dataset_report(
                     output_root,
                     condition,
                     condition_fit_runs,
-                    eval_frame[eval_frame["condition"] == condition].copy() if not eval_frame.empty else pd.DataFrame(),
+                    eval_frame[eval_frame["condition"] == condition].copy()
+                    if not eval_frame.empty
+                    else pd.DataFrame(),
                     subjects,
                     meta_df,
                     eval_specs,
@@ -1850,7 +1984,9 @@ def generate_dataset_report(
                     output_root,
                     condition,
                     condition_fit_runs,
-                    eval_frame[eval_frame["condition"] == condition].copy() if not eval_frame.empty else pd.DataFrame(),
+                    eval_frame[eval_frame["condition"] == condition].copy()
+                    if not eval_frame.empty
+                    else pd.DataFrame(),
                     metric_columns,
                     subjects,
                     meta_df,
@@ -1867,8 +2003,7 @@ def generate_dataset_report(
         ].copy()
         pooled_eval = (
             eval_frame[
-                (eval_frame["scope"] == "pooled")
-                & (eval_frame["condition"] == pooled_condition)
+                (eval_frame["scope"] == "pooled") & (eval_frame["condition"] == pooled_condition)
             ].copy()
             if not eval_frame.empty
             else pd.DataFrame()
@@ -1889,7 +2024,8 @@ def generate_dataset_report(
 
     # --- Condition statistics section (paired t-tests across conditions) ---
     stats_metrics = [
-        m for m in ["trustworthiness", "continuity", SEPARATION_METRIC_KEY]
+        m
+        for m in ["trustworthiness", "continuity", SEPARATION_METRIC_KEY]
         if m in fit_eval_ranking.columns
     ]
     stats_section = _build_condition_stats_section(args, fit_eval_ranking, stats_metrics)

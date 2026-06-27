@@ -126,9 +126,7 @@ def test_foundation_visual_report_handles_empty_records(tmp_path):
         title="Foundation Figures",
         config={"report_asset_urls": _asset_urls()},
     )
-    assert "No foundation decoding units were produced." in output.read_text(
-        encoding="utf-8"
-    )
+    assert "No foundation decoding units were produced." in output.read_text(encoding="utf-8")
 
 
 def test_decoding_summary_is_grouped_by_scope_and_analysis_plan(tmp_path):
@@ -194,9 +192,7 @@ def test_classical_decoding_summary_uses_coco_pipe_comparisons(tmp_path):
             "selection_mode": "baseline",
             "accuracy_mean": 0.65,
             "accuracy_std": 0.03,
-            "output_dir": str(
-                _write_result(tmp_path, "flat", accuracy=0.65)
-            ),
+            "output_dir": str(_write_result(tmp_path, "flat", accuracy=0.65)),
         },
     ]
     for sensor, accuracy in zip(
@@ -590,9 +586,7 @@ def test_decoding_summary_omits_zero_feature_missingness(tmp_path):
 
 def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
     bids_root = tmp_path / "BIDS"
-    result_root = (
-        bids_root / "derivatives" / "decoding" / "group" / "dataset" / "descriptors"
-    )
+    result_root = bids_root / "derivatives" / "decoding" / "group" / "dataset" / "descriptors"
     result_root.mkdir(parents=True)
     pd.DataFrame(
         [
@@ -628,13 +622,7 @@ def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
 
 def test_head_to_head_ignores_empty_failed_sweep(tmp_path):
     failed_root = (
-        tmp_path
-        / "BIDS"
-        / "derivatives"
-        / "decoding"
-        / "group"
-        / "dataset"
-        / "descriptors"
+        tmp_path / "BIDS" / "derivatives" / "decoding" / "group" / "dataset" / "descriptors"
     )
     failed_root.mkdir(parents=True)
     (failed_root / "sweep_results.csv").write_text("", encoding="utf-8")

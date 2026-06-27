@@ -85,9 +85,7 @@ def collect_shard_records(
     """
     required = required_descriptor_files(include_pooled, include_qc=True)
     records: list[dict[str, object]] = []
-    shard_dirs = sorted(
-        path for path in derivative_root.glob("sub-*/ses-*/eeg/*") if path.is_dir()
-    )
+    shard_dirs = sorted(path for path in derivative_root.glob("sub-*/ses-*/eeg/*") if path.is_dir())
     for shard_dir in shard_dirs:
         rel = shard_dir.relative_to(derivative_root)
         subject = rel.parts[0].removeprefix("sub-")
@@ -189,9 +187,7 @@ def summarize_reasons(derivative_root: Path, shard_df: pd.DataFrame) -> dict[str
             flags.update(zip(severity, code))
             if "scope" in flags_df.columns:
                 scope = flags_df["scope"].astype(str)
-                flag_scope.update(
-                    (c, s) for c, s in zip(code, scope) if s and s.lower() != "nan"
-                )
+                flag_scope.update((c, s) for c, s in zip(code, scope) if s and s.lower() != "nan")
 
         fail_df = _read(shard_dir / "failures.csv")
         if fail_df is not None:
@@ -305,9 +301,7 @@ def main() -> None:
     shard_df = collect_shard_records(derivative_root, reports_root, include_pooled)
 
     out_path = (
-        Path(args.out).expanduser()
-        if args.out
-        else derivative_root / "verification_report.csv"
+        Path(args.out).expanduser() if args.out else derivative_root / "verification_report.csv"
     )
     shard_df.to_csv(out_path, index=False)
 

@@ -146,7 +146,9 @@ def load_stage_run_lookup(
 
 
 def load_raw_pre_base_lookup(reports_root: Path) -> dict[str, dict[str, object]]:
-    return load_stage_run_lookup(reports_root, report_paths.ReportStage.RAW_QC_PRE_BASE, csv_name="raw_qc_runs.csv")
+    return load_stage_run_lookup(
+        reports_root, report_paths.ReportStage.RAW_QC_PRE_BASE, csv_name="raw_qc_runs.csv"
+    )
 
 
 def update_run_lookup(lookup: dict[str, dict[str, object]], record: Mapping[str, object]) -> None:

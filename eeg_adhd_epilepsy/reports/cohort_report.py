@@ -144,7 +144,9 @@ def generate_cohort_report(
                 "shortfall_n2",
                 "limiting_group",
             ]
-            available_columns = [c for c in recruitment_columns if c in recruitment_projection_df.columns]
+            available_columns = [
+                c for c in recruitment_columns if c in recruitment_projection_df.columns
+            ]
             recruitment.add_element(
                 InteractiveTableElement(
                     recruitment_projection_df[available_columns],

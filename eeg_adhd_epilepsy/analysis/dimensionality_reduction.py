@@ -336,7 +336,12 @@ def main() -> None:
             "e.g. 'medicated_adhd_vs_controls/lis'."
         ),
     )
-    reduction_group.add_argument("--reports_root", type=str, default=None, help="Custom root directory for reports (defaults to sibling of bids_root)")
+    reduction_group.add_argument(
+        "--reports_root",
+        type=str,
+        default=None,
+        help="Custom root directory for reports (defaults to sibling of bids_root)",
+    )
 
     filter_group = parser.add_argument_group("Filtering")
     filter_group.add_argument("--filter_col", action="append", default=[])
@@ -725,7 +730,9 @@ def main() -> None:
             eval_specs=eval_specs,
             pooled_condition=POOLED_CONDITION,
         )
-        reports_root = Path(args.reports_root) if args.reports_root else default_reports_root(bids_root)
+        reports_root = (
+            Path(args.reports_root) if args.reports_root else default_reports_root(bids_root)
+        )
         summary_dir = summary_report_dir(reports_root, ReportStage.DIM_REDUCTION, create=True)
         if args.output_group:
             summary_dir = summary_dir / Path(str(args.output_group))
