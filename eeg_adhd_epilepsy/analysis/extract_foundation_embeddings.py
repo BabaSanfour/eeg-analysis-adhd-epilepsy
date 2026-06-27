@@ -269,6 +269,9 @@ def main() -> None:
         description="Extract BIDS-compatible EEG foundation-model embeddings."
     )
     parser.add_argument("--config", required=True)
+    parser.add_argument("--bids_root", required=True, help="Path to BIDS dataset")
+    parser.add_argument("--metadata", default=None, help="Path to metadata CSV")
+    parser.add_argument("--derivative_root", type=str, default=None, help="Explicit path to write output derivatives")
     parser.add_argument(
         "--metadata_row",
         type=int,
@@ -287,9 +290,16 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     config = load_yaml_config(args.config)
-    derivative_root = get_derivative_root(
-        Path(config["bids_root"]).expanduser(), DerivativeStage.FOUNDATION_EMBEDDINGS
-    )
+    config["bids_root"] = args.bids_root
+    if args.metadata:
+        config["metadata"] = args.metadata
+
+    if args.derivative_root:
+        derivative_root = Path(args.derivative_root).expanduser()
+    else:
+        derivative_root = get_derivative_root(
+            Path(config["bids_root"]).expanduser(), DerivativeStage.FOUNDATION_EMBEDDINGS
+        )
 
     if args.metadata_row is not None and args.subjects:
         raise ValueError("--metadata_row and --subjects are mutually exclusive.")

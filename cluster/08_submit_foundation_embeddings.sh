@@ -18,6 +18,10 @@ module load gcc arrow/23.0.1 python/3.11
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 FOUNDATION_CONFIG=${FOUNDATION_CONFIG:?Set FOUNDATION_CONFIG to the dataset-wide embedding config}
+BIDS_ROOT=${BIDS_ROOT:?Set BIDS_ROOT to the BIDS dataset}
+METADATA=${METADATA:?Set METADATA to the metadata CSV}
+SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
+DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.foundation_array_state}
 AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-1}
 FIRST_BATCH_SIZE=${FIRST_BATCH_SIZE:-1000}
@@ -28,6 +32,8 @@ METADATA_ROW=$((SLURM_ARRAY_TASK_ID + ROW_OFFSET))
 
 [ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
 [ -f "$FOUNDATION_CONFIG" ] || { echo "Foundation config not found: $FOUNDATION_CONFIG"; exit 1; }
+[ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
+[ -f "$METADATA" ] || { echo "Metadata not found: $METADATA"; exit 1; }
 [ -d "$VENV_PATH" ] || { echo "Virtual environment not found: $VENV_PATH"; exit 1; }
 
 cd "$PROJECT_ROOT"
@@ -41,6 +47,9 @@ mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 
 python -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings \
   --config "$FOUNDATION_CONFIG" \
+  --bids_root "$BIDS_ROOT" \
+  --metadata "$METADATA" \
+  --derivative_root "$DERIVATIVE_ROOT" \
   --metadata_row "$METADATA_ROW"
 
 if [[ "$AUTO_SUBMIT_NEXT" == "1" && "$ROW_OFFSET" == "0" ]]; then
