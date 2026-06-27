@@ -5,7 +5,7 @@
 #SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.err
 #SBATCH --time=02:00:00
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3_3g.30gb:1
+#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3_3g.40gb:1
 #SBATCH --array=1-1000
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
