@@ -172,7 +172,14 @@ def run(config: dict[str, Any]) -> Path:
             segment_duration = float(model_cfg["segment_duration"])
             overlap = float(model_cfg["overlap"])
             use_derivatives = bool(model_cfg["use_derivatives"])
+            if "window_source" not in model_cfg:
+                raise ValueError(f"model '{model_key}' must explicitly define 'window_source'")
             window_source = str(model_cfg["window_source"])
+            if window_source not in ("re_epoch", "derivative"):
+                raise ValueError(
+                    f"model '{model_key}' window_source must be 're_epoch' or 'derivative', "
+                    f"got: '{window_source}'"
+                )
             spec = get_foundation_model_spec(model_key)
             provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
             container = build_dataset(
