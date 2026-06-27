@@ -24,7 +24,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import yaml
 from coco_pipe.decoding import redact_sensitive, write_run_status
 from coco_pipe.io import (
     embedding_sidecar_path,
@@ -135,10 +134,6 @@ def run(config: dict[str, Any]) -> Path:
     records = success_records + failures
 
     derivative_root.mkdir(parents=True, exist_ok=True)
-    (derivative_root / "config_used.yaml").write_text(
-        yaml.safe_dump(redact_sensitive(config), sort_keys=False),
-        encoding="utf-8",
-    )
     write_embedding_manifest(derivative_root, records)
     write_embedding_dataset_description(
         derivative_root,
@@ -179,16 +174,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Aggregate EEG foundation-embedding shards into combined tables and a report."
     )
-    parser.add_argument("--config", required=True)
     parser.add_argument("--bids_root", required=True, help="Path to BIDS dataset")
-    parser.add_argument("--derivative_root", type=str, default=None, help="Explicit path to write output derivatives")
+    parser.add_argument("--derivative_root", type=str, default=None, help="Explicit path to the extraction derivatives")
     parser.add_argument("--reports_root", type=str, default=None, help="Explicit path to write output reports")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
-    config = load_yaml_config(args.config)
-    config["bids_root"] = args.bids_root
+
+    bids_root = Path(args.bids_root).expanduser()
     if args.derivative_root:
-        config["derivative_root"] = args.derivative_root
+        derivative_root = Path(args.derivative_root).expanduser()
+    else:
+        derivative_root = get_derivative_root(bids_root, DerivativeStage.FOUNDATION_EMBEDDINGS)
+
+    config_path = derivative_root / "config_used.yaml"
+    if not config_path.exists():
+        raise FileNotFoundError(
+            f"config_used.yaml not found under {derivative_root}; run "
+            "extract_foundation_embeddings first."
+        )
+    config = load_yaml_config(config_path)
+    config["bids_root"] = args.bids_root
+    config["derivative_root"] = str(derivative_root)
     if args.reports_root:
         config["reports_root"] = args.reports_root
     run(config)

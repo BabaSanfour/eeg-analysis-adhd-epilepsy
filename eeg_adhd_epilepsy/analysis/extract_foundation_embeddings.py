@@ -5,15 +5,19 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import yaml
 from coco_pipe.decoding import (
     SignalMetadata,
     config_hash,
     get_foundation_model_spec,
+    redact_sensitive,
 )
 from coco_pipe.decoding.foundation_models import (
     FoundationEmbeddingExtractor,
@@ -21,7 +25,6 @@ from coco_pipe.decoding.foundation_models import (
     normalize_inclusive_endpoint,
 )
 from coco_pipe.io import (
-    read_json,
     read_table,
     save_embedding_derivative,
 )
@@ -48,6 +51,57 @@ from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
 
+_VOLATILE_CONFIG_KEYS = (
+    "subjects",
+    "bids_root",
+    "metadata",
+    "derivative_root",
+    "reports_root",
+)
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    """Atomically write *text* to *path* using a process-unique temp file.
+
+    Many Slurm array tasks share one derivative root and would otherwise race on
+    the top-level ``config_used.yaml``. A unique temp name (``mkstemp``) avoids the
+    shared-".tmp" rename collision, and ``os.replace`` is atomic, so any concurrent
+    reader sees either the old file or the fully-written new one.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def _freeze_config_used(config: dict[str, Any], derivative_root: Path) -> None:
+    """Write (or verify) ``config_used.yaml`` for the run, mirroring extract_descriptors.
+
+    The first task to reach the root materializes the redacted, volatile-key-stripped
+    config; later tasks compare byte-for-byte and raise on any drift so that a single
+    derivative root can never mix configs. ``merge_foundation_embeddings`` reads this
+    file back as its sole config source.
+    """
+    snapshot = {key: value for key, value in config.items() if key not in _VOLATILE_CONFIG_KEYS}
+    config_text = yaml.safe_dump(redact_sensitive(snapshot), sort_keys=True)
+    config_used_path = derivative_root / "config_used.yaml"
+    if config_used_path.exists():
+        if config_used_path.read_text(encoding="utf-8") != config_text:
+            raise ValueError(
+                "Existing foundation-embedding derivative root was generated with a "
+                "different configuration. Clear the derivative root and re-run."
+            )
+        return
+    derivative_root.mkdir(parents=True, exist_ok=True)
+    _write_text_atomic(config_used_path, config_text)
+
 
 def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "full") -> Path:
     """Extract embeddings for the configured (sliced) subjects into one task shard.
@@ -57,6 +111,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
     (window-mismatch / unsupported / errored).
     """
     bids_root = Path(config["bids_root"]).expanduser()
+    _freeze_config_used(config, derivative_root)
     metadata_df = (
         read_table(Path(config["metadata"]).expanduser(), sep=None)
         if config.get("metadata")
@@ -163,25 +218,8 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     check=False,
                 ).fpath
 
-                # Resume: an existing artifact is reused only if its provenance matches.
-                if artifact.exists() and not config.get("overwrite", False):
-                    sidecar = artifact.with_suffix(".json")
-                    existing_hash = (
-                        read_json(sidecar).get("config_hash") if sidecar.exists() else None
-                    )
-                    if existing_hash != cfg_hash:
-                        records.append(
-                            {
-                                **base_metadata,
-                                "artifact_path": str(artifact),
-                                "status": "failed",
-                                "reason": (
-                                    f"config_hash mismatch: existing={existing_hash!r}, "
-                                    f"requested={cfg_hash!r}; use overwrite to replace."
-                                ),
-                            }
-                        )
-                        continue
+                sidecar = artifact.with_suffix(".json")
+                if artifact.exists() and sidecar.exists() and not config.get("overwrite", False):
                     records.append(
                         {
                             **base_metadata,
@@ -241,7 +279,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                         result, artifact, overwrite=bool(config.get("overwrite", False))
                     )
                     (artifact.parent / "_SUCCESS").write_text("", encoding="utf-8")
-                    LOGGER.info("Successfully extracted %s for %s (shape: %s)", model_key, recording_id, result.X.shape)
+                    LOGGER.info("Successfully extracted %s for %s (shape: %s)", model_key, recording_id, result.window_embeddings.shape)
                     records.append(
                         {**result.metadata, "artifact_path": str(artifact), "status": "success"}
                     )
@@ -249,7 +287,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     if "OutOfMemory" in type(exc).__name__ or "CUDA out of memory" in str(exc):
                         LOGGER.critical("GPU Out of Memory for model %s. Crashing job.", model_key)
                         raise
-                        
+
                     LOGGER.exception(
                         "Embedding extraction failed for %s/%s", recording_id, model_key
                     )

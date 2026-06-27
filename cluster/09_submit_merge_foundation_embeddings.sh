@@ -23,14 +23,12 @@ module load gcc arrow/23.0.1 python/3.11
 
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-FOUNDATION_CONFIG=${FOUNDATION_CONFIG:-$PROJECT_ROOT/configs/foundation_extraction.yaml}
 BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
 SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
 DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 REPORTS_ROOT=${REPORTS_ROOT:-$SCRATCH_ROOT/reports}
 
 [ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
-[ -f "$FOUNDATION_CONFIG" ] || { echo "Foundation config not found: $FOUNDATION_CONFIG"; exit 1; }
 [ -d "$VENV_PATH" ] || { echo "Virtual environment not found: $VENV_PATH"; exit 1; }
 
 cd "$PROJECT_ROOT"
@@ -39,7 +37,6 @@ source "$VENV_PATH/bin/activate"
 export PYTHONNOUSERSITE=1
 
 python -m eeg_adhd_epilepsy.analysis.merge_foundation_embeddings \
-  --config "$FOUNDATION_CONFIG" \
   --bids_root "$BIDS_ROOT" \
   --derivative_root "$DERIVATIVE_ROOT" \
   --reports_root "$REPORTS_ROOT"
