@@ -101,6 +101,9 @@ def foundation_provenance(
         "config_hash": config_hash,
         "model_key": str(model_cfg["model_key"]),
         "pooling": str(model_cfg.get("pooling", "mean")),
+        "bandpass": (
+            [float(v) for v in model_cfg["bandpass"]] if model_cfg.get("bandpass") else None
+        ),
         "segment_duration": float(model_cfg["segment_duration"]),
         "overlap": float(model_cfg["overlap"]),
         "use_derivatives": bool(model_cfg["use_derivatives"]),

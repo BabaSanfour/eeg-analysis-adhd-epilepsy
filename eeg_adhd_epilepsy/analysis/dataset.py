@@ -45,9 +45,15 @@ def build_container(
     condition: str | None = None,
     window_source: str = "auto",
     units: str = "V",
+    bandpass: tuple[float, float] | None = None,
 ) -> DataContainer:
     """Load raw BIDS data or saved epoch derivatives into a DataContainer."""
     subjects = subjects or []
+    if bandpass is not None and window_source != "re_epoch":
+        raise ValueError(
+            "bandpass is only supported with window_source='re_epoch' "
+            f"(continuous-domain filtering); got window_source={window_source!r}."
+        )
     if window_source == "re_epoch":
         return reepoch_eeg(
             bids_root=bids_root,
@@ -61,6 +67,7 @@ def build_container(
             desc=desc,
             session=session if isinstance(session, str) else "01",
             units=units,
+            bandpass=bandpass,
         )
     external_metadata_df = metadata_df.copy() if metadata_df is not None else None
     if external_metadata_df is not None:
@@ -122,8 +129,15 @@ def reepoch_eeg(
     desc: str = "base",
     session: str = "01",
     units: str = "V",
+    bandpass: tuple[float, float] | None = None,
 ) -> DataContainer:
-    """Re-epoch the cleaned continuous ``desc`` derivative at ``segment_duration``."""
+    """Re-epoch the cleaned continuous ``desc`` derivative at ``segment_duration``.
+
+    When ``bandpass`` is given, the continuous recording is band-pass filtered to
+    ``(l_freq, h_freq)`` *before* epoching -- the correct place for it, since a
+    sub-Hz high-pass needs a multi-second FIR that would clip a short epoch. Used
+    to match a foundation model's pretraining band (e.g. SignalJEPA: 0.5-40 Hz).
+    """
     preproc_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
     meta_lookup: pd.DataFrame | None = None
     if metadata_df is not None:
@@ -169,6 +183,9 @@ def reepoch_eeg(
             if raw is None:
                 issues.extend(load_issues)
                 continue
+            if bandpass is not None:
+                # Continuous-domain band-pass before epoching (raw is preloaded).
+                raw.filter(l_freq=bandpass[0], h_freq=bandpass[1], verbose="ERROR")
             try:
                 epochs = make_epochs_from_preproc_raw(
                     raw, segment_duration=segment_duration, overlap=overlap
@@ -234,6 +251,7 @@ def reepoch_eeg(
             "window_source": "re_epoch_cleaned_continuous",
             "autoreject_applied": False,
             "segment_duration": float(segment_duration),
+            "bandpass": list(bandpass) if bandpass is not None else None,
             "load_issues": issues,
         },
     )
