@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_foundation_emb
-#SBATCH --account=rrg-kjerbi
+#SBATCH --account=def-kjerbi
 #SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.out
 #SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.err
 #SBATCH --time=02:00:00
 #SBATCH --mem=64G
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1
 #SBATCH --array=1-1000
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
