@@ -21,6 +21,7 @@ from eeg_adhd_epilepsy.io.bids import (
     bids_session_label,
     bids_subject_label,
     get_derivative_root,
+    parse_bids_components,
 )
 from eeg_adhd_epilepsy.io.readers import read_preproc_stage
 from eeg_adhd_epilepsy.preproc.epochs import make_epochs_from_preproc_raw
@@ -137,48 +138,70 @@ def reepoch_eeg(
 
     for raw_sid in subjects or []:
         study_id = f"{int(raw_sid):04d}" if str(raw_sid).isdigit() else str(raw_sid)
-        raw, _prov, load_issues = read_preproc_stage(study_id, preproc_root, desc=desc, task=task)
-        if raw is None:
-            issues.extend(load_issues)
+        subject_label = bids_subject_label(study_id)
+        session_label = bids_session_label(session)
+        search_dir = preproc_root / subject_label / session_label / "eeg"
+
+        runs_to_process = []
+        if search_dir.exists():
+            for f in search_dir.glob(f"*_desc-{desc}_eeg.fif"):
+                runs_to_process.append(parse_bids_components(f).get("run", "01"))
+        
+        if not runs_to_process:
+            fallback_dir = preproc_root / subject_label / "eeg"
+            if fallback_dir.exists():
+                for f in fallback_dir.glob(f"*_desc-{desc}_eeg.fif"):
+                    runs_to_process.append(parse_bids_components(f).get("run", "01"))
+
+        if not runs_to_process:
+            issues.append(f"missing_eeg:{subject_label}")
             continue
-        try:
-            epochs = make_epochs_from_preproc_raw(
-                raw, segment_duration=segment_duration, overlap=overlap
+
+        for current_run in sorted(set(runs_to_process)):
+            raw, _prov, load_issues = read_preproc_stage(
+                study_id, preproc_root, desc=desc, task=task, session=session, run=current_run
             )
-        except ValueError as exc:
-            issues.append(f"no_epochs:{bids_subject_label(study_id)}:{exc}")
-            continue
-        if condition is None or condition not in epochs.event_id:
-            issues.append(f"missing_condition:{bids_subject_label(study_id)}:{condition}")
-            continue
-        cond_epochs = epochs[condition]
-        data = np.asarray(cond_epochs.get_data(), dtype=np.float32)
-        if data.shape[0] == 0:
-            continue
-        if ch_names is None:
-            ch_names = list(cond_epochs.ch_names)
-            sfreq = float(cond_epochs.info["sfreq"])
-            times = np.asarray(cond_epochs.times)
-        recording_id = f"{bids_subject_label(study_id)}_{bids_session_label(session)}_run-01"
-        meta_row: dict[str, Any] = {}
-        if meta_lookup is not None and study_id in meta_lookup.index:
-            meta_row = {
-                str(column): meta_lookup.loc[study_id, column] for column in meta_lookup.columns
-            }
-        for epoch_idx in range(data.shape[0]):
-            obs_rows.append(
-                {
-                    subject_col: study_id,
-                    "subject": bids_subject_label(study_id),
-                    "session": session,
-                    "run": "01",
-                    "condition": condition,
-                    "recording_id": recording_id,
-                    **meta_row,
+            if raw is None:
+                issues.extend(load_issues)
+                continue
+            try:
+                epochs = make_epochs_from_preproc_raw(
+                    raw, segment_duration=segment_duration, overlap=overlap
+                )
+            except ValueError as exc:
+                issues.append(f"no_epochs:{subject_label}_run-{current_run}:{exc}")
+                continue
+            if condition is None or condition not in epochs.event_id:
+                issues.append(f"missing_condition:{subject_label}_run-{current_run}:{condition}")
+                continue
+            cond_epochs = epochs[condition]
+            data = np.asarray(cond_epochs.get_data(), dtype=np.float32)
+            if data.shape[0] == 0:
+                continue
+            if ch_names is None:
+                ch_names = list(cond_epochs.ch_names)
+                sfreq = float(cond_epochs.info["sfreq"])
+                times = np.asarray(cond_epochs.times)
+            recording_id = f"{subject_label}_{session_label}_run-{current_run}"
+            meta_row: dict[str, Any] = {}
+            if meta_lookup is not None and study_id in meta_lookup.index:
+                meta_row = {
+                    str(column): meta_lookup.loc[study_id, column] for column in meta_lookup.columns
                 }
-            )
-            ids.append(f"{recording_id}_epoch-{epoch_idx:03d}")
-        x_chunks.append(data)
+            for epoch_idx in range(data.shape[0]):
+                obs_rows.append(
+                    {
+                        subject_col: study_id,
+                        "subject": subject_label,
+                        "session": session,
+                        "run": current_run,
+                        "condition": condition,
+                        "recording_id": recording_id,
+                        **meta_row,
+                    }
+                )
+                ids.append(f"{recording_id}_epoch-{epoch_idx:03d}")
+            x_chunks.append(data)
 
     if not x_chunks:
         raise RuntimeError(
