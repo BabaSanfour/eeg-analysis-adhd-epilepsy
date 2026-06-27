@@ -59,6 +59,13 @@ _VOLATILE_CONFIG_KEYS = (
     "reports_root",
 )
 
+_NO_DATA = object()
+
+_NO_DATA_MESSAGES = (
+    "No valid data found in",
+    "No cleaned-continuous epochs for condition",
+)
+
 
 def _write_text_atomic(path: Path, text: str) -> None:
     """Atomically write *text* to *path* using a process-unique temp file.
@@ -172,22 +179,44 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
             )
             raw = container_cache.get(load_key)
             if raw is None:
-                raw = build_container(
-                    bids_root=bids_root,
-                    use_derivatives=use_derivatives,
-                    subjects=subjects,
-                    task=config["task"],
-                    segment_duration=segment_duration,
-                    overlap=overlap,
-                    metadata_df=metadata_df,
-                    subject_col=subject_col,
-                    desc=config.get("desc", "base"),
-                    condition=condition,
-                    window_source=window_source,
-                    units="uV",
-                    bandpass=bandpass,
-                )
+                try:
+                    raw = build_container(
+                        bids_root=bids_root,
+                        use_derivatives=use_derivatives,
+                        subjects=subjects,
+                        task=config["task"],
+                        segment_duration=segment_duration,
+                        overlap=overlap,
+                        metadata_df=metadata_df,
+                        subject_col=subject_col,
+                        desc=config.get("desc", "base"),
+                        condition=condition,
+                        window_source=window_source,
+                        units="uV",
+                        bandpass=bandpass,
+                    )
+                except RuntimeError as exc:
+                    if not any(token in str(exc) for token in _NO_DATA_MESSAGES):
+                        raise
+                    LOGGER.warning(
+                        "No usable %s data for this shard; skipping %s: %s",
+                        condition,
+                        model_key,
+                        exc,
+                    )
+                    raw = _NO_DATA
                 container_cache[load_key] = raw
+
+            if raw is _NO_DATA:
+                records.append(
+                    {
+                        **provenance,
+                        "condition": condition,
+                        "status": "skipped",
+                        "reason": "no_data_for_condition",
+                    }
+                )
+                continue
 
             container, window_reason = normalize_inclusive_endpoint(
                 raw,
