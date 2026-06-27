@@ -142,6 +142,16 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     f"model '{model_key}' window_source must be 're_epoch' or 'derivative', "
                     f"got: '{window_source}'"
                 )
+            # Optional continuous-domain band-pass to match a model's pretraining
+            # band (e.g. SignalJEPA 0.5-40 Hz). Filtering is done on the cleaned
+            # continuous derivative before re-epoching, so it requires re_epoch.
+            bandpass_cfg = model_cfg.get("bandpass")
+            bandpass = tuple(float(v) for v in bandpass_cfg) if bandpass_cfg else None
+            if bandpass is not None and window_source != "re_epoch":
+                raise ValueError(
+                    f"model '{model_key}' sets bandpass but window_source="
+                    f"'{window_source}'; bandpass requires window_source='re_epoch'."
+                )
             spec = get_foundation_model_spec(model_key)
             provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
 
@@ -152,7 +162,14 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                 segment_duration,
                 window_source,
             )
-            load_key = (condition, segment_duration, overlap, use_derivatives, window_source)
+            load_key = (
+                condition,
+                segment_duration,
+                overlap,
+                use_derivatives,
+                window_source,
+                bandpass,
+            )
             raw = container_cache.get(load_key)
             if raw is None:
                 raw = build_container(
@@ -168,6 +185,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     condition=condition,
                     window_source=window_source,
                     units="uV",
+                    bandpass=bandpass,
                 )
                 container_cache[load_key] = raw
 

@@ -38,6 +38,20 @@ def test_foundation_provenance_defaults_pooling_to_mean():
     assert prov["pooling"] == "mean"
 
 
+def test_foundation_provenance_defaults_bandpass_to_none():
+    prov = foundation_provenance(_base_model_cfg(), _fm_spec(), config_hash="abc")
+    assert prov["bandpass"] is None
+
+
+def test_foundation_provenance_records_bandpass():
+    prov = foundation_provenance(
+        _base_model_cfg(window_source="re_epoch", bandpass=[0.5, 40.0]),
+        _fm_spec(),
+        config_hash="abc",
+    )
+    assert prov["bandpass"] == [0.5, 40.0]
+
+
 def test_foundation_provenance_distinguishes_pooling_variants():
     # The pooling field is the join key that keeps same-model/same-window
     # embedding variants (e.g. REVE mean vs attention) distinguishable.

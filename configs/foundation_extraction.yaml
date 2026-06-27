@@ -40,8 +40,9 @@ models:
   - model_key: signaljepa
     segment_duration: 10.0
     overlap: 0.0
-    use_derivatives: true
-    window_source: derivative
+    use_derivatives: false
+    window_source: re_epoch
+    bandpass: [0.5, 40.0]
   - model_key: eegpt
     segment_duration: 10.0
     overlap: 0.0
