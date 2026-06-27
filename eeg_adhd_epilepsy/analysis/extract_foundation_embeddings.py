@@ -81,6 +81,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
             spec = get_foundation_model_spec(model_key)
             provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
 
+            LOGGER.info("Processing %s for %s (segment_duration: %gs, source: %s)", model_key, condition, segment_duration, window_source)
             load_key = (condition, segment_duration, overlap, use_derivatives, window_source)
             raw = container_cache.get(load_key)
             if raw is None:
@@ -189,6 +190,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                             "reason": "resumed",
                         }
                     )
+                    LOGGER.info("Skipping %s for %s: artifact already exists (resumed)", recording_id, model_key)
                     continue
 
                 capability = check_capability(
@@ -201,6 +203,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     backend_kwargs=model_cfg.get("backend_kwargs", {}),
                 )
                 if capability.status != "available":
+                    LOGGER.info("Skipping %s for %s: unsupported configuration (%s)", recording_id, model_key, capability.reason)
                     records.append(
                         {
                             **base_metadata,
@@ -238,10 +241,15 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                         result, artifact, overwrite=bool(config.get("overwrite", False))
                     )
                     (artifact.parent / "_SUCCESS").write_text("", encoding="utf-8")
+                    LOGGER.info("Successfully extracted %s for %s (shape: %s)", model_key, recording_id, result.X.shape)
                     records.append(
                         {**result.metadata, "artifact_path": str(artifact), "status": "success"}
                     )
-                except Exception as exc:
+                except (ValueError, TypeError, RuntimeError) as exc:
+                    if "OutOfMemory" in type(exc).__name__ or "CUDA out of memory" in str(exc):
+                        LOGGER.critical("GPU Out of Memory for model %s. Crashing job.", model_key)
+                        raise
+                        
                     LOGGER.exception(
                         "Embedding extraction failed for %s/%s", recording_id, model_key
                     )
