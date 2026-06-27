@@ -94,7 +94,8 @@ classical-decode: ## combined descriptors -> classical decoding
 # --- Non-core stages (direct console scripts) ---------------------------------
 foundation-embeddings: ## Extract foundation-model embeddings (dataset-wide)
 	$(if $(FOUNDATION_EMB_CFG),,$(error Set FOUNDATION_EMB_CFG to the dataset-wide embedding config))
-	$(PYTHON) -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings --config $(FOUNDATION_EMB_CFG)
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings --config $(FOUNDATION_EMB_CFG) --bids_root $(BIDS_ROOT) $(if $(METADATA),--metadata $(METADATA))
 
 foundation-decode: ## Foundation-model probing / fine-tuning (cohort + analysis)
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.foundation_decoding --cohort_config $(COHORT) --analysis_config $(ANALYSIS) \

@@ -26,6 +26,30 @@ models:
     overlap: 0.0
     use_derivatives: true
     window_source: derivative
+  - model_key: biot
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: false
+    window_source: re_epoch
+    backend_kwargs:
+      interpolate_channels: true
+  - model_key: signaljepa
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: false
+    window_source: re_epoch
+    backend_kwargs:
+      interpolate_channels: true
+  - model_key: eegpt
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: false
+    window_source: re_epoch
+  - model_key: bendr
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: false
+    window_source: re_epoch
 device: auto
 precision: fp32
 on_unsupported: skip
