@@ -21,6 +21,12 @@ models:
     overlap: 0.0
     use_derivatives: true
     window_source: derivative
+  - model_key: reve
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_source: derivative
+    pooling: attention
   - model_key: luna
     segment_duration: 10.0
     overlap: 0.0

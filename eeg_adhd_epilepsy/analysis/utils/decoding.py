@@ -100,6 +100,7 @@ def foundation_provenance(
     return {
         "config_hash": config_hash,
         "model_key": str(model_cfg["model_key"]),
+        "pooling": str(model_cfg.get("pooling", "mean")),
         "segment_duration": float(model_cfg["segment_duration"]),
         "overlap": float(model_cfg["overlap"]),
         "use_derivatives": bool(model_cfg["use_derivatives"]),

@@ -1,13 +1,53 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis.utils.decoding import (
     cohort_signature,
+    foundation_provenance,
     prepare_decoding_scope,
     prepare_target,
     safe_group_n_splits,
 )
+
+
+def _fm_spec():
+    return SimpleNamespace(
+        pretrained_n_times=2000,
+        pretrained_sfreq=200.0,
+        pretrained_window_seconds=10.0,
+    )
+
+
+def _base_model_cfg(**overrides):
+    cfg = {
+        "model_key": "reve",
+        "segment_duration": 10.0,
+        "overlap": 0.0,
+        "use_derivatives": True,
+        "window_source": "derivative",
+    }
+    cfg.update(overrides)
+    return cfg
+
+
+def test_foundation_provenance_defaults_pooling_to_mean():
+    prov = foundation_provenance(_base_model_cfg(), _fm_spec(), config_hash="abc")
+    assert prov["pooling"] == "mean"
+
+
+def test_foundation_provenance_distinguishes_pooling_variants():
+    # The pooling field is the join key that keeps same-model/same-window
+    # embedding variants (e.g. REVE mean vs attention) distinguishable.
+    mean = foundation_provenance(_base_model_cfg(), _fm_spec(), config_hash="abc")
+    attn = foundation_provenance(
+        _base_model_cfg(pooling="attention"), _fm_spec(), config_hash="abc"
+    )
+    assert mean["pooling"] == "mean"
+    assert attn["pooling"] == "attention"
+    assert mean != attn
 
 
 def test_cohort_signature_is_stable_and_does_not_expose_ids():
