@@ -13,14 +13,13 @@ from coco_pipe.io.embeddings import save_embedding_derivative
 
 import eeg_adhd_epilepsy.analysis.dimensionality_reduction as dim_reduction
 import eeg_adhd_epilepsy.reports.dim_reduction as dim_report
+from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.dimensionality_reduction import (
     ANALYSIS_MODES,
     _collect_scope_fit_requests,
 )
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import pool_containers
-from eeg_adhd_epilepsy.analysis.dataset import build_dataset
-from eeg_adhd_epilepsy.analysis.utils.units import apply_family_qc_mask
-from eeg_adhd_epilepsy.analysis.utils.units import families_for_analysis_unit
+from eeg_adhd_epilepsy.analysis.utils.units import apply_family_qc_mask, families_for_analysis_unit
 
 
 def test_descriptor_loader_filters_subjects(tmp_path):
@@ -76,6 +75,8 @@ def test_descriptor_analysis_attaches_family_qc(tmp_path):
         filter_val=[],
         balance_target=None,
         aggregation_unit=None,
+        qc={},
+        location_statistic=None,
     )
 
     container = build_dataset(
@@ -122,6 +123,8 @@ def test_sensor_descriptor_analysis_attaches_family_qc(tmp_path):
         filter_val=[],
         balance_target=None,
         aggregation_unit=None,
+        qc={},
+        location_statistic=None,
     )
 
     container = build_dataset(
@@ -167,6 +170,7 @@ def test_family_scoped_qc_keeps_band_outlier_for_complexity(tmp_path):
         filter_val=[],
         balance_target=None,
         aggregation_unit=None,
+        location_statistic=None,
         qc={
             "column_prune": {"enabled": False},
             "outlier": {
@@ -234,6 +238,7 @@ def test_measure_grouping_keeps_alpha_outlier_for_beta(tmp_path):
         filter_val=[],
         balance_target=None,
         aggregation_unit=None,
+        location_statistic=None,
         qc={
             "column_prune": {"enabled": False},
             "outlier": {
@@ -292,6 +297,7 @@ def test_subfamily_grouping_keeps_logabs_outlier_for_relative(tmp_path):
         filter_val=[],
         balance_target=None,
         aggregation_unit=None,
+        location_statistic=None,
         qc={
             "column_prune": {"enabled": False},
             "outlier": {
@@ -353,6 +359,7 @@ def test_column_prune_removes_all_nan_feature_without_row_drop(tmp_path):
         filter_val=[],
         balance_target=None,
         aggregation_unit=None,
+        location_statistic=None,
         qc={
             "column_prune": {
                 "enabled": True,
@@ -407,6 +414,9 @@ def test_foundation_embedding_loader_filters_condition_and_subject(tmp_path):
         filter_val=[],
         balance_target=None,
         aggregation_unit=None,
+        analysis_mode="flat",
+        qc={},
+        location_statistic=None,
     )
 
     container = build_dataset(

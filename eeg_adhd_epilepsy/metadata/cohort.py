@@ -538,9 +538,9 @@ def _build_demographics_summary(df: pd.DataFrame) -> pd.DataFrame:
                     f"{group}={count}"
                     for group, count in sorted(
                         age_group_counts.items(),
-                        key=lambda item: int(item[0].split("-")[0])
-                        if item[0] and item[0] != "nan"
-                        else 999,
+                        key=lambda item: (
+                            int(item[0].split("-")[0]) if item[0] and item[0] != "nan" else 999
+                        ),
                     )
                     if group != "nan"
                 ),
@@ -1039,14 +1039,18 @@ def _build_recruitment_projection(
     summary_df = pd.DataFrame(summary_rows)
     projection_df["family"] = projection_df["analysis"].map(_analysis_family)
     projection_df["newly_feasible"] = projection_df.apply(
-        lambda row: row["opportunity_label"]
-        in newly_feasible_labels_by_milestone.get(int(row["milestone"]), set()),
+        lambda row: (
+            row["opportunity_label"]
+            in newly_feasible_labels_by_milestone.get(int(row["milestone"]), set())
+        ),
         axis=1,
     )
     projection_df["status"] = projection_df.apply(
-        lambda row: "Newly Feasible"
-        if bool(row["newly_feasible"])
-        else ("Feasible" if bool(row["feasible"]) else "Not Feasible"),
+        lambda row: (
+            "Newly Feasible"
+            if bool(row["newly_feasible"])
+            else ("Feasible" if bool(row["feasible"]) else "Not Feasible")
+        ),
         axis=1,
     )
     projection_df = projection_df.sort_values(

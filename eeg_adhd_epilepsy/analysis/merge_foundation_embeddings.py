@@ -156,9 +156,8 @@ def run(config: dict[str, Any]) -> Path:
     )
     write_run_status(derivative_root, status)
 
-    report_dir = (
-        summary_report_dir(reports_root, ReportStage.FOUNDATION_EMBEDDINGS)
-        / str(config["dataset_name"])
+    report_dir = summary_report_dir(reports_root, ReportStage.FOUNDATION_EMBEDDINGS) / str(
+        config["dataset_name"]
     )
     report_dir.mkdir(parents=True, exist_ok=True)
     make_foundation_embedding_report(
@@ -175,8 +174,15 @@ def main() -> None:
         description="Aggregate EEG foundation-embedding shards into combined tables and a report."
     )
     parser.add_argument("--bids_root", required=True, help="Path to BIDS dataset")
-    parser.add_argument("--derivative_root", type=str, default=None, help="Explicit path to the extraction derivatives")
-    parser.add_argument("--reports_root", type=str, default=None, help="Explicit path to write output reports")
+    parser.add_argument(
+        "--derivative_root",
+        type=str,
+        default=None,
+        help="Explicit path to the extraction derivatives",
+    )
+    parser.add_argument(
+        "--reports_root", type=str, default=None, help="Explicit path to write output reports"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 

@@ -23,13 +23,38 @@ MIN_GROUP_N = 2
 def _synthetic_cohort() -> pd.DataFrame:
     """A deterministic clean-metadata cohort exercising every analysis family."""
 
-    def make(sid, pid, sex, age, *, adhd=0, autism=0, epi=0, ps=0, pscat="None",
-             asm=0, res=0, first=1, atypes="No_ASM", cdx="Control"):
+    def make(
+        sid,
+        pid,
+        sex,
+        age,
+        *,
+        adhd=0,
+        autism=0,
+        epi=0,
+        ps=0,
+        pscat="None",
+        asm=0,
+        res=0,
+        first=1,
+        atypes="No_ASM",
+        cdx="Control",
+    ):
         return dict(
-            study_id=sid, patient_id=pid, sex=sex, age_group=age, adhd=adhd,
-            autism=autism, epilepsy=epi, psychostimulant=ps,
-            psychostimulant_category=pscat, asm=asm, asm_resistant=res,
-            first_eeg=first, asm_types=atypes, combined_diagnosis=cdx,
+            study_id=sid,
+            patient_id=pid,
+            sex=sex,
+            age_group=age,
+            adhd=adhd,
+            autism=autism,
+            epilepsy=epi,
+            psychostimulant=ps,
+            psychostimulant_category=pscat,
+            asm=asm,
+            asm_resistant=res,
+            first_eeg=first,
+            asm_types=atypes,
+            combined_diagnosis=cdx,
         )
 
     rows: list[dict] = []
@@ -60,11 +85,35 @@ def _synthetic_cohort() -> pd.DataFrame:
     for k in range(3):
         counter["sid"] += 1
         pid = 9000 + k
-        rows.append(make(counter["sid"], pid, "M", "13-15", epi=1, asm=1, res=1,
-                         first=1, atypes="LEV", cdx="Epilepsy"))
+        rows.append(
+            make(
+                counter["sid"],
+                pid,
+                "M",
+                "13-15",
+                epi=1,
+                asm=1,
+                res=1,
+                first=1,
+                atypes="LEV",
+                cdx="Epilepsy",
+            )
+        )
         counter["sid"] += 1
-        rows.append(make(counter["sid"], pid, "M", "13-15", epi=1, asm=1, res=1,
-                         first=0, atypes="LEV", cdx="Epilepsy"))
+        rows.append(
+            make(
+                counter["sid"],
+                pid,
+                "M",
+                "13-15",
+                epi=1,
+                asm=1,
+                res=1,
+                first=0,
+                atypes="LEV",
+                cdx="Epilepsy",
+            )
+        )
     # Autism comorbidity
     add(2, sex="F", age="10-12", adhd=1, autism=1, cdx="ADHD+Autism")
 

@@ -106,11 +106,11 @@ def _skip_records(
 
 
 def _raw_loader_args(
-    config: dict[str, Any], 
-    segment_duration: float, 
-    overlap: float, 
-    use_derivatives: bool, 
-    window_source: str
+    config: dict[str, Any],
+    segment_duration: float,
+    overlap: float,
+    use_derivatives: bool,
+    window_source: str,
 ):
     filters = config.get("filters", {})
     return SimpleNamespace(

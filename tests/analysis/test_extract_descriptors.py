@@ -668,8 +668,10 @@ aggregation:
     monkeypatch.setattr(
         extract_descriptors,
         "build_container",
-        lambda **kwargs: rerun_calls.append(tuple(kwargs.get("subjects") or []))
-        or _demo_container_for_subjects(kwargs.get("subjects")),
+        lambda **kwargs: (
+            rerun_calls.append(tuple(kwargs.get("subjects") or []))
+            or _demo_container_for_subjects(kwargs.get("subjects"))
+        ),
     )
     extract_descriptors.main()
     assert rerun_calls == [("0001",)]

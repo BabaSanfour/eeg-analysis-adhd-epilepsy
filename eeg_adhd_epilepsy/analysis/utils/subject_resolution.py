@@ -63,7 +63,5 @@ def resolve_cohort_subjects(
     else:
         subjects = sorted(valid_subjects)
     if not subjects:
-        raise ValueError(
-            f"No metadata-cohort subjects matched against the {subject_col!r} column."
-        )
+        raise ValueError(f"No metadata-cohort subjects matched against the {subject_col!r} column.")
     return subjects

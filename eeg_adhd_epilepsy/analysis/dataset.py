@@ -44,6 +44,7 @@ def build_container(
     desc: str = "base",
     condition: str | None = None,
     window_source: str = "auto",
+    units: str = "V",
 ) -> DataContainer:
     """Load raw BIDS data or saved epoch derivatives into a DataContainer."""
     subjects = subjects or []
@@ -59,6 +60,7 @@ def build_container(
             subject_col=subject_col,
             desc=desc,
             session=session if isinstance(session, str) else "01",
+            units=units,
         )
     external_metadata_df = metadata_df.copy() if metadata_df is not None else None
     if external_metadata_df is not None:
@@ -77,6 +79,7 @@ def build_container(
             subjects=subjects if subjects else None,
             event_id=condition if condition else None,
             target_col=target_col,
+            units=units,
         )
         return load_data(
             config=config,
@@ -96,6 +99,7 @@ def build_container(
         datatype="eeg",
         suffix="eeg",
         target_col=target_col,
+        units=units,
     )
     container = load_data(
         config=config,
@@ -117,6 +121,7 @@ def reepoch_eeg(
     subject_col: str = "study_id",
     desc: str = "base",
     session: str = "01",
+    units: str = "V",
 ) -> DataContainer:
     """Re-epoch the cleaned continuous ``desc`` derivative at ``segment_duration``."""
     preproc_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
@@ -146,7 +151,7 @@ def reepoch_eeg(
         if search_dir.exists():
             for f in search_dir.glob(f"*_desc-{desc}_eeg.fif"):
                 runs_to_process.append(parse_bids_components(f).get("run", "01"))
-        
+
         if not runs_to_process:
             fallback_dir = preproc_root / subject_label / "eeg"
             if fallback_dir.exists():
@@ -175,7 +180,7 @@ def reepoch_eeg(
                 issues.append(f"missing_condition:{subject_label}_run-{current_run}:{condition}")
                 continue
             cond_epochs = epochs[condition]
-            data = np.asarray(cond_epochs.get_data(), dtype=np.float32)
+            data = np.asarray(cond_epochs.get_data(units=units), dtype=np.float32)
             if data.shape[0] == 0:
                 continue
             if ch_names is None:
@@ -224,6 +229,7 @@ def reepoch_eeg(
         coords=coords,
         ids=np.asarray(ids, dtype=object),
         meta={
+            "units": units,
             "sfreq": sfreq,
             "window_source": "re_epoch_cleaned_continuous",
             "autoreject_applied": False,
@@ -241,13 +247,11 @@ def build_dataset(
     target_col: str | None = None,
 ) -> DataContainer:
     """Top-level dataset orchestrator."""
-    input_mode = getattr(args, "input_mode", "raw")
+    input_mode = args.input_mode
     effective_input_mode = (
-        getattr(args, "reduced_source_input_mode", "descriptors")
-        if input_mode == "reduced_dimensions"
-        else input_mode
+        args.reduced_source_input_mode if input_mode == "reduced_dimensions" else input_mode
     )
-    analysis_mode = getattr(args, "analysis_mode", "flat")
+    analysis_mode = args.analysis_mode
     if effective_input_mode == "raw":
         container = build_container(
             bids_root=Path(args.bids_root),
@@ -261,10 +265,11 @@ def build_dataset(
             target_col=target_col,
             desc=args.desc,
             condition=condition,
-            window_source=getattr(args, "window_source", "auto"),
+            window_source=args.window_source,
+            units=args.units,
         )
     elif effective_input_mode == "descriptors":
-        qc_config = getattr(args, "qc", None) or {}
+        qc_config = args.qc or {}
         column_prune = qc_config.get("column_prune", {})
         container = load_descriptor_table(
             table_path=Path(args.descriptor_table_path),
@@ -275,13 +280,13 @@ def build_dataset(
             subjects=subjects,
             subject_col=args.subject_col,
             analysis_mode=analysis_mode,
-            descriptor_families=getattr(args, "descriptor_families", None),
-            descriptor_max_abs_value=getattr(args, "descriptor_max_abs_value", None),
+            descriptor_families=args.descriptor_families,
+            descriptor_max_abs_value=args.descriptor_max_abs_value,
             drop_degenerate_columns=bool(column_prune.get("enabled", False)),
             max_missing_rate=float(column_prune.get("max_missing_rate", 0.20)),
             drop_constant_columns=bool(column_prune.get("drop_constant", True)),
             max_row_drop_rate=column_prune.get("max_row_drop_rate"),
-            location_statistic=getattr(args, "location_statistic", None),
+            location_statistic=args.location_statistic,
         )
         scoring_container = (
             container if container.dims == ("obs", "feature") else container.flatten(preserve="obs")
@@ -336,9 +341,9 @@ def build_dataset(
     elif effective_input_mode == "foundation_embeddings":
         container = load_embedding_derivatives(
             Path(args.embedding_derivative_root),
-            representation=getattr(args, "embedding_representation", "recording"),
-            aggregate_by=getattr(args, "embedding_aggregate_by", None),
-            model_key=getattr(args, "embedding_model_key", None),
+            representation=args.embedding_representation,
+            aggregate_by=args.embedding_aggregate_by,
+            model_key=args.embedding_model_key,
         )
         if condition and "condition" in container.coords:
             values = np.asarray(container.coords["condition"]).astype(str)
@@ -351,7 +356,7 @@ def build_dataset(
                 container = container.isel(obs=np.flatnonzero(np.isin(values, list(wanted))))
     else:
         raise ValueError(f"Unsupported input mode '{input_mode}'.")
-    group_filters = getattr(args, "group_filters", None)
+    group_filters = args.group_filters
     if group_filters:
         n_obs = container.X.shape[0]
         final_mask = np.zeros(n_obs, dtype=bool)
@@ -387,7 +392,7 @@ def build_dataset(
             "recording_time_as_sample",
             "recording_native",
         }:
-            aggregation_unit = getattr(args, "aggregation_unit", "recording")
+            aggregation_unit = args.aggregation_unit
             if aggregation_unit == "recording":
                 container = add_recording_id(container, args.subject_col)
                 container = container.aggregate(by="recording_id", stats="mean")
@@ -425,7 +430,7 @@ def build_dataset(
             "source_input_mode": effective_input_mode,
             "condition": condition,
             "analysis_mode": analysis_mode,
-            "aggregation_unit": getattr(args, "aggregation_unit", None),
+            "aggregation_unit": args.aggregation_unit,
             "loaded_obs": int(container.X.shape[0]),
             "loaded_subjects": int(
                 pd.Index(np.asarray(container.coords.get(args.subject_col, []))).nunique()

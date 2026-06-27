@@ -43,7 +43,12 @@ export PYTHONNOUSERSITE=1
 export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
 export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
 export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
-mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
+export HF_HOME="${HF_HOME:-${SLURM_TMPDIR:-/tmp}/hf_home}"
+mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR" "$HF_HOME"
+
+if [[ -z "${HF_TOKEN:-}" ]]; then
+  echo "WARN: HF_TOKEN is unset; REVE (gated) will be skipped." >&2
+fi
 
 python -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings \
   --config "$FOUNDATION_CONFIG" \

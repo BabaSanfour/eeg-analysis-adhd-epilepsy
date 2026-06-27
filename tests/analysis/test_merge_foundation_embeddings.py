@@ -27,21 +27,37 @@ def test_merge_reads_config_used_and_unions_failure_shards(tmp_path, monkeypatch
     failures_dir = derivative_root / "_failures"
     failures_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
-        [{"recording_id": "sub-0001_ses-01_run-01", "model_key": "labram",
-          "status": "skipped", "reason": "unsupported"}]
+        [
+            {
+                "recording_id": "sub-0001_ses-01_run-01",
+                "model_key": "labram",
+                "status": "skipped",
+                "reason": "unsupported",
+            }
+        ]
     ).to_csv(failures_dir / "row-0001.csv", index=False)
     pd.DataFrame(
-        [{"recording_id": "sub-0002_ses-01_run-01", "model_key": "cbramod",
-          "status": "failed", "reason": "boom"}]
+        [
+            {
+                "recording_id": "sub-0002_ses-01_run-01",
+                "model_key": "cbramod",
+                "status": "failed",
+                "reason": "boom",
+            }
+        ]
     ).to_csv(failures_dir / "row-0002.csv", index=False)
 
     monkeypatch.setattr(
-        sys, "argv",
+        sys,
+        "argv",
         [
             "merge_foundation_embeddings",
-            "--bids_root", str(bids_root),
-            "--derivative_root", str(derivative_root),
-            "--reports_root", str(tmp_path / "reports"),
+            "--bids_root",
+            str(bids_root),
+            "--derivative_root",
+            str(derivative_root),
+            "--reports_root",
+            str(tmp_path / "reports"),
         ],
     )
     mfe.main()
@@ -62,11 +78,14 @@ def test_merge_requires_config_used(tmp_path, monkeypatch):
     derivative_root = get_derivative_root(bids_root, DerivativeStage.FOUNDATION_EMBEDDINGS)
 
     monkeypatch.setattr(
-        sys, "argv",
+        sys,
+        "argv",
         [
             "merge_foundation_embeddings",
-            "--bids_root", str(bids_root),
-            "--derivative_root", str(derivative_root),
+            "--bids_root",
+            str(bids_root),
+            "--derivative_root",
+            str(derivative_root),
         ],
     )
     with pytest.raises(FileNotFoundError, match="config_used.yaml not found"):
