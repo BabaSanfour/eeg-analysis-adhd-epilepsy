@@ -3,6 +3,7 @@ desc: base
 dataset_name: foundation_embeddings
 allow_transductive_input: false
 conditions: [EO_baseline, EC_baseline]
+batch_size: 64
 models:
   - model_key: cbramod
     segment_duration: 10.0
@@ -14,6 +15,7 @@ models:
     overlap: 0.0
     use_derivatives: false
     window_source: re_epoch
+    batch_size: 16
     backend_kwargs:
       interpolate_channels: true
   - model_key: reve

@@ -303,6 +303,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                             recording_pooling=model_cfg.get("recording_pooling", "mean"),
                             normalize_embeddings=bool(model_cfg.get("normalize_embeddings", True)),
                             resample=bool(model_cfg.get("resample", True)),
+                            batch_size=model_cfg.get("batch_size", config.get("batch_size")),
                             backend_kwargs=model_cfg.get("backend_kwargs", {}),
                         )
                     n_times = recording.X.shape[-1]
