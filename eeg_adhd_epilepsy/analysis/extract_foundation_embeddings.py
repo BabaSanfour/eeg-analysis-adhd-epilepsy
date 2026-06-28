@@ -101,10 +101,13 @@ def _freeze_config_used(config: dict[str, Any], derivative_root: Path) -> None:
     config_used_path = derivative_root / "config_used.yaml"
     if config_used_path.exists():
         if config_used_path.read_text(encoding="utf-8") != config_text:
-            raise ValueError(
-                "Existing foundation-embedding derivative root was generated with a "
-                "different configuration. Clear the derivative root and re-run."
-            )
+            if config.get("overwrite", False):
+                _write_text_atomic(config_used_path, config_text)
+            else:
+                raise ValueError(
+                    "Existing foundation-embedding derivative root was generated with a "
+                    "different configuration. Clear the derivative root and re-run."
+                )
         return
     derivative_root.mkdir(parents=True, exist_ok=True)
     _write_text_atomic(config_used_path, config_text)
