@@ -6,8 +6,8 @@
 #SBATCH --time=02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=64G
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -35,6 +35,7 @@ cd "$PROJECT_ROOT"
 source "$VENV_PATH/bin/activate"
 
 export PYTHONNOUSERSITE=1
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
 
 python -m eeg_adhd_epilepsy.analysis.merge_foundation_embeddings \
   --bids_root "$BIDS_ROOT" \
