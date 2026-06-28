@@ -409,12 +409,15 @@ def main() -> None:
         default=None,
         help="Explicit subjects to process, overriding config['subjects'].",
     )
+    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing embeddings.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     config = load_yaml_config(args.config)
     config["bids_root"] = args.bids_root
     if args.metadata:
         config["metadata"] = args.metadata
+    if args.overwrite:
+        config["overwrite"] = True
 
     if args.derivative_root:
         derivative_root = Path(args.derivative_root).expanduser()

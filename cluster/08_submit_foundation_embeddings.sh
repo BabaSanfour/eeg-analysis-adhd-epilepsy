@@ -55,7 +55,8 @@ python -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings \
   --bids_root "$BIDS_ROOT" \
   --metadata "$METADATA" \
   --derivative_root "$DERIVATIVE_ROOT" \
-  --metadata_row "$METADATA_ROW"
+  --metadata_row "$METADATA_ROW" \
+  --overwrite
 
 if [[ "$AUTO_SUBMIT_NEXT" == "1" && "$ROW_OFFSET" == "0" ]]; then
   batch_state_dir="$SUBMIT_STATE_DIR/${SLURM_ARRAY_JOB_ID:-manual}"
