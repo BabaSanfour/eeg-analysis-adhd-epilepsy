@@ -3,13 +3,16 @@
 
 Mirrors ``merge_descriptors``: the array tasks in ``extract_foundation_embeddings``
 write per-recording ``*_embedding.npz`` + self-describing sidecars (plus a per-subject
-failures CSV under ``_failures/``). This step scans them and materializes, per
-(model, condition):
+failures CSV under ``_failures/``). This step scans them and materializes one table
+per (model, condition) at each :data:`~coco_pipe.io.AGGREGATION_LEVELS` granularity:
 
+- ``combined/<model>_<condition>_epoch_embeddings.{parquet,csv}``     — 1 row / epoch
 - ``combined/<model>_<condition>_recording_embeddings.{parquet,csv}`` — 1 row / recording
-- ``combined/<model>_<condition>_window_embeddings.{parquet,csv}``    — 1 row / epoch
+- ``combined/<model>_<condition>_subject_embeddings.{parquet,csv}``   — 1 row / subject
 
-plus the run manifest, failures table, dataset description, run status, and HTML report.
+``epoch`` and ``recording`` come straight from the saved per-window / pooled arrays;
+``subject`` is mean-pooled from a subject's epochs here at merge (no re-extraction).
+Plus the run manifest, failures table, dataset description, run status, and HTML report.
 Successful units are recovered by tree-scanning the sidecars; failed/skipped units come
 from the per-subject failures CSVs (they leave no artifact to scan).
 """
@@ -26,6 +29,7 @@ import numpy as np
 import pandas as pd
 from coco_pipe.decoding import redact_sensitive, write_run_status
 from coco_pipe.io import (
+    combined_embedding_table_path,
     embedding_sidecar_path,
     load_embedding_derivatives,
     read_json,
@@ -52,10 +56,6 @@ _ID_COLUMNS = (
     "recording_id",
     "model_key",
     "window_index",
-)
-_REPRESENTATIONS = (
-    ("recording", "recording_embeddings"),
-    ("window", "window_embeddings"),
 )
 
 
@@ -99,22 +99,55 @@ def _embedding_frame(container: Any) -> pd.DataFrame:
     return pd.concat([metadata[id_columns], features], axis=1)
 
 
+def _subject_frame(epoch_frame: pd.DataFrame) -> pd.DataFrame:
+    """Mean-pool a subject's epoch embeddings into one row per (condition, subject)."""
+    if not {"subject", "condition"}.issubset(epoch_frame.columns):
+        return pd.DataFrame()
+    feature_cols = [c for c in epoch_frame.columns if str(c).startswith("embedding_")]
+    keys = ["condition", "subject"]
+    subject_df = epoch_frame.groupby(keys, as_index=False)[feature_cols].mean()
+    if "model_key" in epoch_frame.columns:
+        model_keys = epoch_frame.groupby(keys, as_index=False)["model_key"].first()
+        subject_df = subject_df.merge(model_keys, on=keys)
+    return subject_df
+
+
+def _write_condition_tables(
+    derivative_root: Path, model_key: str, representation: str, frame: pd.DataFrame
+) -> None:
+    """Split *frame* by condition and write one combined table per condition.
+
+    Paths come from ``combined_embedding_table_path`` — the same helper the
+    dim-reduction loader (:func:`load_combined_embedding_table`) reads back, so the
+    filename convention has a single source of truth shared by writer and reader.
+    """
+    if frame.empty or "condition" not in frame.columns:
+        return
+    for condition, condition_frame in frame.groupby("condition"):
+        parquet_path = combined_embedding_table_path(
+            derivative_root, model_key, str(condition), representation
+        )
+        condition_frame.to_parquet(parquet_path, index=False)
+        condition_frame.to_csv(parquet_path.with_suffix(".csv"), index=False)
+
+
 def _write_combined_tables(derivative_root: Path, by_model: dict[str, list[Path]]) -> None:
-    """Materialize per (model, condition) recording- and window-level feature tables."""
-    combined_dir = derivative_root / "combined"
-    combined_dir.mkdir(parents=True, exist_ok=True)
+    """Materialize per (model, condition) epoch/recording/subject feature tables.
+
+    ``epoch`` and ``recording`` are the saved per-window and pooled arrays;
+    ``subject`` is mean-pooled from the epoch rows here (no re-extraction needed).
+    """
+    (derivative_root / "combined").mkdir(parents=True, exist_ok=True)
     for model_key, paths in by_model.items():
-        for representation, label in _REPRESENTATIONS:
-            container = load_embedding_derivatives(
-                paths, representation=representation, model_key=model_key
-            )
-            frame = _embedding_frame(container)
-            if "condition" not in frame.columns:
-                continue
-            for condition, condition_frame in frame.groupby("condition"):
-                stem = f"{model_key}_{condition}_{label}"
-                condition_frame.to_parquet(combined_dir / f"{stem}.parquet", index=False)
-                condition_frame.to_csv(combined_dir / f"{stem}.csv", index=False)
+        epoch_frame = _embedding_frame(
+            load_embedding_derivatives(paths, representation="epoch", model_key=model_key)
+        )
+        recording_frame = _embedding_frame(
+            load_embedding_derivatives(paths, representation="recording", model_key=model_key)
+        )
+        _write_condition_tables(derivative_root, model_key, "epoch", epoch_frame)
+        _write_condition_tables(derivative_root, model_key, "recording", recording_frame)
+        _write_condition_tables(derivative_root, model_key, "subject", _subject_frame(epoch_frame))
 
 
 def run(config: dict[str, Any]) -> Path:

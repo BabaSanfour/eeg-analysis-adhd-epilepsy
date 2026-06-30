@@ -14,7 +14,25 @@ import plotly.graph_objects as go
 from coco_pipe.viz import info_from_montage
 from coco_pipe.viz import plot_topomap as coco_plot_topomap
 
+from eeg_adhd_epilepsy.utils.constants import BASIC_1020_CHANNELS
+
 LOGGER = logging.getLogger(__name__)
+
+
+def feature_names_are_sensors(feature_names: Sequence[str] | None) -> bool:
+    """Return ``True`` when every feature name is a standard 10-20 channel.
+
+    Used to gate scalp topomaps of component loadings: a topomap is only
+    meaningful when the feature axis *is* the sensor montage (e.g. raw
+    sensor-space input), not when features are ``band×channel`` descriptors
+    flattened into composite names.
+    """
+    names = [str(name) for name in (feature_names or [])]
+    if len(names) < 3:
+        return False
+
+    known = {ch.lower() for ch in BASIC_1020_CHANNELS}
+    return all(name.lower() in known for name in names)
 
 
 def plot_topomap_from_channel_values(

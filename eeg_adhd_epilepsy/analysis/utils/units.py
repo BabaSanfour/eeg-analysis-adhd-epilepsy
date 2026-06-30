@@ -5,6 +5,18 @@ from coco_pipe.io import DataContainer
 from coco_pipe.io.quality import group_labels
 
 
+def base_layout_mode(input_mode: str) -> str:
+    """Analysis mode used to *load* the shared base container for a scope.
+
+    Descriptor containers are loaded in ``sensor`` layout (``obs × sensor ×
+    feature``) so a single load can be re-sliced into every descriptor analysis
+    unit (flat, family, sensor, descriptor, …) without re-reading the table.
+    Everything else loads flat. Shared by the dim-reduction and decoding loaders
+    so the rule lives in one place.
+    """
+    return "sensor" if input_mode == "descriptors" else "flat"
+
+
 def families_for_analysis_unit(
     source: DataContainer,
     unit: dict,

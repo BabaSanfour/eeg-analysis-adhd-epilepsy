@@ -323,15 +323,15 @@ aggregation:
         assert (shard_root / "sensor_epoch_features.csv").exists()
         assert (shard_root / "sensor_epoch_features.parquet").exists()
         assert (shard_root / "sensor_epoch_features_feature_columns.json").exists()
-        assert (shard_root / "sensor_subject_features.csv").exists()
-        assert (shard_root / "sensor_subject_features.parquet").exists()
-        assert (shard_root / "sensor_subject_features_feature_columns.json").exists()
+        assert (shard_root / "sensor_recording_features.csv").exists()
+        assert (shard_root / "sensor_recording_features.parquet").exists()
+        assert (shard_root / "sensor_recording_features_feature_columns.json").exists()
         assert (shard_root / "pooled_epoch_features.csv").exists()
         assert (shard_root / "pooled_epoch_features.parquet").exists()
         assert (shard_root / "pooled_epoch_features_feature_columns.json").exists()
-        assert (shard_root / "pooled_subject_features.csv").exists()
-        assert (shard_root / "pooled_subject_features.parquet").exists()
-        assert (shard_root / "pooled_subject_features_feature_columns.json").exists()
+        assert (shard_root / "pooled_recording_features.csv").exists()
+        assert (shard_root / "pooled_recording_features.parquet").exists()
+        assert (shard_root / "pooled_recording_features_feature_columns.json").exists()
         assert (shard_root / "failures.csv").exists()
         assert (shard_root / "qc" / "summary_row.csv").exists()
         assert (shard_root / "qc" / "summary_metrics.csv").exists()
@@ -357,9 +357,9 @@ aggregation:
     ).exists()
 
     sensor_epoch_df = pd.read_csv(subject_one_root / "sensor_epoch_features.csv")
-    sensor_agg_df = pd.read_csv(subject_one_root / "sensor_subject_features.csv")
+    sensor_agg_df = pd.read_csv(subject_one_root / "sensor_recording_features.csv")
     pooled_epoch_df = pd.read_csv(subject_one_root / "pooled_epoch_features.csv")
-    pooled_agg_df = pd.read_csv(subject_one_root / "pooled_subject_features.csv")
+    pooled_agg_df = pd.read_csv(subject_one_root / "pooled_recording_features.csv")
     # The fixture has 10 epochs/subject; MAD rejection may drop ~1, so at least 5 survive.
     assert len(sensor_epoch_df) >= 5
     # Subject 0001 alternates between run-01 and run-02 → always 2 recording rows.
@@ -477,28 +477,36 @@ aggregation:
     combined_root = bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
     reports_root = tmp_path / "reports"
     combined_sensor_epoch_df = pd.read_csv(combined_root / "sensor_epoch_features.csv")
-    combined_sensor_agg_df = pd.read_csv(combined_root / "sensor_subject_features.csv")
+    combined_sensor_recording_df = pd.read_csv(combined_root / "sensor_recording_features.csv")
+    combined_sensor_subject_df = pd.read_csv(combined_root / "sensor_subject_features.csv")
     combined_pooled_epoch_df = pd.read_csv(combined_root / "pooled_epoch_features.csv")
-    combined_pooled_agg_df = pd.read_csv(combined_root / "pooled_subject_features.csv")
+    combined_pooled_recording_df = pd.read_csv(combined_root / "pooled_recording_features.csv")
+    combined_pooled_subject_df = pd.read_csv(combined_root / "pooled_subject_features.csv")
 
     # 2 subjects × ≥5 surviving epochs each → at least 10 combined epoch rows.
     assert len(combined_sensor_epoch_df) >= 10
-    # 0001 has 2 runs, 0002 has 1 run → always 3 recording-level rows after merge.
-    assert len(combined_sensor_agg_df) == 3
+    # 0001 has 2 runs, 0002 has 1 run → 3 recording-level rows, 2 subject-level rows.
+    assert len(combined_sensor_recording_df) == 3
+    assert len(combined_sensor_subject_df) == 2
     assert len(combined_pooled_epoch_df) >= 10
-    assert len(combined_pooled_agg_df) == 3
-    assert any(column.startswith("agg_band_ratio_") for column in combined_sensor_agg_df.columns)
+    assert len(combined_pooled_recording_df) == 3
+    assert len(combined_pooled_subject_df) == 2
+    # Aggregated stat columns are present at recording level and inherited by subject.
+    for frame in (combined_sensor_recording_df, combined_sensor_subject_df):
+        assert any(column.startswith("agg_band_ratio_") for column in frame.columns)
+        assert any(column.startswith("agg_band_corr_ratio_") for column in frame.columns)
     assert any(
-        column.startswith("agg_band_corr_ratio_") for column in combined_sensor_agg_df.columns
+        column.startswith("agg_band_ratio_") for column in combined_pooled_recording_df.columns
     )
-    assert any(column.startswith("agg_band_ratio_") for column in combined_pooled_agg_df.columns)
     assert any(
-        column.startswith("agg_band_corr_ratio_") for column in combined_pooled_agg_df.columns
+        column.startswith("agg_band_corr_ratio_") for column in combined_pooled_recording_df.columns
     )
     assert (combined_root / "failures.csv").exists()
     assert (combined_root / "sensor_epoch_features_feature_columns.json").exists()
+    assert (combined_root / "sensor_recording_features_feature_columns.json").exists()
     assert (combined_root / "sensor_subject_features_feature_columns.json").exists()
     assert (combined_root / "pooled_epoch_features_feature_columns.json").exists()
+    assert (combined_root / "pooled_recording_features_feature_columns.json").exists()
     assert (combined_root / "pooled_subject_features_feature_columns.json").exists()
     assert (combined_root / "qc" / "dataset_summary_metrics.csv").exists()
     assert (combined_root / "qc" / "dataset_flags.csv").exists()
@@ -662,7 +670,7 @@ aggregation:
         / "eeg"
         / "EO_baseline"
     )
-    (incomplete_shard / "pooled_subject_features.csv").unlink()
+    (incomplete_shard / "pooled_recording_features.csv").unlink()
 
     rerun_calls: list[tuple[str, ...]] = []
     monkeypatch.setattr(
@@ -753,8 +761,10 @@ aggregation:
     combined_root = bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
     reports_root = tmp_path / "reports"
     assert (combined_root / "sensor_epoch_features.csv").exists()
+    assert (combined_root / "sensor_recording_features.csv").exists()
     assert (combined_root / "sensor_subject_features.csv").exists()
     assert not (combined_root / "pooled_epoch_features.csv").exists()
+    assert not (combined_root / "pooled_recording_features.csv").exists()
     assert not (combined_root / "pooled_subject_features.csv").exists()
     assert (
         reports_root / "summary" / "descriptor_qc" / "descriptor_qc_dataset_summary.html"

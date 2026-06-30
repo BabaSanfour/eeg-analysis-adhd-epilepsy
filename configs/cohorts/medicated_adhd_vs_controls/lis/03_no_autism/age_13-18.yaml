@@ -30,6 +30,7 @@ filter_val:
 evals:
 - name: med_adhd_vs_ctrl
   target_col: combined_diagnosis
+  group_col: patient_group_id
   label_map:
     Control: '0'
     Epilepsy: '0'
@@ -41,6 +42,7 @@ evals:
     ADHD+ASD+Epilepsy: '1'
 - name: sex_separation
   target_col: sex
+  group_col: patient_group_id
 - name: condition_separation
   target_col: condition
   group_col: patient_group_id

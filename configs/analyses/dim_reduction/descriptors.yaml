@@ -1,0 +1,47 @@
+# Analysis/method config — dimensionality reduction over extracted descriptors.
+# Pair with a cohort config via --cohort_config. The descriptor table paths are
+# supplied on the CLI (--descriptor_table_path / --descriptor_feature_columns_path).
+#
+# The whole descriptor analysis plan now runs in-process from this one config:
+# the orchestrator sweeps `analysis_modes` and loads each condition once.
+input_mode: descriptors
+
+selection_metric: separation_logreg_balanced_accuracy
+selection_eval_name: med_adhd_vs_ctrl
+use_derivatives: true
+interactive: true
+location_statistic: mean
+overwrite: false
+
+# QC mirrors the decoding descriptor QC so dimensionality reduction sees the same
+# clean matrix. group_by drives family-scoped masking across analysis units.
+qc:
+  column_prune:
+    enabled: true
+    max_missing_rate: 0.2
+    drop_constant: true
+    max_row_drop_rate: 0.0
+  outlier:
+    z_threshold: 5.0
+    group_by: subfamily
+    epoch_outlier_fraction: 0.3
+    subject_outlier_fraction: 0.2
+  min_obs: 5
+
+# Tiered analysis plan, organized around the analysis mode (the unit of work:
+# each mode is loaded once, then swept over reducers × n_components). `feature`
+# (redundant with feature_within_family) and `descriptor_sensor` (too granular
+# once only mean/variance/IQR remain) are intentionally omitted. Each mode fully
+# declares its own run — the `reducers` to fit and the `n_components` to sweep
+# (there is no global default). PCA is the cheap linear baseline that runs on every
+# mode and yields component loadings; the non-linear reducers only run where a
+# manifold is worth recovering, and the granular modes drop to PCA + a small sweep.
+analysis_modes:
+  flat:                  {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 15, 20, 25]}
+  family:                {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 15, 20, 25]}
+  subfamily:             {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 15, 20, 25]}
+  sensor:                {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 15, 20, 25]}
+  sensor_within_family:  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25]}
+  sensor_within_subfamily: {reducers: [PCA], n_components: [2, 3]}
+  feature_within_family: {reducers: [PCA], n_components: [2, 3]}
+  descriptor:            {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25]}

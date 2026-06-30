@@ -6,7 +6,7 @@
 #SBATCH --time=03:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
-#SBATCH --array=1-148
+#SBATCH --array=1-74
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -23,11 +23,12 @@ METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhd
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
 REPORTS_ROOT="$SCRATCH_ROOT/reports"
-# Cohort configs (one per dataset/cohort/strata), each paired with the single
-# analysis config below. Point CONFIGS_DIR at a subtree to narrow the sweep.
-# NOTE: --array (line 9) must equal CONFIG_COUNT * MODE_COUNT (guarded below).
+# One array task = one cohort config. The analysis config drives the raw
+# (analysis_mode, representation) plan in-process via `analysis_modes` (each raw
+# mode pins its representation), so there is no bash mode fan-out and --array
+# equals the cohort count (guarded below).
 CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/cohorts}
-ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/dim_reduction/default.yaml}
+ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/dim_reduction/raw.yaml}
 
 # 3. Environment Setup
 cd "$PROJECT_ROOT"
@@ -49,43 +50,29 @@ mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 [ -d "$CONFIGS_DIR" ] || { echo "Config directory not found: $CONFIGS_DIR"; exit 1; }
 [ -f "$ANALYSIS_CONFIG" ] || { echo "Analysis config not found: $ANALYSIS_CONFIG"; exit 1; }
 
-# 4. Map this array task to one cohort/mode pair
+# 4. Map this array task to one cohort config
 mapfile -t CONFIGS < <(find "$CONFIGS_DIR" -name "*.yaml" | sort)
-MODES=("flat:recording_flat" "sensor:recording_native")
 CONFIG_COUNT=${#CONFIGS[@]}
-MODE_COUNT=${#MODES[@]}
-TOTAL_TASKS=$((CONFIG_COUNT * MODE_COUNT))
 TASK_ID=${SLURM_ARRAY_TASK_ID:-1}
 
-# Guard: a stale #SBATCH --array bound silently drops the trailing tasks. Fail
-# loudly if the submitted array size does not match cohorts x modes.
-if [ -n "${SLURM_ARRAY_TASK_COUNT:-}" ] && [ "$SLURM_ARRAY_TASK_COUNT" -ne "$TOTAL_TASKS" ]; then
-    echo "ERROR: array size $SLURM_ARRAY_TASK_COUNT != cohorts($CONFIG_COUNT) x modes($MODE_COUNT) = $TOTAL_TASKS." >&2
-    echo "Update '#SBATCH --array=1-$TOTAL_TASKS' (or set CONFIGS_DIR to a subtree)." >&2
+# Guard: a stale #SBATCH --array bound silently drops the trailing tasks.
+if [ -n "${SLURM_ARRAY_TASK_COUNT:-}" ] && [ "$SLURM_ARRAY_TASK_COUNT" -ne "$CONFIG_COUNT" ]; then
+    echo "ERROR: array size $SLURM_ARRAY_TASK_COUNT != cohort count $CONFIG_COUNT." >&2
+    echo "Update '#SBATCH --array=1-$CONFIG_COUNT' (or set CONFIGS_DIR to a subtree)." >&2
     exit 1
 fi
 
-if (( TASK_ID < 1 || TASK_ID > TOTAL_TASKS )); then
-    echo "Array task $TASK_ID is outside valid task range 1-$TOTAL_TASKS; nothing to do."
+if (( TASK_ID < 1 || TASK_ID > CONFIG_COUNT )); then
+    echo "Array task $TASK_ID is outside valid task range 1-$CONFIG_COUNT; nothing to do."
     exit 0
 fi
 
-task_index=$((TASK_ID - 1))
-mode_index=$((task_index / CONFIG_COUNT))
-config_index=$((task_index % CONFIG_COUNT))
-mode_spec="${MODES[$mode_index]}"
-mode="${mode_spec%%:*}"
-representation="${mode_spec##*:}"
-config="${CONFIGS[$config_index]}"
-input_mode="raw"
-aggregation_unit="${AGGREGATION_UNIT:-recording}"
+config="${CONFIGS[$((TASK_ID - 1))]}"
 
 echo "================================================================================"
-echo "DIM REDUCTION ARRAY TASK $TASK_ID / $TOTAL_TASKS"
-echo "Config:         $config"
-echo "Mode:           $mode"
-echo "Representation: $representation"
-echo "Report:         resolved by the configuration-hashed run namespace"
+echo "RAW DIM REDUCTION ARRAY TASK $TASK_ID / $CONFIG_COUNT"
+echo "Config:   $config"
+echo "Analysis: $ANALYSIS_CONFIG (analysis_modes drives the in-process sweep)"
 echo "================================================================================"
 
 python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
@@ -94,8 +81,4 @@ python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
     --metadata "$METADATA_PATH" \
     --cohort_config "$config" \
     --analysis_config "$ANALYSIS_CONFIG" \
-    --input_mode "$input_mode" \
-    --analysis_mode "$mode" \
-    --representation "$representation" \
-    --aggregation_unit "$aggregation_unit" \
     --n_jobs "$THREADS"

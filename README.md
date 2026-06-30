@@ -86,7 +86,8 @@ The analysis stages (`eeg-dim-reduce`, `eeg-classical-decode`,
   question: `dataset_name`, `output_group`, `conditions`, `group_filters`,
   `filter_col`/`filter_val`, and `evals` (targets + label maps).
 - an **analysis config** (`configs/analyses/<type>/...`) — the method and
-  hyperparameters: `reducers`/`n_components_sweep` (dim-reduction), `models`/`cv`/
+  hyperparameters: `analysis_modes` (dim-reduction; each mode names its reducers
+  and n_components sweep), `models`/`cv`/
   `feature_selection` (decoding), `models`/`train_modes` (foundation), plus
   input-shaping and run controls.
 
@@ -234,7 +235,7 @@ eeg-dim-reduce \
   --bids_root /path/to/BIDS --metadata /path/to/patients_metadata_clean.csv \
   --cohort_config   configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml \
   --analysis_config configs/analyses/dim_reduction/default.yaml \
-  --input_mode raw --analysis_mode flat --representation subject_flat \
+  --input_mode raw --analysis_mode flat --representation subject \
   --n_jobs 4
 ```
 
@@ -248,11 +249,13 @@ Three arguments define what is loaded and what one “analysis unit” is:
   `sensor_within_family`, `sensor_within_subfamily`, `feature`,
   `feature_within_family`, `descriptor`, `descriptor_sensor` — progressively finer
   units (most are descriptor-only).
-- `--representation`: `epoch_flat`, `subject_flat` (one row per subject), or
-  `subject_native` (native tensor after subject averaging, for raw sensor work).
+- `--representation`: for `raw` inputs, this is the averaging granularity (`epoch`
+  or `subject`). For `descriptors` and `foundation_embeddings`, it dictates which
+  pre-computed representation file to load (e.g., `epoch`, `recording`, `subject`).
+  It is orthogonal to `--analysis_mode`.
 
 The most common subject-level raw setup is `--input_mode raw --analysis_mode flat
---representation subject_flat`: one row per subject over the joint sensor×time
+--representation subject`: one row per subject over the joint sensor×time
 space. Best-fit selection is driven by `selection_metric` /`selection_eval_name`
 (in the analysis config), and outputs are separated by a configuration hash under
 `BIDS/derivatives/dim_reduction/<output_group>/<dataset_name>/...`. Re-runs rebuild
