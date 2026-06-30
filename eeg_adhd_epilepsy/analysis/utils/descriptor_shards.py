@@ -18,9 +18,8 @@ from __future__ import annotations
 _TABLE_FORMATS = ("parquet", "csv")
 _FEATURE_COLUMNS_SUFFIX = "_feature_columns.json"
 
-# Descriptor-table stems written via ``save_descriptor_table``, by tier.
-SENSOR_TABLE_STEMS: tuple[str, ...] = ("sensor_epoch_features", "sensor_subject_features")
-POOLED_TABLE_STEMS: tuple[str, ...] = ("pooled_epoch_features", "pooled_subject_features")
+SENSOR_TABLE_STEMS: tuple[str, ...] = ("sensor_epoch_features", "sensor_recording_features")
+POOLED_TABLE_STEMS: tuple[str, ...] = ("pooled_epoch_features", "pooled_recording_features")
 
 # Non-table artifacts the producer writes directly (no save_descriptor_table).
 SENSOR_MARKER_FILES: tuple[str, ...] = (

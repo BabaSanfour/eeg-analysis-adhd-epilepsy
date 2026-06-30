@@ -7,9 +7,11 @@ import argparse
 import logging
 from itertools import product
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import yaml
 from coco_pipe.dim_reduction import (
     EVAL_RUN_KEY_FIELDS,
@@ -17,24 +19,20 @@ from coco_pipe.dim_reduction import (
     FIT_RUN_KEY_FIELDS,
     POOLED_CONDITION,
     SEPARATION_METRIC_KEY,
-    build_auto_pooled_eval_spec,
     build_availability_record,
     build_eval_request,
     build_fit_request,
-    load_fit_runs,
     parse_eval_specs,
     run_eval,
-    run_fit,
+    run_fit_group,
     update_runs,
     valid_component_sweep,
     write_run_status,
 )
 from coco_pipe.io import (
-    ANALYSIS_MODES,
-    DESCRIPTOR_ONLY_ANALYSIS_MODES,
     DataContainer,
     iter_analysis_units,
-    normalize_subject_value,
+    read_json,
     read_table,
     write_json,
 )
@@ -42,29 +40,40 @@ from coco_pipe.utils import resolve_n_jobs, run_task_batch, slug, stable_hash
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
+    _load_run,
+    _selection_config,
+    build_and_validate_mode_specs,
+    build_input_signature,
+    build_output_root,
     build_run_config_payload,
-    condition_load_failure_record,
+    group_fit_requests,
     pool_containers,
+    validate_inputs,
 )
 from eeg_adhd_epilepsy.analysis.utils.units import (
     apply_family_qc_mask,
+    base_layout_mode,
     families_for_analysis_unit,
+)
+from eeg_adhd_epilepsy.io.bids import (
+    DerivativeStage,
+    get_derivative_root,
 )
 from eeg_adhd_epilepsy.io.report_paths import (
     ReportStage,
     default_reports_root,
     summary_report_dir,
 )
-from eeg_adhd_epilepsy.reports.dim_reduction import generate_dataset_report
-from eeg_adhd_epilepsy.utils.config import load_cohort_analysis_config
+from eeg_adhd_epilepsy.reports.dim_reduction import (
+    collect_mode_leaderboard,
+    generate_dataset_report,
+    generate_rollup_report,
+)
+from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 from eeg_adhd_epilepsy.utils.constants import DEFAULT_ANALYSIS_CONDITIONS
 
 logger = logging.getLogger(__name__)
-
-DEFAULT_REDUCERS = ["PCA", "UMAP", "PHATE", "Isomap"]
-EXTENDED_REDUCERS = ["PCA", "UMAP", "PHATE", "Isomap", "Pacmap", "Trimap", "LLE", "TSNE"]
 DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
-DEFAULT_N_COMPONENTS_SWEEP = [2, 3, 5, 10, 20, 50, 75, 100]
 
 
 def _collect_scope_fit_requests(
@@ -94,6 +103,8 @@ def _collect_scope_fit_requests(
             unit_spec["container"],
             families,
         )
+        if np.asarray(unit_container.X).ndim != 2:
+            unit_container = unit_container.flatten(preserve="obs")
         unit_spec = {**unit_spec, "container": unit_container}
         unit_container = unit_spec["container"]
         unit_containers_by_key[(scope, condition, unit_spec["unit_key"])] = unit_container
@@ -117,66 +128,7 @@ def _collect_scope_fit_requests(
                 tuple(X.shape),
             )
             continue
-        filter_specs = [
-            {"column": str(col), "values": [str(value) for value in vals]}
-            for col, vals in zip(args.filter_col, args.filter_val)
-            if vals
-        ]
-        input_signature: dict[str, Any] = {
-            "input_mode": args.input_mode,
-            "representation": args.representation,
-            "analysis_mode": args.analysis_mode,
-            "run_config_hash": getattr(args, "run_config_hash", None),
-            "descriptor_families": list(getattr(args, "descriptor_families", []) or []),
-            "filters": filter_specs,
-            "group_filters": getattr(args, "group_filters", None),
-            "balance_target": args.balance_target,
-            "balance_strategy": args.balance_strategy if args.balance_target else None,
-            "unit_type": unit_spec["unit_type"],
-            "unit_name": unit_spec["unit_name"],
-            "family": unit_spec.get("family"),
-            "run_label": getattr(args, "run_label", None),
-            "qc": getattr(args, "qc", None),
-        }
-        if args.input_mode == "raw":
-            input_signature.update(
-                {
-                    "bids_root": str(Path(args.bids_root).expanduser()),
-                    "use_derivatives": bool(args.use_derivatives),
-                    "task": getattr(args, "task", "clinical"),
-                    "segment_duration": float(args.segment_duration),
-                    "overlap": float(args.overlap),
-                    "desc": args.desc,
-                    "window_source": getattr(args, "window_source", "auto"),
-                    "aggregation_unit": getattr(args, "aggregation_unit", None),
-                }
-            )
-        elif args.input_mode == "descriptors":
-            input_signature.update(
-                {
-                    "descriptor_table_path": str(Path(args.descriptor_table_path).expanduser()),
-                    "descriptor_feature_columns_path": str(
-                        Path(args.descriptor_feature_columns_path).expanduser()
-                    ),
-                    "descriptor_max_abs_value": getattr(args, "descriptor_max_abs_value", None),
-                    "location_statistic": getattr(args, "location_statistic", None),
-                }
-            )
-        elif args.input_mode == "foundation_embeddings":
-            input_signature.update(
-                {
-                    "embedding_derivative_root": str(
-                        Path(args.embedding_derivative_root).expanduser()
-                    ),
-                    "embedding_representation": getattr(
-                        args, "embedding_representation", "recording"
-                    ),
-                    "embedding_aggregate_by": getattr(args, "embedding_aggregate_by", None),
-                    "embedding_model_key": getattr(args, "embedding_model_key", None),
-                }
-            )
-        else:
-            raise ValueError(f"Unsupported input_mode '{args.input_mode}'.")
+        input_signature = build_input_signature(args, unit_spec)
 
         for reducer_name, n_components in product(reducers, valid_components):
             logger.info(
@@ -204,341 +156,73 @@ def _collect_scope_fit_requests(
     return requests
 
 
-def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(levelname)s - %(message)s",
-    )
+def _get_base_container(
+    base_cache: dict[tuple[str, str, str], Any],
+    args: Any,
+    *,
+    condition: str,
+    meta_df: Any,
+    load_mode: str,
+    representation: str,
+) -> DataContainer:
+    """Load (and cache) one condition's base container in a shared layout.
 
-    pre_parser = argparse.ArgumentParser(add_help=False)
-    pre_parser.add_argument("--cohort_config", default=None)
-    pre_parser.add_argument("--analysis_config", default=None)
-    bootstrap_args, _ = pre_parser.parse_known_args()
-
-    parser = argparse.ArgumentParser(description="Run checkpointed EEG dimensionality reduction.")
-    parser.add_argument(
-        "--cohort_config",
-        required=True,
-        help="Cohort/dataset config: subjects + clinical question (configs/cohorts/).",
-    )
-    parser.add_argument(
-        "--analysis_config",
-        required=True,
-        help="Analysis/method config: reducers, sweep (configs/analyses/dim_reduction/).",
-    )
-
-    dataset_group = parser.add_argument_group("Dataset")
-    dataset_group.add_argument("--bids_root", required=False, default=None)
-    dataset_group.add_argument("--metadata", default=None, help="Path to canonical metadata CSV.")
-    dataset_group.add_argument(
-        "--dataset_name", default=None, help="Name for this dim-reduction run namespace."
-    )
-    dataset_group.add_argument(
-        "--run_label",
-        default=None,
-        help="Optional human-readable label used in reports and output folders.",
-    )
-    dataset_group.add_argument(
-        "--subject_col", default="study_id", help="Subject identifier column."
-    )
-    dataset_group.add_argument(
-        "--subjects", nargs="+", default=None, help="Specific subjects to process."
-    )
-    dataset_group.add_argument(
-        "--conditions",
-        nargs="+",
-        default=DEFAULT_CONDITIONS,
-        choices=DEFAULT_CONDITIONS,
-    )
-
-    input_group = parser.add_argument_group("Input")
-    input_group.add_argument(
-        "--input_mode",
-        choices=["raw", "descriptors", "foundation_embeddings"],
-        default="raw",
-    )
-    input_group.add_argument("--task", default="clinical")
-    input_group.add_argument("--segment_duration", type=float, default=60.0)
-    input_group.add_argument("--overlap", type=float, default=0.0)
-    input_group.add_argument("--use_derivatives", action="store_true")
-    input_group.add_argument("--desc", default="base")
-    input_group.add_argument(
-        "--representation",
-        choices=[
-            "epoch_native",
-            "epoch_flat",
-            "epoch_time_as_sample",
-            "subject_native",
-            "subject_flat",
-            "subject_time_as_sample",
-            "recording_native",
-            "recording_flat",
-            "recording_time_as_sample",
-        ],
-        default="epoch_flat",
-    )
-    input_group.add_argument(
-        "--analysis_mode",
-        choices=ANALYSIS_MODES,
-        default="flat",
-    )
-    input_group.add_argument("--descriptor_table_path", default=None)
-    input_group.add_argument("--descriptor_feature_columns_path", default=None)
-    input_group.add_argument("--descriptor_families", nargs="+", default=None)
-    input_group.add_argument("--embedding_derivative_root", default=None)
-    input_group.add_argument(
-        "--embedding_representation",
-        choices=["recording", "window"],
-        default="recording",
-    )
-    input_group.add_argument("--embedding_aggregate_by", default=None)
-    input_group.add_argument("--embedding_model_key", default=None)
-    input_group.add_argument(
-        "--descriptor_max_abs_value",
-        type=float,
-        default=1e12,
-        help=(
-            "For descriptor inputs, drop rows whose selected finite descriptor "
-            "features exceed this absolute value threshold."
-        ),
-    )
-    input_group.add_argument(
-        "--ignore_annotations",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-    )
-    input_group.add_argument(
-        "--aggregation_unit",
-        choices=["recording", "subject"],
-        default="recording",
-        help=(
-            "Aggregation unit for raw subject_* representations. "
-            "'recording' preserves separate session/run rows; "
-            "'subject' collapses all runs for a study_id."
-        ),
-    )
-
-    reduction_group = parser.add_argument_group("Reduction")
-    reduction_group.add_argument("--reducers", nargs="+", default=["default"])
-    reduction_group.add_argument(
-        "--n_components_sweep", nargs="+", type=int, default=DEFAULT_N_COMPONENTS_SWEEP
-    )
-    reduction_group.add_argument("--run_pooled", action="store_true")
-    reduction_group.add_argument("--overwrite", action="store_true")
-    reduction_group.add_argument("--reports-only", action="store_true")
-    reduction_group.add_argument("--eval_config", default=None)
-    reduction_group.add_argument("--n_jobs", type=int, default=1)
-    reduction_group.add_argument(
-        "--output_group",
-        default=None,
-        help=(
-            "Optional nested output group under derivatives/reports, "
-            "e.g. 'medicated_adhd_vs_controls/lis'."
-        ),
-    )
-    reduction_group.add_argument(
-        "--reports_root",
-        type=str,
-        default=None,
-        help="Custom root directory for reports (defaults to sibling of bids_root)",
-    )
-
-    filter_group = parser.add_argument_group("Filtering")
-    filter_group.add_argument("--filter_col", action="append", default=[])
-    filter_group.add_argument("--filter_val", action="append", nargs="+", default=[])
-    filter_group.add_argument("--balance_target", default=None)
-    filter_group.add_argument(
-        "--balance_strategy",
-        choices=["undersample", "oversample", "auto"],
-        default="undersample",
-    )
-
-    report_group = parser.add_argument_group("Report")
-    report_group.add_argument("--interactive", action=argparse.BooleanOptionalAction, default=True)
-    report_group.add_argument("--save_static_figures", action="store_true")
-    report_group.add_argument("--compress_viz_with_pca", action="store_true")
-    report_group.add_argument(
-        "--selection_metric",
-        default=SEPARATION_METRIC_KEY,
-        help="Metric used to select the best run in report summaries.",
-    )
-    report_group.add_argument(
-        "--selection_eval_name",
-        default=None,
-        help=(
-            "Eval name whose separation metric should drive report selection, "
-            "e.g. 'med_adhd_vs_ctrl'."
-        ),
-    )
-
-    config_eval_specs = None
-    if bootstrap_args.cohort_config and bootstrap_args.analysis_config:
-        raw_config = load_cohort_analysis_config(
-            bootstrap_args.cohort_config, bootstrap_args.analysis_config
+    Descriptor and foundation inputs load a single layout that every analysis
+    mode re-slices, so the cache turns an N-mode sweep into one load per
+    condition instead of N. Cached load failures re-raise without retrying.
+    """
+    key = (condition, representation, load_mode)
+    if key in base_cache:
+        cached = base_cache[key]
+        if isinstance(cached, Exception):
+            raise cached
+        return cached
+    try:
+        container = build_dataset(
+            args,
+            meta_df,
+            condition,
+            target_col=None,
+            analysis_mode=load_mode,
+            representation=representation,
         )
-    else:
-        raw_config = None
-    if raw_config is not None:
-        raw_config = dict(raw_config)
-        config_eval_specs = raw_config.pop("evals", None)
-        parser.set_defaults(**raw_config)
-    args = parser.parse_args()
+    except Exception as exc:
+        base_cache[key] = exc
+        raise
+    base_cache[key] = container
+    return container
 
-    # --- Validation ---
-    if args.bids_root is None:
-        raise ValueError("--bids_root is required.")
-    if len(args.filter_col) != len(args.filter_val):
-        raise ValueError("--filter_col and --filter_val must be provided in matching pairs.")
-    if args.input_mode == "descriptors":
-        if not args.descriptor_table_path or not args.descriptor_feature_columns_path:
-            raise ValueError(
-                "--descriptor_table_path and --descriptor_feature_columns_path are required "
-                "when --input_mode descriptors."
-            )
-        if args.descriptor_max_abs_value is not None and args.descriptor_max_abs_value <= 0:
-            raise ValueError("--descriptor_max_abs_value must be positive when provided.")
-        # For descriptor inputs, use the table filename stem as the representation label
-        # (the --representation CLI flag is ignored; this sets it once before anything reads it)
-        args.representation = Path(args.descriptor_table_path).stem
-    if args.input_mode == "foundation_embeddings":
-        if not args.embedding_derivative_root:
-            raise ValueError("--embedding_derivative_root is required for foundation embeddings.")
-        if not args.embedding_model_key:
-            raise ValueError("--embedding_model_key is required to keep model spaces separate.")
-        if args.analysis_mode != "flat":
-            raise ValueError("Foundation embeddings currently support analysis_mode='flat' only.")
-        args.representation = f"foundation_{args.embedding_representation}"
-    if args.run_label is None:
-        args.run_label = args.dataset_name
-    if args.analysis_mode in DESCRIPTOR_ONLY_ANALYSIS_MODES and args.input_mode != "descriptors":
-        raise ValueError(
-            f"analysis_mode='{args.analysis_mode}' is only supported for descriptor inputs."
-        )
-    if args.input_mode == "raw" and args.analysis_mode == "sensor":
-        if args.representation not in {"epoch_native", "subject_native", "recording_native"}:
-            raise ValueError(
-                "Raw sensor mode requires representation 'epoch_native', "
-                "'subject_native', or 'recording_native'."
-            )
-    if args.input_mode == "raw" and args.analysis_mode != "flat":
-        if args.analysis_mode != "sensor":
-            raise ValueError("Raw inputs currently support only analysis_mode='flat' or 'sensor'.")
-    if args.input_mode == "raw" and args.analysis_mode == "flat":
-        if args.representation in {"epoch_native", "subject_native", "recording_native"}:
-            raise ValueError(
-                "Native EEG representations are reserved for sensor mode. "
-                "Use --analysis_mode sensor with epoch_native, subject_native, "
-                "or recording_native."
-            )
-    if args.input_mode == "raw" and args.representation.startswith("recording_"):
-        if args.aggregation_unit != "recording":
-            raise ValueError("recording_* representations require --aggregation_unit recording.")
-    if args.descriptor_families and args.input_mode != "descriptors":
-        raise ValueError("--descriptor_families is only supported for descriptor inputs.")
-    if args.descriptor_families:
-        invalid_families = [
-            family
-            for family in args.descriptor_families
-            if family not in ("band", "complexity", "param")
-        ]
-        if invalid_families:
-            raise ValueError(
-                f"Unknown descriptor families: {invalid_families}. "
-                f"Valid families: {['band', 'complexity', 'param']}"
-            )
 
-    resolved_n_jobs = resolve_n_jobs(args.n_jobs)
-
-    requested_reducers = [str(value) for value in args.reducers]
-    if len(requested_reducers) == 1 and requested_reducers[0].lower() == "default":
-        reducers = list(DEFAULT_REDUCERS)
-    elif len(requested_reducers) == 1 and requested_reducers[0].lower() == "extended":
-        reducers = list(EXTENDED_REDUCERS)
-    else:
-        reducers = requested_reducers
-
-    bids_root = Path(args.bids_root).expanduser()
-    meta_df = read_table(Path(args.metadata), sep=",")
-    if args.subjects:
-        subjects = [normalize_subject_value(subject) for subject in args.subjects]
-    else:
-        if args.subject_col not in meta_df.columns:
-            raise ValueError(f"Metadata table must contain subject column '{args.subject_col}'.")
-        subjects = sorted(
-            {
-                normalize_subject_value(subject)
-                for subject in meta_df[args.subject_col].dropna().unique()
-            }
-        )
-        logger.info(
-            "Resolved %d subjects from metadata column '%s'.",
-            len(subjects),
-            args.subject_col,
-        )
-    raw_eval_specs = config_eval_specs
-    if raw_eval_specs is None and args.eval_config:
-        raw_eval_specs = (
-            yaml.safe_load(Path(args.eval_config).expanduser().read_text(encoding="utf-8")) or []
-        )
-    eval_specs = parse_eval_specs(raw_eval_specs, args.subject_col)
-    auto_pooled_eval_spec = build_auto_pooled_eval_spec(args.conditions, args.run_pooled)
-    if auto_pooled_eval_spec is not None and not any(
-        spec["name"] == auto_pooled_eval_spec["name"] for spec in eval_specs
-    ):
-        eval_specs = [*eval_specs, auto_pooled_eval_spec]
-
-    valid_selection_metrics = {*FIT_METRIC_COLUMNS, SEPARATION_METRIC_KEY}
-    eval_names = {spec["name"] for spec in eval_specs}
-    if args.selection_metric in eval_names and not args.selection_eval_name:
-        args.selection_eval_name = args.selection_metric
-        args.selection_metric = SEPARATION_METRIC_KEY
-    if args.selection_metric not in valid_selection_metrics:
-        raise ValueError(
-            f"Unknown selection_metric '{args.selection_metric}'. "
-            f"Valid metrics: {sorted(valid_selection_metrics)}"
-        )
-    if args.selection_eval_name and args.selection_eval_name not in eval_names:
-        raise ValueError(
-            f"Unknown selection_eval_name '{args.selection_eval_name}'. "
-            f"Valid eval names: {sorted(eval_names)}"
-        )
+def execute_analysis_mode(
+    *,
+    args: Any,
+    mode: str,
+    representation: str,
+    reducers: list[str],
+    n_components_sweep: list[int],
+    meta_df: Any,
+    eval_specs: list[dict[str, Any]],
+    resolved_n_jobs: int,
+    bids_root: Path,
+    base_cache: dict[tuple[str, str, str], Any],
+    base_load_mode: str,
+    reports_root: Path,
+) -> dict[str, Any]:
+    """Run one analysis mode end-to-end (fits, evals, per-mode report) and report back."""
+    args.analysis_mode = mode
+    args.representation = representation
+    args.n_components_sweep = list(n_components_sweep)
 
     run_config = build_run_config_payload(args, reducers, eval_specs)
     args.run_config_hash = stable_hash(run_config, length=12)
 
-    output_base = bids_root / "derivatives" / "dim_reduction"
-    if args.output_group:
-        output_group = Path(str(args.output_group))
-        if output_group.is_absolute():
-            raise ValueError("--output_group must be relative, not absolute.")
-        output_base = output_base / output_group
-    aggregation_unit = getattr(args, "aggregation_unit", None)
-    representation_label = (
-        args.representation.removesuffix(f"_{args.analysis_mode}")
-        if args.input_mode == "raw"
-        else args.representation
-    )
-    variant_parts = [args.analysis_mode, args.input_mode, representation_label]
-    if args.input_mode == "foundation_embeddings":
-        variant_parts.append(args.embedding_model_key)
-    if (
-        args.input_mode == "raw"
-        and representation_label == "subject"
-        and aggregation_unit
-        and aggregation_unit != "subject"
-    ):
-        variant_parts.append(f"by_{aggregation_unit}")
-    variant_parts.append(f"cfg-{args.run_config_hash}")
-    run_variant = "_".join(slug(part) for part in variant_parts if part)
-    args.run_variant = run_variant
-    output_dataset_name = slug(args.run_label or args.dataset_name)
-    output_root = output_base / output_dataset_name / run_variant
+    output_root = build_output_root(bids_root, args, mode, representation)
+    run_variant = args.run_variant
+    output_dataset_name = slug(args.run_label)
     output_root.mkdir(parents=True, exist_ok=True)
     runs_dir = output_root / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
-    config_snapshot = {
-        key: value for key, value in vars(args).items() if key not in {"config", "eval_config"}
-    }
+    config_snapshot = {key: value for key, value in vars(args).items() if key != "config"}
     if eval_specs:
         config_snapshot["evals"] = eval_specs
     (output_root / "config_used.yaml").write_text(
@@ -550,42 +234,41 @@ def main() -> None:
     if not args.reports_only:
         write_json(fit_runs_path, [], indent=2)
         write_json(eval_runs_path, [], indent=2)
-    logger.info("Using %d outer worker(s) for fits/evals.", resolved_n_jobs)
 
     base_containers_by_scope: dict[tuple[str, str], DataContainer] = {}
     unit_containers_by_key: dict[tuple[str, str, str], DataContainer] = {}
     data_availability: list[dict[str, Any]] = []
-    condition_load_failures: list[dict[str, str]] = []
+    dataset_stats: list[dict[str, Any]] = []
     report_path: Path | None = None
     fatal_error: str | None = None
+    leaderboard = None
     try:
         if args.reports_only:
             if not fit_runs_path.exists():
                 raise FileNotFoundError(
                     f"--reports-only requested but {fit_runs_path} does not exist."
                 )
+            fit_runs = read_json(fit_runs_path)
+            if run_summary_path.exists():
+                summary_data = read_json(run_summary_path)
+                dataset_stats = summary_data.get("run_metadata", {}).get("dataset_stats", [])
         else:
             fit_requests: list[dict[str, Any]] = []
             for condition in args.conditions:
-                logger.info("Loading input for condition '%s' (%s).", condition, args.input_mode)
-                try:
-                    base_container = build_dataset(
-                        args, subjects, meta_df, condition, target_col=None
-                    )
-                except Exception as exc:
-                    logger.exception("Failed to load condition '%s'.", condition)
-                    condition_load_failures.append({"condition": condition, "error": str(exc)})
-                    update_runs(
-                        fit_runs_path,
-                        condition_load_failure_record(
-                            condition=condition,
-                            args=args,
-                            error=exc,
-                        ),
-                        key_fields=FIT_RUN_KEY_FIELDS,
-                    )
-                    continue
-
+                logger.info(
+                    "Loading input for condition '%s' (%s / %s).",
+                    condition,
+                    args.input_mode,
+                    mode,
+                )
+                base_container = _get_base_container(
+                    base_cache,
+                    args,
+                    condition=condition,
+                    meta_df=meta_df,
+                    load_mode=base_load_mode,
+                    representation=representation,
+                )
                 base_containers_by_scope[("condition", condition)] = base_container
                 fit_requests.extend(
                     _collect_scope_fit_requests(
@@ -601,99 +284,58 @@ def main() -> None:
                 )
 
             if args.run_pooled:
-                available_conditions = [
-                    cond
-                    for cond in args.conditions
-                    if ("condition", cond) in base_containers_by_scope
+                source_containers = [
+                    base_containers_by_scope[("condition", cond)] for cond in args.conditions
                 ]
-                if available_conditions:
-                    source_containers = [
-                        base_containers_by_scope[("condition", cond)]
-                        for cond in available_conditions
-                    ]
-                    pooled_container = pool_containers(source_containers)
-                    base_containers_by_scope[("pooled", POOLED_CONDITION)] = pooled_container
-                    fit_requests.extend(
-                        _collect_scope_fit_requests(
-                            "pooled",
-                            POOLED_CONDITION,
-                            pooled_container,
-                            args,
-                            reducers,
-                            output_root,
-                            unit_containers_by_key,
-                            data_availability,
-                        )
+                pooled_container = pool_containers(source_containers)
+                base_containers_by_scope[("pooled", POOLED_CONDITION)] = pooled_container
+                fit_requests.extend(
+                    _collect_scope_fit_requests(
+                        "pooled",
+                        POOLED_CONDITION,
+                        pooled_container,
+                        args,
+                        reducers,
+                        output_root,
+                        unit_containers_by_key,
+                        data_availability,
                     )
-                else:
-                    logger.warning("Skipping pooled mode: no condition containers were available.")
+                )
 
             logger.info(
-                "Queued %d fit request(s) across %d loaded scope(s).",
+                "Queued %d fit request(s) across %d loaded scope(s) for mode '%s'.",
                 len(fit_requests),
                 len(base_containers_by_scope),
+                mode,
             )
-            for record in run_task_batch(
-                fit_requests,
-                lambda request: run_fit(**request, errors="record"),
+            fit_groups = group_fit_requests(fit_requests)
+            fit_runs = []
+            for group_records in run_task_batch(
+                fit_groups,
+                lambda group: run_fit_group(group, errors="raise"),
                 resolved_n_jobs,
             ):
-                update_runs(fit_runs_path, record, key_fields=FIT_RUN_KEY_FIELDS)
+                for record in group_records:
+                    update_runs(fit_runs_path, record, key_fields=FIT_RUN_KEY_FIELDS)
+                    fit_runs.append(record)
 
             if eval_specs:
-                if not fit_runs_path.exists():
-                    raise RuntimeError(
-                        "No fit runs were produced, so post-hoc evaluations cannot run. "
-                        "Check the condition load errors above."
-                    )
-                fit_runs = [
-                    record
-                    for record in load_fit_runs(fit_runs_path)
-                    if record.get("status") == "success"
-                    and record.get("input_mode") == args.input_mode
-                    and record.get("analysis_mode") == args.analysis_mode
-                    and record.get("reducer") in reducers
-                    and int(record.get("n_components", 0)) in args.n_components_sweep
-                ]
-                if not fit_runs:
-                    raise RuntimeError(
-                        "No successful fit runs were produced, so post-hoc evaluations "
-                        "cannot run. Check the fit errors above."
-                    )
                 eval_requests: list[dict[str, Any]] = []
                 for fit_record in fit_runs:
-                    unit_container = unit_containers_by_key.get(
+                    unit_container = unit_containers_by_key[
                         (
                             fit_record["scope"],
                             fit_record["condition"],
                             fit_record["unit_key"],
                         )
-                    )
-                    if unit_container is None:
-                        logger.warning(
-                            "Skipping evals for missing unit scope %s/%s/%s.",
-                            fit_record["scope"],
-                            fit_record["condition"],
-                            fit_record["unit_key"],
-                        )
-                        continue
+                    ]
                     for eval_spec in eval_specs:
-                        # The auto-pooled eval spec is only meaningful for pooled scopes.
+                        # The condition_separation eval is only meaningful for pooled scopes.
                         if (
-                            auto_pooled_eval_spec is not None
-                            and eval_spec["name"] == auto_pooled_eval_spec["name"]
+                            eval_spec["name"] == "condition_separation"
                             and fit_record["scope"] != "pooled"
                         ):
                             continue
-                        logger.info(
-                            "Evaluating %s/%s/%s/%s/n%d [%s]",
-                            fit_record["condition"],
-                            fit_record["analysis_mode"],
-                            fit_record["unit_name"],
-                            fit_record["reducer"],
-                            fit_record["n_components"],
-                            eval_spec["name"],
-                        )
                         eval_requests.append(
                             build_eval_request(
                                 fit_record=fit_record,
@@ -703,19 +345,43 @@ def main() -> None:
                                 overwrite=bool(args.overwrite),
                             )
                         )
-                logger.info("Queued %d eval request(s).", len(eval_requests))
+                logger.info("Queued %d eval request(s) for mode '%s'.", len(eval_requests), mode)
                 for record in run_task_batch(
                     eval_requests,
-                    lambda request: run_eval(**request, errors="record"),
+                    lambda request: run_eval(**request, errors="raise"),
                     resolved_n_jobs,
                 ):
                     update_runs(eval_runs_path, record, key_fields=EVAL_RUN_KEY_FIELDS)
 
-        if not fit_runs_path.exists():
+        if not fit_runs:
             raise RuntimeError(
                 f"No fit runs found in {fit_runs_path}. "
                 "Dim reduction produced no successful fit inventory."
             )
+
+        if not args.reports_only and base_containers_by_scope:
+            import pandas as pd
+
+            for (scope, condition), container in base_containers_by_scope.items():
+                stat = {
+                    "scope": scope,
+                    "condition": condition,
+                    "loaded_observations": int(
+                        container.meta.get("loaded_obs", container.X.shape[0])
+                    ),
+                    "samples_used": int(container.X.shape[0]),
+                }
+                if hasattr(args, "subject_col") and args.subject_col in container.coords:
+                    stat["unique_subjects"] = int(
+                        pd.Index(
+                            np.asarray(container.coords[args.subject_col]).astype(str)
+                        ).nunique()
+                    )
+                if "recording_id" in container.coords:
+                    stat["unique_recordings"] = int(
+                        pd.Index(np.asarray(container.coords["recording_id"]).astype(str)).nunique()
+                    )
+                dataset_stats.append(stat)
 
         report = generate_dataset_report(
             args=args,
@@ -723,28 +389,32 @@ def main() -> None:
             fit_runs_path=fit_runs_path,
             eval_runs_path=eval_runs_path,
             reducers=reducers,
-            subjects=subjects,
             meta_df=meta_df,
-            containers_by_scope=base_containers_by_scope or None,
-            metric_columns=FIT_METRIC_COLUMNS,
+            containers_by_scope=base_containers_by_scope,
+            dataset_stats=dataset_stats,
             eval_specs=eval_specs,
             pooled_condition=POOLED_CONDITION,
         )
-        reports_root = (
-            Path(args.reports_root) if args.reports_root else default_reports_root(bids_root)
-        )
         summary_dir = summary_report_dir(reports_root, ReportStage.DIM_REDUCTION, create=True)
-        if args.output_group:
-            summary_dir = summary_dir / Path(str(args.output_group))
         summary_dir = summary_dir / output_dataset_name
         summary_dir.mkdir(parents=True, exist_ok=True)
         report_path = summary_dir / f"{run_variant}_dataset_summary.html"
         report.save(report_path)
         logger.info("Report saved to: %s", report_path)
+        leaderboard = collect_mode_leaderboard(
+            args=args,
+            fit_runs_path=fit_runs_path,
+            eval_runs_path=eval_runs_path,
+            reducers=reducers,
+            pooled_condition=POOLED_CONDITION,
+        )
+        if leaderboard is not None and not leaderboard.empty:
+            leaderboard.to_json(runs_dir / "leaderboard.json", orient="records")
     except Exception as exc:
         fatal_error = str(exc)
         raise
     finally:
+        run_summary_path.parent.mkdir(parents=True, exist_ok=True)
         write_run_status(
             output_root,
             fit_runs_path,
@@ -756,18 +426,330 @@ def main() -> None:
                 "dataset_name": args.dataset_name,
                 "run_label": args.run_label,
                 "input_mode": args.input_mode,
-                "analysis_mode": args.analysis_mode,
-                "representation": args.representation,
-                "aggregation_unit": args.aggregation_unit,
+                "analysis_mode": mode,
+                "representation": representation,
                 "run_variant": run_variant,
                 "run_config_hash": args.run_config_hash,
                 "output_dataset_name": output_dataset_name,
                 "conditions_requested": list(args.conditions),
-                "subjects_resolved": len(subjects),
-                "condition_load_failures": condition_load_failures,
+                "subjects_resolved": (
+                    len(base_containers_by_scope[("condition", args.conditions[0])].ids)
+                    if args.conditions
+                    and ("condition", args.conditions[0]) in base_containers_by_scope
+                    else 0
+                ),
                 "data_availability": data_availability,
+                "dataset_stats": dataset_stats,
             },
         )
+    return {
+        "analysis_mode": mode,
+        "representation": representation,
+        "input_mode": args.input_mode,
+        "run_variant": run_variant,
+        "report_path": str(report_path) if report_path else None,
+        "leaderboard": leaderboard,
+    }
+
+
+def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
+    """Build the per-run args namespace from the merged cohort+analysis config.
+
+    Every field is sourced via ``config.get`` with a default — the run no longer
+    depends on argparse defaults (mirrors ``classical_decoding.run``). Per-mode
+    fields (``analysis_mode``, ``representation``, ``n_components_sweep``) and
+    derived provenance (``run_config_hash``, ``run_variant``, ``run_label``) are
+    set later at runtime.
+    """
+    return SimpleNamespace(
+        # Identity / selection
+        dataset_name=config.get("dataset_name"),
+        run_label=config.get("run_label"),
+        output_group=config.get("output_group"),
+        conditions=list(config.get("conditions", DEFAULT_CONDITIONS)),
+        subjects=config.get("subjects"),
+        subject_col=config.get("subject_col", "study_id"),
+        run_pooled=bool(config.get("run_pooled", False)),
+        selection_metric=config.get("selection_metric", "trustworthiness"),
+        selection_eval_name=config.get("selection_eval_name"),
+        # Input mode + dataset loading
+        input_mode=config.get("input_mode", "raw"),
+        reduced_source_input_mode=config.get("reduced_source_input_mode", "descriptors"),
+        analysis_mode=config.get("analysis_mode", "flat"),
+        representation=config.get("representation", ""),
+        bids_root=config.get("bids_root"),
+        metadata=config.get("metadata"),
+        use_derivatives=bool(config.get("use_derivatives", True)),
+        task=config.get("task", "clinical"),
+        segment_duration=float(config.get("segment_duration", 60.0)),
+        overlap=float(config.get("overlap", 0.0)),
+        desc=config.get("desc", "base"),
+        window_source=config.get("window_source", "auto"),
+        units=config.get("units"),
+        # Descriptors
+        descriptor_table_path=config.get("descriptor_table_path"),
+        descriptor_feature_columns_path=config.get("descriptor_feature_columns_path"),
+        descriptor_families=config.get("descriptor_families"),
+        descriptor_max_abs_value=config.get("descriptor_max_abs_value"),
+        location_statistic=config.get("location_statistic"),
+        # Foundation embeddings
+        embedding_derivative_root=config.get("embedding_derivative_root"),
+        embedding_aggregate_by=config.get("embedding_aggregate_by"),
+        embedding_model_key=config.get("embedding_model_key"),
+        # Filtering / balancing
+        filter_col=list(config.get("filter_col", []) or []),
+        filter_val=list(config.get("filter_val", []) or []),
+        group_filters=config.get("group_filters"),
+        balance_target=config.get("balance_target"),
+        balance_strategy=config.get("balance_strategy", "undersample"),
+        # Reduction plan (per-mode sweep overrides happen in execute_analysis_mode)
+        analysis_modes=config.get("analysis_modes"),
+        n_components_sweep=list(config.get("n_components_sweep", []) or []),
+        # Execution / reporting
+        n_jobs=config.get("n_jobs", 1),
+        overwrite=bool(config.get("overwrite", False)),
+        reports_only=bool(config.get("reports_only", False)),
+        reports_root=config.get("reports_root"),
+        qc=config.get("qc", {}),
+        interactive=bool(config.get("interactive", False)),
+    )
+
+
+def compare_cohort(dim_root: Path, dataset_name: str, reports_root: Path) -> Path | None:
+    """Render the cross-model comparison for one cohort, returning the report path."""
+    cohort_dir = dim_root / slug(dataset_name)
+    if not cohort_dir.is_dir():
+        raise FileNotFoundError(f"No dim-reduction runs under {cohort_dir}.")
+
+    run_dirs = sorted(
+        path.parent.parent for path in cohort_dir.glob("foundation_*/runs/leaderboard.json")
+    )
+    summaries: list[dict[str, Any]] = []
+    selection_metric, selection_eval_name = SEPARATION_METRIC_KEY, None
+    for run_dir in run_dirs:
+        summary = _load_run(run_dir)
+        if summary is None:
+            continue
+        summaries.append(summary)
+        selection_metric, selection_eval_name = _selection_config(run_dir)
+
+    if not summaries:
+        logger.warning("No foundation leaderboards under %s; nothing to compare.", cohort_dir)
+        return None
+
+    args = SimpleNamespace(
+        run_label=dataset_name,
+        dataset_name=dataset_name,
+        input_mode="foundation_embeddings",
+        selection_metric=selection_metric,
+        selection_eval_name=selection_eval_name,
+    )
+    report = generate_rollup_report(args=args, summaries=summaries)
+
+    out_dir = summary_report_dir(reports_root, ReportStage.DIM_REDUCTION, create=True) / slug(
+        dataset_name
+    )
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "foundation_model_comparison.html"
+    report.save(out_path)
+
+    merged = pd.concat([summary["leaderboard"] for summary in summaries], ignore_index=True)
+    merged.to_csv(out_dir / "foundation_model_comparison.csv", index=False)
+    logger.info(
+        "Cross-model comparison for %s: %d run(s) -> %s",
+        dataset_name,
+        len(summaries),
+        out_path,
+    )
+    return out_path
+
+
+def run(config: dict[str, Any]) -> None:
+    """Run the full dimensionality-reduction sweep from a merged config dict."""
+    args = _run_args_from_config(config)
+
+    # --- Global validation (mode-independent; per-mode checks run in the loop) ---
+    validate_inputs(args)
+
+    resolved_n_jobs = resolve_n_jobs(args.n_jobs)
+
+    bids_root = Path(config["bids_root"]).expanduser()
+
+    dim_root = (
+        Path(config["derivative_root"]).expanduser()
+        if config.get("derivative_root")
+        else get_derivative_root(bids_root, DerivativeStage.DIM_REDUCTION)
+    )
+    reports_root = (
+        Path(config["reports_root"]).expanduser()
+        if config.get("reports_root")
+        else Path(default_reports_root(bids_root)).expanduser()
+    )
+
+    if config.get("compare_only"):
+        if config.get("dataset_name"):
+            cohorts = [str(config["dataset_name"])]
+        else:
+            cohorts = sorted(
+                path.name
+                for path in dim_root.iterdir()
+                if path.is_dir() and any(path.glob("foundation_*/runs/leaderboard.json"))
+            )
+        if not cohorts:
+            logger.warning("No cohorts with foundation runs found under %s.", dim_root)
+            return
+
+        written: list[Path] = []
+        for cohort in cohorts:
+            path = compare_cohort(dim_root, cohort, reports_root)
+            if path is not None:
+                written.append(path)
+        return
+
+    meta_df = (
+        read_table(Path(config["metadata"]).expanduser(), sep=",")
+        if config.get("metadata")
+        else None
+    )
+
+    eval_specs = parse_eval_specs(config.get("evals"), args.subject_col)
+
+    valid_selection_metrics = {*FIT_METRIC_COLUMNS, SEPARATION_METRIC_KEY}
+    eval_names = {spec["name"] for spec in eval_specs}
+
+    if args.selection_metric not in valid_selection_metrics:
+        raise ValueError(
+            f"Unknown selection_metric '{args.selection_metric}'. "
+            f"Valid metrics: {sorted(valid_selection_metrics)}"
+        )
+    if args.selection_eval_name and args.selection_eval_name not in eval_names:
+        raise ValueError(
+            f"Unknown selection_eval_name '{args.selection_eval_name}'. "
+            f"Valid eval names: {sorted(eval_names)}"
+        )
+
+    reports_root = Path(args.reports_root) if args.reports_root else default_reports_root(bids_root)
+
+    mode_specs, mode_tasks = build_and_validate_mode_specs(args)
+    logger.info(
+        "Dimensionality-reduction plan: %d task(s) -> %s",
+        len(mode_tasks),
+        ", ".join(f"{mode}/{representation}" for mode, representation in mode_tasks),
+    )
+    logger.info("Using %d outer worker(s) for fits/evals.", resolved_n_jobs)
+
+    base_cache: dict[tuple[str, str, str], Any] = {}
+    summaries: list[dict[str, Any]] = []
+    task_failures: list[dict[str, str]] = []
+    for mode, representation in mode_tasks:
+        spec = mode_specs[mode]
+        reducers_for_this_mode = spec["reducers"]
+        sweep_for_this_mode = [int(value) for value in spec["n_components"]]
+        base_load_mode = "sensor" if args.input_mode == "raw" else base_layout_mode(args.input_mode)
+        try:
+            summary = execute_analysis_mode(
+                args=args,
+                mode=mode,
+                representation=representation,
+                reducers=reducers_for_this_mode,
+                n_components_sweep=sweep_for_this_mode,
+                meta_df=meta_df,
+                eval_specs=eval_specs,
+                resolved_n_jobs=resolved_n_jobs,
+                bids_root=bids_root,
+                base_cache=base_cache,
+                base_load_mode=base_load_mode,
+                reports_root=reports_root,
+            )
+            summaries.append(summary)
+        except Exception as exc:  # one mode failing must not abort the whole sweep
+            logger.exception("Analysis mode '%s' (%s) failed.", mode, representation)
+            task_failures.append(
+                {"analysis_mode": mode, "representation": representation, "error": str(exc)}
+            )
+
+    if not summaries:
+        raise RuntimeError("All dimensionality-reduction tasks failed; see the errors above.")
+
+    if len(mode_tasks) > 1:
+        rollup_report = generate_rollup_report(
+            args=args,
+            summaries=summaries,
+            task_failures=task_failures,
+        )
+        summary_dir = summary_report_dir(reports_root, ReportStage.DIM_REDUCTION, create=True)
+        summary_dir = summary_dir / slug(args.run_label or args.dataset_name)
+        summary_dir.mkdir(parents=True, exist_ok=True)
+        rollup_path = summary_dir / "rollup_leaderboard.html"
+        rollup_report.save(rollup_path)
+        logger.info("Roll-up leaderboard saved to: %s", rollup_path)
+
+
+def main() -> None:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+    )
+
+    parser = argparse.ArgumentParser(description="Run checkpointed EEG dimensionality reduction.")
+    parser.add_argument(
+        "--cohort_config",
+        required=True,
+        help="Cohort/dataset config: subjects + clinical question (configs/cohorts/).",
+    )
+    parser.add_argument(
+        "--analysis_config",
+        required=True,
+        help="Analysis/method config: analysis_modes (reducers + sweep per mode) "
+        "(configs/analyses/dim_reduction/).",
+    )
+    parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
+    parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
+    parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
+    parser.add_argument(
+        "--representation",
+        choices=["epoch", "recording", "subject"],
+        default=None,
+        help="Representation granularity to reduce (e.g., epoch, subject, recording).",
+    )
+    parser.add_argument(
+        "--reports_root",
+        default=None,
+        help="Custom root directory for reports (defaults to sibling of bids_root).",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override the config's overwrite flag.",
+    )
+    parser.add_argument(
+        "--reports-only",
+        dest="reports_only",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Regenerate reports from existing fit/eval inventories without refitting.",
+    )
+    parser.add_argument(
+        "--compare_only",
+        action="store_true",
+        help="Skip reduction and generate cross-model foundation comparison reports.",
+    )
+    args = parser.parse_args()
+
+    config = resolve_cli_config(
+        cohort_config=args.cohort_config,
+        analysis_config=args.analysis_config,
+        bids_root=args.bids_root,
+        metadata=args.metadata,
+        n_jobs=args.n_jobs,
+        reports_root=args.reports_root,
+        overwrite=args.overwrite,
+        reports_only=args.reports_only,
+        representation=args.representation,
+        compare_only=args.compare_only,
+    )
+    run(config)
 
 
 if __name__ == "__main__":

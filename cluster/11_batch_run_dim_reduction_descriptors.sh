@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=eeg_dimred_desc_resume
+#SBATCH --job-name=eeg_dimred_desc
 #SBATCH --account=rrg-kjerbi
 #SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.out
 #SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.err
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-#SBATCH --array=1-740
+#SBATCH --array=1-74
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -21,18 +21,21 @@ PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
 METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-# Cohort configs paired with the single analysis config below.
-# NOTE: --array (line 13) must equal CONFIG_COUNT * MODE_COUNT (guarded below).
+# One array task = one cohort config. The analysis config sweeps every descriptor
+# analysis mode in-process (loading each condition once), so --array equals the
+# cohort count (guarded below) instead of cohorts x modes.
 CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/cohorts}
-ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/dim_reduction/default.yaml}
+ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/dim_reduction/descriptors.yaml}
 SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
 REPORTS_ROOT="$SCRATCH_ROOT/reports"
 OVERWRITE=${OVERWRITE:-0}
 
-# Descriptor Data Paths
+# Descriptor Data Paths. Recording-level table (one row per recording) — was
+# historically misnamed 'sensor_subject_features'; the merge now writes the honest
+# name. Override to 'sensor_subject_features' for the true subject-pooled level.
 DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
-TABLE_PATH="$DESC_ROOT/sensor_subject_features.csv"
-COLUMNS_PATH="$DESC_ROOT/sensor_subject_features_feature_columns.json"
+TABLE_PATH="$DESC_ROOT/sensor_recording_features.parquet"
+COLUMNS_PATH="$DESC_ROOT/sensor_recording_features_feature_columns.json"
 
 # 3. Environment Setup
 cd "$PROJECT_ROOT"
@@ -56,52 +59,30 @@ mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 [ -f "$TABLE_PATH" ] || { echo "Descriptor table not found: $TABLE_PATH"; exit 1; }
 [ -f "$COLUMNS_PATH" ] || { echo "Descriptor feature columns not found: $COLUMNS_PATH"; exit 1; }
 
-# 4. Map this array task to one config/mode pair
+# 4. Map this array task to one cohort config
 mapfile -t CONFIGS < <(find "$CONFIGS_DIR" -name "*.yaml" | sort)
-MODES=(
-    "flat"
-    "sensor"
-    "family"
-    "subfamily"
-    "sensor_within_family"
-    "sensor_within_subfamily"
-    "feature"
-    "feature_within_family"
-    "descriptor"
-    "descriptor_sensor"
-)
 CONFIG_COUNT=${#CONFIGS[@]}
-MODE_COUNT=${#MODES[@]}
-TOTAL_TASKS=$((CONFIG_COUNT * MODE_COUNT))
 TASK_ID=${SLURM_ARRAY_TASK_ID:-1}
 
 # Guard: a stale #SBATCH --array bound silently drops the trailing tasks.
-if [ -n "${SLURM_ARRAY_TASK_COUNT:-}" ] && [ "$SLURM_ARRAY_TASK_COUNT" -ne "$TOTAL_TASKS" ]; then
-    echo "ERROR: array size $SLURM_ARRAY_TASK_COUNT != cohorts($CONFIG_COUNT) x modes($MODE_COUNT) = $TOTAL_TASKS." >&2
-    echo "Update '#SBATCH --array=1-$TOTAL_TASKS' (or set CONFIGS_DIR to a subtree)." >&2
+if [ -n "${SLURM_ARRAY_TASK_COUNT:-}" ] && [ "$SLURM_ARRAY_TASK_COUNT" -ne "$CONFIG_COUNT" ]; then
+    echo "ERROR: array size $SLURM_ARRAY_TASK_COUNT != cohort count $CONFIG_COUNT." >&2
+    echo "Update '#SBATCH --array=1-$CONFIG_COUNT' (or set CONFIGS_DIR to a subtree)." >&2
     exit 1
 fi
 
-if (( TASK_ID < 1 || TASK_ID > TOTAL_TASKS )); then
-    echo "Array task $TASK_ID is outside valid task range 1-$TOTAL_TASKS; nothing to do."
+if (( TASK_ID < 1 || TASK_ID > CONFIG_COUNT )); then
+    echo "Array task $TASK_ID is outside valid task range 1-$CONFIG_COUNT; nothing to do."
     exit 0
 fi
 
-task_index=$((TASK_ID - 1))
-mode_index=$((task_index / CONFIG_COUNT))
-config_index=$((task_index % CONFIG_COUNT))
-mode="${MODES[$mode_index]}"
-config="${CONFIGS[$config_index]}"
-input_mode="descriptors"
-representation=$(basename "$TABLE_PATH")
-representation="${representation%.*}"
+config="${CONFIGS[$((TASK_ID - 1))]}"
 
 echo "================================================================================"
-echo "DESCRIPTOR DIM REDUCTION ARRAY TASK $TASK_ID / $TOTAL_TASKS"
-echo "Config:         $config"
-echo "Mode:           $mode"
-echo "Table:          $TABLE_PATH"
-echo "Report:         resolved by the configuration-hashed run namespace"
+echo "DESCRIPTOR DIM REDUCTION ARRAY TASK $TASK_ID / $CONFIG_COUNT"
+echo "Config:   $config"
+echo "Analysis: $ANALYSIS_CONFIG (analysis_modes sweep in-process)"
+echo "Table:    $TABLE_PATH"
 echo "================================================================================"
 
 cmd=(
@@ -111,10 +92,8 @@ cmd=(
     --metadata "$METADATA_PATH"
     --cohort_config "$config"
     --analysis_config "$ANALYSIS_CONFIG"
-    --input_mode "$input_mode"
     --descriptor_table_path "$TABLE_PATH"
     --descriptor_feature_columns_path "$COLUMNS_PATH"
-    --analysis_mode "$mode"
     --n_jobs "$THREADS"
 )
 

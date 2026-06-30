@@ -42,6 +42,7 @@ from eeg_adhd_epilepsy.analysis.utils.decoding import (
 )
 from eeg_adhd_epilepsy.analysis.utils.units import (
     apply_family_qc_mask,
+    base_layout_mode,
     families_for_analysis_unit,
 )
 from eeg_adhd_epilepsy.io.report_paths import default_reports_root
@@ -174,7 +175,7 @@ def run(config: dict[str, Any]) -> Path:
     scopes: list[tuple[str, DataContainer]] = []
     qc_report_results = []
     load_mode = "reduced_dimensions" if input_mode == "reduced_dimensions" else source_mode
-    layout_mode = "sensor" if source_mode == "descriptors" else "flat"
+    layout_mode = base_layout_mode(source_mode)
     default_analysis_modes = (
         _DESCRIPTOR_ANALYSIS_MODES if source_mode == "descriptors" else ["flat"]
     )
@@ -207,7 +208,6 @@ def run(config: dict[str, Any]) -> Path:
         location_statistic=config.get("location_statistic"),
         qc=config.get("qc"),
         embedding_derivative_root=config.get("embedding_derivative_root"),
-        embedding_representation=config.get("embedding_representation", "recording"),
         embedding_aggregate_by=config.get("embedding_aggregate_by"),
         embedding_model_key=config.get("embedding_model_key"),
         filter_col=list(filters),
@@ -215,13 +215,11 @@ def run(config: dict[str, Any]) -> Path:
         group_filters=config.get("group_filters"),
         balance_target=None,
         balance_strategy="undersample",
-        representation=config.get("representation", "recording_flat"),
-        aggregation_unit=config.get("aggregation_unit", "recording"),
+        representation=config.get("representation", "subject"),
     )
     for condition in conditions:
         container = build_dataset(
             loader_args,
-            config.get("subjects"),
             metadata,
             condition,
             target_col=None,
@@ -637,6 +635,12 @@ def main() -> None:
     parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
     parser.add_argument(
+        "--representation",
+        choices=["epoch", "recording", "subject"],
+        default=None,
+        help="Representation granularity to reduce (e.g., epoch, subject, recording).",
+    )
+    parser.add_argument(
         "--overwrite",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -651,6 +655,7 @@ def main() -> None:
         metadata=args.metadata,
         n_jobs=args.n_jobs,
         overwrite=args.overwrite,
+        representation=args.representation,
     )
     run(config)
 

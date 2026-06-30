@@ -226,7 +226,7 @@ def _build_failure_df(
     return reorder_columns_front(failure_df, failure_front)
 
 
-def _save_subject_shard(
+def _save_descriptor_shard(
     shard_root: Path,
     sensor_container: DataContainer,
     sensor_outputs: dict[str, Any],
@@ -248,7 +248,7 @@ def _save_subject_shard(
     )
     save_descriptor_table(
         sensor_outputs["subject_df"],
-        shard_root / "sensor_subject_features",
+        shard_root / "sensor_recording_features",
         feature_columns=sensor_outputs["subject_feature_columns"],
         formats=("parquet", "csv"),
     )
@@ -261,7 +261,7 @@ def _save_subject_shard(
         )
         save_descriptor_table(
             pooled_outputs["subject_df"],
-            shard_root / "pooled_subject_features",
+            shard_root / "pooled_recording_features",
             feature_columns=pooled_outputs["subject_feature_columns"],
             formats=("parquet", "csv"),
         )
@@ -573,7 +573,7 @@ def main() -> None:
                 failure_metadata_df,
                 condition,
             )
-            _save_subject_shard(
+            _save_descriptor_shard(
                 shard_root,
                 sensor_result,
                 sensor_outputs,
@@ -591,7 +591,7 @@ def main() -> None:
                 sensor_epoch_feature_columns_path=shard_root
                 / "sensor_epoch_features_feature_columns.json",
                 sensor_subject_feature_columns_path=shard_root
-                / "sensor_subject_features_feature_columns.json",
+                / "sensor_recording_features_feature_columns.json",
                 pooled_epoch_df=None if pooled_outputs is None else pooled_outputs["epoch_df"],
                 pooled_subject_df=None if pooled_outputs is None else pooled_outputs["subject_df"],
                 failure_df=failure_df,
@@ -599,7 +599,7 @@ def main() -> None:
             )
             (shard_root / "_SUCCESS").write_text("ok\n", encoding="utf-8")
             LOGGER.info(
-                "%s / %s: saved %d epoch rows, %d subject rows, %d failures, qc=%s, report=%s",
+                "%s / %s: saved %d epoch rows, %d recording rows, %d failures, qc=%s, report=%s",
                 condition,
                 subject,
                 len(sensor_outputs["epoch_df"]),

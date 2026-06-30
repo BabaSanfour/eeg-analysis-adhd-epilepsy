@@ -23,7 +23,7 @@ A **cohort config** answers "who and which clinical question?" It owns fields
 such as `dataset_name`, `output_group`, `conditions`, population filters, and
 `evals` (including targets and label maps).
 
-An **analysis config** answers "which method?" It owns reducers or models,
+An **analysis config** answers "which method?" It owns reducer specs or models,
 cross-validation, feature selection, tuning, input shaping, and run controls.
 If both files define `conditions`, the analysis value overrides the cohort
 default. The loader validates each role and then deep-merges the analysis onto
@@ -60,10 +60,27 @@ eeg-classical-decode \
   --metadata /path/to/patients_metadata_clean.csv
 ```
 
-For dimensionality reduction, pair any compatible cohort with
-`configs/analyses/dim_reduction/default.yaml`. Its `selection_eval_name` must
-match the name of an entry in the cohort's `evals`; validation fails early when
-they do not match.
+For dimensionality reduction, pick the analysis config that matches the input:
+`configs/analyses/dim_reduction/{raw,descriptors,foundation}.yaml`. Each one
+sweeps its full analysis-mode plan **in-process** (one run loads each condition
+once and reduces every mode). The config is **organized around the analysis
+mode** — the unit of work, since a mode is loaded once and then swept over
+reducers × n_components. `analysis_modes` is a mapping of mode -> spec, where each
+spec **fully declares that mode's run**: the `reducers` to fit and the
+`n_components` to sweep. There is no global default — each mode is the single
+source of truth for its own sweep, so granular modes simply list a smaller range.
+Every input uses the same `analysis_modes` mapping. For raw inputs the averaging
+granularity is a single top-level `representation: epoch | subject` (orthogonal to
+the mode's flat/sensor axis), so it lives outside `analysis_modes`, not per spec.
+Descriptor/foundation inputs omit it — their granularity is set by which file is
+loaded (optionally labelled for output paths via `granularity_label`).
+(This deliberately diverges from decoding, which stays organized around `models`
+because a model carries rich per-estimator config; a reducer is just a name, so
+the mode owns it.)
+The descriptor config also carries the shared `qc` block. `default.yaml` remains a
+neutral method default for quick single-mode runs. Every config's
+`selection_eval_name` must match the name of an entry in the cohort's `evals`;
+validation fails early when they do not match.
 
 Cluster jobs use the same pairing through `COHORT_CONFIG`, `ANALYSIS_CONFIG`,
 `BIDS_ROOT`, and `METADATA_PATH`. See [`../cluster/README.md`](../cluster/README.md) for submission order and array-job details.

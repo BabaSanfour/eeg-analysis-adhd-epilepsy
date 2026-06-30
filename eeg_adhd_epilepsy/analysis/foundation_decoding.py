@@ -128,8 +128,7 @@ def _raw_loader_args(
         group_filters=config.get("group_filters"),
         balance_target=None,
         balance_strategy="undersample",
-        representation="epoch_native",
-        aggregation_unit="recording",
+        representation="epoch",
         window_source=window_source,
     )
 
@@ -184,7 +183,6 @@ def run(config: dict[str, Any]) -> Path:
             provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
             container = build_dataset(
                 _raw_loader_args(config, segment_duration, overlap, use_derivatives, window_source),
-                config.get("subjects"),
                 metadata,
                 condition,
                 target_col=None,

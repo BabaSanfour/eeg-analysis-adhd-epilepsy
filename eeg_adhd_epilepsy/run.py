@@ -18,7 +18,7 @@ Preview the whole chain without running anything::
 
     eeg-run --dry-run --bids_root /data/BIDS --metadata /data/meta.csv \
         --raw_root /data/raw --cohort_config configs/cohorts/.../total.yaml \
-        --dim_analysis_config configs/analyses/dim_reduction/default.yaml \
+        --dim_analysis_config configs/analyses/dim_reduction/raw.yaml \
         --decode_analysis_config configs/analyses/decoding/EO.yaml
 
 Run only preproc → epochs → descriptors → merge::
@@ -140,7 +140,7 @@ STAGES: list[Stage] = [
         name="merge",
         module=f"{PKG}.analysis.merge_descriptors",
         build=lambda c: ["--bids_root", str(c.bids_root)],
-        done=lambda c: (_descriptor_combined(c) / "sensor_subject_features.parquet").exists(),
+        done=lambda c: (_descriptor_combined(c) / "sensor_recording_features.parquet").exists(),
         note="needs descriptors complete",
     ),
     Stage(
@@ -160,9 +160,9 @@ STAGES: list[Stage] = [
             "--analysis_mode",
             "flat",
             "--descriptor_table_path",
-            str(_descriptor_combined(c) / "sensor_subject_features.parquet"),
+            str(_descriptor_combined(c) / "sensor_recording_features.parquet"),
             "--descriptor_feature_columns_path",
-            str(_descriptor_combined(c) / "sensor_subject_features_feature_columns.json"),
+            str(_descriptor_combined(c) / "sensor_recording_features_feature_columns.json"),
             "--n_jobs",
             str(c.n_jobs),
         ],

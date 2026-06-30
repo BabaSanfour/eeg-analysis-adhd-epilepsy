@@ -1,0 +1,37 @@
+# Analysis/method config — dimensionality reduction over raw EEG.
+# Pair with a cohort config via --cohort_config.
+#
+# Same `analysis_modes` mapping as every other input — raw modes just add a
+# `representation` to their spec, because they are representation-coupled (flat
+# needs a flattened layout, sensor a native one) whereas descriptor/foundation
+# modes share the input's single representation. Each mode fully declares its run
+# with `reducers` and `n_components` (no global default). PCA + UMAP run on both
+# modes; the slower non-linear reducers focus on the flattened whole-montage
+# manifold, and sensor sweeps a smaller range.
+input_mode: raw
+
+# Run selection. `selection_eval_name` MUST name an eval declared in the paired
+# COHORT config's `evals:` block (cross-checked at load time in utils/config.py);
+# `selection_metric` then ranks every fit by that eval's score. `med_adhd_vs_ctrl`
+# is the ADHD-vs-control contrast common to the medicated_adhd_vs_controls cohorts.
+selection_metric: separation_logreg_balanced_accuracy
+selection_eval_name: med_adhd_vs_ctrl
+use_derivatives: true
+interactive: true
+overwrite: false
+
+task: clinical
+segment_duration: 60.0
+overlap: 0.0
+desc: base
+window_source: auto
+
+# Two orthogonal axes for raw EEG:
+#   representation (top-level, one per run) = averaging granularity:
+#     'subject' averages every epoch to one row per subject; 'epoch' keeps each epoch.
+#   analysis_mode (per spec below) = sensor handling: flat concatenates all
+#     channels into one vector; sensor keeps the native per-channel layout.
+representation: subject
+analysis_modes:
+  flat:   {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 20]}
+  sensor: {reducers: [PCA, UMAP],                n_components: [2, 3, 5]}

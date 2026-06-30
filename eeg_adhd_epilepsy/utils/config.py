@@ -6,7 +6,8 @@ The analysis CLIs in this project run a *cohort* against an *analysis*:
   (``dataset_name``, ``output_group``, ``group_filters``, ``filter_col`` /
   ``filter_val``, ``conditions``, ``evals`` / ``label_map``); and
 * an **analysis config** answers *which method and hyperparameters*
-  (dim-reduction ``reducers`` / ``n_components_sweep``; decoding ``models`` /
+  (dim-reduction ``analysis_modes`` — each mode names its reducers + n_components;
+  decoding ``models`` /
   ``cv`` / ``feature_selection``; foundation ``models`` / ``train_modes`` …),
   plus input-shaping (``input_mode``, ``qc``, ``descriptor_table_path`` …) and
   run controls (``n_jobs``, ``overwrite`` …).
@@ -43,8 +44,10 @@ __all__ = [
 # Keys a cohort config must define (the "who + which question").
 _COHORT_REQUIRED_KEYS = ("dataset_name", "output_group", "evals")
 
-# A recognizable analysis config declares at least one method block.
-_ANALYSIS_METHOD_MARKERS = ("reducers", "models", "train_modes")
+# A recognizable analysis config declares at least one method block. Dim-reduction
+# is organized around analysis modes (`analysis_modes`, each mode naming its
+# reducers + n_components); decoding/foundation use `models`.
+_ANALYSIS_METHOD_MARKERS = ("analysis_modes", "models", "train_modes")
 
 
 class ConfigError(ValueError):
@@ -99,7 +102,7 @@ def validate_analysis_config(config: Mapping[str, Any], path: str | Path) -> Non
         raise ConfigError(
             f"Analysis config {Path(path)} does not declare a method block. "
             f"Expected at least one of: {', '.join(_ANALYSIS_METHOD_MARKERS)}. "
-            "See configs/analyses/ for examples (dim_reduction uses 'reducers', "
+            "See configs/analyses/ for examples (dim_reduction uses 'analysis_modes', "
             "decoding/foundation use 'models', foundation adds 'train_modes')."
         )
     if "evals" in config:

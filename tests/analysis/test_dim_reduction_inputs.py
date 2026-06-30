@@ -8,16 +8,13 @@ import numpy as np
 import pandas as pd
 from coco_pipe.descriptors import load_descriptor_table
 from coco_pipe.dim_reduction import run_eval
-from coco_pipe.io import DataContainer, iter_analysis_units
+from coco_pipe.io import ANALYSIS_MODES, DataContainer, iter_analysis_units
 from coco_pipe.io.embeddings import save_embedding_derivative
 
 import eeg_adhd_epilepsy.analysis.dimensionality_reduction as dim_reduction
 import eeg_adhd_epilepsy.reports.dim_reduction as dim_report
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
-from eeg_adhd_epilepsy.analysis.dimensionality_reduction import (
-    ANALYSIS_MODES,
-    _collect_scope_fit_requests,
-)
+from eeg_adhd_epilepsy.analysis.dimensionality_reduction import _collect_scope_fit_requests
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import pool_containers
 from eeg_adhd_epilepsy.analysis.utils.units import apply_family_qc_mask, families_for_analysis_unit
 
@@ -74,14 +71,12 @@ def test_descriptor_analysis_attaches_family_qc(tmp_path):
         filter_col=[],
         filter_val=[],
         balance_target=None,
-        aggregation_unit=None,
         qc={},
         location_statistic=None,
     )
 
     container = build_dataset(
         args,
-        subjects=None,
         meta_df=None,
         condition="EO_baseline",
     )
@@ -122,14 +117,12 @@ def test_sensor_descriptor_analysis_attaches_family_qc(tmp_path):
         filter_col=[],
         filter_val=[],
         balance_target=None,
-        aggregation_unit=None,
         qc={},
         location_statistic=None,
     )
 
     container = build_dataset(
         args,
-        subjects=None,
         meta_df=None,
         condition="EO_baseline",
     )
@@ -169,7 +162,6 @@ def test_family_scoped_qc_keeps_band_outlier_for_complexity(tmp_path):
         filter_col=[],
         filter_val=[],
         balance_target=None,
-        aggregation_unit=None,
         location_statistic=None,
         qc={
             "column_prune": {"enabled": False},
@@ -183,7 +175,7 @@ def test_family_scoped_qc_keeps_band_outlier_for_complexity(tmp_path):
         },
     )
 
-    container = build_dataset(args, None, None, "EO_baseline")
+    container = build_dataset(args, None, "EO_baseline")
     # One row per subject ⇒ the epoch-level (L2) MAD pass is short-circuited.
     qc_result = container.meta["qc_result"]
     assert qc_result.thresholds["subject_aggregated"] is True
@@ -237,7 +229,6 @@ def test_measure_grouping_keeps_alpha_outlier_for_beta(tmp_path):
         filter_col=[],
         filter_val=[],
         balance_target=None,
-        aggregation_unit=None,
         location_statistic=None,
         qc={
             "column_prune": {"enabled": False},
@@ -250,7 +241,7 @@ def test_measure_grouping_keeps_alpha_outlier_for_beta(tmp_path):
         },
     )
 
-    container = build_dataset(args, None, None, "EO_baseline")
+    container = build_dataset(args, None, "EO_baseline")
     assert container.meta["qc_result"].thresholds["group_by"] == "measure"
     retained = {}
     for unit in iter_analysis_units(container, "feature", "descriptors"):
@@ -296,7 +287,6 @@ def test_subfamily_grouping_keeps_logabs_outlier_for_relative(tmp_path):
         filter_col=[],
         filter_val=[],
         balance_target=None,
-        aggregation_unit=None,
         location_statistic=None,
         qc={
             "column_prune": {"enabled": False},
@@ -309,7 +299,7 @@ def test_subfamily_grouping_keeps_logabs_outlier_for_relative(tmp_path):
         },
     )
 
-    container = build_dataset(args, None, None, "EO_baseline")
+    container = build_dataset(args, None, "EO_baseline")
     assert container.meta["qc_result"].thresholds["group_by"] == "subfamily"
     # bad ids are keyed by sub-family label
     assert set(container.meta["family_qc_bad_ids"]) == {"log_abs", "rel"}
@@ -358,7 +348,6 @@ def test_column_prune_removes_all_nan_feature_without_row_drop(tmp_path):
         filter_col=[],
         filter_val=[],
         balance_target=None,
-        aggregation_unit=None,
         location_statistic=None,
         qc={
             "column_prune": {
@@ -370,7 +359,7 @@ def test_column_prune_removes_all_nan_feature_without_row_drop(tmp_path):
         },
     )
 
-    container = build_dataset(args, None, None, "EO_baseline")
+    container = build_dataset(args, None, "EO_baseline")
 
     assert container.X.shape == (3, 1)
     assert container.meta["qc_result"].n_dropped_nan_inf == 0
@@ -405,7 +394,7 @@ def test_foundation_embedding_loader_filters_condition_and_subject(tmp_path):
     args = SimpleNamespace(
         input_mode="foundation_embeddings",
         embedding_derivative_root=str(root),
-        embedding_representation="recording",
+        representation="recording",
         embedding_aggregate_by=None,
         embedding_model_key="cbramod",
         subject_col="study_id",
@@ -413,16 +402,16 @@ def test_foundation_embedding_loader_filters_condition_and_subject(tmp_path):
         filter_col=[],
         filter_val=[],
         balance_target=None,
-        aggregation_unit=None,
         analysis_mode="flat",
         qc={},
         location_statistic=None,
     )
 
+    # Subject filtering now flows through meta_df: restricting the metadata to
+    # study_id 0002 is what scopes the foundation loader to that subject.
     container = build_dataset(
         args,
-        subjects=["0002"],
-        meta_df=None,
+        meta_df=pd.DataFrame({"study_id": ["0002"]}),
         condition="EO_baseline",
     )
 
@@ -444,17 +433,20 @@ def test_fit_request_collection_skips_invalid_n_components(tmp_path):
         n_components_sweep=[2, 3, 4, 10],
         filter_col=[],
         filter_val=[],
+        group_filters=None,
         balance_target=None,
         balance_strategy="undersample",
-        representation="epoch_flat",
+        representation="epoch",
         bids_root=str(tmp_path),
         use_derivatives=False,
         task="clinical",
         segment_duration=60.0,
         overlap=0.0,
         desc="base",
-        aggregation_unit="recording",
+        window_source="auto",
+        qc=None,
         run_label="test",
+        run_config_hash="cfg",
         overwrite=True,
         subject_col="study_id",
     )
@@ -476,11 +468,12 @@ def test_fit_request_collection_skips_invalid_n_components(tmp_path):
 
 
 def test_dim_reduction_preserves_exact_reducer_names():
+    # Reducer names from each mode's `reducers` list are passed through verbatim to
+    # coco_pipe; case-normalizing them would break the registry lookup.
     source = inspect.getsource(dim_reduction)
 
-    assert dim_reduction.DEFAULT_REDUCERS == ["PCA", "UMAP", "PHATE", "Isomap"]
-    assert {"Isomap", "Pacmap", "Trimap"}.issubset(dim_reduction.EXTENDED_REDUCERS)
     assert ".upper()" not in source
+    assert ".lower()" not in source
 
 
 def test_dim_reduction_avoids_private_dim_reduction_imports():
@@ -561,7 +554,6 @@ def test_fit_identity_changes_with_matrix_content_and_qc(tmp_path):
         descriptor_feature_columns_path=str(tmp_path / "columns.json"),
         descriptor_max_abs_value=None,
         location_statistic=None,
-        aggregation_unit=None,
         run_label="test",
         run_config_hash="cfg",
         overwrite=False,
@@ -619,7 +611,6 @@ def test_descriptor_sensor_units_have_distinct_fit_ids(tmp_path):
         descriptor_feature_columns_path=str(tmp_path / "columns.json"),
         descriptor_max_abs_value=None,
         location_statistic=None,
-        aggregation_unit=None,
         run_label="test",
         run_config_hash="cfg",
         overwrite=False,
@@ -655,19 +646,20 @@ def test_foundation_fit_request_records_embedding_provenance(tmp_path):
     )
     args = SimpleNamespace(
         input_mode="foundation_embeddings",
-        representation="foundation_recording",
         analysis_mode="flat",
         descriptor_families=None,
         filter_col=[],
         filter_val=[],
+        group_filters=None,
         balance_target=None,
         balance_strategy="undersample",
+        qc=None,
         embedding_derivative_root=str(tmp_path / "embeddings"),
-        embedding_representation="recording",
+        representation="recording",
         embedding_aggregate_by="study_id",
         embedding_model_key="cbramod",
-        aggregation_unit=None,
         run_label="test",
+        run_config_hash="cfg",
         overwrite=True,
         subject_col="study_id",
         n_components_sweep=[2],
@@ -687,7 +679,7 @@ def test_foundation_fit_request_records_embedding_provenance(tmp_path):
     payload = request["fit_payload"]
 
     assert payload["embedding_model_key"] == "cbramod"
-    assert payload["embedding_representation"] == "recording"
+    assert payload["representation"] == "recording"
     assert payload["embedding_aggregate_by"] == "study_id"
     assert payload["input_signature"]["embedding_model_key"] == "cbramod"
 
@@ -729,8 +721,7 @@ def test_separation_eval_passes_patient_groups(monkeypatch, tmp_path):
         "unit_key": "all_features",
         "family": None,
         "input_mode": "raw",
-        "representation": "subject_flat",
-        "aggregation_unit": "recording",
+        "representation": "subject",
         "run_label": "test",
         "reducer": "PCA",
         "n_components": 2,

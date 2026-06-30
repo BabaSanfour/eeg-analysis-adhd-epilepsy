@@ -1,5 +1,14 @@
-"""
-Merge checkpointed descriptor shards into combined tables.
+"""Merge checkpointed descriptor shards into combined tables.
+
+Produces one combined table per :data:`~coco_pipe.io.AGGREGATION_LEVELS` granularity:
+
+- ``combined/sensor_epoch_features``     — 1 row / epoch (concatenated shards)
+- ``combined/sensor_recording_features`` — 1 row / recording (concatenated shards)
+- ``combined/sensor_subject_features``   — 1 row / subject (mean-pooled here from
+  the recording table)
+
+The per-shard tables are written at epoch and recording granularity; the subject
+level is derived at merge time.
 """
 
 from __future__ import annotations
@@ -14,6 +23,7 @@ import pandas as pd
 from coco_pipe.descriptors import (
     check_feature_column_consistency,
     merge_descriptor_tables,
+    save_descriptor_table,
 )
 from coco_pipe.io import read_table, write_json
 
@@ -44,9 +54,9 @@ def _check_shard_feature_columns(
     Returns a list of human-readable mismatch descriptions (empty if the
     shard is consistent with previously-seen shards).
     """
-    keys = ["sensor_epoch", "sensor_subject"]
+    keys = ["sensor_epoch", "sensor_recording"]
     if include_pooled:
-        keys += ["pooled_epoch", "pooled_subject"]
+        keys += ["pooled_epoch", "pooled_recording"]
     mismatches: list[str] = []
     for key in keys:
         try:
@@ -134,9 +144,9 @@ def main() -> None:
 
     feature_cols: dict[str, list[str] | None] = {
         "sensor_epoch": None,
-        "sensor_subject": None,
+        "sensor_recording": None,
         "pooled_epoch": None,
-        "pooled_subject": None,
+        "pooled_recording": None,
     }
 
     shard_roots: list[Path] = []
@@ -204,23 +214,63 @@ def main() -> None:
     combined_root = derivative_root / "combined"
     combined_root.mkdir(parents=True, exist_ok=True)
 
-    def _merge_family(name: str) -> pd.DataFrame:
-        combined, _ = merge_descriptor_tables(
+    def _merge_family(name: str) -> tuple[pd.DataFrame, list[str] | None]:
+        """Concatenate one shard table-kind across shards into a combined table."""
+        combined, feature_columns = merge_descriptor_tables(
             [shard_root / f"{name}.parquet" for shard_root in shard_roots],
             [shard_root / f"{name}_feature_columns.json" for shard_root in shard_roots],
             out_base_path=combined_root / name,
             formats=("parquet", "csv"),
         )
-        return combined
+        return combined, feature_columns
 
+    def _write_subject_table(
+        recording_df: pd.DataFrame, feature_columns: list[str] | None, out_name: str
+    ) -> pd.DataFrame:
+        """Mean-pool the recording-level table to one row per (subject, condition).
+
+        Subjects are pooled by averaging their recordings' feature values (the
+        merge analog of the descriptor recording aggregation, one level up).
+        Recording-specific id columns (session/run/recording_id/obs_id) are
+        dropped; everything else constant within a subject is carried through.
+        """
+        keys = [k for k in ("subject", "condition") if k in recording_df.columns]
+        feature_cols = [c for c in (feature_columns or []) if c in recording_df.columns]
+        if recording_df.empty or not keys or not feature_cols:
+            return pd.DataFrame()
+        subject_df = recording_df.groupby(keys, as_index=False)[feature_cols].mean()
+        drop = set(feature_cols) | set(keys) | {"session", "run", "recording_id", "obs_id"}
+        carry = [c for c in recording_df.columns if c not in drop]
+        if carry:
+            firsts = recording_df.groupby(keys, as_index=False)[carry].first()
+            subject_df = subject_df.merge(firsts, on=keys)
+        save_descriptor_table(
+            subject_df,
+            combined_root / out_name,
+            feature_columns=feature_cols,
+            formats=("parquet", "csv"),
+        )
+        return subject_df
+
+    # epoch + recording come straight from the shards; subject is mean-pooled here.
     LOGGER.info("Combining sensor families...")
-    combined_sensor_epoch_df = _merge_family("sensor_epoch_features")
-    combined_sensor_subject_df = _merge_family("sensor_subject_features")
+    combined_sensor_epoch_df, _ = _merge_family("sensor_epoch_features")
+    combined_sensor_recording_df, sensor_feature_columns = _merge_family(
+        "sensor_recording_features"
+    )
+    combined_sensor_subject_df = _write_subject_table(
+        combined_sensor_recording_df, sensor_feature_columns, "sensor_subject_features"
+    )
 
     if include_pooled:
         LOGGER.info("Combining pooled families...")
         _merge_family("pooled_epoch_features")
-        _merge_family("pooled_subject_features")
+        combined_pooled_recording_df, pooled_feature_columns = _merge_family(
+            "pooled_recording_features"
+        )
+        _write_subject_table(
+            combined_pooled_recording_df, pooled_feature_columns, "pooled_subject_features"
+        )
 
     # Some shards may have zero-row failures.csv; concatenating only the
     # non-empty frames avoids dtype-mismatch warnings from pd.concat while
@@ -242,25 +292,28 @@ def main() -> None:
         "n_shards_merged": len(shard_roots),
         "n_shards_excluded": len(excluded_shards),
         "skip_inconsistent": bool(args.skip_inconsistent),
-        "n_subjects": _nunique_or_none(combined_sensor_subject_df, "subject"),
-        "n_sessions": _nunique_or_none(combined_sensor_subject_df, "session"),
-        "n_conditions": _nunique_or_none(combined_sensor_subject_df, "condition"),
+        "n_subjects": _nunique_or_none(combined_sensor_recording_df, "subject"),
+        "n_sessions": _nunique_or_none(combined_sensor_recording_df, "session"),
+        "n_conditions": _nunique_or_none(combined_sensor_recording_df, "condition"),
         "n_sensor_epoch_rows": int(len(combined_sensor_epoch_df)),
+        "n_sensor_recording_rows": int(len(combined_sensor_recording_df)),
         "n_sensor_subject_rows": int(len(combined_sensor_subject_df)),
         "n_failures_total": int(len(combined_failures_df)),
         "excluded_shards": excluded_shards,
         "merged_shards": shard_manifest_rows,
     }
 
+    # QC runs on the recording-level table — the granularity decoding/dim-reduction
+    # actually consume (the keyword args keep their historical `_subject` names).
     dataset_qc = run_descriptor_dataset_qc(
         reports_root=reports_root,
         qc_dir=combined_root / "qc",
         merged_sensor_epoch_df=combined_sensor_epoch_df,
-        merged_sensor_subject_df=combined_sensor_subject_df,
+        merged_sensor_subject_df=combined_sensor_recording_df,
         merged_sensor_epoch_feature_columns_path=combined_root
         / "sensor_epoch_features_feature_columns.json",
         merged_sensor_subject_feature_columns_path=combined_root
-        / "sensor_subject_features_feature_columns.json",
+        / "sensor_recording_features_feature_columns.json",
         shard_qc_rows_df=pd.concat(shard_qc_rows, ignore_index=True) if shard_qc_rows else None,
         merged_failures_df=combined_failures_df,
         config_snapshot=config_used,

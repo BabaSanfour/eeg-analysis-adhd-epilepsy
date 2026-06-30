@@ -1,0 +1,21 @@
+# Analysis/method config — dimensionality reduction over foundation-model
+# embeddings. Pair with a cohort config via --cohort_config. The embedding
+# derivative root, the per-model key, and the representation are supplied on the
+# CLI (--embedding_derivative_root / --embedding_model_key /
+# --representation), so one config serves all foundation models; the
+# cluster array fans model keys × representations out as separate runs.
+input_mode: foundation_embeddings
+
+selection_metric: separation_logreg_balanced_accuracy
+selection_eval_name: med_adhd_vs_ctrl
+interactive: true
+overwrite: false
+
+# Foundation embeddings are a single dense space per model -> flat mode only, so
+# the whole plan is one mode running every reducer over its n_components sweep.
+# `representation` is one of the canonical levels epoch/recording/subject;
+# it defaults to 'recording' here for local runs, and the cluster overrides it per
+# array task (epoch, recording, subject) via the CLI.
+representation: recording
+analysis_modes:
+  flat: {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 20, 50]}

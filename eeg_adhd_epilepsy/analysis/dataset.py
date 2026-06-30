@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -11,13 +10,16 @@ import numpy as np
 import pandas as pd
 from coco_pipe.descriptors import KNOWN_FAMILY_TOKENS, load_descriptor_table
 from coco_pipe.descriptors.qc import aggregate_family_qc
-from coco_pipe.io import BIDSConfig, DataContainer, load_data
-from coco_pipe.io.embeddings import load_embedding_derivatives
+from coco_pipe.io import AGGREGATION_LEVELS, BIDSConfig, DataContainer, load_data
+from coco_pipe.io.embeddings import (
+    combined_embedding_table_path,
+    load_combined_embedding_table,
+    load_embedding_derivatives,
+)
 from coco_pipe.io.quality import GROUP_BY_COLUMN, run_qc
 
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
-    add_recording_id,
     bids_session_label,
     bids_subject_label,
     get_derivative_root,
@@ -257,19 +259,89 @@ def reepoch_eeg(
     )
 
 
+def _attach_subject_metadata(
+    container: DataContainer,
+    meta_df: pd.DataFrame,
+    subject_col: str,
+) -> DataContainer:
+    """Join cohort metadata columns onto an embedding container, keyed by subject.
+
+    Foundation embeddings arrive with only identity coords; this adds every
+    ``meta_df`` column not already present (e.g. ``combined_diagnosis``,
+    ``patient_group_id``) so downstream evals can read their target/group columns,
+    mirroring what the BIDS/descriptor loaders do via ``subject_metadata_df``.
+    Subjects with no metadata row get NaN, which the evals already treat as
+    missing. A no-op if the container carries no recognizable subject coord.
+    """
+    from coco_pipe.io import normalize_subject_value
+
+    subject_key = subject_col if subject_col in container.coords else "subject"
+    if subject_key not in container.coords:
+        return container
+
+    lookup = meta_df.copy()
+    lookup[subject_col] = lookup[subject_col].map(normalize_subject_value)
+    lookup = lookup.drop_duplicates(subject_col).set_index(subject_col)
+
+    obs_subjects = pd.Index(
+        [normalize_subject_value(value) for value in np.asarray(container.coords[subject_key])]
+    )
+    new_coords = dict(container.coords)
+    for column in lookup.columns:
+        if column in new_coords:
+            continue
+        new_coords[column] = np.asarray(
+            lookup[column].reindex(obs_subjects).to_numpy(), dtype=object
+        )
+    return DataContainer(
+        X=container.X,
+        dims=container.dims,
+        coords=new_coords,
+        ids=container.ids,
+        meta=container.meta,
+    )
+
+
 def build_dataset(
     args,
-    subjects: Sequence[str] | None,
     meta_df: pd.DataFrame | None,
     condition: str,
     target_col: str | None = None,
+    *,
+    analysis_mode: str | None = None,
+    representation: str | None = None,
 ) -> DataContainer:
-    """Top-level dataset orchestrator."""
+    """Top-level dataset orchestrator.
+
+    ``analysis_mode`` and ``representation`` may be passed explicitly to load a
+    layout other than the run's current mode; both default to the matching
+    ``args`` attribute.
+    """
+    if meta_df is None:
+        subjects = None
+    else:
+        mask = pd.Series(True, index=meta_df.index)
+        for col, vals in zip(args.filter_col, args.filter_val):
+            if col in meta_df.columns:
+                mask &= meta_df[col].astype(str).isin(vals)
+
+        from coco_pipe.io import normalize_subject_value
+
+        subjects = sorted(
+            {
+                normalize_subject_value(subject)
+                for subject in meta_df.loc[mask, args.subject_col].dropna().unique()
+            }
+        )
+
     input_mode = args.input_mode
     effective_input_mode = (
         args.reduced_source_input_mode if input_mode == "reduced_dimensions" else input_mode
     )
-    analysis_mode = args.analysis_mode
+    analysis_mode = analysis_mode if analysis_mode is not None else args.analysis_mode
+    representation = (
+        representation if representation is not None else getattr(args, "representation", "")
+    )
     if effective_input_mode == "raw":
         container = build_container(
             bids_root=Path(args.bids_root),
@@ -357,15 +429,45 @@ def build_dataset(
                 container = container.isel(obs=keep_indices)
         container.meta = {**dict(container.meta), "qc_result": qc_result}
     elif effective_input_mode == "foundation_embeddings":
-        container = load_embedding_derivatives(
-            Path(args.embedding_derivative_root),
-            representation=args.embedding_representation,
-            aggregate_by=args.embedding_aggregate_by,
-            model_key=args.embedding_model_key,
+        embedding_root = Path(args.embedding_derivative_root)
+        combined_path = (
+            combined_embedding_table_path(
+                embedding_root,
+                args.embedding_model_key,
+                condition,
+                representation,
+            )
+            if condition
+            else None
         )
-        if condition and "condition" in container.coords:
-            values = np.asarray(container.coords["condition"]).astype(str)
-            container = container.isel(obs=np.flatnonzero(values == str(condition)))
+        if combined_path is not None and combined_path.exists():
+            container = load_combined_embedding_table(
+                embedding_root,
+                args.embedding_model_key,
+                condition,
+                representation=representation,
+                aggregate_by=args.embedding_aggregate_by,
+            )
+        else:
+            requested_rep = representation
+            load_rep = "epoch" if requested_rep == "subject" else requested_rep
+            container = load_embedding_derivatives(
+                embedding_root,
+                representation=load_rep,
+                aggregate_by=args.embedding_aggregate_by,
+                model_key=args.embedding_model_key,
+            )
+            if condition and "condition" in container.coords:
+                values = np.asarray(container.coords["condition"]).astype(str)
+                container = container.isel(obs=np.flatnonzero(values == str(condition)))
+            if requested_rep == "subject":
+                subject_key = (
+                    args.subject_col if args.subject_col in container.coords else "subject"
+                )
+                if subject_key in container.coords:
+                    container = container.aggregate(by=subject_key, stats="mean")
+        if meta_df is not None:
+            container = _attach_subject_metadata(container, meta_df, args.subject_col)
         if subjects is not None:
             subject_key = args.subject_col if args.subject_col in container.coords else "subject"
             if subject_key in container.coords:
@@ -402,44 +504,27 @@ def build_dataset(
 
     represented = container
     if effective_input_mode == "raw":
-        if args.representation in {
-            "subject_flat",
-            "subject_time_as_sample",
-            "subject_native",
-            "recording_flat",
-            "recording_time_as_sample",
-            "recording_native",
-        }:
-            aggregation_unit = args.aggregation_unit
-            if aggregation_unit == "recording":
-                container = add_recording_id(container, args.subject_col)
-                container = container.aggregate(by="recording_id", stats="mean")
-            elif aggregation_unit == "subject":
-                container = container.aggregate(by=args.subject_col, stats="mean")
-            else:
-                raise ValueError(f"Unsupported aggregation_unit '{aggregation_unit}'.")
+        if representation == "subject":
+            container = container.aggregate(by=args.subject_col, stats="mean")
+        elif representation == "recording":
+            if "recording_id" not in container.coords:
+                raise ValueError(
+                    "Raw 'recording' representation requires a 'recording_id' coordinate."
+                )
+            container = container.aggregate(by="recording_id", stats="mean")
+        elif representation != "epoch":
+            raise ValueError(
+                f"Raw representation must be one of {list(AGGREGATION_LEVELS)}, "
+                f"got '{representation}'."
+            )
 
         if analysis_mode == "flat":
-            if args.representation in {"epoch_flat", "subject_flat", "recording_flat"}:
-                represented = container.flatten(preserve="obs")
-            elif args.representation in {
-                "epoch_time_as_sample",
-                "subject_time_as_sample",
-                "recording_time_as_sample",
-            }:
-                represented = container.stack(dims=("obs", "time"), new_dim="obs")
-            else:
-                raise ValueError(f"Unsupported raw flat representation '{args.representation}'.")
-        elif analysis_mode == "sensor" and args.representation in {
-            "epoch_native",
-            "subject_native",
-            "recording_native",
-        }:
+            represented = container.flatten(preserve="obs")
+        elif analysis_mode == "sensor":
             represented = container
         else:
             raise ValueError(
-                f"Unsupported raw representation '{args.representation}' "
-                f"for analysis_mode='{analysis_mode}'."
+                f"Raw inputs support analysis_mode 'flat' or 'sensor', got '{analysis_mode}'."
             )
     represented.meta = dict(represented.meta)
     represented.meta.update(
@@ -448,7 +533,7 @@ def build_dataset(
             "source_input_mode": effective_input_mode,
             "condition": condition,
             "analysis_mode": analysis_mode,
-            "aggregation_unit": args.aggregation_unit,
+            "representation": representation,
             "loaded_obs": int(container.X.shape[0]),
             "loaded_subjects": int(
                 pd.Index(np.asarray(container.coords.get(args.subject_col, []))).nunique()
