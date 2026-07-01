@@ -37,10 +37,10 @@ qc:
 # mode and yields component loadings; the non-linear reducers only run where a
 # manifold is worth recovering, and the granular modes drop to PCA + a small sweep.
 analysis_modes:
-  flat:                  {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 15, 20, 25]}
-  family:                {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 15, 20, 25]}
-  subfamily:             {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 15, 20, 25]}
-  sensor:                {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 15, 20, 25]}
+  flat:                  {reducers: [PCA, UMAP, PHATE], n_components: [2, 3, 5, 10, 15, 20, 25]}
+  family:                {reducers: [PCA, UMAP, PHATE], n_components: [2, 3, 5, 10, 15, 20, 25]}
+  subfamily:             {reducers: [PCA, UMAP, PHATE], n_components: [2, 3, 5, 10, 15, 20, 25]}
+  sensor:                {reducers: [PCA, UMAP, PHATE], n_components: [2, 3, 5, 10, 15, 20, 25]}
   sensor_within_family:  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25]}
   sensor_within_subfamily: {reducers: [PCA], n_components: [2, 3]}
   feature_within_family: {reducers: [PCA], n_components: [2, 3]}
