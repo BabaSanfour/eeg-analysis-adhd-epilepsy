@@ -735,6 +735,26 @@ def main() -> None:
         action="store_true",
         help="Skip reduction and generate cross-model foundation comparison reports.",
     )
+    parser.add_argument(
+        "--descriptor_table_path",
+        default=None,
+        help="Override descriptor table path.",
+    )
+    parser.add_argument(
+        "--descriptor_feature_columns_path",
+        default=None,
+        help="Override descriptor feature columns path.",
+    )
+    parser.add_argument(
+        "--embedding_derivative_root",
+        default=None,
+        help="Override foundation embedding root.",
+    )
+    parser.add_argument(
+        "--embedding_model_key",
+        default=None,
+        help="Override foundation embedding model.",
+    )
     args = parser.parse_args()
 
     config = resolve_cli_config(
@@ -748,6 +768,10 @@ def main() -> None:
         reports_only=args.reports_only,
         representation=args.representation,
         compare_only=args.compare_only,
+        descriptor_table_path=args.descriptor_table_path,
+        descriptor_feature_columns_path=args.descriptor_feature_columns_path,
+        embedding_derivative_root=args.embedding_derivative_root,
+        embedding_model_key=args.embedding_model_key,
     )
     run(config)
 
