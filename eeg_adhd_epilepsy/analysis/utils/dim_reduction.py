@@ -333,7 +333,30 @@ def group_fit_requests(
 
 def pool_containers(containers: list[DataContainer]) -> DataContainer:
     """Concatenate conditions while preserving deferred family-QC semantics."""
-    pooled = DataContainer.concat(containers)
+    if not containers:
+        raise ValueError("No containers to pool.")
+
+    dims = containers[0].dims
+    common_coords = {}
+    for dim in dims:
+        if dim == "obs":
+            continue
+        if dim in containers[0].coords:
+            common = set(containers[0].coords[dim])
+            for c in containers[1:]:
+                common &= set(c.coords[dim])
+            # Preserve original order from first container
+            common_coords[dim] = [x for x in containers[0].coords[dim] if x in common]
+
+    aligned = []
+    for c in containers:
+        c_aligned = c
+        for dim, values in common_coords.items():
+            if len(values) < len(c_aligned.coords[dim]):
+                c_aligned = c_aligned.select(**{dim: values})
+        aligned.append(c_aligned)
+
+    pooled = DataContainer.concat(aligned)
     group_by_values = {
         str(container.meta["family_qc_group_by"])
         for container in containers
