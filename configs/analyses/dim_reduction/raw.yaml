@@ -33,5 +33,5 @@ window_source: auto
 #     channels into one vector; sensor keeps the native per-channel layout.
 representation: subject
 analysis_modes:
-  flat:   {reducers: [PCA, UMAP, PHATE, Isomap], n_components: [2, 3, 5, 10, 20]}
+  flat:   {reducers: [PCA, UMAP, PHATE], n_components: [2, 3, 5, 10, 20]}
   sensor: {reducers: [PCA, UMAP],                n_components: [2, 3, 5]}
