@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 from coco_pipe.dim_reduction import SEPARATION_METRIC_KEY
 from coco_pipe.io import DataContainer
+from joblib.parallel import get_active_backend
 
 import eeg_adhd_epilepsy.analysis.dimensionality_reduction as dim_reduction
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
@@ -238,6 +239,15 @@ def test_collect_flat_unit_flattens_sensor_layout_container(tmp_path):
     assert len(requests) == 2
     assert {request["fit_payload"]["n_components"] for request in requests} == {2, 3}
     assert {request["fit_payload"]["unit_name"] for request in requests} == {"all"}
+
+
+def test_dim_reduction_batches_use_thread_backend_for_parallel_work():
+    def worker(task):
+        return get_active_backend()[0].__class__.__name__, task
+
+    records = dim_reduction._run_shared_memory_batch([1, 2], worker, max_workers=2)
+
+    assert records == [("ThreadingBackend", 1), ("ThreadingBackend", 2)]
 
 
 # --- Leaderboard collection + roll-up rendering ---------------------------------
