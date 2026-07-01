@@ -4,8 +4,8 @@
 #SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.out
 #SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.err
 #SBATCH --time=24:00:00
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=256G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=128G
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -56,7 +56,7 @@ if [ "$PIPELINE_TYPE" == "raw" ]; then
     for rep in epoch recording; do
         echo " -> Representation: $rep"
         if [ "$rep" == "epoch" ]; then
-            run_threads=8
+            run_threads=2
         else
             run_threads=$THREADS
         fi
