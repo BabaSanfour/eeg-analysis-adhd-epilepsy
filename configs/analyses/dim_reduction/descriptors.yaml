@@ -33,15 +33,16 @@ qc:
 # (redundant with feature_within_family) and `descriptor_sensor` (too granular
 # once only mean/variance/IQR remain) are intentionally omitted. Each mode fully
 # declares its own run — the `reducers` to fit and the `n_components` to sweep
-# (there is no global default). PCA is the cheap linear baseline that runs on every
-# mode and yields component loadings; the non-linear reducers only run where a
-# manifold is worth recovering, and the granular modes drop to PCA + a small sweep.
+# (there is no global default). For now every mode runs PCA only: it is the cheap,
+# memory-safe linear baseline that yields component loadings and is stable at epoch/
+# subject granularity. The non-linear reducers (UMAP/PHATE) are parked — their
+# neighbor graphs are the main OOM driver — and can be re-added per mode later.
 analysis_modes:
-  flat:                  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
-  family:                {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
-  subfamily:             {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
-  sensor:                {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
-  sensor_within_family:  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
+  flat:                  {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
+  family:                {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
+  subfamily:             {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
+  sensor:                {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
+  sensor_within_family:  {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
   sensor_within_subfamily: {reducers: [PCA], n_components: [2, 3]}
   feature_within_family: {reducers: [PCA], n_components: [2, 3]}
-  descriptor:            {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
+  descriptor:            {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
