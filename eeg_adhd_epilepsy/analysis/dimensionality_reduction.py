@@ -37,6 +37,7 @@ from coco_pipe.io import (
     write_json,
 )
 from coco_pipe.utils import resolve_n_jobs, run_task_batch, slug, stable_hash
+from joblib import parallel_backend
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
@@ -193,6 +194,18 @@ def _get_base_container(
     return container
 
 
+def _run_shared_memory_batch(
+    tasks: list[Any],
+    worker_fn: Any,
+    max_workers: int,
+) -> list[Any]:
+    """Run fit/eval batches with thread workers to avoid duplicating large arrays."""
+    if max_workers == 1 or len(tasks) <= 1:
+        return run_task_batch(tasks, worker_fn, max_workers)
+    with parallel_backend("threading"):
+        return run_task_batch(tasks, worker_fn, max_workers)
+
+
 def execute_analysis_mode(
     *,
     args: Any,
@@ -310,7 +323,7 @@ def execute_analysis_mode(
             )
             fit_groups = group_fit_requests(fit_requests)
             fit_runs = []
-            for group_records in run_task_batch(
+            for group_records in _run_shared_memory_batch(
                 fit_groups,
                 lambda group: run_fit_group(group, errors="raise"),
                 resolved_n_jobs,
@@ -346,7 +359,7 @@ def execute_analysis_mode(
                             )
                         )
                 logger.info("Queued %d eval request(s) for mode '%s'.", len(eval_requests), mode)
-                for record in run_task_batch(
+                for record in _run_shared_memory_batch(
                     eval_requests,
                     lambda request: run_eval(**request, errors="raise"),
                     resolved_n_jobs,
