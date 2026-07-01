@@ -18,4 +18,5 @@ overwrite: false
 # array task (epoch, recording, subject) via the CLI.
 representation: recording
 analysis_modes:
-  flat: {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 20]}
+  # PCA only for now (memory-safe baseline); UMAP/PHATE parked, re-add later.
+  flat: {reducers: [PCA], n_components: [2, 3, 5, 10, 20]}
