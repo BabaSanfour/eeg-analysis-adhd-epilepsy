@@ -5,7 +5,7 @@
 #SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.err
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=128G
+#SBATCH --mem=256G
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
