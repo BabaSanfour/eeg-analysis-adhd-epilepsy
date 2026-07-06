@@ -13,11 +13,11 @@ from coco_pipe.io import DataContainer
 from joblib.parallel import get_active_backend
 
 import eeg_adhd_epilepsy.analysis.dimensionality_reduction as dim_reduction
+from eeg_adhd_epilepsy.analysis.utils.common import base_layout_mode
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     build_and_validate_mode_specs,
     group_fit_requests,
 )
-from eeg_adhd_epilepsy.analysis.utils.units import base_layout_mode
 from eeg_adhd_epilepsy.reports.dim_reduction import (
     collect_mode_leaderboard,
     generate_rollup_report,
@@ -430,7 +430,6 @@ def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch):
     cohort = tmp_path / "cohort.yaml"
     cohort.write_text(
         "dataset_name: smoke\n"
-        "output_group: smoke_group\n"
         "subject_col: study_id\n"
         "conditions: [EO_baseline]\n"
         "run_pooled: false\n"

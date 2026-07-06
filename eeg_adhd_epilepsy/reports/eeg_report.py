@@ -17,16 +17,10 @@ from mne_bids import BIDSPath
 
 from eeg_adhd_epilepsy.io import report_paths
 from eeg_adhd_epilepsy.reports._common import (
-    add_images as _add_images,
-)
-from eeg_adhd_epilepsy.reports._common import (
-    add_optional_table as _add_optional_table,
-)
-from eeg_adhd_epilepsy.reports._common import (
+    add_images,
+    add_optional_table,
     build_subject_overview_table,
-)
-from eeg_adhd_epilepsy.reports._common import (
-    clean_scalar as _clean_scalar,
+    clean_scalar,
 )
 from eeg_adhd_epilepsy.utils import events as utils_events
 from eeg_adhd_epilepsy.utils.constants import SEGMENT_COLUMNS
@@ -457,14 +451,14 @@ def generate_eeg_subject_report(
     overview.add_markdown(
         "Aggregated pre-base EEG summary across all runs for this subject-session."
     )
-    _add_optional_table(overview, build_subject_overview_table(record), "Subject Overview")
+    add_optional_table(overview, build_subject_overview_table(record), "Subject Overview")
     report.add_section(overview)
 
     if run_inventory_df is not None and not run_inventory_df.empty:
         runs = Section("Run Inventory", icon="📚")
-        _add_optional_table(runs, run_inventory_df, "Runs Included")
+        add_optional_table(runs, run_inventory_df, "Runs Included")
         if consistency_df is not None and not consistency_df.empty:
-            _add_optional_table(runs, consistency_df, "Run Consistency")
+            add_optional_table(runs, consistency_df, "Run Consistency")
             if consistency_df["Sampling rate (Hz)"].nunique() > 1 or (
                 consistency_df["EEG Channels"].nunique() > 1
             ):
@@ -475,32 +469,32 @@ def generate_eeg_subject_report(
         report.add_section(runs)
 
     condition = Section("Condition Summary", icon="🧠")
-    _add_optional_table(
+    add_optional_table(
         condition,
         build_condition_summary_table(record["summary"], raw_duration=record.get("raw_duration")),
         "Condition Summary",
     )
-    _add_optional_table(condition, build_segment_counts_table(record["summary"]), "Segment Counts")
+    add_optional_table(condition, build_segment_counts_table(record["summary"]), "Segment Counts")
     if epoch_yield_df is not None and not epoch_yield_df.empty:
-        _add_optional_table(condition, epoch_yield_df, "Epoch Yield")
-    _add_optional_table(
+        add_optional_table(condition, epoch_yield_df, "Epoch Yield")
+    add_optional_table(
         condition, build_photo_frequency_table(record["summary"]), "PHOTO Frequencies"
     )
     report.add_section(condition)
 
     annotations = Section("Annotations", icon="📝")
-    _add_optional_table(
+    add_optional_table(
         annotations, build_event_counts_table(record.get("event_counts")), "Filtered Event Counts"
     )
     report.add_section(annotations)
 
     if run_summary_df is not None and not run_summary_df.empty:
         run_summaries = Section("Run Summaries", icon="🗂️")
-        _add_optional_table(run_summaries, run_summary_df, "Per-Run Summary")
+        add_optional_table(run_summaries, run_summary_df, "Per-Run Summary")
         report.add_section(run_summaries)
 
     figures = Section("Figures", icon="📈")
-    _add_images(
+    add_images(
         figures,
         figure_paths,
         (
@@ -538,46 +532,46 @@ def generate_eeg_dataset_report(
     report.add_section(definition)
 
     inventory = Section("Recording Inventory", icon="🗂️")
-    _add_optional_table(
+    add_optional_table(
         inventory,
         tables.get("multi_run_subjects_df", pd.DataFrame()),
         "Subjects With More Than 2 Runs",
     )
-    _add_images(inventory, figure_paths, ("runs_per_subject", "run_duration_distribution"))
+    add_images(inventory, figure_paths, ("runs_per_subject", "run_duration_distribution"))
     report.add_section(inventory)
 
     timing = Section("Recording Structure and Timing", icon="⏰")
-    _add_optional_table(timing, tables.get("timing_df", pd.DataFrame()), "Timing Summary")
-    _add_images(timing, figure_paths, ("recording_start_hour_distribution",))
+    add_optional_table(timing, tables.get("timing_df", pd.DataFrame()), "Timing Summary")
+    add_images(timing, figure_paths, ("recording_start_hour_distribution",))
     report.add_section(timing)
 
     availability = Section("Condition Availability", icon="🧠")
-    _add_optional_table(
+    add_optional_table(
         availability, tables.get("missingness_df", pd.DataFrame()), "Condition Missingness"
     )
-    _add_optional_table(
+    add_optional_table(
         availability, tables.get("availability_df", pd.DataFrame()), "Condition Availability"
     )
-    _add_images(availability, figure_paths, ("dataset_event_distributions_conditions",))
+    add_images(availability, figure_paths, ("dataset_event_distributions_conditions",))
     report.add_section(availability)
 
     annotations = Section("Annotations and Clinical Content", icon="📝")
-    _add_optional_table(
+    add_optional_table(
         annotations, tables.get("event_rates_df", pd.DataFrame()), "Filtered Event Rates"
     )
-    _add_images(annotations, figure_paths, ("dataset_event_distributions_clinical",))
+    add_images(annotations, figure_paths, ("dataset_event_distributions_clinical",))
     report.add_section(annotations)
 
     metadata = Section("Metadata-Linked EEG Views", icon="🔗")
-    _add_optional_table(
+    add_optional_table(
         metadata, tables.get("source_dataset_df", pd.DataFrame()), "By Source Dataset"
     )
-    _add_optional_table(
+    add_optional_table(
         metadata, tables.get("combined_diagnosis_df", pd.DataFrame()), "By Combined Diagnosis"
     )
-    _add_optional_table(metadata, tables.get("sex_df", pd.DataFrame()), "By Sex")
-    _add_optional_table(metadata, tables.get("age_group_df", pd.DataFrame()), "By Age Group")
-    _add_images(
+    add_optional_table(metadata, tables.get("sex_df", pd.DataFrame()), "By Sex")
+    add_optional_table(metadata, tables.get("age_group_df", pd.DataFrame()), "By Age Group")
+    add_images(
         metadata,
         figure_paths,
         (
@@ -650,17 +644,17 @@ def build_eeg_run_record(
     eeg_record = {
         **ids,
         "study_id": int(record["study_id"]),
-        "source_dataset": _clean_scalar(metadata.get("source_dataset"))
-        or _clean_scalar(record.get("source_dataset")),
-        "record_date": _clean_scalar(record.get("record_date")),
-        "meas_datetime": _clean_scalar(record.get("meas_datetime")),
+        "source_dataset": clean_scalar(metadata.get("source_dataset"))
+        or clean_scalar(record.get("source_dataset")),
+        "record_date": clean_scalar(record.get("record_date")),
+        "meas_datetime": clean_scalar(record.get("meas_datetime")),
         "filepath": str(ids.get("filepath") or ""),
         "raw_duration": raw_duration,
         "n_channels": len(raw.ch_names),
         "sfreq": float(raw.info.get("sfreq") or 0.0),
-        "age_group": _clean_scalar(metadata.get("age_group")),
-        "sex": _clean_scalar(metadata.get("sex")),
-        "combined_diagnosis": _clean_scalar(metadata.get("combined_diagnosis")),
+        "age_group": clean_scalar(metadata.get("age_group")),
+        "sex": clean_scalar(metadata.get("sex")),
+        "combined_diagnosis": clean_scalar(metadata.get("combined_diagnosis")),
         "segments_df": segments_df,
         "summary": summary,
         "event_counts": event_counts,

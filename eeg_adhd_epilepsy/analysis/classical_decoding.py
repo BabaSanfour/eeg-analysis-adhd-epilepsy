@@ -1,53 +1,58 @@
 #!/usr/bin/env python3
-"""Leakage-safe classical decoding over descriptors and foundation embeddings."""
+"""Leakage-safe classical decoding over descriptors and foundation embeddings.
+
+The entry point stays thin, mirroring the dimensionality-reduction workflow:
+``run`` normalizes the config into a :class:`ClassicalPlan`, loads each condition
+scope once, enumerates the independent decoding units, and runs them through the
+coco-pipe per-unit runner (optionally in parallel). All the per-unit lifecycle —
+experiment assembly, resume, export, reports, record extraction — lives in
+``coco_pipe.decoding`` and ``analysis.utils.decoding``.
+"""
 
 from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Mapping
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
+import coco_pipe.report
 import numpy as np
 import pandas as pd
-import yaml
 from coco_pipe.decoding import (
-    ClassicalModelConfig,
     CVConfig,
-    Experiment,
+    DecodingUnit,
     ExperimentConfig,
     FeatureSelectionConfig,
     ReducerConfig,
     TuningConfig,
-    completed_for_config,
     correct_sweep_pvalues,
-    load_completed_result_records,
+    execute_decoding_sweep,
+    grouped_chance_assessment,
+    load_sweep_records,
     redact_sensitive,
     safe_group_n_splits,
-    write_run_status,
 )
-from coco_pipe.io import DataContainer, iter_analysis_units, read_table
-from coco_pipe.report import make_decoding_report
+from coco_pipe.descriptors import build_descriptor_feature_metadata
+from coco_pipe.io import DataContainer, read_json
+from coco_pipe.utils import slug
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
-from eeg_adhd_epilepsy.analysis.utils.decoding import (
-    DEFAULT_METRICS,
-    cohort_signature,
-    grouped_accuracy_assessment,
-    prepare_decoding_scope,
-    require_conditions,
-    result_records,
-    slug,
-)
-from eeg_adhd_epilepsy.analysis.utils.units import (
+from eeg_adhd_epilepsy.analysis.utils.common import (
     apply_family_qc_mask,
-    base_layout_mode,
     families_for_analysis_unit,
+    pool_containers,
+    require_config,
 )
-from eeg_adhd_epilepsy.io.report_paths import default_reports_root
+from eeg_adhd_epilepsy.analysis.utils.decoding import (
+    ClassicalPlan,
+    build_classical_plan,
+    build_loader_args,
+    prepare_decoding_scope,
+    resolve_decoding_paths,
+)
 from eeg_adhd_epilepsy.reports.decoding import (
-    descriptor_feature_metadata,
     generate_decoding_summary_report,
     generate_head_to_head_report,
 )
@@ -55,566 +60,457 @@ from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 
 LOGGER = logging.getLogger(__name__)
 
-# Canonical descriptor plan. Keep this order aligned with the summary report.
-_DESCRIPTOR_ANALYSIS_MODES = [
-    "flat",
-    "sensor",
-    "subfamily",
-    "sensor_within_subfamily",
-    "descriptor",
-    "descriptor_sensor",
-]
-_DESCRIPTOR_ANALYSIS_MODE_SET = frozenset(_DESCRIPTOR_ANALYSIS_MODES)
+_FS_METADATA_KEYS = {"name", "analysis_modes"}
 
 
-def _is_transductive(container: DataContainer) -> bool:
-    """Return whether the input representation used full-cohort information."""
-    return bool(container.meta.get("transductive", False))
+# ---------------------------------------------------------------------------
+# Classical unit construction
+# ---------------------------------------------------------------------------
 
 
-def _selection_specs(config: dict[str, Any]) -> list[dict[str, Any]]:
-    """Return mandatory baseline plus explicitly requested SFS passes."""
-    normalized = [{"name": "baseline", "method": "none"}]
-    names = {"baseline"}
-    for raw_spec in config.get("feature_selection") or []:
-        spec = dict(raw_spec)
-        method = str(spec.get("method", "none")).lower()
-        if method == "none":
-            continue
-        if method != "sfs":
+def _validate_unit_data(
+    X: np.ndarray,
+    y: pd.Series,
+    groups: pd.Series | None,
+    target_name: str,
+    requested_splits: int,
+    is_classifier: bool = True,
+) -> int:
+    """Validate data dimensions and class counts; return safe CV fold count."""
+    if X.shape[0] == 0:
+        raise ValueError(f"No valid observations for {target_name}.")
+    if is_classifier:
+        counts = y.value_counts()
+        if len(counts) < 2:
             raise ValueError(
-                "feature_selection only supports method='sfs'; "
-                "the baseline pass is added automatically."
+                f"Target '{target_name}' has fewer than 2 classes: {counts.to_dict()}."
             )
-        name = str(spec.get("name") or "sfs")
-        if name in names:
-            raise ValueError(f"Duplicate feature-selection name: {name!r}.")
-        spec.update(name=name, method="sfs")
-        normalized.append(spec)
-        names.add(name)
-    return normalized
+        if counts.min() < 2:
+            raise ValueError(
+                f"Target '{target_name}' has classes with < 2 members: {counts.to_dict()}."
+            )
+    return safe_group_n_splits(y, groups, requested_splits)
 
 
-def _selection_specs_for_unit(
-    specs: list[dict[str, Any]],
-    *,
+def _mode_models(
+    plan: ClassicalPlan,
     analysis_mode: str,
-    n_available: int,
-) -> list[dict[str, Any]]:
-    """Filter optional SFS passes for one analysis unit."""
-    selected: list[dict[str, Any]] = []
-    for spec in specs:
-        if spec["method"] == "none":
-            selected.append(spec)
-            continue
-        requested_modes = spec.get("analysis_modes")
-        if requested_modes and analysis_mode not in requested_modes:
-            continue
-        if analysis_mode == "descriptor_sensor" or n_available <= 1:
-            continue
-        selected.append(spec)
-    return selected
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Return model configs and grids explicitly enabled for one analysis mode."""
+    model_configs = {
+        name: model
+        for name, model in plan.model_configs.items()
+        if plan.model_analysis_modes.get(name) is None
+        or analysis_mode in plan.model_analysis_modes[name]
+    }
+    model_grids = {name: grid for name, grid in plan.model_grids.items() if name in model_configs}
+    return model_configs, model_grids
 
 
-def _feature_selection_config(
-    spec: dict[str, Any],
-    n_available: int,
-    *,
-    cv: CVConfig | None = None,
-) -> FeatureSelectionConfig:
-    method = str(spec.get("method", "none"))
-    if method == "none":
-        return FeatureSelectionConfig(enabled=False)
-    n_features = spec.get("n_features")
-    if n_features is not None:
-        n_features = min(int(n_features), int(n_available) - 1)
-    return FeatureSelectionConfig(
-        enabled=True,
-        method=method,
-        n_features=n_features,
-        direction=str(spec.get("direction", "forward")),
-        tol=spec.get("tol", 0.001) if n_features is None else spec.get("tol"),
-        cv=cv,
-        scoring=spec.get("scoring"),
+def _build_selection_units(
+    plan: ClassicalPlan,
+    unit: dict[str, Any],
+    X: np.ndarray,
+    unit_y: pd.Series,
+    unit_groups: pd.Series | None,
+    unit_n_splits: int,
+    unit_metadata: pd.DataFrame,
+    scope: str,
+    target_name: str,
+    analysis_mode: str,
+    derivative_root: Path,
+    config: Mapping[str, Any],
+    model_configs: dict[str, Any],
+    model_grids: dict[str, dict[str, Any]],
+    random_state: int,
+    overwrite: bool,
+):
+    """Yield DecodingUnit configs for all valid feature selection passes."""
+    flattened = (
+        unit["container"]
+        if unit["container"].dims == ("obs", "feature")
+        else unit["container"].flatten(preserve="obs")
     )
+    names = [str(value) for value in flattened.coords.get("feature", np.arange(X.shape[1]))]
+    valid_selection_specs = [
+        spec
+        for spec in plan.selection_specs
+        if (
+            not spec.get("analysis_modes")
+            or analysis_mode in {str(mode) for mode in spec["analysis_modes"]}
+        )
+        if str(spec.get("method", "none")) == "none" or X.shape[1] > 1
+    ]
+
+    for selection_spec in valid_selection_specs:
+        selection_mode = str(selection_spec.get("name") or selection_spec.get("method") or "fs")
+        stem = (
+            f"fit_{slug(scope)}_{slug(target_name)}"
+            f"_{analysis_mode}_{slug(unit['unit_key'])}_{selection_mode}"
+        )
+        output_dir = derivative_root / "artifacts" / "fits" / stem
+        context = {
+            "scope": scope,
+            "target": target_name,
+            "input_mode": plan.input_mode,
+            "analysis_mode": analysis_mode,
+            "unit_name": unit["unit_name"],
+            "unit_key": unit["unit_key"],
+            "family": unit.get("family"),
+            "subfamily": unit.get("subfamily"),
+            "selection_mode": selection_mode,
+            "primary": analysis_mode == "flat",
+        }
+        cv_config = CVConfig(
+            strategy="stratified_group_kfold",
+            n_splits=unit_n_splits,
+            shuffle=True,
+            random_state=random_state,
+            group_key="group_id",
+        )
+        tuning = (
+            TuningConfig(
+                enabled=True,
+                scoring=plan.tuning_cfg.get("scoring"),
+                search_type=plan.tuning_cfg.get("search_type", "grid"),
+                cv=CVConfig(
+                    strategy="stratified_group_kfold",
+                    n_splits=min(int(plan.tuning_cfg.get("n_splits", 3)), unit_n_splits),
+                    shuffle=True,
+                    random_state=random_state,
+                    group_key="group_id",
+                ),
+                n_jobs=1,
+                allow_nongroup_inner_cv=bool(plan.tuning_cfg.get("allow_nongroup_inner_cv", False)),
+            )
+            if model_grids and bool(plan.tuning_cfg.get("enabled", True))
+            else None
+        )
+        reducer = (
+            ReducerConfig(
+                enabled=True,
+                method="pca",
+                n_components=plan.reducer_cfg.get("n_components"),
+                whiten=bool(plan.reducer_cfg.get("whiten", False)),
+            )
+            if plan.reducer_enabled
+            else None
+        )
+        fs_kwargs = {k: v for k, v in selection_spec.items() if k not in _FS_METADATA_KEYS}
+        fs_config = (
+            FeatureSelectionConfig(enabled=True, cv=cv_config, **fs_kwargs)
+            if str(fs_kwargs.get("method", "none")) != "none"
+            else None
+        )
+
+        experiment_config = ExperimentConfig(
+            task="classification",
+            tag=f"{target_name}_{analysis_mode}_{unit['unit_key']}_{selection_mode}",
+            random_state=random_state,
+            models=model_configs,
+            grids=model_grids or None,
+            cv=cv_config,
+            tuning=tuning or TuningConfig(enabled=False),
+            reducer=reducer or ReducerConfig(enabled=False),
+            feature_selection=fs_config or FeatureSelectionConfig(enabled=False),
+            statistical_assessment=grouped_chance_assessment(
+                config["chance_method"],
+                n_permutations=int(config["n_permutations"]),
+                store_null=bool(config["store_null_distribution"]),
+            ),
+            metrics=list(plan.metrics),
+            use_scaler=True,
+            n_jobs=1,
+            verbose=bool(config["verbose"]),
+        )
+        yield DecodingUnit(
+            experiment_config=experiment_config,
+            X=X,
+            y=unit_y,
+            output_dir=output_dir,
+            context=context,
+            run_config={**dict(config), **context},
+            groups=unit_groups,
+            feature_names=names,
+            sample_ids=unit_metadata["sample_id"].astype(str),
+            sample_metadata=unit_metadata,
+            inferential_unit="group_id",
+            overwrite=overwrite,
+            include_p_values=True,
+        )
+
+
+def _enumerate_scope(
+    plan: ClassicalPlan,
+    scope: str,
+    full_container: DataContainer,
+    config: Mapping[str, Any],
+    derivative_root: Path,
+):
+    """Yield DecodingUnit objects or failure dicts for a single scope."""
+    from coco_pipe.io import iter_analysis_units
+
+    subject_col = str(config.get("subject_col", "study_id"))
+    session_col = str(config.get("session_col", "session_id"))
+    requested_splits = int(config["cv"]["n_splits"])
+    random_state = int(config["random_state"])
+    overwrite = bool(config["overwrite"])
+
+    for eval_spec in plan.evals:
+        target_name = eval_spec.get("name", eval_spec["target_col"])
+        try:
+            target_container, y, groups, sample_metadata, _ = prepare_decoding_scope(
+                full_container,
+                eval_spec,
+                scope=scope,
+                group_col=eval_spec.get("group_col", config.get("group_col", "patient_group_id")),
+                session_col=session_col,
+                subject_col=subject_col,
+                requested_splits=requested_splits,
+            )
+        except Exception as exc:
+            yield {
+                "scope": scope,
+                "target": target_name,
+                "status": "failed",
+                "reason": f"{type(exc).__name__}: {exc}",
+            }
+            continue
+
+        for analysis_mode in plan.analysis_modes:
+            model_configs, model_grids = _mode_models(plan, analysis_mode)
+            if not model_configs:
+                yield {
+                    "scope": scope,
+                    "target": target_name,
+                    "analysis_mode": analysis_mode,
+                    "status": "skipped",
+                    "reason": "No models are configured for this analysis mode.",
+                }
+                continue
+            try:
+                analysis_units = iter_analysis_units(
+                    target_container,
+                    analysis_mode,
+                    "descriptors" if plan.input_mode == "descriptors" else "foundation_embeddings",
+                    config.get("descriptor_families"),
+                )
+            except Exception as exc:
+                yield {
+                    "scope": scope,
+                    "target": target_name,
+                    "analysis_mode": analysis_mode,
+                    "status": "skipped",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+                continue
+
+            for unit in analysis_units:
+                families = families_for_analysis_unit(
+                    target_container,
+                    unit,
+                    config.get("descriptor_families"),
+                )
+                unit_container, keep_indices = apply_family_qc_mask(unit["container"], families)
+                unit["container"] = unit_container
+                unit_y = pd.Series(y).iloc[keep_indices].reset_index(drop=True)
+                unit_groups = pd.Series(groups).iloc[keep_indices].reset_index(drop=True)
+                unit_metadata = sample_metadata.iloc[keep_indices].reset_index(drop=True)
+                try:
+                    unit_n_splits = _validate_unit_data(
+                        unit_container.X,
+                        unit_y,
+                        unit_groups,
+                        target_name,
+                        requested_splits,
+                    )
+                except ValueError as exc:
+                    yield {
+                        "scope": scope,
+                        "target": target_name,
+                        "analysis_mode": analysis_mode,
+                        "unit_name": unit["unit_name"],
+                        "unit_key": unit["unit_key"],
+                        "family": unit.get("family"),
+                        "subfamily": unit.get("subfamily"),
+                        "status": "skipped",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    }
+                    continue
+
+                X = np.asarray(unit_container.X)
+                if X.ndim != 2:
+                    X = unit_container.flatten(preserve="obs").X
+
+                try:
+                    yield from _build_selection_units(
+                        plan=plan,
+                        unit=unit,
+                        X=X,
+                        unit_y=unit_y,
+                        unit_groups=unit_groups,
+                        unit_n_splits=unit_n_splits,
+                        unit_metadata=unit_metadata,
+                        scope=scope,
+                        target_name=target_name,
+                        analysis_mode=analysis_mode,
+                        derivative_root=derivative_root,
+                        config=config,
+                        model_configs=model_configs,
+                        model_grids=model_grids,
+                        random_state=random_state,
+                        overwrite=overwrite,
+                    )
+                except ValueError as exc:
+                    yield {
+                        "scope": scope,
+                        "target": target_name,
+                        "analysis_mode": analysis_mode,
+                        "unit_name": unit["unit_name"],
+                        "unit_key": unit["unit_key"],
+                        "family": unit.get("family"),
+                        "subfamily": unit.get("subfamily"),
+                        "status": "skipped",
+                        "reason": f"{type(exc).__name__}: {exc}",
+                    }
+
+
+def enumerate_classical_units(
+    plan: ClassicalPlan,
+    scopes: list[tuple[str, DataContainer]],
+    *,
+    config: Mapping[str, Any],
+    derivative_root: Path,
+) -> tuple[list[DecodingUnit], list[dict[str, Any]]]:
+    """Flatten the scope × eval × mode × unit × selection sweep into units.
+
+    Returns ``(units, enumeration_failures)`` where failures are enumeration-time
+    skips (missing models, target/QC problems) that never become sweep rows.
+    """
+    units: list[DecodingUnit] = []
+    failures: list[dict[str, Any]] = []
+
+    for scope, full_container in scopes:
+        for item in _enumerate_scope(
+            plan=plan,
+            scope=scope,
+            full_container=full_container,
+            config=config,
+            derivative_root=derivative_root,
+        ):
+            if isinstance(item, DecodingUnit):
+                units.append(item)
+            else:
+                failures.append(item)
+
+    return units, failures
+
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+
+def _classical_primary_mask(frame: pd.DataFrame) -> pd.Series:
+    """Successful flat-baseline rows — the primary classical result."""
+    if not {"status", "primary"}.issubset(frame.columns):
+        return pd.Series(False, index=frame.index)
+    return (frame["status"] == "success") & frame["primary"].fillna(False).astype(bool)
 
 
 def run(config: dict[str, Any]) -> Path:
-    input_mode = config.get("input_mode", "descriptors")
-    source_mode = (
-        config.get("reduced_source_input_mode", "descriptors")
-        if input_mode == "reduced_dimensions"
-        else input_mode
-    )
-    if source_mode not in {"descriptors", "foundation_embeddings"}:
-        raise ValueError("Classical decoding supports descriptors or embeddings.")
-    bids_root = Path(config["bids_root"]).expanduser()
-    metadata = (
-        read_table(Path(config["metadata"]).expanduser(), sep=None)
-        if config.get("metadata")
-        else None
-    )
-    derivative_root = (
-        bids_root
-        / "derivatives"
-        / "decoding"
-        / str(config.get("output_group", "default"))
-        / str(config["dataset_name"])
-        / input_mode
-    )
-    reports_root = Path(config.get("reports_root", default_reports_root(bids_root))).expanduser()
-    report_root = (
-        reports_root
-        / "summary"
-        / "decoding"
-        / str(config.get("output_group", "default"))
-        / str(config["dataset_name"])
-        / input_mode
-    )
-    conditions = require_conditions(config)
-    scopes: list[tuple[str, DataContainer]] = []
-    qc_report_results = []
-    load_mode = "reduced_dimensions" if input_mode == "reduced_dimensions" else source_mode
-    layout_mode = base_layout_mode(source_mode)
-    default_analysis_modes = (
-        _DESCRIPTOR_ANALYSIS_MODES if source_mode == "descriptors" else ["flat"]
-    )
-    analysis_modes = list(config.get("analysis_modes", default_analysis_modes))
-    if source_mode == "descriptors":
-        unsupported_modes = [
-            mode for mode in analysis_modes if mode not in _DESCRIPTOR_ANALYSIS_MODE_SET
+    plan = build_classical_plan(config)
+    (
+        bids_root,
+        derivative_root,
+        report_root,
+        metadata,
+        config_hash,
+        reports_root,
+        dataset_name_slug,
+    ) = resolve_decoding_paths(config, input_mode=plan.input_mode)
+    compare_only = bool(config.get("compare_only", False))
+    reports_only = bool(config.get("reports_only", False))
+
+    if not compare_only:
+        conditions = require_config(config, "conditions", expected_type=list, cast_str=True)
+        loader_args = build_loader_args(
+            config,
+            input_mode=plan.input_mode,
+            layout_mode=plan.layout_mode,
+        )
+        scopes = [
+            (condition, build_dataset(loader_args, metadata, condition, target_col=None))
+            for condition in conditions
         ]
-        if unsupported_modes:
-            raise ValueError(
-                "Unsupported descriptor analysis modes. Keep only "
-                f"{_DESCRIPTOR_ANALYSIS_MODES}; received {unsupported_modes}."
+        qc_report_results = [
+            (condition, container.meta["qc_result"])
+            for condition, container in scopes
+            if container.meta.get("qc_result") is not None
+        ]
+        if config["run_pooled"] and len(scopes) > 1:
+            scopes.append(("pooled", pool_containers([container for _, container in scopes])))
+
+        if reports_only:
+            records = load_sweep_records(derivative_root)
+        else:
+            units, failures = enumerate_classical_units(
+                plan,
+                scopes,
+                config=config,
+                derivative_root=derivative_root,
             )
-    filters = config.get("filters", {})
-    loader_args = SimpleNamespace(
-        input_mode=load_mode,
-        reduced_source_input_mode=config.get("reduced_source_input_mode", "descriptors"),
-        analysis_mode=layout_mode,
-        bids_root=config.get("bids_root"),
-        use_derivatives=bool(config.get("use_derivatives", True)),
-        task=config.get("task", "clinical"),
-        segment_duration=float(config.get("segment_duration", 10.0)),
-        overlap=float(config.get("overlap", 0.0)),
-        subject_col=config.get("subject_col", "study_id"),
-        desc=config.get("desc", "base"),
-        descriptor_table_path=config.get("descriptor_table_path"),
-        descriptor_feature_columns_path=config.get("descriptor_feature_columns_path"),
-        descriptor_families=config.get("descriptor_families"),
-        descriptor_max_abs_value=config.get("descriptor_max_abs_value", 1e12),
-        location_statistic=config.get("location_statistic"),
-        qc=config.get("qc"),
-        embedding_derivative_root=config.get("embedding_derivative_root"),
-        embedding_aggregate_by=config.get("embedding_aggregate_by"),
-        embedding_model_key=config.get("embedding_model_key"),
-        filter_col=list(filters),
-        filter_val=[filters[column] for column in filters],
-        group_filters=config.get("group_filters"),
-        balance_target=None,
-        balance_strategy="undersample",
-        representation=config.get("representation", "subject"),
-    )
-    for condition in conditions:
-        container = build_dataset(
-            loader_args,
-            metadata,
-            condition,
-            target_col=None,
-        )
-        if _is_transductive(container) and not config.get("allow_transductive_input", False):
-            raise ValueError(
-                "The loaded input is marked transductive because its transformation "
-                "was fitted outside the decoding folds. Set allow_transductive_input: "
-                "true only for explicitly exploratory analyses."
+            records, _ = execute_decoding_sweep(
+                units,
+                failures,
+                config=config,
+                output_root=derivative_root,
+                results_filename="sweep_results.csv",
+                primary_mask=_classical_primary_mask,
+                leaderboard_group_fields=("scope", "target", "analysis_mode", "selection_mode"),
+                reallocate_inner_jobs=True,
+                frame_post=lambda frame: (
+                    correct_sweep_pvalues(frame) if "p_value" in frame else frame
+                ),
+                run_metadata={
+                    "dataset_name": config["dataset_name"],
+                    "input_mode": plan.input_mode,
+                    "config_hash": config_hash,
+                    "run_variant": derivative_root.name,
+                },
             )
-        scopes.append((condition, container))
-        if container.meta.get("qc_result") is not None:
-            qc_report_results.append((condition, container.meta["qc_result"]))
-    if config.get("run_pooled", True) and len(scopes) > 1:
-        pooled = DataContainer.concat([item[1] for item in scopes])
-        pooled.meta = {
-            **dict(pooled.meta),
-            "transductive": any(_is_transductive(item[1]) for item in scopes),
-            "family_qc_bad_ids": {
-                family: sorted(
-                    {
-                        str(obs_id)
-                        for _, item in scopes
-                        for obs_id in item.meta.get("family_qc_bad_ids", {}).get(family, [])
-                    }
-                )
-                for family in {
-                    family
-                    for _, item in scopes
-                    for family in item.meta.get("family_qc_bad_ids", {})
-                }
-            },
-        }
-        scopes.append(("pooled", pooled))
 
-    records: list[dict[str, Any]] = []
-    failures: list[dict[str, Any]] = []
-    evals = config.get("evals", [])
-    if not evals:
-        raise ValueError("At least one target specification is required in evals.")
-    model_specs = config.get("models")
-    if not model_specs:
-        raise ValueError("`models` must be specified in the config.")
-
-    all_model_configs = {
-        name: ClassicalModelConfig(
-            estimator=spec["estimator"],
-            params=dict(spec.get("params", {})),
-            input_kind="embeddings"
-            if config.get("input_mode") == "foundation_embeddings"
-            else "tabular",
+        if config.get("detailed_unit_reports", False):
+            feature_metadata = None
+            if plan.input_mode == "descriptors":
+                descriptor_columns_path = config.get("descriptor_feature_columns_path")
+                if descriptor_columns_path:
+                    path = Path(str(descriptor_columns_path)).expanduser()
+                    if path.exists():
+                        feature_metadata = build_descriptor_feature_metadata(read_json(path))
+            coco_pipe.report.render_unit_reports(
+                records,
+                modes=config.get("detailed_unit_report_modes", ["flat"]),
+                feature_metadata=feature_metadata,
+                asset_urls=config.get("report_asset_urls", "inline"),
+                title_fn=lambda record: (
+                    f"{record.get('target')}: {record.get('analysis_mode')}/"
+                    f"{record.get('unit_name')} ({record.get('selection_mode')})"
+                ),
+            )
+        generate_decoding_summary_report(
+            report_root / "dataset_summary.html",
+            records,
+            title=f"Classical Decoding: {config['dataset_name']}",
+            config=redact_sensitive(config),
+            qc_results=qc_report_results,
         )
-        for name, spec in model_specs.items()
-    }
-    model_analysis_modes = {name: spec.get("analysis_modes") for name, spec in model_specs.items()}
-    # Per-model hyperparameter grids (models without a grid run with fixed params).
-    model_grids = {
-        name: dict(spec["grid"]) for name, spec in model_specs.items() if spec.get("grid")
-    }
-    tuning_cfg = config.get("tuning") or {}
-    selection_specs = _selection_specs(config)
 
-    for scope, full_container in scopes:
-        transductive_input = _is_transductive(full_container)
-        for eval_spec in evals:
-            target_name = eval_spec.get("name", eval_spec["target_col"])
-            try:
-                (
-                    target_container,
-                    y,
-                    groups,
-                    sample_metadata,
-                    _n_splits,
-                ) = prepare_decoding_scope(
-                    full_container,
-                    eval_spec,
-                    scope=scope,
-                    group_col=config.get("group_col", "patient_group_id"),
-                    session_col=config["session_col"],
-                    subject_col=config.get("subject_col", "study_id"),
-                    requested_splits=int(config.get("cv", {}).get("n_splits", 5)),
-                )
-            except Exception as exc:
-                failures.append(
-                    {
-                        "scope": scope,
-                        "target": target_name,
-                        "status": "failed",
-                        "reason": f"{type(exc).__name__}: {exc}",
-                    }
-                )
-                continue
-
-            for analysis_mode in analysis_modes:
-                model_configs = {
-                    name: model_config
-                    for name, model_config in all_model_configs.items()
-                    if not model_analysis_modes[name] or analysis_mode in model_analysis_modes[name]
-                }
-                # Grids only for the models active in this mode (tuned models).
-                experiment_grids = {
-                    name: model_grids[name] for name in model_configs if name in model_grids
-                }
-                if not model_configs:
-                    failures.append(
-                        {
-                            "scope": scope,
-                            "target": target_name,
-                            "analysis_mode": analysis_mode,
-                            "status": "skipped",
-                            "reason": "No models are configured for this analysis mode.",
-                        }
-                    )
-                    continue
-                try:
-                    units = iter_analysis_units(
-                        target_container,
-                        analysis_mode,
-                        "descriptors" if source_mode == "descriptors" else "foundation_embeddings",
-                        config.get("descriptor_families"),
-                    )
-                except Exception as exc:
-                    failures.append(
-                        {
-                            "scope": scope,
-                            "target": target_name,
-                            "analysis_mode": analysis_mode,
-                            "status": "skipped",
-                            "reason": f"{type(exc).__name__}: {exc}",
-                        }
-                    )
-                    continue
-
-                for unit in units:
-                    families = families_for_analysis_unit(
-                        target_container,
-                        unit,
-                        config.get("descriptor_families"),
-                    )
-                    unit_container, keep_indices = apply_family_qc_mask(
-                        unit["container"],
-                        families,
-                    )
-                    unit_y = np.asarray(y)[keep_indices]
-                    unit_groups = np.asarray(groups)[keep_indices]
-                    unit_metadata = sample_metadata.iloc[keep_indices].reset_index(drop=True)
-                    try:
-                        unit_n_splits = safe_group_n_splits(
-                            unit_y,
-                            unit_groups,
-                            requested=int(config.get("cv", {}).get("n_splits", 5)),
-                        )
-                    except Exception as exc:
-                        failures.append(
-                            {
-                                "scope": scope,
-                                "target": target_name,
-                                "analysis_mode": analysis_mode,
-                                "unit_name": unit["unit_name"],
-                                "unit_key": unit["unit_key"],
-                                "family": unit.get("family"),
-                                "subfamily": unit.get("subfamily"),
-                                "status": "skipped",
-                                "reason": f"{type(exc).__name__}: {exc}",
-                            }
-                        )
-                        continue
-                    X = np.asarray(unit_container.X)
-                    if X.ndim != 2:
-                        X = unit_container.flatten(preserve="obs").X
-                    flattened = (
-                        unit_container
-                        if unit_container.dims == ("obs", "feature")
-                        else unit_container.flatten(preserve="obs")
-                    )
-                    names = [
-                        str(value)
-                        for value in flattened.coords.get(
-                            "feature", np.arange(flattened.X.shape[1])
-                        )
-                    ]
-                    unit_selection_specs = _selection_specs_for_unit(
-                        selection_specs,
-                        analysis_mode=analysis_mode,
-                        n_available=X.shape[1],
-                    )
-                    for selection_spec in unit_selection_specs:
-                        selection_mode = str(
-                            selection_spec.get("name") or selection_spec.get("method") or "fs"
-                        )
-                        output_dir = (
-                            derivative_root
-                            / slug(scope)
-                            / slug(target_name)
-                            / analysis_mode
-                            / slug(unit["unit_key"])
-                            / selection_mode
-                        )
-                        context = {
-                            "scope": scope,
-                            "target": target_name,
-                            "input_mode": input_mode,
-                            "analysis_mode": analysis_mode,
-                            "unit_name": unit["unit_name"],
-                            "unit_key": unit["unit_key"],
-                            "family": unit.get("family"),
-                            "subfamily": unit.get("subfamily"),
-                            "selection_mode": selection_mode,
-                            "primary": (analysis_mode == "flat" and not transductive_input),
-                            "transductive_input": transductive_input,
-                            "cv_strategy": "stratified_group_kfold",
-                            "cv_random_state": int(config.get("random_state", 42)),
-                            "effective_n_splits": unit_n_splits,
-                            "n_samples": int(len(unit_y)),
-                            "n_groups": int(np.unique(unit_groups).size),
-                            "cohort_signature": cohort_signature(
-                                unit_metadata[config.get("subject_col", "study_id")]
-                            ),
-                        }
-                        unit_config = {
-                            **config,
-                            **context,
-                        }
-                        if not config.get("overwrite", False) and completed_for_config(
-                            output_dir, unit_config
-                        ):
-                            records.extend(
-                                load_completed_result_records(
-                                    output_dir,
-                                    context=context,
-                                )
-                            )
-                            continue
-                        try:
-                            reducer_cfg = config.get("reducer", {})
-                            reducer_enabled = input_mode == "reduced_dimensions"
-                            n_components = reducer_cfg.get("n_components")
-                            cv_config = CVConfig(
-                                strategy="stratified_group_kfold",
-                                n_splits=unit_n_splits,
-                                shuffle=True,
-                                random_state=int(config.get("random_state", 42)),
-                                group_key="group_id",
-                            )
-                            experiment_config = ExperimentConfig(
-                                task="classification",
-                                tag=(
-                                    f"{target_name}_{analysis_mode}_"
-                                    f"{unit['unit_key']}_{selection_mode}"
-                                ),
-                                random_state=int(config.get("random_state", 42)),
-                                models=model_configs,
-                                cv=cv_config,
-                                tuning=TuningConfig(
-                                    enabled=bool(experiment_grids),
-                                    scoring=tuning_cfg.get("scoring"),
-                                    search_type=tuning_cfg.get("search_type", "grid"),
-                                    cv=CVConfig(
-                                        strategy="stratified_group_kfold",
-                                        n_splits=min(
-                                            int(tuning_cfg.get("n_splits", 3)),
-                                            unit_n_splits,
-                                        ),
-                                        shuffle=True,
-                                        random_state=int(config.get("random_state", 42)),
-                                        group_key="group_id",
-                                    ),
-                                    n_jobs=int(config.get("n_jobs", 1)),
-                                    allow_nongroup_inner_cv=bool(
-                                        tuning_cfg.get("allow_nongroup_inner_cv", False)
-                                    ),
-                                ),
-                                grids=experiment_grids or None,
-                                reducer=ReducerConfig(
-                                    enabled=reducer_enabled,
-                                    method="pca",
-                                    n_components=n_components,
-                                    whiten=bool(reducer_cfg.get("whiten", False)),
-                                ),
-                                feature_selection=_feature_selection_config(
-                                    selection_spec,
-                                    X.shape[1],
-                                    cv=cv_config,
-                                ),
-                                statistical_assessment=grouped_accuracy_assessment(
-                                    method=config.get("chance_method", "permutation"),
-                                    n_permutations=int(config.get("n_permutations", 100)),
-                                    store_null=bool(config.get("store_null_distribution", False)),
-                                ),
-                                metrics=config.get("metrics", DEFAULT_METRICS),
-                                use_scaler=True,
-                                n_jobs=int(config.get("n_jobs", 1)),
-                                verbose=bool(config.get("verbose", False)),
-                            )
-                            result = Experiment(experiment_config).run(
-                                X,
-                                unit_y,
-                                groups=unit_groups,
-                                feature_names=names,
-                                sample_ids=unit_metadata["sample_id"].astype(str),
-                                sample_metadata=unit_metadata,
-                                inferential_unit="group_id",
-                            )
-                            result.export(output_dir, config=unit_config)
-                            report_modes = set(config.get("detailed_unit_report_modes", ["flat"]))
-                            if (
-                                config.get("detailed_unit_reports", False)
-                                and analysis_mode in report_modes
-                            ):
-                                feature_metadata = (
-                                    descriptor_feature_metadata(config, names)
-                                    if source_mode == "descriptors"
-                                    else pd.DataFrame({"FeatureName": names})
-                                )
-                                make_decoding_report(
-                                    result,
-                                    title=(
-                                        f"{target_name}: {analysis_mode}/"
-                                        f"{unit['unit_name']} ({selection_mode})"
-                                    ),
-                                    feature_metadata=feature_metadata,
-                                    sections="compact",
-                                    on_error="placeholder",
-                                    asset_urls=config.get(
-                                        "report_asset_urls",
-                                        "inline",
-                                    ),
-                                    output_path=str(output_dir / "report.html"),
-                                )
-                            records.extend(
-                                result_records(
-                                    result,
-                                    context=context,
-                                    output_dir=output_dir,
-                                    include_p_values=True,
-                                )
-                            )
-                        except Exception as exc:
-                            LOGGER.exception("Decoding unit failed: %s", context)
-                            output_dir.mkdir(parents=True, exist_ok=True)
-                            (output_dir / "_FAILED").write_text("", encoding="utf-8")
-                            failure = {
-                                **context,
-                                "status": "failed",
-                                "reason": f"{type(exc).__name__}: {exc}",
-                                "output_dir": str(output_dir),
-                            }
-                            records.append(failure)
-                            failures.append(failure)
-
-    results_frame = pd.DataFrame(records)
-    if not results_frame.empty and "p_value" in results_frame:
-        results_frame = correct_sweep_pvalues(results_frame)
-    derivative_root.mkdir(parents=True, exist_ok=True)
-    results_frame.to_csv(derivative_root / "sweep_results.csv", index=False)
-    pd.DataFrame(failures).to_csv(derivative_root / "failures.csv", index=False)
-    (derivative_root / "config_used.yaml").write_text(
-        yaml.safe_dump(redact_sensitive(config), sort_keys=False),
-        encoding="utf-8",
-    )
-    primary_success = bool(
-        not results_frame.empty
-        and {"status", "primary"}.issubset(results_frame.columns)
-        and (
-            (results_frame["status"] == "success")
-            & results_frame["primary"].fillna(False).astype(bool)
-        ).any()
-    )
-    any_success = bool(
-        not results_frame.empty
-        and "status" in results_frame
-        and (results_frame["status"] == "success").any()
-    )
-    failure_count = len(failures)
-    status = (
-        "SUCCESS"
-        if primary_success and not failure_count
-        else "PARTIAL"
-        if any_success
-        else "FAILED"
-    )
-    write_run_status(derivative_root, status)
-    generate_decoding_summary_report(
-        report_root / "dataset_summary.html",
-        results_frame.to_dict("records"),
-        title=f"Classical Decoding: {config.get('dataset_name', 'dataset')}",
-        config=redact_sensitive(config),
-        qc_results=qc_report_results,
-    )
     generate_head_to_head_report(
         bids_root=bids_root,
         reports_root=reports_root,
-        output_group=str(config.get("output_group", "default")),
-        dataset_name=str(config["dataset_name"]),
-        asset_urls=config.get("report_asset_urls", "inline"),
+        dataset_name=dataset_name_slug,
+        asset_urls=config["report_asset_urls"],
     )
     return derivative_root
 
@@ -629,11 +525,15 @@ def main() -> None:
     parser.add_argument(
         "--analysis_config",
         required=True,
-        help="Analysis/method config: models, cv, feature_selection (configs/analyses/decoding/).",
+        help=(
+            "Analysis/method config: models, cv, feature_selection "
+            "(configs/analyses/decoding/classical.yaml)."
+        ),
     )
     parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
     parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
+    parser.add_argument("--reports_root", default=None, help="Override reports root (else config).")
     parser.add_argument(
         "--representation",
         choices=["epoch", "recording", "subject"],
@@ -646,6 +546,18 @@ def main() -> None:
         default=None,
         help="Override the config's overwrite flag.",
     )
+    parser.add_argument(
+        "--reports-only",
+        dest="reports_only",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Regenerate reports from the saved runs/ inventory without refitting.",
+    )
+    parser.add_argument(
+        "--compare_only",
+        action="store_true",
+        help="Skip decoding and regenerate only the head-to-head comparison report.",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     config = resolve_cli_config(
@@ -654,8 +566,11 @@ def main() -> None:
         bids_root=args.bids_root,
         metadata=args.metadata,
         n_jobs=args.n_jobs,
+        reports_root=args.reports_root,
         overwrite=args.overwrite,
         representation=args.representation,
+        reports_only=args.reports_only,
+        compare_only=args.compare_only,
     )
     run(config)
 

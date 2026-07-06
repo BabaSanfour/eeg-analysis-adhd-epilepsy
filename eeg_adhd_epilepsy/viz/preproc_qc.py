@@ -11,9 +11,9 @@ import matplotlib.pyplot as plt
 import mne
 import numpy as np
 import pandas as pd
-from coco_pipe.viz import plot_bar, plot_histogram
+from coco_pipe.viz import plot_bar, plot_histogram, plot_topomap_from_channel_values
 
-from eeg_adhd_epilepsy.viz import qc_plots, topo, utils
+from eeg_adhd_epilepsy.viz import qc_plots, utils
 
 matplotlib.use("Agg")
 plt.style.use("seaborn-v0_8-whitegrid")
@@ -124,7 +124,7 @@ def _save_topomap_figures(
             axes = [axes]
         for ax, (metric_key, title, cmap) in zip(axes, pair):
             channels, values = topomap_aggregates[metric_key]
-            sub_fig = topo.plot_topomap_from_channel_values(
+            sub_fig = plot_topomap_from_channel_values(
                 channels, values, title=title, cmap=cmap, unit=None, bad_channels=bad_channels
             )
             if sub_fig is None:

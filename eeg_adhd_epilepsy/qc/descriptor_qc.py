@@ -56,6 +56,12 @@ def _expected_families(config_snapshot: dict[str, Any]) -> list[str]:
     ]
 
 
+def _report_asset_urls(config_snapshot: dict[str, Any]) -> dict[str, str] | str | None:
+    """Return configured report assets without triggering implicit downloads."""
+    asset_urls = config_snapshot.get("report_asset_urls")
+    return None if asset_urls == "cdn" else asset_urls
+
+
 def _column_matches_family(column: object, families: Iterable[str]) -> bool:
     text = str(column)
     return any(text.startswith(f"{family}_") or f"_{family}_" in text for family in families)
@@ -458,7 +464,7 @@ def run_descriptor_subject_qc(
         feature_missingness_df=feature_missingness_df,
         family_summary_df=family_summary_df,
         figure_paths=figure_paths,
-        asset_urls="inline",
+        asset_urls=_report_asset_urls(config_snapshot),
     )
     return summary_row
 
@@ -775,7 +781,7 @@ def run_descriptor_dataset_qc(
         figure_paths=figure_paths,
         manifest_df=manifest_df,
         condition_breakdown_df=condition_breakdown_df,
-        asset_urls="inline",
+        asset_urls=_report_asset_urls(config_snapshot),
     )
 
     return {

@@ -19,6 +19,17 @@ from coco_pipe.report.core import ImageElement, Section, TableElement
 
 from eeg_adhd_epilepsy.utils.formatting import format_duration_hms
 
+MODE_TITLES = {
+    "flat": "Full Analysis: All Sensors x All Features",
+    "sensor": "Sensor-wise Analyses",
+    "family": "Family Analyses: All Sensors",
+    "subfamily": "Subfamily Analyses: All Sensors",
+    "sensor_within_family": "Sensor x Family Analyses",
+    "sensor_within_subfamily": "Sensor x Subfamily Analyses",
+    "descriptor": "Single Descriptor (all stats): All Sensors",
+    "descriptor_sensor": "Single Descriptor (all stats) x Single Sensor",
+}
+
 
 def clean_scalar(value: object) -> object:
     """Return ``None`` for NaN/NaT scalars, otherwise the value unchanged."""

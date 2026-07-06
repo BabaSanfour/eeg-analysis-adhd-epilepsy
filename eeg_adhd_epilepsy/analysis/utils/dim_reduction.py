@@ -12,7 +12,6 @@ from coco_pipe.dim_reduction import SEPARATION_METRIC_KEY
 from coco_pipe.io import (
     AGGREGATION_LEVELS,
     DESCRIPTOR_ONLY_ANALYSIS_MODES,
-    DataContainer,
     read_json,
 )
 from coco_pipe.utils import slug
@@ -331,65 +330,8 @@ def group_fit_requests(
     return list(groups.values())
 
 
-def pool_containers(containers: list[DataContainer]) -> DataContainer:
-    """Concatenate conditions while preserving deferred family-QC semantics."""
-    if not containers:
-        raise ValueError("No containers to pool.")
-
-    dims = containers[0].dims
-    common_coords = {}
-    for dim in dims:
-        if dim == "obs":
-            continue
-        if dim in containers[0].coords:
-            common = set(containers[0].coords[dim])
-            for c in containers[1:]:
-                common &= set(c.coords[dim])
-            # Preserve original order from first container
-            common_coords[dim] = [x for x in containers[0].coords[dim] if x in common]
-
-    aligned = []
-    for c in containers:
-        c_aligned = c
-        for dim, values in common_coords.items():
-            if len(values) < len(c_aligned.coords[dim]):
-                c_aligned = c_aligned.select(**{dim: values})
-        aligned.append(c_aligned)
-
-    pooled = DataContainer.concat(aligned)
-    group_by_values = {
-        str(container.meta["family_qc_group_by"])
-        for container in containers
-        if container.meta.get("family_qc_group_by") is not None
-    }
-    if len(group_by_values) > 1:
-        raise ValueError(
-            "Cannot pool containers with different family-QC grouping levels: "
-            f"{sorted(group_by_values)}"
-        )
-    pooled.meta = {
-        **dict(pooled.meta),
-        "family_qc_bad_ids": {
-            group: sorted(
-                {
-                    str(obs_id)
-                    for item in containers
-                    for obs_id in item.meta.get("family_qc_bad_ids", {}).get(group, [])
-                }
-            )
-            for group in {
-                group for item in containers for group in item.meta.get("family_qc_bad_ids", {})
-            }
-        },
-    }
-    if group_by_values:
-        pooled.meta["family_qc_group_by"] = next(iter(group_by_values))
-    return pooled
-
-
 __all__ = [
     "build_and_validate_mode_specs",
     "build_run_config_payload",
     "group_fit_requests",
-    "pool_containers",
 ]

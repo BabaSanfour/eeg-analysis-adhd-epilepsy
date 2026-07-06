@@ -13,14 +13,13 @@ configs/
 │   └── medicated_adhd_vs_controls/  # populations and clinical questions
 ├── analyses/
 │   ├── dim_reduction/              # reducers and selection settings
-│   ├── decoding/                   # classical models, CV, and inputs
-│   └── foundation_decoding/        # foundation models and training modes
+│   └── decoding/                   # classical + foundation decoding methods
 ├── descriptors.yaml                    # dataset-wide descriptor extraction
 ├── annotations.yaml                    # annotation normalization
 ```
 
 A **cohort config** answers "who and which clinical question?" It owns fields
-such as `dataset_name`, `output_group`, `conditions`, population filters, and
+such as `dataset_name`, `conditions`, population filters, and
 `evals` (including targets and label maps).
 
 An **analysis config** answers "which method?" It owns reducer specs or models,
@@ -54,8 +53,8 @@ separately as `--dim_analysis_config` and `--decode_analysis_config`. The generi
 
 ```bash
 eeg-classical-decode \
-  --cohort_config configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/EO.yaml \
-  --analysis_config configs/analyses/decoding/EO.yaml \
+  --cohort_config configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml \
+  --analysis_config configs/analyses/decoding/classical.yaml \
   --bids_root /path/to/BIDS \
   --metadata /path/to/patients_metadata_clean.csv
 ```
@@ -77,8 +76,7 @@ loaded (optionally labelled for output paths via `granularity_label`).
 (This deliberately diverges from decoding, which stays organized around `models`
 because a model carries rich per-estimator config; a reducer is just a name, so
 the mode owns it.)
-The descriptor config also carries the shared `qc` block. `default.yaml` remains a
-neutral method default for quick single-mode runs. Every config's
+The descriptor config also carries the shared `qc` block. Every config's
 `selection_eval_name` must match the name of an entry in the cohort's `evals`;
 validation fails early when they do not match.
 

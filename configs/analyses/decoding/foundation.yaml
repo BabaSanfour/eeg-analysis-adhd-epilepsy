@@ -1,0 +1,120 @@
+# Foundation decoding analysis config — method + hyperparameters only.
+# Pair with a cohort config via --cohort_config + --analysis_config.
+# Cohort configs supply: dataset_name, conditions, evals,
+# subject_col, group_filters, filter_col/filter_val, run_pooled.
+
+# --- Foundation model sweep -------------------------------------------------
+# Each entry defines one model + windowing strategy to run.
+models:
+  - model_key: cbramod
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_source: derivative
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: labram
+    segment_duration: 15.0
+    overlap: 0.0
+    use_derivatives: false
+    window_source: re_epoch
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs:
+      interpolate_channels: true
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: reve
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_source: derivative
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: luna
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_source: derivative
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+
+# --- Training regime --------------------------------------------------------
+train_modes: [linear_probe, full, lora]
+training_defaults:
+  linear_probe:
+    max_epochs: 20
+    lr: 0.001
+    batch_size: 16
+    early_stopping_patience: 5
+    validation_fraction: 0.1
+  full:
+    max_epochs: 10
+    lr: 0.00001
+    batch_size: 8
+    early_stopping_patience: 3
+    validation_fraction: 0.1
+  lora:
+    max_epochs: 15
+    lr: 0.0001
+    batch_size: 8
+    early_stopping_patience: 4
+    validation_fraction: 0.1
+
+# --- Evaluation -------------------------------------------------------------
+cv:
+  n_splits: 5
+
+chance_method: permutation
+n_permutations: 100
+store_null_distribution: false
+
+metrics:
+  - accuracy
+  - balanced_accuracy
+  - f1
+  - precision
+  - recall
+  - roc_auc
+
+# --- Hardware / runtime -----------------------------------------------------
+device: auto
+precision: fp32
+on_unsupported: skip
+
+# --- Column identity --------------------------------------------------------
+session_col: session_id
+subject_col: study_id
+
+# --- Run controls -----------------------------------------------------------
+random_state: 42
+verbose: true
+overwrite: false
+n_jobs: 1
+class_weight: balanced
+run_pooled: true
+
+# --- Reporting --------------------------------------------------------------
+detailed_unit_reports: true
+report_asset_urls: inline

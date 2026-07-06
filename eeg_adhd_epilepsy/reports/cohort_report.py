@@ -14,8 +14,7 @@ from coco_pipe.report.elements import (
     TableElement,
 )
 
-from eeg_adhd_epilepsy.reports._common import add_image_list as _add_images
-from eeg_adhd_epilepsy.reports._common import add_optional_table as _add_optional_table
+from eeg_adhd_epilepsy.reports._common import add_image_list, add_optional_table
 
 
 def generate_cohort_report(
@@ -50,8 +49,8 @@ def generate_cohort_report(
         "`patients_metadata_clean.csv`."
     )
     cohort_definition.add_markdown(cohort_markdown)
-    _add_optional_table(cohort_definition, cohort_summary_df, "Cohort Summary")
-    _add_images(cohort_definition, figures_by_section.get("Cohort Definition", []))
+    add_optional_table(cohort_definition, cohort_summary_df, "Cohort Summary")
+    add_image_list(cohort_definition, figures_by_section.get("Cohort Definition", []))
     report.add_section(cohort_definition)
 
     provenance = Section("Provenance", icon="🧹")
@@ -59,28 +58,28 @@ def generate_cohort_report(
         "These summaries come from `patients_metadata_removed.json` and describe the "
         "metadata-build drops that happened before this report."
     )
-    _add_optional_table(provenance, provenance_reason_df, "Removed Rows by Reason")
-    _add_optional_table(provenance, provenance_source_df, "Removed Rows by Source Dataset")
+    add_optional_table(provenance, provenance_reason_df, "Removed Rows by Reason")
+    add_optional_table(provenance, provenance_source_df, "Removed Rows by Source Dataset")
     report.add_section(provenance)
 
     diagnosis = Section("Diagnosis and Demographics", icon="🧾")
-    _add_optional_table(diagnosis, diagnosis_df, "Diagnosis Summary")
+    add_optional_table(diagnosis, diagnosis_df, "Diagnosis Summary")
     for title, path in figures_by_section.get("Diagnosis and Demographics", []):
         if title == "Diagnosis Prevalence" and path.exists():
             diagnosis.add_element(ImageElement(str(path), caption=title))
-    _add_optional_table(diagnosis, combined_diagnosis_df, "Combined Diagnosis Summary")
+    add_optional_table(diagnosis, combined_diagnosis_df, "Combined Diagnosis Summary")
     for title, path in figures_by_section.get("Diagnosis and Demographics", []):
         if title == "Combined Diagnosis Counts" and path.exists():
             diagnosis.add_element(ImageElement(str(path), caption=title))
-    _add_optional_table(diagnosis, demographics_df, "Demographics Summary")
+    add_optional_table(diagnosis, demographics_df, "Demographics Summary")
     for title, path in figures_by_section.get("Diagnosis and Demographics", []):
         if title in {"Sex by Age Group", "Age by Combined Diagnosis"} and path.exists():
             diagnosis.add_element(ImageElement(str(path), caption=title))
     report.add_section(diagnosis)
 
     medication = Section("Medication and Drug Resistance", icon="💊")
-    _add_optional_table(medication, medication_df, "Medication Summary")
-    _add_images(medication, figures_by_section.get("Medication and Drug Resistance", []))
+    add_optional_table(medication, medication_df, "Medication Summary")
+    add_image_list(medication, figures_by_section.get("Medication and Drug Resistance", []))
     report.add_section(medication)
 
     drug_resistant = Section("Drug Resistant Longitudinal Cohort", icon="🔁")
@@ -89,18 +88,18 @@ def generate_cohort_report(
         "first-EEG versus later-EEG availability for drug-resistant analyses."
     )
     if drug_resistant_overview_df is not None:
-        _add_optional_table(drug_resistant, drug_resistant_overview_df, "Drug-Resistant Overview")
+        add_optional_table(drug_resistant, drug_resistant_overview_df, "Drug-Resistant Overview")
     if first_later_drug_resistant_df is not None:
-        _add_optional_table(
+        add_optional_table(
             drug_resistant,
             first_later_drug_resistant_df,
             "Drug-Resistant First EEG vs Later EEG",
         )
     if drug_resistant_first_later_figure is not None:
         drug_resistant.add_element(PlotlyElement(drug_resistant_first_later_figure, height="420px"))
-    _add_images(drug_resistant, figures_by_section.get("Drug Resistant Longitudinal Cohort", []))
+    add_image_list(drug_resistant, figures_by_section.get("Drug Resistant Longitudinal Cohort", []))
     if source_overlap_df is not None:
-        _add_optional_table(drug_resistant, source_overlap_df, "Cohort 1 vs Cohort 2 Overlap")
+        add_optional_table(drug_resistant, source_overlap_df, "Cohort 1 vs Cohort 2 Overlap")
     if longitudinal_drug_resistant_patients_df is not None:
         drug_resistant.add_element(
             TableElement(

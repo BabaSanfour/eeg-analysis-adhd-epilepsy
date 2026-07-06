@@ -73,6 +73,7 @@ class DerivativeStage(StrEnum):
     DESCRIPTORS = "signal_features/descriptors"
     FOUNDATION_EMBEDDINGS = "eeg_foundation_embeddings"
     DIM_REDUCTION = "dim_reduction"
+    DECODING = "decoding"
 
 
 def get_derivative_root(bids_root: Path, stage: DerivativeStage) -> Path:

@@ -19,7 +19,7 @@ Preview the whole chain without running anything::
     eeg-run --dry-run --bids_root /data/BIDS --metadata /data/meta.csv \
         --raw_root /data/raw --cohort_config configs/cohorts/.../total.yaml \
         --dim_analysis_config configs/analyses/dim_reduction/raw.yaml \
-        --decode_analysis_config configs/analyses/decoding/EO.yaml
+        --decode_analysis_config configs/analyses/decoding/classical.yaml
 
 Run only preproc → epochs → descriptors → merge::
 
@@ -155,10 +155,6 @@ STAGES: list[Stage] = [
             str(c.cohort_config),
             "--analysis_config",
             str(c.dim_analysis_config or c.analysis_config),
-            "--input_mode",
-            "descriptors",
-            "--analysis_mode",
-            "flat",
             "--descriptor_table_path",
             str(_descriptor_combined(c) / "sensor_recording_features.parquet"),
             "--descriptor_feature_columns_path",
