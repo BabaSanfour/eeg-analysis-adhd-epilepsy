@@ -1,7 +1,6 @@
 task: clinical
 desc: base
 dataset_name: foundation_embeddings
-allow_transductive_input: false
 conditions: [EO_baseline, EC_baseline]
 batch_size: 64
 models:

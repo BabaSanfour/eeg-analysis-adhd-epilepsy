@@ -2,7 +2,6 @@
 # Cohort config: subjects + clinical question. Pair it with an analysis
 # config (configs/analyses/<type>/) via --cohort_config + --analysis_config.
 dataset_name: pooled_04_no_comorbidities_age_13-18
-output_group: medicated_adhd_vs_controls/pooled
 subject_col: study_id
 conditions:
 - EO_baseline

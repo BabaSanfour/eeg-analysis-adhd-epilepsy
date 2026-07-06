@@ -10,24 +10,18 @@ from pathlib import Path
 import pandas as pd
 from coco_pipe.report.core import ImageElement, Report, Section
 
-from eeg_adhd_epilepsy.reports._common import add_images as _add_images_base
+from eeg_adhd_epilepsy.reports import _common
 from eeg_adhd_epilepsy.reports._common import (
-    add_optional_table as _add_optional_table,
-)
-from eeg_adhd_epilepsy.reports._common import (
+    add_images,
+    add_optional_table,
     build_dataset_mean_metric_table,
     build_record_metric_table,
-)
-from eeg_adhd_epilepsy.reports._common import (
-    build_flag_reason_table as _build_flag_reason_table,
-)
-from eeg_adhd_epilepsy.reports._common import (
-    format_value as _format_value,
+    format_value,
 )
 from eeg_adhd_epilepsy.utils.formatting import format_duration_hms
 
 # preproc_qc figures are not individually captioned (unlike raw_qc/eeg_report).
-_add_images = partial(_add_images_base, caption_from_key=False)
+add_uncaptioned_images = partial(add_images, caption_from_key=False)
 
 
 def build_stage_overview_table(
@@ -160,7 +154,7 @@ def build_retention_table(record: Mapping[str, object]) -> pd.DataFrame:
             },
             {
                 "Metric": "Condition segment retention",
-                "Value": _format_value(record.get("condition_coverage_retention_pct"), suffix="%"),
+                "Value": format_value(record.get("condition_coverage_retention_pct"), suffix="%"),
             },
         ]
     )
@@ -220,10 +214,10 @@ def build_run_summary_table(records: Sequence[Mapping[str, object]]) -> pd.DataF
             {
                 "Run": record.get("run_id", "") or record.get("source_stage", ""),
                 "QC Status": record.get("qc_flag", ""),
-                "Retention (%)": _format_value(record.get("duration_retention_pct")),
-                "Bad Channels (%)": _format_value(record.get("pct_bad_channels")),
-                "Line Noise": _format_value(record.get("line_noise_ratio")),
-                "HF/LF": _format_value(record.get("hf_lf_ratio")),
+                "Retention (%)": format_value(record.get("duration_retention_pct")),
+                "Bad Channels (%)": format_value(record.get("pct_bad_channels")),
+                "Line Noise": format_value(record.get("line_noise_ratio")),
+                "HF/LF": format_value(record.get("hf_lf_ratio")),
             }
         )
     return pd.DataFrame(rows)
@@ -278,19 +272,19 @@ def build_dataset_retention_table(runs_df: pd.DataFrame) -> pd.DataFrame:
         [
             {
                 "Metric": "Mean recording retention",
-                "Value": _format_value(duration_retention.mean(), suffix="%"),
+                "Value": format_value(duration_retention.mean(), suffix="%"),
             },
             {
                 "Metric": "Median recording retention",
-                "Value": _format_value(duration_retention.median(), suffix="%"),
+                "Value": format_value(duration_retention.median(), suffix="%"),
             },
             {
                 "Metric": "Mean condition coverage retention",
-                "Value": _format_value(coverage_retention.mean(), suffix="%"),
+                "Value": format_value(coverage_retention.mean(), suffix="%"),
             },
             {
                 "Metric": "Median condition coverage retention",
-                "Value": _format_value(coverage_retention.median(), suffix="%"),
+                "Value": format_value(coverage_retention.median(), suffix="%"),
             },
         ]
     )
@@ -310,7 +304,7 @@ def build_dataset_residual_metrics_table(runs_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_flag_reason_table(runs_df: pd.DataFrame) -> pd.DataFrame:
-    return _build_flag_reason_table(
+    return _common.build_flag_reason_table(
         runs_df, reasons_column="qc_flag_reasons", count_label="Records"
     )
 
@@ -332,7 +326,7 @@ def generate_subject_report(
     report = Report(title=f"{stage_display_name} QC - {prefix}")
 
     overview = Section("Stage Overview", icon="🧭")
-    _add_optional_table(
+    add_optional_table(
         overview,
         build_stage_overview_table(
             record, stage_display_name=stage_display_name, previous_stage_label=previous_stage_label
@@ -356,7 +350,7 @@ def generate_subject_report(
 
     if previous_stage_label != raw_reference_label:
         effect_prev = Section("Effect Vs Previous Stage", icon="↔️")
-        _add_optional_table(
+        add_optional_table(
             effect_prev,
             build_delta_table(record, suffix="prev", reference_label=previous_stage_label),
             "Primary Deltas",
@@ -364,7 +358,7 @@ def generate_subject_report(
         report.add_section(effect_prev)
 
     effect_raw = Section("Effect Vs Raw", icon="📏")
-    _add_optional_table(
+    add_optional_table(
         effect_raw,
         build_delta_table(record, suffix="raw", reference_label=raw_reference_label),
         "Raw Reference Deltas",
@@ -372,11 +366,11 @@ def generate_subject_report(
     report.add_section(effect_raw)
 
     retention = Section("Retention", icon="🧩")
-    _add_optional_table(retention, build_retention_table(record), "Retention")
+    add_optional_table(retention, build_retention_table(record), "Retention")
     report.add_section(retention)
 
     residual = Section("Residual Artifact Burden", icon="📉")
-    _add_optional_table(
+    add_optional_table(
         residual,
         build_residual_metrics_table(record, channel_diagnostics=channel_diagnostics),
         "Residual Metrics",
@@ -387,7 +381,7 @@ def generate_subject_report(
     if channel_diagnostics:
         ch_diag = Section("Channel Diagnostics", icon="📡")
         rank_df = build_top_channels_table(channel_diagnostics)
-        _add_optional_table(ch_diag, rank_df, "Top 5 Problematic Channels")
+        add_optional_table(ch_diag, rank_df, "Top 5 Problematic Channels")
         report.add_section(ch_diag)
 
     # Per-condition comparison: pre-base vs cleaned signal quality
@@ -400,7 +394,7 @@ def generate_subject_report(
             "Metrics are computed on the full segment window (same basis as pre-base) "
             "and compared against the pre-base stage values from raw_qc_segments.csv."
         )
-        _add_optional_table(
+        add_optional_table(
             cond_section,
             build_condition_comparison_table(segment_comparison),
             "Condition-Level Comparison",
@@ -409,7 +403,7 @@ def generate_subject_report(
 
     if run_summary_df is not None and not run_summary_df.empty and len(run_summary_df) > 1:
         runs = Section("Per-Run Summary", icon="🗂️")
-        _add_optional_table(runs, run_summary_df, "Per-Run Summary")
+        add_optional_table(runs, run_summary_df, "Per-Run Summary")
         report.add_section(runs)
 
     temporal = Section("Temporal Signal Quality", icon="⏲️")
@@ -418,14 +412,14 @@ def generate_subject_report(
         "value for each experimental segment. Red 'x' markers and shaded backgrounds "
         "indicate segments flagged as bad by the automated diagnostics."
     )
-    _add_images(
+    add_uncaptioned_images(
         temporal, figures, ("temporal_amplitude", "temporal_line_noise", "temporal_hf_lf_ratio")
     )
     report.add_section(temporal)
 
     figures_section = Section("Figures", icon="📈")
     # Only topomaps are shown per-subject (single-value histograms moved to dataset report)
-    _add_images(
+    add_uncaptioned_images(
         figures_section,
         figures,
         (
@@ -473,7 +467,7 @@ def generate_dataset_report(
         f"{stage_display_name} QC summarizes cleaning effect, residual artifact "
         "burden, retention, and readiness."
     )
-    _add_optional_table(
+    add_optional_table(
         definition,
         build_dataset_summary_table(runs_df, subjects_df, stage_display_name=stage_display_name),
         "Dataset Summary",
@@ -481,8 +475,8 @@ def generate_dataset_report(
     report.add_section(definition)
 
     usability = Section("Usability Summary", icon="🧪")
-    _add_optional_table(usability, build_flag_reason_table(runs_df), "Flag Reasons")
-    _add_images(usability, figures, ("qc_flag", "qc_flag_reasons"))
+    add_optional_table(usability, build_flag_reason_table(runs_df), "Flag Reasons")
+    add_uncaptioned_images(usability, figures, ("qc_flag", "qc_flag_reasons"))
     report.add_section(usability)
 
     if condition_summary_df is not None and not condition_summary_df.empty:
@@ -492,7 +486,7 @@ def generate_dataset_report(
             "signal-quality metrics per experimental condition. Pre = pre-base "
             "stage; Post = after cleaning."
         )
-        _add_optional_table(
+        add_optional_table(
             cond_section,
             build_condition_comparison_table(condition_summary_df),
             "Condition-Level Averages",
@@ -501,14 +495,14 @@ def generate_dataset_report(
 
     if previous_stage_label != raw_reference_label:
         effect_prev = Section("Effect Vs Previous Stage", icon="↔️")
-        _add_optional_table(
+        add_optional_table(
             effect_prev,
             build_dataset_effect_table(
                 runs_df, suffix="prev", reference_label=previous_stage_label
             ),
             "Primary Deltas",
         )
-        _add_images(
+        add_uncaptioned_images(
             effect_prev,
             figures,
             (
@@ -523,12 +517,12 @@ def generate_dataset_report(
         report.add_section(effect_prev)
 
     effect_raw = Section("Effect Vs Raw", icon="📏")
-    _add_optional_table(
+    add_optional_table(
         effect_raw,
         build_dataset_effect_table(runs_df, suffix="raw", reference_label=raw_reference_label),
         "Raw Reference Deltas",
     )
-    _add_images(
+    add_uncaptioned_images(
         effect_raw,
         figures,
         (
@@ -543,13 +537,17 @@ def generate_dataset_report(
     report.add_section(effect_raw)
 
     retention = Section("Retention", icon="🧩")
-    _add_optional_table(retention, build_dataset_retention_table(runs_df), "Retention")
-    _add_images(retention, figures, ("duration_retention_pct", "condition_coverage_retention_pct"))
+    add_optional_table(retention, build_dataset_retention_table(runs_df), "Retention")
+    add_uncaptioned_images(
+        retention,
+        figures,
+        ("duration_retention_pct", "condition_coverage_retention_pct"),
+    )
     report.add_section(retention)
 
     residual = Section("Residual Artifact Burden", icon="📉")
-    _add_optional_table(residual, build_dataset_residual_metrics_table(runs_df), "Residual Metrics")
-    _add_images(
+    add_optional_table(residual, build_dataset_residual_metrics_table(runs_df), "Residual Metrics")
+    add_uncaptioned_images(
         residual,
         figures,
         (

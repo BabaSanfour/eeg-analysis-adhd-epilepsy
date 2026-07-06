@@ -2,7 +2,6 @@
 # Cohort config: subjects + clinical question. Pair it with an analysis
 # config (configs/analyses/<type>/) via --cohort_config + --analysis_config.
 dataset_name: mph_03_no_autism_age_9-12
-output_group: medicated_adhd_vs_controls/mph
 subject_col: study_id
 conditions:
 - EO_baseline

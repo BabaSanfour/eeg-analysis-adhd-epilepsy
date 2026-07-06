@@ -15,8 +15,11 @@ import eeg_adhd_epilepsy.analysis.dimensionality_reduction as dim_reduction
 import eeg_adhd_epilepsy.reports.dim_reduction as dim_report
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.dimensionality_reduction import _collect_scope_fit_requests
-from eeg_adhd_epilepsy.analysis.utils.dim_reduction import pool_containers
-from eeg_adhd_epilepsy.analysis.utils.units import apply_family_qc_mask, families_for_analysis_unit
+from eeg_adhd_epilepsy.analysis.utils.common import (
+    apply_family_qc_mask,
+    families_for_analysis_unit,
+    pool_containers,
+)
 
 
 def test_descriptor_loader_filters_subjects(tmp_path):

@@ -46,6 +46,7 @@ from coco_pipe.io import DataContainer, read_table, save_npz
 from coco_pipe.io.quality import drop_epoch_outliers
 
 from eeg_adhd_epilepsy.analysis.dataset import build_container
+from eeg_adhd_epilepsy.analysis.utils.common import require_config
 from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import required_descriptor_files
 from eeg_adhd_epilepsy.analysis.utils.subject_resolution import (
     resolve_cohort_subjects,
@@ -364,9 +365,7 @@ def main() -> None:
     aggregation_config = raw_config.pop("aggregation", None) or {}
     pooling_config = raw_config.pop("pooling", None) or {}
     qc_config = raw_config.pop("qc", None) or {}
-    aggregation_descriptors = aggregation_config.get("descriptors")
-    if not aggregation_descriptors:
-        raise ValueError("Config must define aggregation.descriptors.")
+    aggregation_descriptors = require_config(aggregation_config, "descriptors", expected_type=list)
     channel_groups = pooling_config.get("channel_groups")
     include_pooled = bool(channel_groups)
     config_snapshot = deepcopy(raw_config)

@@ -3,7 +3,7 @@
 The analysis CLIs in this project run a *cohort* against an *analysis*:
 
 * a **cohort config** answers *which subjects and which clinical question*
-  (``dataset_name``, ``output_group``, ``group_filters``, ``filter_col`` /
+  (``dataset_name``, ``group_filters``, ``filter_col`` /
   ``filter_val``, ``conditions``, ``evals`` / ``label_map``); and
 * an **analysis config** answers *which method and hyperparameters*
   (dim-reduction ``analysis_modes`` — each mode names its reducers + n_components;
@@ -42,7 +42,7 @@ __all__ = [
 ]
 
 # Keys a cohort config must define (the "who + which question").
-_COHORT_REQUIRED_KEYS = ("dataset_name", "output_group", "evals")
+_COHORT_REQUIRED_KEYS = ("dataset_name", "evals")
 
 # A recognizable analysis config declares at least one method block. Dim-reduction
 # is organized around analysis modes (`analysis_modes`, each mode naming its

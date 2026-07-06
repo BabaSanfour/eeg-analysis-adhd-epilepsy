@@ -5,7 +5,6 @@ import pytest
 from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis.utils.decoding import (
-    cohort_signature,
     foundation_provenance,
     prepare_decoding_scope,
     prepare_target,
@@ -62,14 +61,6 @@ def test_foundation_provenance_distinguishes_pooling_variants():
     assert mean["pooling"] == "mean"
     assert attn["pooling"] == "attention"
     assert mean != attn
-
-
-def test_cohort_signature_is_stable_and_does_not_expose_ids():
-    first = cohort_signature(["patient-2", "patient-1", "patient-1"])
-    second = cohort_signature(["patient-1", "patient-2"])
-    assert first == second
-    assert len(first) == 16
-    assert "patient" not in first
 
 
 def test_prepare_target_uses_patient_groups_and_label_map():

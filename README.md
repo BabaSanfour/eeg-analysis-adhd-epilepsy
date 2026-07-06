@@ -46,8 +46,8 @@ eeg-run --list
 eeg-run --dry-run \
   --raw_root /path/to/raw --bids_root /path/to/BIDS --metadata /path/to/patients_metadata_clean.csv \
   --cohort_config configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml \
-  --dim_analysis_config configs/analyses/dim_reduction/default.yaml \
-  --decode_analysis_config configs/analyses/decoding/EO.yaml
+  --dim_analysis_config configs/analyses/dim_reduction/descriptors.yaml \
+  --decode_analysis_config configs/analyses/decoding/classical.yaml
 
 # 3. Run a single stage, a range, or the whole thing (resume-by-default).
 eeg-run --from preprocess --to merge --bids_root /path/to/BIDS --metadata /path/to/meta.csv
@@ -83,7 +83,7 @@ The analysis stages (`eeg-dim-reduce`, `eeg-classical-decode`,
 *which analysis*:
 
 - a **cohort config** (`configs/cohorts/...`) — the dataset selection and clinical
-  question: `dataset_name`, `output_group`, `conditions`, `group_filters`,
+  question: `dataset_name`, `conditions`, `group_filters`,
   `filter_col`/`filter_val`, and `evals` (targets + label maps).
 - an **analysis config** (`configs/analyses/<type>/...`) — the method and
   hyperparameters: `analysis_modes` (dim-reduction; each mode names its reducers
@@ -93,8 +93,8 @@ The analysis stages (`eeg-dim-reduce`, `eeg-classical-decode`,
 
 ```bash
 eeg-classical-decode \
-  --cohort_config   configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/EO.yaml \
-  --analysis_config configs/analyses/decoding/EO.yaml \
+  --cohort_config   configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml \
+  --analysis_config configs/analyses/decoding/classical.yaml \
   --bids_root /path/to/BIDS --metadata /path/to/meta.csv
 ```
 
@@ -234,7 +234,7 @@ on `coco-pipe.dim_reduction`).
 eeg-dim-reduce \
   --bids_root /path/to/BIDS --metadata /path/to/patients_metadata_clean.csv \
   --cohort_config   configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml \
-  --analysis_config configs/analyses/dim_reduction/default.yaml \
+  --analysis_config configs/analyses/dim_reduction/raw.yaml \
   --input_mode raw --analysis_mode flat --representation subject \
   --n_jobs 4
 ```
@@ -258,7 +258,7 @@ The most common subject-level raw setup is `--input_mode raw --analysis_mode fla
 --representation subject`: one row per subject over the joint sensor×time
 space. Best-fit selection is driven by `selection_metric` /`selection_eval_name`
 (in the analysis config), and outputs are separated by a configuration hash under
-`BIDS/derivatives/dim_reduction/<output_group>/<dataset_name>/...`. Re-runs rebuild
+`BIDS/derivatives/dim_reduction/<dataset_name>/...`. Re-runs rebuild
 inventories from reusable checkpoints. `--n_jobs` controls outer-task parallelism
 (start with 4–6).
 
@@ -269,8 +269,8 @@ inventories from reusable checkpoints. `--n_jobs` controls outer-task parallelis
 eeg-foundation-embeddings --config /path/to/foundation_embeddings.yaml
 
 # Decoding (two-config). Classical = descriptors/embeddings; foundation = direct probing/fine-tune/LoRA.
-eeg-classical-decode  --cohort_config <cohort.yaml> --analysis_config configs/analyses/decoding/<x>.yaml --bids_root … --metadata …
-eeg-foundation-decode --cohort_config <cohort.yaml> --analysis_config configs/analyses/foundation_decoding/default.yaml --bids_root … --metadata …
+eeg-classical-decode  --cohort_config <cohort.yaml> --analysis_config configs/analyses/decoding/classical.yaml --bids_root … --metadata …
+eeg-foundation-decode --cohort_config <cohort.yaml> --analysis_config configs/analyses/decoding/foundation.yaml --bids_root … --metadata …
 ```
 
 Each model declares its own EEG window requirements; the example configs use

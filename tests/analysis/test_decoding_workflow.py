@@ -1,9 +1,12 @@
+import json
+
 import numpy as np
 import pandas as pd
 import pytest
 from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis import classical_decoding as decoding
+from eeg_adhd_epilepsy.analysis.utils.decoding import build_classical_plan
 
 
 def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkeypatch):
@@ -33,7 +36,6 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
     config = {
         "bids_root": str(bids_root),
         "dataset_name": "synthetic",
-        "output_group": "tests",
         "input_mode": "descriptors",
         "subject_col": "subject",
         "session_col": "session",
@@ -44,6 +46,7 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
         "models": {
             "logreg_l1": {
                 "estimator": "LogisticRegression",
+                "analysis_modes": ["flat"],
                 "params": {
                     "penalty": "l1",
                     "solver": "liblinear",
@@ -52,6 +55,7 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
                 },
             }
         },
+        "feature_selection": [{"name": "baseline", "method": "none"}],
         "metrics": ["accuracy", "balanced_accuracy", "roc_auc"],
         "evals": [
             {
@@ -63,8 +67,12 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
         ],
         "cv": {"n_splits": 5},
         "chance_method": "binomial",
+        "n_permutations": 5,
+        "store_null_distribution": False,
         "n_jobs": 1,
         "random_state": 42,
+        "verbose": False,
+        "overwrite": False,
         "report_asset_urls": {
             "plotly": "about:blank",
             "tailwind": "about:blank",
@@ -74,36 +82,46 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
     output = decoding.run(config)
     assert (output / "_SUCCESS").exists()
     assert (output / "sweep_results.csv").exists()
-    assert (
-        output / "eo_baseline" / "adhd" / "flat" / "all" / "baseline" / "predictions.csv"
-    ).exists()
-    assert (
-        tmp_path
-        / "reports"
-        / "summary"
-        / "decoding"
-        / "tests"
-        / "synthetic"
-        / "descriptors"
-        / "dataset_summary.html"
-    ).exists()
+    unit_root = output / "artifacts" / "fits" / "fit_eo_baseline_adhd_flat_all_baseline"
+    assert (unit_root / "predictions.csv").exists()
+    assert list(
+        (tmp_path / "reports" / "summary" / "decoding" / "synthetic").glob(
+            "descriptors_cfg-*/dataset_summary.html"
+        )
+    )
     assert (output.parent / "head_to_head_comparison.csv").exists()
     assert (
-        tmp_path
-        / "reports"
-        / "summary"
-        / "decoding"
-        / "tests"
-        / "synthetic"
-        / "head_to_head_comparison.html"
+        tmp_path / "reports" / "summary" / "decoding" / "synthetic" / "head_to_head_comparison.html"
     ).exists()
 
-    unit_root = output / "eo_baseline" / "adhd" / "flat" / "all" / "baseline"
     assert (
         "Model"
         in np.genfromtxt(unit_root / "summary.csv", delimiter=",", dtype=str, max_rows=1).tolist()
     )
     assert (unit_root / "model_artifacts.csv").exists()
+
+    # dim_reduction-parity run tracking: runs/ inventory + summary + leaderboard.
+    runs_dir = output / "runs"
+    assert (runs_dir / "sweep_runs.json").exists()
+    summary = json.loads((runs_dir / "run_summary.json").read_text())
+    assert summary["status"] == "SUCCESS"
+    assert summary["unit_success"] >= 1
+    assert summary["run_variant"] == output.name
+    leaderboard = json.loads((runs_dir / "leaderboard.json").read_text())
+    assert leaderboard
+    assert leaderboard[0]["primary_metric_name"] in {"balanced_accuracy", "accuracy"}
+
+    # --reports-only reproduces reports from disk without refitting.
+    predictions_mtime = (unit_root / "predictions.csv").stat().st_mtime_ns
+    summary_html = next(
+        (tmp_path / "reports" / "summary" / "decoding" / "synthetic").glob(
+            "descriptors_cfg-*/dataset_summary.html"
+        )
+    )
+    summary_html.unlink()
+    decoding.run({**config, "reports_only": True})
+    assert summary_html.exists()
+    assert (unit_root / "predictions.csv").stat().st_mtime_ns == predictions_mtime
 
     resumed = decoding.run(config)
     resumed_results = np.genfromtxt(resumed / "sweep_results.csv", delimiter=",", dtype=str)
@@ -119,7 +137,6 @@ def _compact_config(tmp_path, *, input_mode, analysis_modes):
     return {
         "bids_root": str(bids_root),
         "dataset_name": f"synthetic_{input_mode}",
-        "output_group": "tests",
         "input_mode": input_mode,
         "subject_col": "subject",
         "session_col": "session",
@@ -130,9 +147,11 @@ def _compact_config(tmp_path, *, input_mode, analysis_modes):
         "models": {
             "logreg": {
                 "estimator": "LogisticRegression",
+                "analysis_modes": analysis_modes,
                 "params": {"solver": "liblinear", "max_iter": 200},
             }
         },
+        "feature_selection": [{"name": "baseline", "method": "none"}],
         "metrics": ["accuracy"],
         "evals": [
             {
@@ -144,7 +163,12 @@ def _compact_config(tmp_path, *, input_mode, analysis_modes):
         ],
         "cv": {"n_splits": 2},
         "chance_method": "binomial",
+        "n_permutations": 5,
+        "store_null_distribution": False,
         "n_jobs": 1,
+        "random_state": 42,
+        "verbose": False,
+        "overwrite": False,
         "report_asset_urls": {
             "plotly": "about:blank",
             "tailwind": "about:blank",
@@ -169,7 +193,7 @@ def _observation_coords():
     )
 
 
-def test_embedding_and_reduced_dimension_decoding_modes(tmp_path, monkeypatch):
+def test_foundation_embedding_decoding_flat_mode(tmp_path, monkeypatch):
     groups, labels, coords = _observation_coords()
     rng = np.random.default_rng(11)
     X = rng.normal(size=(len(groups), 12))
@@ -185,27 +209,22 @@ def test_embedding_and_reduced_dimension_decoding_modes(tmp_path, monkeypatch):
     embedding_config = _compact_config(
         tmp_path / "embedding",
         input_mode="foundation_embeddings",
-        analysis_modes=["flat", "sensor"],
+        analysis_modes=["flat"],
     )
     embedding_output = decoding.run(embedding_config)
     embedding_sweep = pd.read_csv(embedding_output / "sweep_results.csv")
     assert set(embedding_sweep["status"]) == {"success"}
-    failures = pd.read_csv(embedding_output / "failures.csv")
-    assert "skipped" in set(failures["status"])
-    assert (embedding_output / "_PARTIAL").exists()
+    assert (embedding_output / "_SUCCESS").exists()
 
-    reduced_config = _compact_config(
-        tmp_path / "reduced",
-        input_mode="reduced_dimensions",
-        analysis_modes=["flat"],
+
+def test_foundation_embedding_decoding_rejects_nonflat_mode(tmp_path):
+    config = _compact_config(
+        tmp_path,
+        input_mode="foundation_embeddings",
+        analysis_modes=["flat", "sensor"],
     )
-    reduced_config["reduced_source_input_mode"] = "foundation_embeddings"
-    reduced_config["reducer"] = {"n_components": 0.8}
-    reduced_output = decoding.run(reduced_config)
-    assert (
-        reduced_output / "eo_baseline" / "adhd" / "flat" / "all" / "baseline" / "predictions.csv"
-    ).exists()
-    assert "p_value_fdr" in pd.read_csv(reduced_output / "sweep_results.csv").columns
+    with pytest.raises(ValueError, match="analysis_mode='sensor'"):
+        build_classical_plan(config)
 
 
 def test_nonflat_descriptor_sweeps(tmp_path, monkeypatch):
@@ -233,150 +252,145 @@ def test_nonflat_descriptor_sweeps(tmp_path, monkeypatch):
         analysis_modes=["flat", "sensor", "descriptor_sensor"],
     )
     config["feature_selection"] = [
+        {"name": "baseline", "method": "none"},
         {
             "name": "sfs",
             "method": "sfs",
             "direction": "forward",
-            "analysis_modes": ["sensor", "descriptor_sensor"],
-        }
+            "tol": 0.0,
+            "analysis_modes": ["sensor"],
+        },
     ]
     output = decoding.run(config)
     sweep = pd.read_csv(output / "sweep_results.csv")
     assert {"flat", "sensor", "descriptor_sensor"}.issubset(set(sweep["analysis_mode"]))
     assert (
-        output / "eo_baseline" / "adhd" / "sensor" / "fz" / "sfs" / "selected_features.csv"
+        output
+        / "artifacts"
+        / "fits"
+        / "fit_eo_baseline_adhd_sensor_fz_sfs"
+        / "selected_features.csv"
     ).exists()
-    descriptor_sensor_root = output / "eo_baseline" / "adhd" / "descriptor_sensor"
-    assert list(descriptor_sensor_root.glob("*/baseline"))
-    assert not list(descriptor_sensor_root.glob("*/sfs"))
+    fits_root = output / "artifacts" / "fits"
+    assert list(fits_root.glob("*descriptor_sensor*baseline*"))
+    assert not list(fits_root.glob("*descriptor_sensor*sfs*"))
 
 
-def test_selection_plan_is_baseline_plus_requested_sfs():
-    assert decoding._selection_specs({}) == [{"name": "baseline", "method": "none"}]
-    specs = decoding._selection_specs(
-        {
-            "feature_selection": [
-                {
-                    "name": "forward",
-                    "method": "sfs",
-                    "analysis_modes": ["flat"],
-                }
-            ]
-        }
+def test_classical_plan_rejects_reduced_dimensions(tmp_path):
+    config = _compact_config(
+        tmp_path,
+        input_mode="reduced_dimensions",
+        analysis_modes=["flat"],
     )
-    assert [spec["name"] for spec in specs] == ["baseline", "forward"]
-    assert [
-        spec["name"]
-        for spec in decoding._selection_specs_for_unit(
-            specs,
-            analysis_mode="sensor",
-            n_available=4,
-        )
-    ] == ["baseline"]
-    assert [
-        spec["name"]
-        for spec in decoding._selection_specs_for_unit(
-            specs,
-            analysis_mode="flat",
-            n_available=4,
-        )
-    ] == ["baseline", "forward"]
+    with pytest.raises(ValueError, match="Invalid input_mode"):
+        build_classical_plan(config)
 
 
-def test_selection_plan_rejects_k_best_and_skips_one_column_sfs():
-    with pytest.raises(ValueError, match="only supports method='sfs'"):
-        decoding._selection_specs(
-            {"feature_selection": [{"name": "top10", "method": "k_best", "n_features": 10}]}
-        )
-    specs = decoding._selection_specs({"feature_selection": [{"name": "sfs", "method": "sfs"}]})
-    for analysis_mode in ("flat", "descriptor_sensor"):
-        selected = decoding._selection_specs_for_unit(
-            specs,
-            analysis_mode=analysis_mode,
-            n_available=1,
-        )
-        assert [spec["name"] for spec in selected] == ["baseline"]
-
-
-def test_sfs_feature_count_stays_below_available_columns():
-    config = decoding._feature_selection_config(
-        {"name": "sfs", "method": "sfs", "n_features": 10},
-        n_available=3,
-    )
-    assert config.n_features == 2
-
-
-def test_removed_descriptor_analysis_modes_are_rejected(tmp_path):
+def test_classical_plan_requires_explicit_feature_selection(tmp_path):
     config = _compact_config(
         tmp_path,
         input_mode="descriptors",
-        analysis_modes=["flat", "family"],
-    )
-    with pytest.raises(ValueError, match="Unsupported descriptor analysis modes"):
-        decoding.run(config)
-
-
-def test_transductive_input_requires_explicit_opt_in(tmp_path, monkeypatch):
-    groups, labels, coords = _observation_coords()
-    container = DataContainer(
-        X=np.ones((len(groups), 3)),
-        dims=("obs", "feature"),
-        coords={**coords, "feature": ["pc1", "pc2", "pc3"]},
-        ids=np.asarray([f"r{idx:03d}" for idx in range(len(groups))]),
-        meta={"transductive": True},
-    )
-    monkeypatch.setattr(decoding, "build_dataset", lambda *args, **kwargs: container)
-    config = _compact_config(
-        tmp_path,
-        input_mode="reduced_dimensions",
         analysis_modes=["flat"],
     )
-    with pytest.raises(ValueError, match="marked transductive"):
-        decoding.run(config)
-
-    config["allow_transductive_input"] = True
-    output = decoding.run(config)
-    sweep = pd.read_csv(output / "sweep_results.csv")
-    assert sweep["transductive_input"].all()
-    assert not sweep["primary"].all()
+    config.pop("feature_selection")
+    with pytest.raises(ValueError, match="feature_selection"):
+        build_classical_plan(config)
 
 
-def test_pooled_scope_preserves_transductive_flag(tmp_path, monkeypatch):
-    groups, labels, coords = _observation_coords()
-    transductive = DataContainer(
-        X=np.ones((len(groups), 3)),
-        dims=("obs", "feature"),
-        coords={**coords, "feature": ["pc1", "pc2", "pc3"]},
-        ids=np.asarray([f"a{idx:03d}" for idx in range(len(groups))]),
-        meta={"transductive": True},
+def test_foundation_run_wires_sweep_and_capability_without_gpu(tmp_path, monkeypatch):
+    """Drive foundation_decoding.run() through the skip path (no neural training).
+
+    Verifies the foundation-specific plumbing around the shared sweep scaffold:
+    scope build, capability_matrix.csv, the runs/ inventory, the report, and a
+    --reports-only re-run — all without model checkpoints or a GPU.
+    """
+    from eeg_adhd_epilepsy.analysis import foundation_decoding as fdn
+
+    bids_root = tmp_path / "BIDS"
+    bids_root.mkdir(parents=True)
+    config = {
+        "bids_root": str(bids_root),
+        "dataset_name": "synthetic_foundation",
+        "conditions": ["EO_baseline"],
+        "run_pooled": False,
+        "models": [
+            {
+                "model_key": "labram",
+                "segment_duration": 10.0,
+                "overlap": 0.0,
+                "use_derivatives": True,
+                "window_source": "derivative",
+                "window_mismatch_policy": "raise",
+                "backend": "auto",
+                "backend_kwargs": {},
+                "lora": {},
+                "trainer": {"linear_probe": {}, "full": {}, "lora": {}},
+            }
+        ],
+        "train_modes": ["linear_probe"],
+        "training_defaults": {"linear_probe": {}},
+        "metrics": ["accuracy"],
+        "cv": {"n_splits": 2},
+        "chance_method": "binomial",
+        "n_permutations": 5,
+        "store_null_distribution": False,
+        "session_col": "session",
+        "subject_col": "subject",
+        "device": "cpu",
+        "precision": "fp32",
+        "on_unsupported": "skip",
+        "class_weight": "balanced",
+        "n_jobs": 1,
+        "random_state": 42,
+        "verbose": False,
+        "overwrite": False,
+        "report_asset_urls": {
+            "plotly": "about:blank",
+            "tailwind": "about:blank",
+            "pako": "about:blank",
+        },
+    }
+
+    # Bypass data loading + coco-pipe model spec; enumeration yields a single
+    # capability skip (as on_unsupported=skip would produce for a real backend).
+    monkeypatch.setattr(fdn, "_build_foundation_scopes", lambda *a, **k: [("EO_baseline",)])
+    skip = {
+        "condition": "EO_baseline",
+        "target": "adhd",
+        "model_key": "labram",
+        "train_mode": "linear_probe",
+        "primary": True,
+        "status": "skipped",
+        "reason": "backend unavailable in test",
+        "capability": {
+            "condition": "EO_baseline",
+            "target": "adhd",
+            "model_key": "labram",
+            "train_mode": "linear_probe",
+            "status": "unavailable",
+            "reason": "backend unavailable in test",
+        },
+    }
+    monkeypatch.setattr(fdn, "enumerate_foundation_units", lambda *a, **k: ([], [skip]))
+
+    output = fdn.run(config)
+    assert (output / "runs" / "sweep_runs.json").exists()
+    summary = json.loads((output / "runs" / "run_summary.json").read_text())
+    assert summary["status"] == "FAILED"  # only a skip, no successful units
+    capability = pd.read_csv(output / "capability_matrix.csv")
+    assert (capability["status"] == "unavailable").any()
+    assert list(
+        (tmp_path / "reports" / "summary" / "decoding" / "synthetic_foundation").glob(
+            "foundation_cfg-*/dataset_summary.html"
+        )
     )
-    inductive = DataContainer(
-        X=np.ones((len(groups), 3)),
-        dims=("obs", "feature"),
-        coords={**coords, "feature": ["pc1", "pc2", "pc3"]},
-        ids=np.asarray([f"b{idx:03d}" for idx in range(len(groups))]),
+
+    # --reports-only re-run reads the persisted inventory and regenerates reports.
+    summary_html = next(
+        (tmp_path / "reports" / "summary" / "decoding" / "synthetic_foundation").glob(
+            "foundation_cfg-*/dataset_summary.html"
+        )
     )
-    containers = iter([transductive, inductive])
-    monkeypatch.setattr(
-        decoding,
-        "build_dataset",
-        lambda *args, **kwargs: next(containers),
-    )
-    config = _compact_config(
-        tmp_path,
-        input_mode="reduced_dimensions",
-        analysis_modes=["flat"],
-    )
-    config.update(
-        {
-            "conditions": ["EO_baseline", "EC_baseline"],
-            "run_pooled": True,
-            "allow_transductive_input": True,
-        }
-    )
-    output = decoding.run(config)
-    sweep = pd.read_csv(output / "sweep_results.csv")
-    pooled = sweep[sweep["scope"] == "pooled"]
-    assert not pooled.empty
-    assert pooled["transductive_input"].all()
-    assert not pooled["primary"].all()
+    summary_html.unlink()
+    fdn.run({**config, "reports_only": True})
+    assert summary_html.exists()

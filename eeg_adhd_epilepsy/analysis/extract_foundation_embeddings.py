@@ -32,10 +32,9 @@ from coco_pipe.utils import stable_hash
 from mne_bids import BIDSPath
 
 from eeg_adhd_epilepsy.analysis.dataset import build_container
+from eeg_adhd_epilepsy.analysis.utils.common import require_config
 from eeg_adhd_epilepsy.analysis.utils.decoding import (
     foundation_provenance,
-    require_conditions,
-    require_models,
 )
 from eeg_adhd_epilepsy.analysis.utils.subject_resolution import (
     resolve_cohort_subjects,
@@ -129,8 +128,8 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
     )
     subject_col = config.get("subject_col", "study_id")
     subjects = resolve_cohort_subjects(metadata_df, subject_col, config.get("subjects"))
-    conditions = require_conditions(config)
-    models = require_models(config)
+    conditions = require_config(config, "conditions", expected_type=list, cast_str=True)
+    models = require_config(config, "models", expected_type=list)
     cfg_hash = config_hash(config)
 
     records: list[dict[str, Any]] = []

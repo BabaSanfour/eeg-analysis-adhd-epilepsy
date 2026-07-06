@@ -1,9 +1,14 @@
 import pandas as pd
 from coco_pipe.decoding import ExperimentResult
 from coco_pipe.io.quality import QCResult, SubjectDropRecord
+from coco_pipe.report import (
+    best_rows,
+    display_frame,
+    primary_metric_column,
+    signature_compatibility,
+)
 
 from eeg_adhd_epilepsy.reports.decoding import (
-    _result_display_frame,
     generate_decoding_summary_report,
     generate_foundation_decoding_report,
     generate_head_to_head_report,
@@ -73,10 +78,10 @@ def _foundation_records(tmp_path):
                         "primary": train_mode == "linear_probe",
                         "model": f"{model_key}_{train_mode}",
                         "status": "success",
-                        "accuracy": 0.62,
-                        "balanced_accuracy": 0.6,
-                        "f1": 0.61,
-                        "roc_auc": 0.7,
+                        "accuracy_mean": 0.62,
+                        "balanced_accuracy_mean": 0.6,
+                        "f1_mean": 0.61,
+                        "roc_auc_mean": 0.7,
                         "output_dir": str(output_dir),
                     }
                 )
@@ -91,6 +96,63 @@ def _foundation_records(tmp_path):
         }
     )
     return records
+
+
+def test_decoding_report_metric_priority_prefers_balanced_accuracy():
+    frame = pd.DataFrame(
+        [
+            {"accuracy_mean": 0.9, "balanced_accuracy_mean": 0.62},
+            {"accuracy_mean": 0.8, "balanced_accuracy_mean": 0.71},
+        ]
+    )
+    assert primary_metric_column(frame) == "balanced_accuracy_mean"
+
+
+def test_decoding_report_best_rows_rank_by_primary_then_fdr():
+    frame = pd.DataFrame(
+        [
+            {
+                "scope": "EO",
+                "target": "adhd",
+                "model": "rf",
+                "status": "success",
+                "balanced_accuracy_mean": 0.7,
+                "p_value_fdr": 0.04,
+            },
+            {
+                "scope": "EO",
+                "target": "adhd",
+                "model": "logreg",
+                "status": "success",
+                "balanced_accuracy_mean": 0.7,
+                "p_value_fdr": 0.02,
+            },
+        ]
+    )
+    best, metric = best_rows(
+        frame,
+        ("scope", "target"),
+        tie_breakers=(("p_value_fdr", True), ("p_value", True)),
+    )
+    assert metric == "balanced_accuracy_mean"
+    assert best.loc[0, "model"] == "logreg"
+
+
+def test_decoding_report_cv_compatibility_detects_mismatches():
+    frame = pd.DataFrame(
+        [
+            {"scope": "EO", "target": "adhd", "cv_signature": "cv-a"},
+            {"scope": "EO", "target": "adhd", "cv_signature": "cv-b"},
+            {"scope": "EC", "target": "adhd", "cv_signature": "cv-a"},
+            {"scope": "EC", "target": "adhd", "cv_signature": "cv-a"},
+        ]
+    )
+    compatibility = signature_compatibility(frame, ("scope", "target"))
+    eo = compatibility[compatibility["scope"] == "EO"].iloc[0]
+    ec = compatibility[compatibility["scope"] == "EC"].iloc[0]
+    assert not bool(eo["paired_compatible"])
+    assert eo["mismatched_fields"] == "cv_signature"
+    assert bool(ec["paired_compatible"])
 
 
 def test_foundation_visual_report_uses_coco_pipe_comparisons(tmp_path):
@@ -113,9 +175,13 @@ def test_foundation_visual_report_uses_coco_pipe_comparisons(tmp_path):
         figures_dir=figures_dir,
     )
     html = output.read_text(encoding="utf-8")
+    assert "Scientific Overview" in html
+    assert "Linear Probe Leaderboard" in html
     assert "Linear Probe" in html
     assert "Training-Mode Comparison" in html
     assert "Foundation Capability Matrix" in html
+    assert "Per-Result Diagnostics" in html
+    assert "Skipped and Failed Units" in html
     assert not list(figures_dir.glob("*.png"))
 
 
@@ -151,6 +217,7 @@ def test_decoding_summary_is_grouped_by_scope_and_analysis_plan(tmp_path):
                     "model": "logreg_l1",
                     "selection_mode": "baseline",
                     "primary": mode == "flat",
+                    "balanced_accuracy_mean": 0.61,
                 }
             )
     output = generate_decoding_summary_report(
@@ -163,6 +230,8 @@ def test_decoding_summary_is_grouped_by_scope_and_analysis_plan(tmp_path):
         },
     )
     html = output.read_text(encoding="utf-8")
+    assert "Scientific Overview" in html
+    assert "Primary Leaderboard" in html
     titles = [
         "Full Analysis: All Sensors x All Features",
         "Sensor-wise Analyses",
@@ -217,6 +286,19 @@ def test_classical_decoding_summary_uses_coco_pipe_comparisons(tmp_path):
                 "output_dir": str(output_dir),
             }
         )
+    records.append(
+        {
+            "scope": "EO_baseline",
+            "target": "adhd",
+            "status": "success",
+            "analysis_mode": "sensor",
+            "unit_name": "Fp1",
+            "model": "logreg_l1",
+            "selection_mode": "sfs",
+            "accuracy_mean": 0.61,
+            "output_dir": str(_write_result(tmp_path, "sensor_fp1_sfs", accuracy=0.61)),
+        }
+    )
     for subfamily, sensor, accuracy in (
         ("log_abs", "Fp1", 0.55),
         ("log_abs", "Fp2", 0.57),
@@ -264,7 +346,7 @@ def test_classical_decoding_summary_uses_coco_pipe_comparisons(tmp_path):
                 "scope": "EO_baseline",
                 "target": "adhd",
                 "status": "success",
-                "analysis_mode": "feature",
+                "analysis_mode": "descriptor",
                 "unit_key": "mean_log_abs_alpha",
                 "unit_name": "mean_log_abs_alpha",
                 "model": "logreg_l1",
@@ -275,7 +357,7 @@ def test_classical_decoding_summary_uses_coco_pipe_comparisons(tmp_path):
                 "scope": "EO_baseline",
                 "target": "adhd",
                 "status": "success",
-                "analysis_mode": "feature_sensor",
+                "analysis_mode": "descriptor_sensor",
                 "unit_key": "mean_log_abs_alpha_Fp1",
                 "unit_name": "mean_log_abs_alpha",
                 "model": "logreg_l1",
@@ -286,7 +368,7 @@ def test_classical_decoding_summary_uses_coco_pipe_comparisons(tmp_path):
                 "scope": "EO_baseline",
                 "target": "adhd",
                 "status": "success",
-                "analysis_mode": "feature_sensor",
+                "analysis_mode": "descriptor_sensor",
                 "unit_key": "mean_log_abs_alpha_Fp2",
                 "unit_name": "mean_log_abs_alpha",
                 "model": "logreg_l1",
@@ -309,6 +391,11 @@ def test_classical_decoding_summary_uses_coco_pipe_comparisons(tmp_path):
 
     assert not list(figures_dir.glob("*.png"))
     html = output.read_text(encoding="utf-8")
+    assert "Scientific Overview" in html
+    assert "Primary Leaderboard" in html
+    assert "Model Heatmap" in html
+    assert "Score Spread" in html
+    assert "Feature-Selection Diagnostics" in html
     assert "Sensor-wise Accuracy: EO_baseline" in html
     assert "Subfamily Accuracy: EO_baseline" in html
     assert "Sensor x Subfamily Accuracy: EO_baseline" in html
@@ -349,44 +436,6 @@ def test_classical_decoding_summary_uses_full_result_artifacts(tmp_path):
     assert "Download Fold Scores CSV" in html
 
 
-def test_decoding_summary_accepts_legacy_feature_mode_names(tmp_path):
-    output = generate_decoding_summary_report(
-        tmp_path / "summary.html",
-        [
-            {
-                "scope": "EO_baseline",
-                "status": "success",
-                "analysis_mode": "flat",
-                "selection_mode": "baseline",
-            },
-            {
-                "scope": "EO_baseline",
-                "status": "success",
-                "analysis_mode": "feature",
-                "unit_name": "mean_log_abs_alpha",
-                "selection_mode": "baseline",
-            },
-            {
-                "scope": "EO_baseline",
-                "status": "success",
-                "analysis_mode": "feature_sensor",
-                "unit_name": "mean_log_abs_alpha",
-                "selection_mode": "baseline",
-            },
-        ],
-        title="Summary",
-        config={
-            "conditions": ["EO_baseline"],
-            "run_pooled": False,
-            "report_asset_urls": _asset_urls(),
-        },
-    )
-
-    html = output.read_text(encoding="utf-8")
-    assert "Single Descriptor (all stats): All Sensors" in html
-    assert "Single Descriptor (all stats) x Single Sensor" in html
-
-
 def test_decoding_summary_keeps_configured_scope_with_no_rows(tmp_path):
     output = generate_decoding_summary_report(
         tmp_path / "summary.html",
@@ -411,7 +460,7 @@ def test_decoding_summary_keeps_configured_scope_with_no_rows(tmp_path):
 
 
 def test_decoding_result_tables_lead_with_scores_and_hide_audit_noise():
-    display = _result_display_frame(
+    display = display_frame(
         pd.DataFrame(
             [
                 {
@@ -586,28 +635,82 @@ def test_decoding_summary_omits_zero_feature_missingness(tmp_path):
 
 def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
     bids_root = tmp_path / "BIDS"
-    result_root = bids_root / "derivatives" / "decoding" / "group" / "dataset" / "descriptors"
+    result_root = bids_root / "derivatives" / "decoding" / "dataset" / "descriptors"
     result_root.mkdir(parents=True)
     pd.DataFrame(
         [
             {
                 "status": "success",
+                "input_mode": "descriptors",
                 "analysis_mode": "flat",
                 "selection_mode": "baseline",
                 "scope": "EO_baseline",
                 "target": "adhd",
+                "model": "logreg",
+                "balanced_accuracy_mean": 0.62,
+                "cv_strategy": "stratified_group_kfold",
+                "effective_n_splits": 5,
+                "cv_random_state": 42,
+                "cohort_signature": "abc123",
+            },
+            {
+                "status": "success",
+                "input_mode": "descriptors",
+                "analysis_mode": "flat",
+                "selection_mode": "baseline",
+                "scope": "EC_baseline",
+                "target": "adhd",
+                "model": "logreg",
+                "balanced_accuracy_mean": 0.6,
+                "cv_strategy": "stratified_group_kfold",
+                "effective_n_splits": 5,
+                "cv_random_state": 42,
+                "cohort_signature": "abc123",
+            },
+        ]
+    ).to_csv(result_root / "sweep_results.csv", index=False)
+    embedding_root = bids_root / "derivatives" / "decoding" / "dataset" / "foundation_embeddings"
+    embedding_root.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "status": "success",
+                "input_mode": "foundation_embeddings",
+                "analysis_mode": "flat",
+                "selection_mode": "baseline",
+                "scope": "EC_baseline",
+                "target": "adhd",
+                "model": "ridge",
+                "balanced_accuracy_mean": 0.66,
                 "cv_strategy": "stratified_group_kfold",
                 "effective_n_splits": 5,
                 "cv_random_state": 42,
                 "cohort_signature": "abc123",
             }
         ]
-    ).to_csv(result_root / "sweep_results.csv", index=False)
+    ).to_csv(embedding_root / "sweep_results.csv", index=False)
+    foundation_root = bids_root / "derivatives" / "decoding" / "dataset" / "foundation_linear"
+    foundation_root.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "status": "success",
+                "condition": "EO_baseline",
+                "target": "adhd",
+                "model_key": "labram",
+                "train_mode": "linear_probe",
+                "balanced_accuracy_mean": 0.67,
+                "cv_strategy": "stratified_group_kfold",
+                "effective_n_splits": 5,
+                "cv_random_state": 99,
+                "cohort_signature": "abc123",
+            }
+        ]
+    ).to_csv(foundation_root / "foundation_results.csv", index=False)
 
     outputs = generate_head_to_head_report(
         bids_root=bids_root,
         reports_root=tmp_path / "reports",
-        output_group="group",
         dataset_name="dataset",
         asset_urls=_asset_urls(),
     )
@@ -615,22 +718,30 @@ def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
     comparison_path, report_path = outputs
     comparison = pd.read_csv(comparison_path)
     assert "cv_signature" in comparison
+    assert "primary_metric" in comparison
+    assert "comparison_family" in comparison
+    assert set(comparison["comparison_family"]) == {
+        "descriptor_flat_baseline",
+        "foundation_embedding_flat_baseline",
+        "foundation_linear_probe",
+    }
     assert "stratified_group_kfold" in comparison.loc[0, "cv_signature"]
     assert comparison.loc[0, "cohort_signature"] == "abc123"
-    assert "Head-to-Head Comparison" in report_path.read_text(encoding="utf-8")
+    html = report_path.read_text(encoding="utf-8")
+    assert "Head-to-Head Comparison" in html
+    assert "Comparison Compatibility" in html
+    assert "Paired Comparisons Limited" in html
+    assert "Paired Delta vs Descriptor Baseline" in html
 
 
 def test_head_to_head_ignores_empty_failed_sweep(tmp_path):
-    failed_root = (
-        tmp_path / "BIDS" / "derivatives" / "decoding" / "group" / "dataset" / "descriptors"
-    )
+    failed_root = tmp_path / "BIDS" / "derivatives" / "decoding" / "dataset" / "descriptors"
     failed_root.mkdir(parents=True)
     (failed_root / "sweep_results.csv").write_text("", encoding="utf-8")
     assert (
         generate_head_to_head_report(
             bids_root=tmp_path / "BIDS",
             reports_root=tmp_path / "reports",
-            output_group="group",
             dataset_name="dataset",
             asset_urls=_asset_urls(),
         )

@@ -20,6 +20,7 @@ class ReportStage(StrEnum):
     DESCRIPTOR_QC = "descriptor_qc"
     DIM_REDUCTION = "dim_reduction"
     FOUNDATION_EMBEDDINGS = "foundation_embeddings"
+    DECODING = "decoding"
 
 
 def default_reports_root(bids_root: Path) -> Path:

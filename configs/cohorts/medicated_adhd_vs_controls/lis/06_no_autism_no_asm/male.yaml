@@ -2,7 +2,6 @@
 # Cohort config: subjects + clinical question. Pair it with an analysis
 # config (configs/analyses/<type>/) via --cohort_config + --analysis_config.
 dataset_name: lis_06_no_autism_no_asm_male
-output_group: medicated_adhd_vs_controls/lis
 subject_col: study_id
 conditions:
 - EO_baseline

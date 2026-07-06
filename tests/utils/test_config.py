@@ -22,7 +22,6 @@ def _write(path, body: str) -> str:
 def _cohort_yaml(extra: str = "") -> str:
     return f"""
     dataset_name: pooled_01_all_subjects_total
-    output_group: medicated_adhd_vs_controls/pooled
     conditions:
       - EO_baseline
       - EC_baseline
@@ -76,7 +75,6 @@ def test_missing_cohort_key_is_actionable(tmp_path):
     cohort = _write(
         tmp_path / "cohort.yaml",
         """
-        output_group: g
         evals:
           - name: x
         """,

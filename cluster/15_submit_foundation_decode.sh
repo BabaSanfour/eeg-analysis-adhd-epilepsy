@@ -21,8 +21,8 @@ PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
 METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
 VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/EO_EC_baseline_only.yaml}
-ANALYSIS_CONFIG=${ANALYSIS_CONFIG:?Set ANALYSIS_CONFIG to a configs/analyses/foundation_decoding/*.yaml}
+COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
+ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation.yaml}
 
 [ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
 [ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }

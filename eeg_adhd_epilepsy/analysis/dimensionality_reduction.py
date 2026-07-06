@@ -40,6 +40,13 @@ from coco_pipe.utils import resolve_n_jobs, run_task_batch, slug, stable_hash
 from joblib import parallel_backend
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
+from eeg_adhd_epilepsy.analysis.utils.common import (
+    apply_family_qc_mask,
+    base_layout_mode,
+    families_for_analysis_unit,
+    pool_containers,
+    require_config,
+)
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     _load_run,
     _selection_config,
@@ -48,13 +55,7 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     build_output_root,
     build_run_config_payload,
     group_fit_requests,
-    pool_containers,
     validate_inputs,
-)
-from eeg_adhd_epilepsy.analysis.utils.units import (
-    apply_family_qc_mask,
-    base_layout_mode,
-    families_for_analysis_unit,
 )
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
@@ -478,7 +479,6 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         # Identity / selection
         dataset_name=config.get("dataset_name"),
         run_label=config.get("run_label"),
-        output_group=config.get("output_group"),
         conditions=list(config.get("conditions", DEFAULT_CONDITIONS)),
         subjects=config.get("subjects"),
         subject_col=config.get("subject_col", "study_id"),
@@ -625,7 +625,10 @@ def run(config: dict[str, Any]) -> None:
         else None
     )
 
-    eval_specs = parse_eval_specs(config.get("evals"), args.subject_col)
+    eval_specs = parse_eval_specs(
+        require_config(config, "evals", expected_type=list),
+        args.subject_col,
+    )
 
     valid_selection_metrics = {*FIT_METRIC_COLUMNS, SEPARATION_METRIC_KEY}
     eval_names = {spec["name"] for spec in eval_specs}

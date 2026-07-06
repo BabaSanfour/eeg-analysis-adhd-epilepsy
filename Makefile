@@ -6,8 +6,8 @@
 #
 #   make dry-run BIDS_ROOT=/data/BIDS METADATA=/data/meta.csv RAW_ROOT=/data/raw \
 #                COHORT=configs/cohorts/.../total.yaml \
-#                DIM_ANALYSIS=configs/analyses/dim_reduction/default.yaml \
-#                DECODE_ANALYSIS=configs/analyses/decoding/EO.yaml
+#                DIM_ANALYSIS=configs/analyses/dim_reduction/descriptors.yaml \
+#                DECODE_ANALYSIS=configs/analyses/decoding/classical.yaml
 #   make descriptors BIDS_ROOT=/data/BIDS METADATA=/data/meta.csv
 #   make all ...        # whole chain
 #
@@ -98,7 +98,7 @@ foundation-embeddings: ## Extract foundation-model embeddings (dataset-wide)
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings --config $(FOUNDATION_EMB_CFG) --bids_root $(BIDS_ROOT) $(if $(METADATA),--metadata $(METADATA))
 
 foundation-decode: ## Foundation-model probing / fine-tuning (cohort + analysis)
-	$(PYTHON) -m eeg_adhd_epilepsy.analysis.foundation_decoding --cohort_config $(COHORT) --analysis_config $(ANALYSIS) \
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.foundation_decoding --cohort_config $(COHORT) --analysis_config $(or $(DECODE_ANALYSIS),$(ANALYSIS),configs/analyses/decoding/foundation.yaml) \
 	  $(if $(BIDS_ROOT),--bids_root $(BIDS_ROOT)) $(if $(METADATA),--metadata $(METADATA))
 
 cohort-report: ## Build the cohort report from clean metadata
