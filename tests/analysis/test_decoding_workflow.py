@@ -1,4 +1,5 @@
 import json
+import logging
 
 import numpy as np
 import pandas as pd
@@ -7,6 +8,25 @@ from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis import classical_decoding as decoding
 from eeg_adhd_epilepsy.analysis.utils.decoding import build_classical_plan
+
+
+def test_classical_empty_sweep_logging_summarizes_failures(tmp_path, caplog):
+    failures = [
+        {"reason": "ValueError: not enough classes"},
+        {"reason": "ValueError: not enough classes"},
+        {"reason": "RuntimeError: missing target"},
+    ]
+
+    caplog.set_level(logging.WARNING, logger=decoding.LOGGER.name)
+    decoding._log_enumeration_failures(
+        failures,
+        unit_count=0,
+        derivative_root=tmp_path,
+    )
+
+    assert "No classical decoding units were enumerated" in caplog.text
+    assert "Enumeration skip x2: ValueError: not enough classes" in caplog.text
+    assert str(tmp_path / "failures.csv") in caplog.text
 
 
 def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkeypatch):

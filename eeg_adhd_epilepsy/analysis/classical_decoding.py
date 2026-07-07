@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from collections import Counter
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,40 @@ from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 LOGGER = logging.getLogger(__name__)
 
 _FS_METADATA_KEYS = {"name", "analysis_modes"}
+_MAX_FAILURE_REASONS_TO_LOG = 8
+
+
+def _log_enumeration_failures(
+    failures: list[dict[str, Any]],
+    *,
+    unit_count: int,
+    derivative_root: Path,
+) -> None:
+    """Log a compact reason summary for skipped enumeration candidates."""
+    if not failures:
+        return
+
+    reason_counts = Counter(str(item.get("reason", "unknown")) for item in failures)
+    if unit_count == 0:
+        LOGGER.warning(
+            "No classical decoding units were enumerated; %d skip/failure record(s) "
+            "will be written to %s.",
+            len(failures),
+            derivative_root / "failures.csv",
+        )
+    else:
+        LOGGER.info(
+            "Classical decoding enumeration skipped %d candidate(s); details will be "
+            "written to %s.",
+            len(failures),
+            derivative_root / "failures.csv",
+        )
+
+    for reason, count in reason_counts.most_common(_MAX_FAILURE_REASONS_TO_LOG):
+        LOGGER.warning("Enumeration skip x%d: %s", count, reason)
+    remaining = len(reason_counts) - _MAX_FAILURE_REASONS_TO_LOG
+    if remaining > 0:
+        LOGGER.warning("Enumeration skip summary truncated; %d more reason(s).", remaining)
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +493,11 @@ def run(config: dict[str, Any]) -> Path:
                 plan,
                 scopes,
                 config=config,
+                derivative_root=derivative_root,
+            )
+            _log_enumeration_failures(
+                failures,
+                unit_count=len(units),
                 derivative_root=derivative_root,
             )
             records, _ = execute_decoding_sweep(
