@@ -12,21 +12,16 @@
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 set -euo pipefail
-
-module purge
-module load gcc arrow/23.0.1 python/3.11
-
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
+
 # Point BIDS_ROOT to your scratch BIDS because that's where the descriptors are saved!
-SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
 SCRATCH_BIDS_ROOT=${SCRATCH_BIDS_ROOT:-$SCRATCH_ROOT/BIDS}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
-
-export PYTHONNOUSERSITE=1
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+dra_activate
+# Single-process merge that wants threaded BLAS.
+dra_pin_threads "${SLURM_CPUS_PER_TASK:-1}"
 
 python -m eeg_adhd_epilepsy.analysis.merge_descriptors \
   --bids_root "$SCRATCH_BIDS_ROOT" \

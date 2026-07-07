@@ -535,6 +535,16 @@ def main() -> None:
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
     parser.add_argument("--reports_root", default=None, help="Override reports root (else config).")
     parser.add_argument(
+        "--descriptor_table_path",
+        default=None,
+        help="Descriptor table path (dataset path; supply here rather than in the config).",
+    )
+    parser.add_argument(
+        "--descriptor_feature_columns_path",
+        default=None,
+        help="Descriptor feature-columns JSON path (dataset path; supply here, not in config).",
+    )
+    parser.add_argument(
         "--representation",
         choices=["epoch", "recording", "subject"],
         default=None,
@@ -567,6 +577,8 @@ def main() -> None:
         metadata=args.metadata,
         n_jobs=args.n_jobs,
         reports_root=args.reports_root,
+        descriptor_table_path=args.descriptor_table_path,
+        descriptor_feature_columns_path=args.descriptor_feature_columns_path,
         overwrite=args.overwrite,
         representation=args.representation,
         reports_only=args.reports_only,

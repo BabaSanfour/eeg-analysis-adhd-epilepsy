@@ -5,16 +5,20 @@
 # `representation` to their spec, because they are representation-coupled (flat
 # needs a flattened layout, sensor a native one) whereas descriptor/foundation
 # modes share the input's single representation. Each mode fully declares its run
-# with `reducers` and `n_components` (no global default). PCA + UMAP run on both
-# modes; the slower non-linear reducers focus on the flattened whole-montage
-# manifold, and sensor sweeps a smaller range.
+# with `reducers` and `n_components` (no global default). PCA is the linear
+# baseline; UMAP adds a non-linear manifold and is feasible at epoch granularity
+# because it uses approximate-NN graphs (~O(n_samples·k), not dense), and the
+# co-ranking fit metrics are now subsampled (DEFAULT_MAX_CORANKING_SAMPLES). PHATE
+# stays parked — its diffusion operator is a dense O(n_samples^2) matrix that OOMs
+# at epoch level (see the matching note in descriptors.yaml/foundation.yaml); run
+# it only at subject/recording granularity.
 input_mode: raw
 
 # Run selection. `selection_eval_name` MUST name an eval declared in the paired
 # COHORT config's `evals:` block (cross-checked at load time in utils/config.py);
 # `selection_metric` then ranks every fit by that eval's score. `med_adhd_vs_ctrl`
 # is the ADHD-vs-control contrast common to the medicated_adhd_vs_controls cohorts.
-selection_metric: separation_logreg_balanced_accuracy
+selection_metric: separation_rf_balanced_accuracy
 selection_eval_name: med_adhd_vs_ctrl
 use_derivatives: true
 interactive: true
@@ -33,5 +37,5 @@ window_source: auto
 #     channels into one vector; sensor keeps the native per-channel layout.
 representation: subject
 analysis_modes:
-  flat:   {reducers: [PCA, UMAP, PHATE], n_components: [2, 3, 5, 10, 20]}
-  sensor: {reducers: [PCA, UMAP],                n_components: [2, 3, 5]}
+  flat:   {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 20]}
+  sensor: {reducers: [PCA, UMAP], n_components: [2, 3, 5]}

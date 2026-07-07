@@ -10,38 +10,23 @@
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 set -euo pipefail
-
-module purge
-module load gcc arrow/23.0.1 python/3.11
-
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
-BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
-SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
+
 SEGMENT_DURATION=${SEGMENT_DURATION:-10.0}
 OVERLAP=${OVERLAP:-0.0}
 OVERWRITE=${OVERWRITE:-0}
 
-[ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
-[ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
-[ -d "$VENV_PATH" ] || { echo "Virtual environment not found: $VENV_PATH"; exit 1; }
+require_dir "$BIDS_ROOT"
+require_dir "$VENV_PATH"
 
 BASE_COUNT=$(find "$BIDS_ROOT/derivatives/preproc" -name '*desc-base_eeg.fif' -type f | wc -l)
 [ "$BASE_COUNT" -gt 0 ] || { echo "No base-cleaned FIF files found under: $BIDS_ROOT/derivatives/preproc"; exit 1; }
 echo "Found $BASE_COUNT base-cleaned FIF files for epoching."
 
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
-
-export PYTHONNOUSERSITE=1
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export NUMEXPR_NUM_THREADS=1
-export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
-export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
-export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
-mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
+dra_activate
+dra_pin_threads 1
 
 cmd=(
   python -m eeg_adhd_epilepsy.preproc.epochs

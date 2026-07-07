@@ -17,25 +17,17 @@
 # array, e.g.:  sbatch --dependency=afterok:<array_jobid> "$0"
 
 set -euo pipefail
-
-module purge
-module load gcc arrow/23.0.1 python/3.11
-
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
-SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
+
 DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
-REPORTS_ROOT=${REPORTS_ROOT:-$SCRATCH_ROOT/reports}
 
-[ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
-[ -d "$VENV_PATH" ] || { echo "Virtual environment not found: $VENV_PATH"; exit 1; }
+require_dir "$VENV_PATH"
 
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
-
-export PYTHONNOUSERSITE=1
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
+dra_activate
+# Single-process merge that wants threaded BLAS.
+dra_pin_threads "${SLURM_CPUS_PER_TASK:-1}"
 
 python -m eeg_adhd_epilepsy.analysis.merge_foundation_embeddings \
   --bids_root "$BIDS_ROOT" \

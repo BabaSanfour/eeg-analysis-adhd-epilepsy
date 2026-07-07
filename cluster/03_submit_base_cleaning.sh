@@ -11,15 +11,11 @@
 
 set -euo pipefail
 
-module purge
-module load gcc arrow/23.0.1 python/3.11
-
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
-BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
-SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-OVERWRITE=${OVERWRITE:-0}
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
 
+OVERWRITE=${OVERWRITE:-0}
 THREADS=${SLURM_CPUS_PER_TASK:-32}
 
 # Memory-aware concurrency: cap simultaneous subjects to the RAM budget, keeping
@@ -30,28 +26,15 @@ MEM_PER_SUBJECT_GB=${MEM_PER_SUBJECT_GB:-4}
 SLURM_MEM_MB=${SLURM_MEM_PER_NODE:-196608}
 MAX_MEM_GB=$(( SLURM_MEM_MB / 1024 * 85 / 100 ))
 
-[ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
-[ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
-[ -d "$VENV_PATH" ] || { echo "Virtual environment not found: $VENV_PATH"; exit 1; }
+require_dir "$BIDS_ROOT"
+require_dir "$VENV_PATH"
 
 VHDR_COUNT=$(find "$BIDS_ROOT" -path '*/eeg/*_eeg.vhdr' -type f | wc -l)
 [ "$VHDR_COUNT" -gt 0 ] || { echo "No BIDS .vhdr EEG files found under: $BIDS_ROOT"; exit 1; }
 echo "Found $VHDR_COUNT BIDS EEG recordings for base cleaning."
 
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
-
-export PYTHONNOUSERSITE=1
-
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export NUMEXPR_NUM_THREADS=1
-
-export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
-export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
-export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
-mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
+dra_activate
+dra_pin_threads 1
 
 echo "Memory budget: ${MAX_MEM_GB} GB usable (~${MEM_PER_SUBJECT_GB} GB/subject) across ${THREADS} cores."
 

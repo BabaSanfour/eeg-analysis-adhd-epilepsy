@@ -6,7 +6,7 @@
 # the orchestrator sweeps `analysis_modes` and loads each condition once.
 input_mode: descriptors
 
-selection_metric: separation_logreg_balanced_accuracy
+selection_metric: separation_rf_balanced_accuracy
 selection_eval_name: med_adhd_vs_ctrl
 use_derivatives: true
 interactive: true
@@ -33,16 +33,18 @@ qc:
 # (redundant with feature_within_family) and `descriptor_sensor` (too granular
 # once only mean/variance/IQR remain) are intentionally omitted. Each mode fully
 # declares its own run — the `reducers` to fit and the `n_components` to sweep
-# (there is no global default). For now every mode runs PCA only: it is the cheap,
-# memory-safe linear baseline that yields component loadings and is stable at epoch/
-# subject granularity. The non-linear reducers (UMAP/PHATE) are parked — their
-# neighbor graphs are the main OOM driver — and can be re-added per mode later.
+# (there is no global default). PCA is the cheap linear baseline that yields
+# component loadings and is stable at every granularity; UMAP adds a non-linear
+# manifold and is feasible at epoch level because it uses approximate-NN graphs
+# (~O(n_samples·k), not dense) and the co-ranking fit metrics are now subsampled
+# (DEFAULT_MAX_CORANKING_SAMPLES). PHATE stays parked — its dense O(n_samples^2)
+# diffusion operator is the OOM driver — and can be re-added per mode later.
 analysis_modes:
-  flat:                  {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
-  family:                {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
-  subfamily:             {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
-  sensor:                {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
-  sensor_within_family:  {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
-  sensor_within_subfamily: {reducers: [PCA], n_components: [2, 3]}
-  feature_within_family: {reducers: [PCA], n_components: [2, 3]}
-  descriptor:            {reducers: [PCA], n_components: [2, 3, 5, 10, 15, 20]}
+  flat:                  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
+  family:                {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
+  subfamily:             {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
+  sensor:                {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
+  sensor_within_family:  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
+  sensor_within_subfamily: {reducers: [PCA, UMAP], n_components: [2, 3]}
+  feature_within_family: {reducers: [PCA, UMAP], n_components: [2, 3]}
+  descriptor:            {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}

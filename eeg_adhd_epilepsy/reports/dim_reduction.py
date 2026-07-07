@@ -27,6 +27,10 @@ from coco_pipe.report import (
 )
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
+from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
+    DEFAULT_DIM_REDUCTION_SELECTION_METRIC,
+    DIM_REDUCTION_EVAL_METRIC_COLUMNS,
+)
 from eeg_adhd_epilepsy.metadata.schema import EPILEPSY_MED_COLS
 from eeg_adhd_epilepsy.reports._common import (
     MODE_TITLES,
@@ -50,11 +54,11 @@ _UNIT_LABELS = {
     "descriptor_sensor": "descriptor × sensor",
 }
 
-# Tie-break best-run selection on structure-preservation then class separation.
+# RF separation is the default primary metric; LR is the first tie-breaker.
 _SEPARATION_TIE_BREAKERS = (
+    (SEPARATION_METRIC_KEY, False),
     ("trustworthiness", False),
     ("continuity", False),
-    (SEPARATION_METRIC_KEY, False),
 )
 
 _PLOT_META_EXCLUDED_COLUMNS = {
@@ -233,6 +237,7 @@ def collect_mode_leaderboard(
         eval_name=getattr(args, "selection_eval_name", None),
         tie_breakers=_SEPARATION_TIE_BREAKERS,
         reducers=reducers,
+        metrics=DIM_REDUCTION_EVAL_METRIC_COLUMNS,
     )
     if best.empty:
         return pd.DataFrame()
@@ -262,7 +267,12 @@ def collect_mode_leaderboard(
         best["representation"] = args.representation or ""
         keep_cols.append("model")
 
-    for metric in ["trustworthiness", "continuity", SEPARATION_METRIC_KEY, "eval_name"]:
+    for metric in [
+        *DIM_REDUCTION_EVAL_METRIC_COLUMNS,
+        "trustworthiness",
+        "continuity",
+        "eval_name",
+    ]:
         if metric in best.columns:
             keep_cols.append(metric)
 
@@ -309,7 +319,7 @@ def generate_rollup_report(
         f"Best run per analysis mode &times; condition for **{run_label}** ({args.input_mode}), "
         f"ranked by **{args.selection_metric}**{selection_note}.<br/><br/>"
         "💡 A strong representation is both geometrically faithful (high trustworthiness) "
-        "and clinically separating (high separation balanced accuracy) — "
+        "and clinically separating (high RF, then LR, balanced accuracy) — "
         "aim for the top-right in the scatter plot below."
     )
     link_rows = [
@@ -324,9 +334,17 @@ def generate_rollup_report(
         for summary in summaries
     ]
 
+    y_metric = (
+        args.selection_metric
+        if hasattr(args, "selection_metric") and args.selection_metric
+        else DEFAULT_DIM_REDUCTION_SELECTION_METRIC
+    )
+
     return build_reduction_rollup_report(
         leaderboard,
         title=f"Dim Reduction Roll-up: {run_label} ({args.input_mode})",
+        y_metric=y_metric,
+        sort_col=y_metric if y_metric in leaderboard.columns else None,
         mode_label_map=MODE_TITLES,
         strategy_note=strategy_note,
         link_rows=link_rows,

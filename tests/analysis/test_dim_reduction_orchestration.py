@@ -15,6 +15,8 @@ from joblib.parallel import get_active_backend
 import eeg_adhd_epilepsy.analysis.dimensionality_reduction as dim_reduction
 from eeg_adhd_epilepsy.analysis.utils.common import base_layout_mode
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
+    DEFAULT_DIM_REDUCTION_SELECTION_METRIC,
+    SEPARATION_RF_METRIC_KEY,
     build_and_validate_mode_specs,
     group_fit_requests,
 )
@@ -297,6 +299,7 @@ def _write_inventories(tmp_path):
             "eval_name": "med_adhd_vs_ctrl",
             "target_col": "dx",
             "status": "success",
+            SEPARATION_RF_METRIC_KEY: 0.64,
             SEPARATION_METRIC_KEY: 0.62,
         },
         {
@@ -311,6 +314,7 @@ def _write_inventories(tmp_path):
             "eval_name": "med_adhd_vs_ctrl",
             "target_col": "dx",
             "status": "success",
+            SEPARATION_RF_METRIC_KEY: 0.73,
             SEPARATION_METRIC_KEY: 0.71,
         },
     ]
@@ -329,7 +333,7 @@ def _leaderboard_args():
         n_components_sweep=[5],
         conditions=["EO_baseline"],
         run_pooled=False,
-        selection_metric=SEPARATION_METRIC_KEY,
+        selection_metric=DEFAULT_DIM_REDUCTION_SELECTION_METRIC,
         selection_eval_name="med_adhd_vs_ctrl",
         descriptor_families=None,
         descriptor_max_abs_value=None,
@@ -353,6 +357,10 @@ def test_collect_mode_leaderboard_picks_best_by_separation(tmp_path):
     row = board.iloc[0]
     assert row["analysis_mode"] == "flat"
     assert row["reducer"] == "UMAP"  # higher separation than PCA
+    assert list(board.columns).index(SEPARATION_RF_METRIC_KEY) < list(board.columns).index(
+        SEPARATION_METRIC_KEY
+    )
+    assert row[SEPARATION_RF_METRIC_KEY] == 0.73
     assert row[SEPARATION_METRIC_KEY] == 0.71
 
 
@@ -443,7 +451,7 @@ def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch):
     analysis = tmp_path / "analysis.yaml"
     analysis.write_text(
         "input_mode: descriptors\n"
-        "selection_metric: separation_logreg_balanced_accuracy\n"
+        "selection_metric: separation_rf_balanced_accuracy\n"
         "selection_eval_name: med_adhd_vs_ctrl\n"
         # Mode-centric plan: each mode fully declares its run. flat sweeps [2, 3]
         # over PCA + UMAP; family runs PCA only over [2]. Exercises build_mode_specs,
@@ -581,18 +589,21 @@ def test_collect_mode_leaderboard_ignores_offtarget_eval(tmp_path):
             "fit_id": "fit_a",
             "eval_name": "sex_separation",
             "status": "success",
+            SEPARATION_RF_METRIC_KEY: 0.99,
             SEPARATION_METRIC_KEY: 0.99,
         },
         {
             "fit_id": "fit_a",
             "eval_name": "med_adhd_vs_ctrl",
             "status": "success",
+            SEPARATION_RF_METRIC_KEY: 0.55,
             SEPARATION_METRIC_KEY: 0.55,
         },
         {
             "fit_id": "fit_b",
             "eval_name": "med_adhd_vs_ctrl",
             "status": "success",
+            SEPARATION_RF_METRIC_KEY: 0.80,
             SEPARATION_METRIC_KEY: 0.80,
         },
     ]
@@ -611,6 +622,7 @@ def test_collect_mode_leaderboard_ignores_offtarget_eval(tmp_path):
     assert len(board) == 1
     row = board.iloc[0]
     assert row["reducer"] == "UMAP"  # the selection eval, not sex_separation, decides
+    assert row[SEPARATION_RF_METRIC_KEY] == 0.80
     assert row[SEPARATION_METRIC_KEY] == 0.80
 
 
@@ -630,6 +642,7 @@ def _write_foundation_run(cohort_dir, variant, model, representation, separation
                 "n_components": 10,
                 "model": model,
                 "trustworthiness": 0.9,
+                SEPARATION_RF_METRIC_KEY: separation,
                 SEPARATION_METRIC_KEY: separation,
             }
         ]
@@ -647,7 +660,7 @@ def _write_foundation_run(cohort_dir, variant, model, representation, separation
         encoding="utf-8",
     )
     (run_dir / "config_used.yaml").write_text(
-        "selection_metric: separation_logreg_balanced_accuracy\n"
+        "selection_metric: separation_rf_balanced_accuracy\n"
         "selection_eval_name: med_adhd_vs_ctrl\n",
         encoding="utf-8",
     )

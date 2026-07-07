@@ -12,15 +12,12 @@
 
 set -euo pipefail
 
-module purge
-module load gcc arrow/23.0.1 python/3.11
-
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
+
 FOUNDATION_CONFIG=${FOUNDATION_CONFIG:-$PROJECT_ROOT/configs/foundation_extraction.yaml}
-BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
-METADATA=${METADATA:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
-SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
+METADATA=${METADATA:-$METADATA_PATH}
 DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.foundation_array_state}
 AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-1}
@@ -30,21 +27,16 @@ SECOND_BATCH_SIZE=${SECOND_BATCH_SIZE:-218}
 ROW_OFFSET=${ROW_OFFSET:-0}
 METADATA_ROW=$((SLURM_ARRAY_TASK_ID + ROW_OFFSET))
 
-[ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
-[ -f "$FOUNDATION_CONFIG" ] || { echo "Foundation config not found: $FOUNDATION_CONFIG"; exit 1; }
-[ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
-[ -f "$METADATA" ] || { echo "Metadata not found: $METADATA"; exit 1; }
-[ -d "$VENV_PATH" ] || { echo "Virtual environment not found: $VENV_PATH"; exit 1; }
+require_file "$FOUNDATION_CONFIG"
+require_dir "$BIDS_ROOT"
+require_file "$METADATA"
+require_dir "$VENV_PATH"
 
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
-
-export PYTHONNOUSERSITE=1
-export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
-export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
-export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
+# GPU job (embedding extraction runs on-device); no BLAS pinning. Add a
+# HuggingFace cache on node-local scratch on top of the standard caches.
+dra_activate
 export HF_HOME="${HF_HOME:-${SLURM_TMPDIR:-/tmp}/hf_home}"
-mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR" "$HF_HOME"
+mkdir -p "$HF_HOME"
 
 if [[ -z "${HF_TOKEN:-}" ]]; then
   echo "WARN: HF_TOKEN is unset; REVE (gated) will be skipped." >&2

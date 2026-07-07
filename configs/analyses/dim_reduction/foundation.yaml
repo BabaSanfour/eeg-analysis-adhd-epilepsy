@@ -6,7 +6,7 @@
 # cluster array fans model keys × representations out as separate runs.
 input_mode: foundation_embeddings
 
-selection_metric: separation_logreg_balanced_accuracy
+selection_metric: separation_rf_balanced_accuracy
 selection_eval_name: med_adhd_vs_ctrl
 interactive: true
 overwrite: false
@@ -18,5 +18,8 @@ overwrite: false
 # array task (epoch, recording, subject) via the CLI.
 representation: recording
 analysis_modes:
-  # PCA only for now (memory-safe baseline); UMAP/PHATE parked, re-add later.
-  flat: {reducers: [PCA], n_components: [2, 3, 5, 10, 20]}
+  # PCA (linear baseline) + UMAP (non-linear manifold; approximate-NN graph, so
+  # feasible at epoch level now that the co-ranking fit metrics are subsampled via
+  # DEFAULT_MAX_CORANKING_SAMPLES). PHATE stays parked — its dense O(n_samples^2)
+  # diffusion operator is the OOM driver; re-add it only at recording/subject.
+  flat: {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 20]}

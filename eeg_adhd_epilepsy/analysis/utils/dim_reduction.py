@@ -20,6 +20,18 @@ from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
 
+SEPARATION_RF_METRIC_KEY = "separation_rf_balanced_accuracy"
+"""Balanced-accuracy separation metric from a random-forest probe."""
+
+DIM_REDUCTION_EVAL_METRIC_COLUMNS = (
+    SEPARATION_RF_METRIC_KEY,
+    SEPARATION_METRIC_KEY,
+)
+"""Eval metrics shown/ranked for dimensionality-reduction separation."""
+
+DEFAULT_DIM_REDUCTION_SELECTION_METRIC = SEPARATION_RF_METRIC_KEY
+"""Default dim-reduction run-selection metric: RF first, LR retained second."""
+
 
 def validate_inputs(args: Any) -> None:
     """Validate dimensionality reduction specific configuration dependencies."""
@@ -134,10 +146,10 @@ def _selection_config(run_dir: Path) -> tuple[str, str | None]:
     if config_path.exists():
         cfg = load_yaml_config(config_path)
         return (
-            str(cfg.get("selection_metric", SEPARATION_METRIC_KEY)),
+            str(cfg.get("selection_metric", DEFAULT_DIM_REDUCTION_SELECTION_METRIC)),
             cfg.get("selection_eval_name"),
         )
-    return SEPARATION_METRIC_KEY, None
+    return DEFAULT_DIM_REDUCTION_SELECTION_METRIC, None
 
 
 def build_output_root(bids_root: Path, args: Any, mode: str, representation: str) -> Path:
@@ -331,6 +343,9 @@ def group_fit_requests(
 
 
 __all__ = [
+    "DEFAULT_DIM_REDUCTION_SELECTION_METRIC",
+    "DIM_REDUCTION_EVAL_METRIC_COLUMNS",
+    "SEPARATION_RF_METRIC_KEY",
     "build_and_validate_mode_specs",
     "build_run_config_payload",
     "group_fit_requests",
