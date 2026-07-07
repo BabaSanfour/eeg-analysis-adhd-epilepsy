@@ -481,6 +481,12 @@ def main() -> None:
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
     parser.add_argument("--reports_root", default=None, help="Override reports root (else config).")
     parser.add_argument(
+        "--representation",
+        choices=["epoch", "recording", "subject"],
+        default=None,
+        help="Override the raw representation granularity for foundation decoding.",
+    )
+    parser.add_argument(
         "--overwrite",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -507,6 +513,7 @@ def main() -> None:
         metadata=args.metadata,
         n_jobs=args.n_jobs,
         reports_root=args.reports_root,
+        representation=args.representation,
         overwrite=args.overwrite,
         reports_only=args.reports_only,
         compare_only=args.compare_only,

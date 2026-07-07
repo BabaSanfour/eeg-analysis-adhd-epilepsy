@@ -26,6 +26,8 @@ sbatch --export=ALL,BIDS_ROOT=/my/BIDS,METADATA_PATH=/my/meta.csv 03_submit_base
 | 13 | `13_submit_compare_foundation_dim_reduction.sh` | per-model dim-reduction runs → cross-model comparison report | single (run after 12) |
 | 14 | `14_submit_classical_decode.sh` | classical decoding | single (one cohort × analysis) |
 | 15 | `15_submit_foundation_decode.sh` | foundation decoding | single (GPU) |
+| 16 | `16_submit_main_dim_reduction.sh` | main-cohort dim-reduction smoke runner | single (raw/descriptors/foundation) |
+| 17 | `17_submit_main_decoding.sh` | main-cohort decoding smoke runner | single (epoch + recording, resources via `sbatch`) |
 
 
 ## Common environment variables
@@ -61,12 +63,33 @@ the method). See `../configs/README.md`.
   `foundation_model_comparison.html` ranking models on the same axes.
 - **14 / 15 (decoding)** run a single `COHORT_CONFIG` × `ANALYSIS_CONFIG` pair;
   submit several jobs (overriding those vars) to cover a grid.
+- **16 / 17 (main smoke runners)** run the hardcoded
+  `medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml` cohort
+  serially. Script 17 runs epoch- and recording-level decoding by default for
+  both descriptor/classical decoding and foundation decoding. Script 17
+  intentionally leaves account/time/memory/CPU/GPU resources to the `sbatch`
+  command; submit the CPU and GPU branches separately to avoid mixed-allocation
+  waste. They are for end-to-end checks of the main cohort, not the full cohort
+  grid.
 
-## Foundation stages (08, 12, 15)
+For script 17, submit the CPU and GPU branches separately:
+
+```bash
+sbatch --account=rrg-kjerbi --time=24:00:00 --cpus-per-task=16 --mem=128G \
+  cluster/17_submit_main_decoding.sh decoding
+
+sbatch --account=def-kjerbi --time=24:00:00 --cpus-per-task=8 --mem=128G \
+  --gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1 \
+  cluster/17_submit_main_decoding.sh foundation
+```
+
+## Foundation stages (08, 12, 15, 17)
 
 Need a GPU (`--gres=gpu:1`), except **12** (foundation dim-reduction) which is
-CPU-only — it reduces already-extracted embeddings. REVE is a gated Hugging Face
-model — run
+CPU-only — it reduces already-extracted embeddings. For **17**, pass `--gres`
+only when submitting `foundation` or `all`; use separate `decoding` and
+`foundation` submissions to avoid reserving a GPU for classical decoding. REVE
+is a gated Hugging Face model — run
 `hf auth login` or export `HF_TOKEN` before submitting, or REVE is skipped with
 `authentication_required`.
 
