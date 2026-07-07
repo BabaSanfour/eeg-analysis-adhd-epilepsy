@@ -213,6 +213,40 @@ def _observation_coords():
     )
 
 
+def test_condition_separation_is_only_enumerated_for_pooled_scope(tmp_path):
+    groups, _labels, coords = _observation_coords()
+    container = DataContainer(
+        X=np.ones((len(groups), 2)),
+        dims=("obs", "feature"),
+        coords={**coords, "feature": ["f1", "f2"]},
+        ids=np.asarray([f"r{idx:03d}" for idx in range(len(groups))]),
+    )
+    config = _compact_config(
+        tmp_path,
+        input_mode="descriptors",
+        analysis_modes=["flat"],
+    )
+    config["evals"] = [
+        {
+            "name": "condition_separation",
+            "target_col": "condition",
+            "group_col": "patient_group_id",
+            "positive_class": "EC_baseline",
+        }
+    ]
+    plan = build_classical_plan(config)
+
+    units, failures = decoding.enumerate_classical_units(
+        plan,
+        [("EO_baseline", container)],
+        config=config,
+        derivative_root=tmp_path,
+    )
+
+    assert units == []
+    assert failures == []
+
+
 def test_foundation_embedding_decoding_flat_mode(tmp_path, monkeypatch):
     groups, labels, coords = _observation_coords()
     rng = np.random.default_rng(11)

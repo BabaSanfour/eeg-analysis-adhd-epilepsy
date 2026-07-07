@@ -121,7 +121,7 @@ metrics:
   - recall
   - roc_auc
 
-session_col: session_id
+session_col: session
 subject_col: study_id
 task: clinical
 desc: base

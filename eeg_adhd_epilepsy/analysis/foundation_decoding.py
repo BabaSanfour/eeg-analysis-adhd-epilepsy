@@ -231,6 +231,8 @@ def _enumerate_foundation_scope(
     channels = [str(value) for value in container.coords["channel"]]
     for eval_spec in evals:
         target_name = eval_spec.get("name", eval_spec["target_col"])
+        if target_name == "condition_separation" and condition != "pooled":
+            continue
         try:
             target_container, y, groups, sample_metadata, n_splits = prepare_decoding_scope(
                 container,

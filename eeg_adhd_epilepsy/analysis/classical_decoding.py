@@ -294,6 +294,8 @@ def _enumerate_scope(
 
     for eval_spec in plan.evals:
         target_name = eval_spec.get("name", eval_spec["target_col"])
+        if target_name == "condition_separation" and scope != "pooled":
+            continue
         try:
             target_container, y, groups, sample_metadata, _ = prepare_decoding_scope(
                 full_container,
