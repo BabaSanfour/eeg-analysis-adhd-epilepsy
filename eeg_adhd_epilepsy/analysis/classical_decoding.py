@@ -91,11 +91,12 @@ def _log_enumeration_failures(
             derivative_root / "failures.csv",
         )
 
+    log_reason = LOGGER.warning if unit_count == 0 else LOGGER.info
     for reason, count in reason_counts.most_common(_MAX_FAILURE_REASONS_TO_LOG):
-        LOGGER.warning("Enumeration skip x%d: %s", count, reason)
+        log_reason("Enumeration skip x%d: %s", count, reason)
     remaining = len(reason_counts) - _MAX_FAILURE_REASONS_TO_LOG
     if remaining > 0:
-        LOGGER.warning("Enumeration skip summary truncated; %d more reason(s).", remaining)
+        log_reason("Enumeration skip summary truncated; %d more reason(s).", remaining)
 
 
 # ---------------------------------------------------------------------------
