@@ -22,4 +22,4 @@ analysis_modes:
   # feasible at epoch level now that the co-ranking fit metrics are subsampled via
   # DEFAULT_MAX_CORANKING_SAMPLES). PHATE stays parked — its dense O(n_samples^2)
   # diffusion operator is the OOM driver; re-add it only at recording/subject.
-  flat: {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 20]}
+  flat: {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100]}
