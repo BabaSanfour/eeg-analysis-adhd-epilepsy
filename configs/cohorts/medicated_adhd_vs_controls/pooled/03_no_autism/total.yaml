@@ -30,6 +30,7 @@ evals:
 - name: med_adhd_vs_ctrl
   target_col: combined_diagnosis
   group_col: patient_group_id
+  positive_class: '1'
   label_map:
     Control: '0'
     Epilepsy: '0'
@@ -42,9 +43,15 @@ evals:
 - name: sex_separation
   target_col: sex
   group_col: patient_group_id
+  positive_class: M
 - name: age_separation
   target_col: age_group
   group_col: patient_group_id
+  class_order:
+  - 5-8
+  - 9-12
+  - 13-18
 - name: condition_separation
   target_col: condition
   group_col: patient_group_id
+  positive_class: EC_baseline
