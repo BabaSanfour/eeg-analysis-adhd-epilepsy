@@ -309,6 +309,7 @@ def build_loader_args(
             else float(config.get("segment_duration", 10.0))
         ),
         overlap=overlap if overlap is not None else float(config.get("overlap", 0.0)),
+        units=config.get("units", "V"),
         subject_col=config.get("subject_col", "study_id"),
         desc=config.get("desc", "base"),
         descriptor_table_path=config.get("descriptor_table_path"),

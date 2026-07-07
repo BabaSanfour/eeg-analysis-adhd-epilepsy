@@ -104,7 +104,7 @@ precision: fp32
 on_unsupported: skip
 
 # --- Column identity --------------------------------------------------------
-session_col: session_id
+session_col: session
 subject_col: study_id
 
 # --- Run controls -----------------------------------------------------------

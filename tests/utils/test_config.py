@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import textwrap
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +13,7 @@ from eeg_adhd_epilepsy.utils.config import (
     load_cohort_analysis_config,
     resolve_cli_config,
 )
+from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 
 def _write(path, body: str) -> str:
@@ -124,6 +126,14 @@ def test_selection_eval_name_matching_cohort_eval_passes(tmp_path):
 
     merged = load_cohort_analysis_config(cohort, analysis)
     assert merged["selection_eval_name"] == "med_adhd_vs_ctrl"
+
+
+def test_decoding_analysis_configs_use_exported_session_column():
+    for path in (
+        Path("configs/analyses/decoding/classical.yaml"),
+        Path("configs/analyses/decoding/foundation.yaml"),
+    ):
+        assert load_yaml_config(path)["session_col"] == "session"
 
 
 def test_apply_overrides_ignores_none():

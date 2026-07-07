@@ -5,6 +5,7 @@ import pytest
 from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis.utils.decoding import (
+    build_loader_args,
     foundation_provenance,
     prepare_decoding_scope,
     prepare_target,
@@ -30,6 +31,18 @@ def _base_model_cfg(**overrides):
     }
     cfg.update(overrides)
     return cfg
+
+
+def test_build_loader_args_sets_raw_units_default_and_override():
+    default_args = build_loader_args({}, input_mode="raw", layout_mode="sensor")
+    assert default_args.units == "V"
+
+    override_args = build_loader_args(
+        {"units": "uV"},
+        input_mode="raw",
+        layout_mode="sensor",
+    )
+    assert override_args.units == "uV"
 
 
 def test_foundation_provenance_defaults_pooling_to_mean():
