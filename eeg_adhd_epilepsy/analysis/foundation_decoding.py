@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 from collections.abc import Iterator
 from pathlib import Path
@@ -16,7 +17,7 @@ from coco_pipe.decoding import (
     CVConfig,
     DecodingUnit,
     ExperimentConfig,
-    execute_decoding_sweep,
+    execute_decoding_sweep_streaming,
     get_foundation_model_spec,
     grouped_chance_assessment,
     load_sweep_records,
@@ -25,7 +26,11 @@ from coco_pipe.decoding import (
 from coco_pipe.utils import slug
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
-from eeg_adhd_epilepsy.analysis.utils.common import pool_containers, require_config
+from eeg_adhd_epilepsy.analysis.utils.common import (
+    container_pool_spec,
+    pool_containers_streaming,
+    require_config,
+)
 from eeg_adhd_epilepsy.analysis.utils.decoding import (
     build_loader_args,
     foundation_provenance,
@@ -284,41 +289,37 @@ def _enumerate_foundation_scope(
             )
 
 
-def enumerate_foundation_units(
-    scopes: list[tuple[str, dict[str, Any], Any, Any, dict[str, Any]]],
+def _foundation_scope_units(
+    condition: str,
+    model_cfg: dict[str, Any],
+    container: Any,
+    spec: Any,
+    provenance: dict[str, Any],
     *,
+    evals: list[dict[str, Any]],
+    train_modes: list[str],
     config: dict[str, Any],
     derivative_root: Path,
-) -> tuple[list[DecodingUnit], list[dict[str, Any]]]:
-    """Flatten the condition × model × eval × train_mode sweep into units.
-
-    Returns ``(units, failures)`` where failures are enumeration-time skips
-    that never become sweep rows.
-    """
+    failures: list[dict[str, Any]],
+) -> list[DecodingUnit]:
+    """Build one scope's decoding units; append enumeration skips to *failures*."""
     units: list[DecodingUnit] = []
-    failures: list[dict[str, Any]] = []
-
-    train_modes = config["train_modes"]
-    evals = require_config(config, "evals", expected_type=list)
-
-    for condition, model_cfg, container, spec, provenance in scopes:
-        for item in _enumerate_foundation_scope(
-            condition=condition,
-            model_cfg=model_cfg,
-            container=container,
-            spec=spec,
-            provenance=provenance,
-            evals=evals,
-            train_modes=train_modes,
-            config=config,
-            derivative_root=derivative_root,
-        ):
-            if isinstance(item, DecodingUnit):
-                units.append(item)
-            else:
-                failures.append(item)
-
-    return units, failures
+    for item in _enumerate_foundation_scope(
+        condition=condition,
+        model_cfg=model_cfg,
+        container=container,
+        spec=spec,
+        provenance=provenance,
+        evals=evals,
+        train_modes=train_modes,
+        config=config,
+        derivative_root=derivative_root,
+    ):
+        if isinstance(item, DecodingUnit):
+            units.append(item)
+        else:
+            failures.append(item)
+    return units
 
 
 # ---------------------------------------------------------------------------
@@ -344,12 +345,28 @@ def _load_capability_matrix(derivative_root: Path) -> list[dict[str, Any]]:
         return []
 
 
-def _build_foundation_scopes(config: dict[str, Any], metadata, cfg_hash: str) -> list:
-    """Build (condition, model_cfg, container, spec, provenance) scopes per model."""
+def _iter_foundation_unit_batches(
+    config: dict[str, Any],
+    metadata,
+    cfg_hash: str,
+    derivative_root: Path,
+    failures: list[dict[str, Any]],
+) -> Iterator[list[DecodingUnit]]:
+    """Yield one scope's decoding units at a time, streaming data per model.
+
+    Loads each model's per-condition containers (and the optional pooled
+    container) lazily, builds that scope's units, yields them, then releases the
+    model's containers before advancing to the next model. This bounds host
+    memory to a single model's scopes instead of materializing every
+    ``model × condition`` container (plus pooled copies) at once, which is what
+    was OOM-killing the run. Enumeration-time skips accumulate into *failures*.
+    """
     conditions = require_config(config, "conditions", expected_type=list, cast_str=True)
     model_configs = require_config(config, "models", expected_type=list)
+    train_modes = config["train_modes"]
+    evals = require_config(config, "evals", expected_type=list)
+    run_pooled = bool(config.get("run_pooled", False))
 
-    scopes = []
     for model_cfg in model_configs:
         model_key = str(model_cfg["model_key"])
         window_source = str(model_cfg["window_source"])
@@ -367,18 +384,52 @@ def _build_foundation_scopes(config: dict[str, Any], metadata, cfg_hash: str) ->
             use_derivatives=bool(model_cfg["use_derivatives"]),
             window_source=window_source,
         )
-        model_scopes = []
+        spec = get_foundation_model_spec(model_key)
+        provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
+
+        pool_specs: list[dict[str, Any]] = []
+        pool_loaders: list[Any] = []
         for condition in conditions:
             container = build_dataset(loader_args, metadata, condition, target_col=None)
-            spec = get_foundation_model_spec(model_key)
-            provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
-            model_scopes.append((condition, model_cfg, container, spec, provenance))
-        if config.get("run_pooled", False) and len(model_scopes) > 1:
-            pooled = pool_containers([item[2] for item in model_scopes])
-            _, model_cfg, _container, spec, provenance = model_scopes[0]
-            model_scopes.append(("pooled", model_cfg, pooled, spec, provenance))
-        scopes.extend(model_scopes)
-    return scopes
+            units = _foundation_scope_units(
+                condition,
+                model_cfg,
+                container,
+                spec,
+                provenance,
+                evals=evals,
+                train_modes=train_modes,
+                config=config,
+                derivative_root=derivative_root,
+                failures=failures,
+            )
+            if run_pooled and len(conditions) > 1:
+                pool_specs.append(container_pool_spec(container))
+                pool_loaders.append(
+                    lambda args=loader_args, cond=condition: build_dataset(
+                        args, metadata, cond, target_col=None
+                    )
+                )
+            yield units
+            del container, units
+            gc.collect()
+        if len(pool_specs) > 1:
+            pooled = pool_containers_streaming(pool_specs, pool_loaders)
+            yield _foundation_scope_units(
+                "pooled",
+                model_cfg,
+                pooled,
+                spec,
+                provenance,
+                evals=evals,
+                train_modes=train_modes,
+                config=config,
+                derivative_root=derivative_root,
+                failures=failures,
+            )
+            del pooled
+        del pool_specs, pool_loaders
+        gc.collect()
 
 
 def run(config: dict[str, Any]) -> Path:
@@ -398,12 +449,9 @@ def run(config: dict[str, Any]) -> Path:
         if reports_only:
             records = load_sweep_records(derivative_root)
         else:
-            scopes = _build_foundation_scopes(config, metadata, cfg_hash)
-            units, failures = enumerate_foundation_units(
-                scopes,
-                config=config,
-                derivative_root=derivative_root,
-            )
+            # Enumeration skips + runtime failures land here; the streaming
+            # executor extends it in place, so the closure below sees them all.
+            failures: list[dict[str, Any]] = []
 
             def _write_capability_matrix(
                 frame: pd.DataFrame, recs: list[dict[str, Any]], output_root: Path
@@ -415,8 +463,10 @@ def run(config: dict[str, Any]) -> Path:
                 if caps:
                     pd.DataFrame(caps).to_csv(output_root / "capability_matrix.csv", index=False)
 
-            records, _ = execute_decoding_sweep(
-                units,
+            records, _ = execute_decoding_sweep_streaming(
+                _iter_foundation_unit_batches(
+                    config, metadata, cfg_hash, derivative_root, failures
+                ),
                 failures,
                 config=config,
                 output_root=derivative_root,

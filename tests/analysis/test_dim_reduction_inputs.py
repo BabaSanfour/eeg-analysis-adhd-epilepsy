@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import pytest
 from coco_pipe.descriptors import load_descriptor_table
 from coco_pipe.dim_reduction import run_eval
 from coco_pipe.io import ANALYSIS_MODES, DataContainer, iter_analysis_units
@@ -17,8 +18,10 @@ from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.dimensionality_reduction import _collect_scope_fit_requests
 from eeg_adhd_epilepsy.analysis.utils.common import (
     apply_family_qc_mask,
+    container_pool_spec,
     families_for_analysis_unit,
     pool_containers,
+    pool_containers_streaming,
 )
 
 
@@ -540,6 +543,63 @@ def test_pooled_container_preserves_fine_grained_qc_metadata():
     assert pooled.meta["family_qc_group_by"] == "subfamily"
     assert "family_qc_descriptor_names" not in pooled.meta
     assert pooled.meta["family_qc_bad_ids"] == {"log_abs": ["r1", "r2"]}
+
+
+def _pool_equivalence_containers(channels_per_condition):
+    """Two conditions with real payloads, obs metadata, and auxiliary coords."""
+    containers = []
+    for index, (condition, channels) in enumerate(channels_per_condition):
+        n_obs = 2 + index
+        rng = np.random.default_rng(index)
+        containers.append(
+            DataContainer(
+                X=rng.normal(size=(n_obs, len(channels), 4)).astype(np.float32),
+                dims=("obs", "channel", "time"),
+                coords={
+                    "channel": np.asarray(channels, dtype=object),
+                    "time": np.arange(4),
+                    "subject": np.asarray([f"{condition}{i}" for i in range(n_obs)], dtype=object),
+                    "condition": np.asarray([condition] * n_obs, dtype=object),
+                },
+                y=np.asarray([i % 2 for i in range(n_obs)]),
+                ids=np.asarray([f"{condition}_r{i}" for i in range(n_obs)], dtype=object),
+                meta={
+                    "condition": condition,
+                    "family_qc_group_by": "family",
+                    "family_qc_bad_ids": {"fam": [f"{condition}_r0"]},
+                },
+            )
+        )
+    return containers
+
+
+@pytest.mark.parametrize(
+    "channels_per_condition",
+    [
+        [("EO", ["A", "B", "C"]), ("EC", ["A", "B", "C"])],  # identical channels
+        [("EO", ["A", "B", "C"]), ("EC", ["A", "B", "D"])],  # channel intersection
+    ],
+)
+def test_streaming_pool_matches_eager_pool(channels_per_condition):
+    containers = _pool_equivalence_containers(channels_per_condition)
+    eager = pool_containers(containers)
+    # Loaders re-create identical containers, mimicking a per-condition reload.
+    streamed = pool_containers_streaming(
+        [container_pool_spec(container) for container in containers],
+        [(lambda c=container: c) for container in containers],
+    )
+
+    assert streamed.X.shape == eager.X.shape
+    np.testing.assert_array_equal(streamed.X, eager.X)
+    np.testing.assert_array_equal(streamed.ids, eager.ids)
+    np.testing.assert_array_equal(streamed.y, eager.y)
+    assert set(streamed.coords) == set(eager.coords)
+    for key in eager.coords:
+        np.testing.assert_array_equal(
+            np.asarray(streamed.coords[key]), np.asarray(eager.coords[key])
+        )
+    assert streamed.meta["family_qc_bad_ids"] == eager.meta["family_qc_bad_ids"]
+    assert streamed.meta["family_qc_group_by"] == eager.meta["family_qc_group_by"]
 
 
 def test_fit_identity_changes_with_matrix_content_and_qc(tmp_path):
