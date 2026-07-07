@@ -11,16 +11,11 @@
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 set -euo pipefail
-
-module purge
-module load gcc arrow/23.0.1 python/3.11
-
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
-BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
-SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
-METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
+
 CONFIG_PATH=${CONFIG_PATH:-$PROJECT_ROOT/configs/descriptors.yaml}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.descriptor_array_state}
 AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-1}
 FIRST_BATCH_SIZE=${FIRST_BATCH_SIZE:-1000}
@@ -30,24 +25,14 @@ THREADS=${SLURM_CPUS_PER_TASK:-16}
 ROW_OFFSET=${ROW_OFFSET:-0}
 METADATA_ROW=$((SLURM_ARRAY_TASK_ID + ROW_OFFSET))
 
-[ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
-[ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
-[ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }
-[ -f "$CONFIG_PATH" ] || { echo "Descriptor config not found: $CONFIG_PATH"; exit 1; }
-[ -d "$VENV_PATH" ] || { echo "Virtual environment not found: $VENV_PATH"; exit 1; }
+require_dir "$BIDS_ROOT"
+require_file "$METADATA_PATH"
+require_file "$CONFIG_PATH"
+require_dir "$VENV_PATH"
 
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
-
-export PYTHONNOUSERSITE=1
-export OMP_NUM_THREADS="$THREADS"
-export MKL_NUM_THREADS="$THREADS"
-export OPENBLAS_NUM_THREADS="$THREADS"
-export NUMEXPR_NUM_THREADS="$THREADS"
-export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
-export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
-export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
-mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
+dra_activate
+# One process per array task doing threaded per-recording work -> threaded BLAS.
+dra_pin_threads "$THREADS"
 
 python -m eeg_adhd_epilepsy.analysis.extract_descriptors \
   --bids_root "$BIDS_ROOT" \

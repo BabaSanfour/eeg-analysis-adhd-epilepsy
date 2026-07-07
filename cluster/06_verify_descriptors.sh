@@ -13,25 +13,19 @@
 
 set -euo pipefail
 
-module purge
-module load gcc arrow/23.0.1 python/3.11
-
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
-SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
+
 DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors}
-REPORTS_ROOT=${REPORTS_ROOT:-$SCRATCH_ROOT/reports}
-METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 ROWS=${ROWS:-}
 STRICT=${STRICT:-0}
 
-[ -d "$PROJECT_ROOT" ] || { echo "Project root not found: $PROJECT_ROOT"; exit 1; }
-[ -d "$DERIVATIVE_ROOT" ] || { echo "Derivative root not found: $DERIVATIVE_ROOT"; exit 1; }
-[ -d "$VENV_PATH" ] || { echo "Virtual environment not found: $VENV_PATH"; exit 1; }
+require_dir "$DERIVATIVE_ROOT"
+require_dir "$VENV_PATH"
 
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
-export PYTHONNOUSERSITE=1
+# CPU-light verification; no BLAS pinning.
+dra_activate
 
 cmd=(
   python -m eeg_adhd_epilepsy.analysis.verify_descriptors

@@ -257,10 +257,11 @@ Three arguments define what is loaded and what one “analysis unit” is:
 The most common subject-level raw setup is `--input_mode raw --analysis_mode flat
 --representation subject`: one row per subject over the joint sensor×time
 space. Best-fit selection is driven by `selection_metric` /`selection_eval_name`
-(in the analysis config), and outputs are separated by a configuration hash under
-`BIDS/derivatives/dim_reduction/<dataset_name>/...`. Re-runs rebuild
-inventories from reusable checkpoints. `--n_jobs` controls outer-task parallelism
-(start with 4–6).
+(in the analysis config); the default separation ranking uses RF balanced
+accuracy first and LR balanced accuracy second. Outputs are separated by a
+configuration hash under `BIDS/derivatives/dim_reduction/<dataset_name>/...`.
+Re-runs rebuild inventories from reusable checkpoints. `--n_jobs` controls
+outer-task parallelism (start with 4–6).
 
 ## Foundation models and decoding
 

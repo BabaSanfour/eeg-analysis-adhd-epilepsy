@@ -9,6 +9,9 @@
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
+# Debug convenience runner: run all representations for ONE hardcoded cohort
+# serially (no --array), to smoke-test a pipeline end to end. The array scripts
+# 10/11/12 are the real submission path.
 set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
@@ -19,34 +22,16 @@ fi
 
 PIPELINE_TYPE=$1
 
-# 1. Load Cluster Modules
-module purge
-module load gcc arrow/23.0.1 python/3.11
-
-# 2. Path Configuration
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
-BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
-METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
-REPORTS_ROOT="$SCRATCH_ROOT/reports"
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
 
 # The exact cohort config
 CONFIG="$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml"
 
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
-export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
-export PYTHONNOUSERSITE=1
+dra_activate
+dra_pin_threads 1
 THREADS=${SLURM_CPUS_PER_TASK:-16}
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export NUMEXPR_NUM_THREADS=1
-export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
-export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
-export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
-mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 
 
 if [ "$PIPELINE_TYPE" == "raw" ]; then

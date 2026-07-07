@@ -18,7 +18,6 @@ from coco_pipe.dim_reduction import (
     FIT_METRIC_COLUMNS,
     FIT_RUN_KEY_FIELDS,
     POOLED_CONDITION,
-    SEPARATION_METRIC_KEY,
     build_availability_record,
     build_eval_request,
     build_fit_request,
@@ -48,6 +47,8 @@ from eeg_adhd_epilepsy.analysis.utils.common import (
     require_config,
 )
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
+    DEFAULT_DIM_REDUCTION_SELECTION_METRIC,
+    DIM_REDUCTION_EVAL_METRIC_COLUMNS,
     _load_run,
     _selection_config,
     build_and_validate_mode_specs,
@@ -483,7 +484,7 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         subjects=config.get("subjects"),
         subject_col=config.get("subject_col", "study_id"),
         run_pooled=bool(config.get("run_pooled", False)),
-        selection_metric=config.get("selection_metric", "trustworthiness"),
+        selection_metric=config.get("selection_metric", DEFAULT_DIM_REDUCTION_SELECTION_METRIC),
         selection_eval_name=config.get("selection_eval_name"),
         # Input mode + dataset loading
         input_mode=config.get("input_mode", "raw"),
@@ -538,7 +539,7 @@ def compare_cohort(dim_root: Path, dataset_name: str, reports_root: Path) -> Pat
         path.parent.parent for path in cohort_dir.glob("foundation_*/runs/leaderboard.json")
     )
     summaries: list[dict[str, Any]] = []
-    selection_metric, selection_eval_name = SEPARATION_METRIC_KEY, None
+    selection_metric, selection_eval_name = DEFAULT_DIM_REDUCTION_SELECTION_METRIC, None
     for run_dir in run_dirs:
         summary = _load_run(run_dir)
         if summary is None:
@@ -630,7 +631,7 @@ def run(config: dict[str, Any]) -> None:
         args.subject_col,
     )
 
-    valid_selection_metrics = {*FIT_METRIC_COLUMNS, SEPARATION_METRIC_KEY}
+    valid_selection_metrics = {*FIT_METRIC_COLUMNS, *DIM_REDUCTION_EVAL_METRIC_COLUMNS}
     eval_names = {spec["name"] for spec in eval_specs}
 
     if args.selection_metric not in valid_selection_metrics:

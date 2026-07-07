@@ -11,33 +11,25 @@
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 set -euo pipefail
-
-module purge
-module load gcc arrow/23.0.1 python/3.11
+PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
 
 # One foundation-decoding run = one cohort config x one analysis config.
 # Fine-tuning/LoRA want a GPU; REVE is gated — set HF_TOKEN / `hf auth login`.
-PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
-BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
-METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation.yaml}
 
-[ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
-[ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }
-[ -f "$COHORT_CONFIG" ] || { echo "Cohort config not found: $COHORT_CONFIG"; exit 1; }
-[ -f "$ANALYSIS_CONFIG" ] || { echo "Analysis config not found: $ANALYSIS_CONFIG"; exit 1; }
+require_dir "$BIDS_ROOT"
+require_file "$METADATA_PATH"
+require_file "$COHORT_CONFIG"
+require_file "$ANALYSIS_CONFIG"
 
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
-
-export PYTHONNOUSERSITE=1
-export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
-export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
-export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
+# GPU job (training runs on-device); no BLAS pinning. Add a HuggingFace cache on
+# node-local scratch on top of the standard numba/MNE/matplotlib caches.
+dra_activate
 export HF_HOME="${HF_HOME:-${SLURM_TMPDIR:-/tmp}/hf_home}"
-mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR" "$HF_HOME"
+mkdir -p "$HF_HOME"
 
 if [[ -z "${HF_TOKEN:-}" ]]; then
   echo "WARN: HF_TOKEN is unset; REVE (gated) will be skipped." >&2

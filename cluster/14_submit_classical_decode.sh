@@ -10,44 +10,41 @@
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 set -euo pipefail
-
-module purge
-module load gcc arrow/23.0.1 python/3.11
+PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
 
 # One classical-decoding run = one cohort config x one analysis config. Submit
 # several jobs (overriding COHORT_CONFIG/ANALYSIS_CONFIG) to cover a grid.
-PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
-BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
-METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
 COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/classical.yaml}
 
-[ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
-[ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }
-[ -f "$COHORT_CONFIG" ] || { echo "Cohort config not found: $COHORT_CONFIG"; exit 1; }
-[ -f "$ANALYSIS_CONFIG" ] || { echo "Analysis config not found: $ANALYSIS_CONFIG"; exit 1; }
+# Descriptor table (dataset path -> supplied here, not in the analysis config).
+# Recording-level table; override to sensor_subject_features for subject-pooled.
+DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
+TABLE_PATH=${TABLE_PATH:-$DESC_ROOT/sensor_recording_features.parquet}
+COLUMNS_PATH=${COLUMNS_PATH:-$DESC_ROOT/sensor_recording_features_feature_columns.json}
 
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
+require_dir "$BIDS_ROOT"
+require_file "$METADATA_PATH"
+require_file "$COHORT_CONFIG"
+require_file "$ANALYSIS_CONFIG"
+require_file "$TABLE_PATH"
+require_file "$COLUMNS_PATH"
 
-export PYTHONNOUSERSITE=1
+dra_activate
+dra_pin_threads 1
 THREADS=${SLURM_CPUS_PER_TASK:-16}
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export NUMEXPR_NUM_THREADS=1
-export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
-export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
-export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
-mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 
 echo "Cohort:   $COHORT_CONFIG"
 echo "Analysis: $ANALYSIS_CONFIG"
+echo "Table:    $TABLE_PATH"
 
 python -m eeg_adhd_epilepsy.analysis.classical_decoding \
     --cohort_config "$COHORT_CONFIG" \
     --analysis_config "$ANALYSIS_CONFIG" \
     --bids_root "$BIDS_ROOT" \
     --metadata "$METADATA_PATH" \
+    --descriptor_table_path "$TABLE_PATH" \
+    --descriptor_feature_columns_path "$COLUMNS_PATH" \
     --n_jobs "$THREADS"

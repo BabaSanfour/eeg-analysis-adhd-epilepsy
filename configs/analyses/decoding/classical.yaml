@@ -5,9 +5,6 @@
 
 input_mode: descriptors
 
-descriptor_table_path: /Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS/derivatives/signal_features/descriptors/combined/sensor_recording_features.parquet
-descriptor_feature_columns_path: /Users/hamzaabdelhedi/Projects/data/EEG_psychostimulant_data/EEG_psychostimulants_2025-02/BIDS/derivatives/signal_features/descriptors/combined/sensor_recording_features_feature_columns.json
-
 location_statistic: mean
 
 qc:

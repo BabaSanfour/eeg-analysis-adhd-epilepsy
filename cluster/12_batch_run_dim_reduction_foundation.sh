@@ -12,18 +12,10 @@
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 set -euo pipefail
-
-# 1. Load Cluster Modules
-module purge
-module load gcc arrow/23.0.1 python/3.11
-
-# 2. Path Configuration
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
-BIDS_ROOT=${BIDS_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}
-METADATA_PATH=${METADATA_PATH:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}
-VENV_PATH=${VENV_PATH:-$PROJECT_ROOT/.venv}
-SCRATCH_ROOT=${SCRATCH_ROOT:-/home/hamza97/scratch/eeg-epilepsy-adhd}
-REPORTS_ROOT="$SCRATCH_ROOT/reports"
+source "$PROJECT_ROOT/cluster/env.sh"
+dra_load_modules
+
 CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/cohorts}
 ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/dim_reduction/foundation.yaml}
 # Merged per-model embeddings written by 09_submit_merge_foundation_embeddings.sh.
@@ -35,47 +27,30 @@ OVERWRITE=${OVERWRITE:-0}
 # manifold). Override MODELS to add/remove keys (e.g. a reve-attention variant).
 MODELS=(${MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr})
 
-# 3. Environment Setup
-cd "$PROJECT_ROOT"
-source "$VENV_PATH/bin/activate"
-export PYTHONPATH="$PROJECT_ROOT:$PYTHONPATH"
-export PYTHONNOUSERSITE=1
-THREADS=${SLURM_CPUS_PER_TASK:-16}
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export NUMEXPR_NUM_THREADS=1
-export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
-export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
-export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
-mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
-
-[ -d "$BIDS_ROOT" ] || { echo "BIDS root not found: $BIDS_ROOT"; exit 1; }
-[ -f "$METADATA_PATH" ] || { echo "Metadata CSV not found: $METADATA_PATH"; exit 1; }
-[ -d "$CONFIGS_DIR" ] || { echo "Config directory not found: $CONFIGS_DIR"; exit 1; }
-[ -f "$ANALYSIS_CONFIG" ] || { echo "Analysis config not found: $ANALYSIS_CONFIG"; exit 1; }
-[ -d "$EMBEDDING_ROOT" ] || { echo "Embedding derivative root not found: $EMBEDDING_ROOT"; exit 1; }
-
 # Embedding representations (canonical granularity ladder) to reduce, each as a
 # SEPARATE run so they can be compared: epoch (1 row/epoch — most points for the
 # manifold reducers), recording (1 row/recording), subject (1 row/subject).
 # Override to narrow, e.g. REPRESENTATIONS="recording subject".
 REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording subject})
 
-# 4. Map this array task to one (cohort, model, representation) triple
+require_dir "$BIDS_ROOT"
+require_file "$METADATA_PATH"
+require_dir "$CONFIGS_DIR"
+require_file "$ANALYSIS_CONFIG"
+require_dir "$EMBEDDING_ROOT"
+
+dra_activate
+dra_pin_threads 1
+THREADS=${SLURM_CPUS_PER_TASK:-16}
+
+# Map this array task to one (cohort, model, representation) triple.
 mapfile -t CONFIGS < <(find "$CONFIGS_DIR" -name "*.yaml" | sort)
 CONFIG_COUNT=${#CONFIGS[@]}
 MODEL_COUNT=${#MODELS[@]}
 REP_COUNT=${#REPRESENTATIONS[@]}
 TOTAL_TASKS=$((CONFIG_COUNT * MODEL_COUNT * REP_COUNT))
 TASK_ID=${SLURM_ARRAY_TASK_ID:-1}
-
-# Guard: a stale #SBATCH --array bound silently drops the trailing tasks.
-if [ -n "${SLURM_ARRAY_TASK_COUNT:-}" ] && [ "$SLURM_ARRAY_TASK_COUNT" -ne "$TOTAL_TASKS" ]; then
-    echo "ERROR: array size $SLURM_ARRAY_TASK_COUNT != cohorts($CONFIG_COUNT) x models($MODEL_COUNT) x reps($REP_COUNT) = $TOTAL_TASKS." >&2
-    echo "Update '#SBATCH --array=1-$TOTAL_TASKS' (or narrow CONFIGS_DIR / MODELS / REPRESENTATIONS)." >&2
-    exit 1
-fi
+guard_array_size "$TOTAL_TASKS"
 
 if (( TASK_ID < 1 || TASK_ID > TOTAL_TASKS )); then
     echo "Array task $TASK_ID is outside valid task range 1-$TOTAL_TASKS; nothing to do."
@@ -91,6 +66,10 @@ rep_index=$((rest / MODEL_COUNT))
 model="${MODELS[$model_index]}"
 config="${CONFIGS[$config_index]}"
 representation="${REPRESENTATIONS[$rep_index]}"
+
+# Epoch runs use all workers like every other representation: the co-ranking
+# subsample cap in coco_pipe (DEFAULT_MAX_CORANKING_SAMPLES) bounds the dominant
+# per-fit allocation, so the old epoch-specific worker cap is no longer needed.
 
 echo "================================================================================"
 echo "FOUNDATION DIM REDUCTION ARRAY TASK $TASK_ID / $TOTAL_TASKS"

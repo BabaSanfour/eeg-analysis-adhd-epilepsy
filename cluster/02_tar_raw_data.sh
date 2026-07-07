@@ -10,11 +10,13 @@
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 set -euo pipefail
+# No venv/module load: this is a pure tar+zstd job. Source env.sh only for the
+# shared RAW_ROOT default and the require_dir helper.
+PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+source "$PROJECT_ROOT/cluster/env.sh"
 
-RAW_ROOT=${RAW_ROOT:-/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/raw_data}
 SHARED_ROOT=$(dirname "$RAW_ROOT")
-
-[ -d "$RAW_ROOT" ] || { echo "RAW root not found: $RAW_ROOT"; exit 1; }
+require_dir "$RAW_ROOT"
 
 cd "$SHARED_ROOT"
 
