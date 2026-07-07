@@ -206,10 +206,6 @@ def add_overview_cohort_summary(
 
     for condition_name, container in containers.items():
         frame = container.observation_frame()
-        if args.subject_col in frame.columns:
-            frame = frame.drop_duplicates(subset=[args.subject_col], keep="first").reset_index(
-                drop=True
-            )
 
         if primary_spec["target_col"] not in frame.columns:
             raise ValueError(
@@ -229,21 +225,41 @@ def add_overview_cohort_summary(
                 "Cannot generate a comparative cohort summary."
             )
 
-        n_subj = (
-            frame[args.subject_col].nunique() if args.subject_col in frame.columns else len(frame)
-        )
+        has_patient = "patient_id" in frame.columns
+        has_subject = args.subject_col in frame.columns
+        if has_patient and has_subject:
+            dedup_key = frame["patient_id"].fillna(frame[args.subject_col])
+            unit = "subjects"
+        elif has_patient:
+            dedup_key = frame["patient_id"]
+            unit = "subjects"
+        elif has_subject:
+            dedup_key = frame[args.subject_col]
+            unit = "subjects"
+        else:
+            dedup_key = None
+            unit = "observations"
+
+        if dedup_key is not None:
+            subject_frame = frame.loc[~dedup_key.duplicated()].copy()
+        else:
+            subject_frame = frame
+        n_unit = len(subject_frame)
+        count_col = f"n_{unit}"
+        pct_col = f"pct_{unit}"
+
         overview_sec.add_markdown(
             f"### {condition_name}\n"
             f"Primary cohort summary for **{primary_spec['name']}** "
-            f"using **{n_subj}** unique subjects."
+            f"using **{n_unit}** unique {unit}."
         )
 
         summary_rows = []
-        for class_value, class_df in frame.groupby("_primary_class", dropna=False):
+        for class_value, class_df in subject_frame.groupby("_primary_class", dropna=False):
             row = {
                 "class": class_value,
-                "n_subjects": int(len(class_df)),
-                "pct_subjects": round(100.0 * len(class_df) / len(frame), 1),
+                count_col: int(len(class_df)),
+                pct_col: round(100.0 * len(class_df) / len(subject_frame), 1),
             }
             if "age" in class_df.columns:
                 age = pd.to_numeric(class_df["age"], errors="coerce")
@@ -257,9 +273,9 @@ def add_overview_cohort_summary(
             )
         )
 
-        if "sex" in frame.columns:
+        if "sex" in subject_frame.columns:
             sex_table = (
-                frame.assign(sex=frame["sex"].astype(str))
+                subject_frame.assign(sex=subject_frame["sex"].astype(str))
                 .groupby(["_primary_class", "sex"], dropna=False)
                 .size()
                 .unstack(fill_value=0)
@@ -270,9 +286,9 @@ def add_overview_cohort_summary(
                 TableElement(sex_table, title=f"Sex by class ({condition_name})")
             )
 
-        if "age_group" in frame.columns:
+        if "age_group" in subject_frame.columns:
             age_group_table = (
-                frame.assign(age_group=frame["age_group"].astype(str))
+                subject_frame.assign(age_group=subject_frame["age_group"].astype(str))
                 .groupby(["_primary_class", "age_group"], dropna=False)
                 .size()
                 .unstack(fill_value=0)
@@ -286,11 +302,11 @@ def add_overview_cohort_summary(
         clinical_columns = [
             column
             for column in ["autism", "epilepsy", "asm", "asm_resistant", "psychostimulant"]
-            if column in frame.columns
+            if column in subject_frame.columns
         ]
         if clinical_columns:
             clinical_rows = []
-            for class_value, class_df in frame.groupby("_primary_class", dropna=False):
+            for class_value, class_df in subject_frame.groupby("_primary_class", dropna=False):
                 row = {"class": class_value}
                 for column in clinical_columns:
                     values = class_df[column].astype(str).str.strip().str.lower()
@@ -309,9 +325,9 @@ def add_overview_cohort_summary(
                 )
             )
 
-        if "psychostimulant_category" in frame.columns:
+        if "psychostimulant_category" in subject_frame.columns:
             medication_rows = []
-            for class_value, class_df in frame.groupby("_primary_class", dropna=False):
+            for class_value, class_df in subject_frame.groupby("_primary_class", dropna=False):
                 counts = (
                     class_df["psychostimulant_category"].fillna("None").astype(str).value_counts()
                 )

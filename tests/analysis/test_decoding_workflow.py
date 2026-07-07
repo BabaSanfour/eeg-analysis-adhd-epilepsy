@@ -236,11 +236,14 @@ def test_condition_separation_is_only_enumerated_for_pooled_scope(tmp_path):
     ]
     plan = build_classical_plan(config)
 
-    units, failures = decoding.enumerate_classical_units(
+    failures: list = []
+    units = decoding._classical_scope_units(
         plan,
-        [("EO_baseline", container)],
+        "EO_baseline",
+        container,
         config=config,
         derivative_root=tmp_path,
+        failures=failures,
     )
 
     assert units == []
@@ -405,9 +408,9 @@ def test_foundation_run_wires_sweep_and_capability_without_gpu(tmp_path, monkeyp
         },
     }
 
-    # Bypass data loading + coco-pipe model spec; enumeration yields a single
-    # capability skip (as on_unsupported=skip would produce for a real backend).
-    monkeypatch.setattr(fdn, "_build_foundation_scopes", lambda *a, **k: [("EO_baseline",)])
+    # Bypass data loading + coco-pipe model spec; the streamed scope generator
+    # yields no unit batches and records a single capability skip (as
+    # on_unsupported=skip would produce for a real backend).
     skip = {
         "condition": "EO_baseline",
         "target": "adhd",
@@ -425,7 +428,13 @@ def test_foundation_run_wires_sweep_and_capability_without_gpu(tmp_path, monkeyp
             "reason": "backend unavailable in test",
         },
     }
-    monkeypatch.setattr(fdn, "enumerate_foundation_units", lambda *a, **k: ([], [skip]))
+    monkeypatch.setattr(
+        fdn,
+        "_iter_foundation_unit_batches",
+        lambda config, metadata, cfg_hash, derivative_root, failures: (
+            failures.append(skip) or iter(())
+        ),
+    )
 
     output = fdn.run(config)
     assert (output / "runs" / "sweep_runs.json").exists()

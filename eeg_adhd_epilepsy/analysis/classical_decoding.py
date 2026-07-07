@@ -12,9 +12,10 @@ experiment assembly, resume, export, reports, record extraction — lives in
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 from collections import Counter
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,7 @@ from coco_pipe.decoding import (
     ReducerConfig,
     TuningConfig,
     correct_sweep_pvalues,
-    execute_decoding_sweep,
+    execute_decoding_sweep_streaming,
     grouped_chance_assessment,
     load_sweep_records,
     redact_sensitive,
@@ -42,8 +43,9 @@ from coco_pipe.utils import slug
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.common import (
     apply_family_qc_mask,
+    container_pool_spec,
     families_for_analysis_unit,
-    pool_containers,
+    pool_containers_streaming,
     require_config,
 )
 from eeg_adhd_epilepsy.analysis.utils.decoding import (
@@ -413,35 +415,102 @@ def _enumerate_scope(
                     }
 
 
-def enumerate_classical_units(
+def _classical_scope_units(
     plan: ClassicalPlan,
-    scopes: list[tuple[str, DataContainer]],
+    scope: str,
+    full_container: DataContainer,
     *,
     config: Mapping[str, Any],
     derivative_root: Path,
-) -> tuple[list[DecodingUnit], list[dict[str, Any]]]:
-    """Flatten the scope × eval × mode × unit × selection sweep into units.
-
-    Returns ``(units, enumeration_failures)`` where failures are enumeration-time
-    skips (missing models, target/QC problems) that never become sweep rows.
-    """
+    failures: list[dict[str, Any]],
+) -> list[DecodingUnit]:
+    """Build one scope's decoding units; append enumeration skips to *failures*."""
     units: list[DecodingUnit] = []
-    failures: list[dict[str, Any]] = []
+    for item in _enumerate_scope(
+        plan=plan,
+        scope=scope,
+        full_container=full_container,
+        config=config,
+        derivative_root=derivative_root,
+    ):
+        if isinstance(item, DecodingUnit):
+            units.append(item)
+        else:
+            failures.append(item)
+    return units
 
-    for scope, full_container in scopes:
-        for item in _enumerate_scope(
-            plan=plan,
-            scope=scope,
-            full_container=full_container,
+
+def _iter_classical_unit_batches(
+    plan: ClassicalPlan,
+    conditions: list[str],
+    loader_args: Any,
+    metadata: pd.DataFrame | None,
+    *,
+    config: Mapping[str, Any],
+    derivative_root: Path,
+    failures: list[dict[str, Any]],
+    enum_failures: list[dict[str, Any]],
+    qc_report_results: list[tuple[str, Any]],
+    stats: dict[str, int],
+) -> Iterator[list[DecodingUnit]]:
+    """Yield one scope's decoding units at a time, streaming data per condition.
+
+    Loads each condition's container lazily, builds that scope's units, yields
+    them, then frees the container's data — pooling reloads each condition one at
+    a time (via container_pool_spec + loaders) rather than holding every condition
+    plus pooled, and all their enumerated unit ``X`` copies, at once. Enumeration
+    skips accumulate into both *failures* (persisted with runtime failures) and
+    *enum_failures* (enumeration-only, for the skip-summary log), which are
+    separated here because runtime failures are appended to *failures* only after
+    this generator is exhausted.
+    """
+    run_pooled = bool(config["run_pooled"]) and len(conditions) > 1
+    pool_specs: list[dict[str, Any]] = []
+    pool_loaders: list[Any] = []
+    for condition in conditions:
+        container = build_dataset(loader_args, metadata, condition, target_col=None)
+        if container.meta.get("qc_result") is not None:
+            qc_report_results.append((condition, container.meta["qc_result"]))
+        n_before = len(failures)
+        units = _classical_scope_units(
+            plan,
+            condition,
+            container,
             config=config,
             derivative_root=derivative_root,
-        ):
-            if isinstance(item, DecodingUnit):
-                units.append(item)
-            else:
-                failures.append(item)
+            failures=failures,
+        )
+        enum_failures.extend(failures[n_before:])
+        stats["units"] += len(units)
+        if run_pooled:
+            pool_specs.append(container_pool_spec(container))
+            pool_loaders.append(
+                lambda args=loader_args, cond=condition: build_dataset(
+                    args, metadata, cond, target_col=None
+                )
+            )
+        yield units
+        del container, units
+        gc.collect()
 
-    return units, failures
+    if len(pool_specs) > 1:
+        pooled = pool_containers_streaming(pool_specs, pool_loaders)
+        n_before = len(failures)
+        units = _classical_scope_units(
+            plan,
+            "pooled",
+            pooled,
+            config=config,
+            derivative_root=derivative_root,
+            failures=failures,
+        )
+        enum_failures.extend(failures[n_before:])
+        stats["units"] += len(units)
+        yield units
+        del pooled, units
+
+    del pool_specs, pool_loaders
+    gc.collect()
 
 
 # ---------------------------------------------------------------------------
@@ -477,34 +546,33 @@ def run(config: dict[str, Any]) -> Path:
             input_mode=plan.input_mode,
             layout_mode=plan.layout_mode,
         )
-        scopes = [
-            (condition, build_dataset(loader_args, metadata, condition, target_col=None))
-            for condition in conditions
-        ]
-        qc_report_results = [
-            (condition, container.meta["qc_result"])
-            for condition, container in scopes
-            if container.meta.get("qc_result") is not None
-        ]
-        if config["run_pooled"] and len(scopes) > 1:
-            scopes.append(("pooled", pool_containers([container for _, container in scopes])))
+        qc_report_results: list[tuple[str, Any]] = []
 
         if reports_only:
             records = load_sweep_records(derivative_root)
+            for condition in conditions:
+                container = build_dataset(loader_args, metadata, condition, target_col=None)
+                if container.meta.get("qc_result") is not None:
+                    qc_report_results.append((condition, container.meta["qc_result"]))
+                del container
+                gc.collect()
         else:
-            units, failures = enumerate_classical_units(
-                plan,
-                scopes,
-                config=config,
-                derivative_root=derivative_root,
-            )
-            _log_enumeration_failures(
-                failures,
-                unit_count=len(units),
-                derivative_root=derivative_root,
-            )
-            records, _ = execute_decoding_sweep(
-                units,
+            failures: list[dict[str, Any]] = []
+            enum_failures: list[dict[str, Any]] = []
+            stats = {"units": 0}
+            records, _ = execute_decoding_sweep_streaming(
+                _iter_classical_unit_batches(
+                    plan,
+                    conditions,
+                    loader_args,
+                    metadata,
+                    config=config,
+                    derivative_root=derivative_root,
+                    failures=failures,
+                    enum_failures=enum_failures,
+                    qc_report_results=qc_report_results,
+                    stats=stats,
+                ),
                 failures,
                 config=config,
                 output_root=derivative_root,
@@ -521,6 +589,11 @@ def run(config: dict[str, Any]) -> Path:
                     "config_hash": config_hash,
                     "run_variant": derivative_root.name,
                 },
+            )
+            _log_enumeration_failures(
+                enum_failures,
+                unit_count=stats["units"],
+                derivative_root=derivative_root,
             )
 
         if config.get("detailed_unit_reports", False):
