@@ -40,11 +40,11 @@ qc:
 # (DEFAULT_MAX_CORANKING_SAMPLES). PHATE stays parked — its dense O(n_samples^2)
 # diffusion operator is the OOM driver — and can be re-added per mode later.
 analysis_modes:
-  flat:                  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
-  family:                {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
-  subfamily:             {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
-  sensor:                {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
+  flat:                  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100]}
+  family:                {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100]}
+  subfamily:             {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100]}
+  sensor:                {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50]}
   sensor_within_family:  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
-  sensor_within_subfamily: {reducers: [PCA, UMAP], n_components: [2, 3]}
-  feature_within_family: {reducers: [PCA, UMAP], n_components: [2, 3]}
+  sensor_within_subfamily: {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10]}
+  feature_within_family: {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10]}
   descriptor:            {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
