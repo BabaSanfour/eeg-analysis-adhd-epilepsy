@@ -132,6 +132,13 @@ run_foundation() {
 
         echo " -> Representation: $rep"
 
+        # For foundation runs --n_jobs is the OUTER sweep concurrency: how many
+        # decoding units (each a full CBraMod/REVE backbone) load at once. On a
+        # single GPU that must stay at 1, otherwise N backbones + N CUDA contexts
+        # co-reside and OOM the host / 20GB MIG slice. It is deliberately NOT tied
+        # to $THREADS (CPU count) -- the allocated CPUs still serve torch/dataloader
+        # threads inside the one active fit. Override via FOUNDATION_N_JOBS only if
+        # the GPU can hold that many concurrent models.
         cmd=(
             python -m eeg_adhd_epilepsy.analysis.foundation_decoding
             --cohort_config "$CONFIG"
@@ -140,7 +147,7 @@ run_foundation() {
             --reports_root "$REPORTS_ROOT"
             --metadata "$METADATA_PATH"
             --representation "$rep"
-            --n_jobs "$THREADS"
+            --n_jobs "${FOUNDATION_N_JOBS:-1}"
         )
         if [ "$OVERWRITE" = "1" ]; then
             cmd+=(--overwrite)
