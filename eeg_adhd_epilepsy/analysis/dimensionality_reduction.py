@@ -30,6 +30,7 @@ from coco_pipe.dim_reduction import (
 )
 from coco_pipe.io import (
     DataContainer,
+    fingerprint_container,
     iter_analysis_units,
     read_json,
     read_table,
@@ -132,30 +133,34 @@ def _collect_scope_fit_requests(
             )
             continue
         input_signature = build_input_signature(args, unit_spec)
+        container_signature = fingerprint_container(unit_container)
 
         for reducer_name, n_components in product(reducers, valid_components):
-            logger.info(
-                "Fitting %s/%s/%s/%s/n%d",
-                condition,
-                args.analysis_mode,
-                unit_spec["unit_name"],
-                reducer_name,
-                int(n_components),
+            request = build_fit_request(
+                container=unit_container,
+                scope=scope,
+                condition=condition,
+                unit_spec=unit_spec,
+                reducer=reducer_name,
+                n_components=int(n_components),
+                input_signature=input_signature,
+                output_root=output_root,
+                overwrite=bool(args.overwrite),
+                subject_col=args.subject_col,
+                container_signature=container_signature,
             )
-            requests.append(
-                build_fit_request(
-                    container=unit_container,
-                    scope=scope,
-                    condition=condition,
-                    unit_spec=unit_spec,
-                    reducer=reducer_name,
-                    n_components=int(n_components),
-                    input_signature=input_signature,
-                    output_root=output_root,
-                    overwrite=bool(args.overwrite),
-                    subject_col=args.subject_col,
+            if (request["out_path"] / "_SUCCESS").exists() and not request["overwrite"]:
+                pass
+            else:
+                logger.info(
+                    "Fitting %s/%s/%s/%s/n%d",
+                    condition,
+                    args.analysis_mode,
+                    unit_spec["unit_name"],
+                    reducer_name,
+                    int(n_components),
                 )
-            )
+            requests.append(request)
     return requests
 
 
