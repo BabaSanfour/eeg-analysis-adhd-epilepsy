@@ -92,6 +92,7 @@ def _collect_scope_fit_requests(
 ) -> list[dict[str, Any]]:
     """Enumerate analysis units and build fit requests for one scope/condition pair."""
     requests: list[dict[str, Any]] = []
+    num_skipped = 0
     for unit_spec in iter_analysis_units(
         container,
         args.analysis_mode,
@@ -150,7 +151,7 @@ def _collect_scope_fit_requests(
                 container_signature=container_signature,
             )
             if (request["out_path"] / "_SUCCESS").exists() and not request["overwrite"]:
-                pass
+                num_skipped += 1
             else:
                 logger.info(
                     "Fitting %s/%s/%s/%s/n%d",
@@ -161,6 +162,15 @@ def _collect_scope_fit_requests(
                     int(n_components),
                 )
             requests.append(request)
+
+    if num_skipped > 0:
+        logger.info(
+            "Skipped %d existing fit(s) for %s condition '%s'.",
+            num_skipped,
+            scope,
+            condition,
+        )
+
     return requests
 
 
