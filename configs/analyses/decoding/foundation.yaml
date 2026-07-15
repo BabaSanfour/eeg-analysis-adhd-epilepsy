@@ -86,7 +86,7 @@ training_defaults:
 cv:
   n_splits: 5
 
-chance_method: permutation
+chance_method: binomial
 n_permutations: 100
 store_null_distribution: false
 
