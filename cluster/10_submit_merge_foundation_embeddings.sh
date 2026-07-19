@@ -8,13 +8,13 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-#SBATCH --mail-type=FAIL
+#SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 # Aggregate every per-task shard (written by 08_submit_foundation_embeddings.sh)
 # into the dataset-level run_manifest.json, failures.csv, dataset_description.json,
-# run status, and the HTML report. CPU-only; no model is loaded. Run once after the
-# array, e.g.:  sbatch --dependency=afterok:<array_jobid> "$0"
+# run status, combined raw/aligned tables, and the HTML report. CPU-only; no model
+# is loaded. Submit this manually after the stage 09 alignment array completes.
 
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}

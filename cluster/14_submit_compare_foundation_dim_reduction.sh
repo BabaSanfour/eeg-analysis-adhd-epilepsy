@@ -8,13 +8,13 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --mail-type=FAIL
+#SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 # Cross-model comparison of the per-model foundation dim-reduction runs produced
-# by 12_batch_run_dim_reduction_foundation.sh. Each model × representation was a
-# separate array task; this step gathers every cohort's per-model leaderboards
-# into one report ranking model × representation × reducer on the same axes.
+# by 13_batch_run_dim_reduction_foundation.sh. Each model × transform ×
+# representation was a separate array task; this step gathers every cohort's
+# leaderboards into one report ranking them on the same axes.
 # CPU-only; run once after the array, e.g.:
 #   sbatch --dependency=afterok:<array_jobid> "$0"
 

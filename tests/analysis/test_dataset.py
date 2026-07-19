@@ -5,7 +5,11 @@ import pandas as pd
 import pytest
 from coco_pipe.io import DataContainer
 
-from eeg_adhd_epilepsy.analysis.dataset import _attach_subject_metadata, build_container
+from eeg_adhd_epilepsy.analysis.dataset import (
+    attach_subject_metadata,
+    build_container,
+    filter_cohort_container,
+)
 
 
 def _embedding_container(subjects):
@@ -34,7 +38,7 @@ def test_attach_subject_metadata_joins_eval_columns():
             "patient_group_id": ["g1", "g2"],
         }
     )
-    out = _attach_subject_metadata(container, meta, "study_id")
+    out = attach_subject_metadata(container, meta, "study_id")
     assert list(out.coords["combined_diagnosis"]) == ["ADHD", "ADHD", "Control"]
     assert list(out.coords["patient_group_id"]) == ["g1", "g1", "g2"]
     # existing identity coords are not clobbered
@@ -44,8 +48,31 @@ def test_attach_subject_metadata_joins_eval_columns():
 def test_attach_subject_metadata_missing_subject_is_nan():
     container = _embedding_container(["9999"])
     meta = pd.DataFrame({"study_id": [1], "combined_diagnosis": ["ADHD"]})
-    out = _attach_subject_metadata(container, meta, "study_id")
+    out = attach_subject_metadata(container, meta, "study_id")
     assert pd.isna(out.coords["combined_diagnosis"][0])  # evals treat NaN as missing
+
+
+def test_filter_cohort_container_applies_group_union_and_column_filter():
+    container = _embedding_container(["0001", "0002", "0003", "0004"])
+    container.coords.update(
+        {
+            "diagnosis": np.asarray(["ADHD", "Control", "ADHD", "Control"]),
+            "medicated": np.asarray(["yes", "no", "no", "yes"]),
+            "age_group": np.asarray(["5-8", "5-8", "9-12", "13-18"]),
+        }
+    )
+
+    selected = filter_cohort_container(
+        container,
+        group_filters=[
+            {"diagnosis": ["ADHD"], "medicated": ["yes"]},
+            {"diagnosis": ["Control"], "medicated": ["yes"]},
+        ],
+        filter_col=["age_group"],
+        filter_val=[["5-8", "13-18"]],
+    )
+
+    assert selected.ids.tolist() == ["rec-0", "rec-3"]
 
 
 def test_build_container_rejects_bandpass_without_reepoch():

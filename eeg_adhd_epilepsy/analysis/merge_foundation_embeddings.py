@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Aggregate foundation-embedding shards into combined tables, a manifest, and a report.
+"""Aggregate raw and aligned foundation embeddings into tables, a manifest, and a report.
 
-Mirrors ``merge_descriptors``: the array tasks in ``extract_foundation_embeddings``
-write per-recording ``*_embedding.npz`` + self-describing sidecars (plus a per-subject
-failures CSV under ``_failures/``). This step scans them and materializes one table
-per (model, condition) at each :data:`~coco_pipe.io.AGGREGATION_LEVELS` granularity:
+Extraction writes raw per-recording ``*_embedding.npz`` derivatives and alignment
+adds transformed derivatives with distinct model keys. This final step scans both
+and materializes one table per (model variant, condition) at each
+:data:`~coco_pipe.io.AGGREGATION_LEVELS` granularity:
 
 - ``combined/<model>_<condition>_epoch_embeddings.{parquet,csv}``     — 1 row / epoch
 - ``combined/<model>_<condition>_recording_embeddings.{parquet,csv}`` — 1 row / recording
@@ -60,7 +60,7 @@ _ID_COLUMNS = (
 
 
 def _scan_artifacts(derivative_root: Path) -> tuple[dict[str, list[Path]], list[dict[str, Any]]]:
-    """Group ``*_embedding.npz`` paths by model and rebuild the success records."""
+    """Group raw and aligned ``*_embedding.npz`` paths by model key."""
     by_model: dict[str, list[Path]] = defaultdict(list)
     records: list[dict[str, Any]] = []
     for npz_path in sorted(derivative_root.rglob("*_embedding.npz")):

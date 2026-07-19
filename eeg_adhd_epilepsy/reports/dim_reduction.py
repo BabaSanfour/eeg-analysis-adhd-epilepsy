@@ -23,6 +23,7 @@ from coco_pipe.report import (
     Report,
     build_dataset_report,
     build_reduction_rollup_report,
+    build_subject_alignment_diagnostics_section,
     rank_reduction_runs,
 )
 
@@ -34,8 +35,10 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
 from eeg_adhd_epilepsy.metadata.schema import EPILEPSY_MED_COLS
 from eeg_adhd_epilepsy.reports._common import (
     MODE_TITLES,
+    AlignmentDiagnosticsSpec,
     add_overview_cohort_summary,
     family_label,
+    load_alignment_diagnostics,
 )
 from eeg_adhd_epilepsy.utils.constants import BASIC_1020_CHANNELS
 
@@ -159,6 +162,14 @@ def generate_dataset_report(
     if fam_label:
         report_title += f" [{fam_label}]"
 
+    excluded_columns = set(_PLOT_META_EXCLUDED_COLUMNS)
+    excluded_normalized = set(_PLOT_META_EXCLUDED_NORMALIZED)
+    if getattr(args, "color_by", None) == "subject":
+        excluded_columns.difference_update({"subject", args.subject_col})
+        excluded_normalized.difference_update(
+            {"subject", "".join(ch for ch in args.subject_col.lower() if ch.isalnum())}
+        )
+
     ctx = DimReductionReportContext(
         analysis_mode=args.analysis_mode,
         selection_metric=args.selection_metric,
@@ -177,8 +188,8 @@ def generate_dataset_report(
         pooled_condition=pooled_condition,
         dataset_name=args.dataset_name,
         report_title=report_title,
-        excluded_columns=frozenset(_PLOT_META_EXCLUDED_COLUMNS),
-        excluded_normalized=frozenset(_PLOT_META_EXCLUDED_NORMALIZED),
+        excluded_columns=frozenset(excluded_columns),
+        excluded_normalized=frozenset(excluded_normalized),
         excluded_normalized_substrings=("psychostimulant",),
         excluded_suffixes=("_bool", "_clean"),
         meta_extractors={"eye_state": _eye_state_extractor},
@@ -264,8 +275,10 @@ def collect_mode_leaderboard(
 
     if args.input_mode == "foundation_embeddings":
         best["model"] = args.embedding_model_key if hasattr(args, "embedding_model_key") else ""
+        model_key = str(getattr(args, "embedding_model_key", ""))
+        best["transform"] = model_key.split("_align-", 1)[1] if "_align-" in model_key else "none"
         best["representation"] = args.representation or ""
-        keep_cols.append("model")
+        keep_cols.extend(["model", "transform"])
 
     for metric in [
         *DIM_REDUCTION_EVAL_METRIC_COLUMNS,
@@ -289,6 +302,8 @@ def generate_rollup_report(
     args: Any,
     summaries: Sequence[dict[str, Any]],
     task_failures: Sequence[dict[str, str]] = (),
+    bids_root: str | Path | None = None,
+    alignment_diagnostics: AlignmentDiagnosticsSpec | None = None,
 ) -> Report:
     """Cross-mode leaderboard answering which representation wins for this cohort.
 
@@ -340,7 +355,7 @@ def generate_rollup_report(
         else DEFAULT_DIM_REDUCTION_SELECTION_METRIC
     )
 
-    return build_reduction_rollup_report(
+    report = build_reduction_rollup_report(
         leaderboard,
         title=f"Dim Reduction Roll-up: {run_label} ({args.input_mode})",
         y_metric=y_metric,
@@ -351,3 +366,12 @@ def generate_rollup_report(
         task_failures=task_failures,
         asset_urls=asset_urls,
     )
+    if alignment_diagnostics is not None:
+        if bids_root is None:
+            raise ValueError("bids_root is required when alignment_diagnostics is requested.")
+        diagnostics = load_alignment_diagnostics(bids_root, alignment_diagnostics)
+        section = build_subject_alignment_diagnostics_section(diagnostics)
+        if section is None:
+            raise ValueError("Requested alignment diagnostics contain no reportable rows.")
+        report.add_section(section)
+    return report

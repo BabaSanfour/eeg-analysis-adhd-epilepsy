@@ -1,0 +1,66 @@
+# Leakage-safe classical decoding over saved foundation embeddings.
+input_mode: foundation_embeddings
+representation: epoch
+alignment_diagnostics_population: clinical_task_subset
+
+analysis_modes:
+  - flat
+
+transforms:
+  - none
+  - leace
+  - ea_coral
+  - ea_mean
+  - ra
+
+transform_params:
+  leace:
+    shrinkage: true
+  ea_coral:
+    shrinkage: true
+
+# When enabled, every transform is decoded both with all dimensions and with
+# fold-local PCA after erasure/scaling.
+reducer:
+  enabled: true
+  n_components: 0.95
+  whiten: false
+
+feature_selection:
+  - name: baseline
+    method: none
+
+tuning:
+  enabled: true
+  scoring: balanced_accuracy
+  n_splits: 3
+
+models:
+  logreg:
+    estimator: LogisticRegression
+    params:
+      penalty: l2
+      solver: liblinear
+      class_weight: balanced
+      max_iter: 2000
+    grid:
+      C: [0.01, 0.1, 1.0, 10.0]
+  random_forest:
+    estimator: RandomForestClassifier
+    params:
+      n_estimators: 300
+      class_weight: balanced
+      n_jobs: 1
+
+cv:
+  n_splits: 5
+
+chance_method: binomial
+n_permutations: 20
+store_null_distribution: false
+
+metrics:
+  - balanced_accuracy
+  - f1
+
+random_state: 42

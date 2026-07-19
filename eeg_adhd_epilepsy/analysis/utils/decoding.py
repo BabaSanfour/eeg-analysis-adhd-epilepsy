@@ -43,8 +43,23 @@ _NON_SCIENTIFIC_HASH_KEYS = frozenset(
         "detailed_unit_reports",
         "detailed_unit_report_modes",
         "foundation_report_sections",
+        "write_shared_comparison_report",
     }
 )
+
+
+def scientific_config(config: Mapping[str, Any]) -> dict[str, Any]:
+    """Drop orchestration-only keys so run identity ignores them.
+
+    Both the run-variant directory hash and the per-unit resume hash must be
+    computed over the same key set: keys in ``_NON_SCIENTIFIC_HASH_KEYS`` (worker
+    counts, verbosity, overwrite/reports toggles) change how a run executes but
+    not what it computes, so including them would make a resume after e.g. an
+    ``n_jobs`` change spuriously mismatch the stored manifest.
+    """
+    return {
+        key: value for key, value in dict(config).items() if key not in _NON_SCIENTIFIC_HASH_KEYS
+    }
 
 
 def resolve_decoding_paths(
@@ -74,10 +89,7 @@ def resolve_decoding_paths(
         else None
     )
 
-    hashable_config = {
-        key: value for key, value in dict(config).items() if key not in _NON_SCIENTIFIC_HASH_KEYS
-    }
-    cfg_hash = stable_hash(redact_sensitive(hashable_config), length=12)
+    cfg_hash = stable_hash(redact_sensitive(scientific_config(config)), length=12)
     run_variant = f"{slug(input_mode)}_cfg-{cfg_hash}"
     dataset_name_slug = slug(config.get("run_label", config["dataset_name"]))
 
@@ -183,6 +195,8 @@ class ClassicalPlan:
     tuning_cfg: dict[str, Any]
     selection_specs: list[dict[str, Any]]
     evals: list[dict[str, Any]]
+    transforms: list[str]
+    transform_params: dict[str, dict[str, Any]]
     reducer_enabled: bool
     reducer_cfg: dict[str, Any]
     metrics: list[str]
@@ -251,6 +265,10 @@ def build_classical_plan(config: Mapping[str, Any]) -> ClassicalPlan:
             raise ValueError(f"feature_selection entry '{name}' must set either n_features or tol.")
 
     metrics = require_config(dict(config), "metrics", expected_type=list)
+    transforms = [str(value) for value in config.get("transforms", ["none"])]
+    if input_mode != "foundation_embeddings" and transforms != ["none"]:
+        raise ValueError("Subject transforms are only supported for foundation embeddings.")
+    reducer_cfg = dict(config.get("reducer") or {})
 
     return ClassicalPlan(
         input_mode=input_mode,
@@ -262,8 +280,13 @@ def build_classical_plan(config: Mapping[str, Any]) -> ClassicalPlan:
         tuning_cfg=dict(config.get("tuning") or {}),
         selection_specs=selection_specs,
         evals=evals_spec,
-        reducer_enabled=False,
-        reducer_cfg=dict(config.get("reducer") or {}),
+        transforms=transforms,
+        transform_params={
+            str(name): dict(params or {})
+            for name, params in (config.get("transform_params") or {}).items()
+        },
+        reducer_enabled=bool(reducer_cfg.get("enabled", False)),
+        reducer_cfg=reducer_cfg,
         metrics=metrics,
     )
 
@@ -340,4 +363,5 @@ __all__ = [
     "foundation_provenance",
     "prepare_decoding_scope",
     "resolve_decoding_paths",
+    "scientific_config",
 ]

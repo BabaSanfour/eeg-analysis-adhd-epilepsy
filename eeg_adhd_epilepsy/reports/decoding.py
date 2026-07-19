@@ -6,12 +6,17 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 from coco_pipe.descriptors import build_descriptor_feature_metadata
 from coco_pipe.io import read_json
 from coco_pipe.io.quality import QCResult
 from coco_pipe.report import (
     CLASSICAL_MODE_TITLES,
+    HEAD_TO_HEAD_DISPLAY_COLUMNS,
+    build_alignment_coverage_section,
+    build_alignment_tradeoff_section,
     build_classical_mode_elements,
+    build_subject_alignment_diagnostics_section,
     collect_comparison_runs,
     enrich_head_to_head_frame,
     feature_selection_section,
@@ -26,6 +31,10 @@ from coco_pipe.report.qc import build_qc_section
 
 from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
 from eeg_adhd_epilepsy.io.report_paths import ReportStage, summary_report_dir
+from eeg_adhd_epilepsy.reports._common import (
+    AlignmentDiagnosticsSpec,
+    load_alignment_diagnostics,
+)
 
 _CLASSICAL_ANALYSIS_PLAN = tuple(((mode,), title) for mode, title in CLASSICAL_MODE_TITLES.items())
 
@@ -182,14 +191,238 @@ def generate_foundation_decoding_report(
     return output
 
 
+def generate_foundation_decoding_comparison(
+    *,
+    bids_root: str | Path,
+    reports_root: str | Path,
+    dataset_name: str,
+    config: Mapping[str, Any],
+) -> tuple[Path, Path, Path | None] | None:
+    """Aggregate every direct foundation run across models and training modes."""
+    decoding_root = get_derivative_root(Path(bids_root), DerivativeStage.DECODING) / dataset_name
+    result_frames: list[pd.DataFrame] = []
+    capability_frames: list[pd.DataFrame] = []
+    for path in sorted(decoding_root.glob("foundation*/foundation_results.csv")):
+        try:
+            frame = pd.read_csv(path)
+        except pd.errors.EmptyDataError:
+            continue
+        if not frame.empty:
+            frame["run_variant"] = path.parent.name
+            result_frames.append(frame)
+    for path in sorted(decoding_root.glob("foundation*/capability_matrix.csv")):
+        try:
+            frame = pd.read_csv(path)
+        except pd.errors.EmptyDataError:
+            continue
+        if not frame.empty:
+            frame["run_variant"] = path.parent.name
+            capability_frames.append(frame)
+
+    if not result_frames and not capability_frames:
+        return None
+
+    results = pd.concat(result_frames, ignore_index=True) if result_frames else pd.DataFrame()
+    capabilities = (
+        pd.concat(capability_frames, ignore_index=True) if capability_frames else pd.DataFrame()
+    )
+    comparison_csv = decoding_root / "foundation_decoding_comparison.csv"
+    comparison_csv.parent.mkdir(parents=True, exist_ok=True)
+    results.to_csv(comparison_csv, index=False)
+
+    capability_csv: Path | None = None
+    if not capabilities.empty:
+        capability_csv = decoding_root / "foundation_decoding_capabilities.csv"
+        capabilities.to_csv(capability_csv, index=False)
+
+    report_path = (
+        summary_report_dir(Path(reports_root), ReportStage.DECODING)
+        / dataset_name
+        / "foundation_decoding_comparison.html"
+    )
+    generate_foundation_decoding_report(
+        report_path,
+        results.to_dict("records"),
+        title=f"Foundation Decoding Comparison: {dataset_name}",
+        config={**dict(config), "dataset_name": dataset_name},
+        capability_records=capabilities.to_dict("records"),
+    )
+    return comparison_csv, report_path, capability_csv
+
+
+def _apply_legacy_head_to_head_migration_policy(
+    comparison: pd.DataFrame,
+) -> pd.DataFrame:
+    """Fill context omitted by result schemas predating transforms and PCA cells.
+
+    The migration is intentionally isolated from report generation. Missing
+    ``transform`` means the historical raw representation; missing
+    ``reduction_mode`` means the historical unreduced, all-dimensions cell.
+    """
+    migrated = comparison.copy()
+    defaults = {
+        "transform": "none",
+        "reduction_mode": "all_dimensions",
+    }
+    for column, default in defaults.items():
+        if column not in migrated:
+            migrated[column] = default
+        else:
+            migrated[column] = migrated[column].fillna(default)
+    return migrated
+
+
+def _build_requested_alignment_diagnostics_sections(
+    bids_root: Path,
+    specs: Sequence[AlignmentDiagnosticsSpec],
+) -> tuple[list[Section], pd.DataFrame]:
+    """Load explicitly requested assessments and render one section per model."""
+    identities = [(spec.base_model_key, spec.cohort_name, spec.population) for spec in specs]
+    if len(identities) != len(set(identities)):
+        raise ValueError("Alignment diagnostics specifications must be unique.")
+    sections: list[Section] = []
+    loaded_diagnostics: list[pd.DataFrame] = []
+    for spec in specs:
+        diagnostics = load_alignment_diagnostics(bids_root, spec)
+        diagnostics["model"] = spec.base_model_key
+        diagnostics["target"] = diagnostics["eval_name"].astype(str)
+        loaded_diagnostics.append(diagnostics)
+        section = build_subject_alignment_diagnostics_section(
+            diagnostics,
+            title=(
+                "Subject Alignment Diagnostics"
+                if len(specs) == 1
+                else f"Subject Alignment Diagnostics: {spec.base_model_key}"
+            ),
+        )
+        if section is None:
+            raise ValueError(
+                "Requested alignment diagnostics contain no reportable rows for "
+                f"base_model_key={spec.base_model_key!r}."
+            )
+        sections.append(section)
+    return (
+        sections,
+        pd.concat(loaded_diagnostics, ignore_index=True) if loaded_diagnostics else pd.DataFrame(),
+    )
+
+
+def _generate_foundation_transform_comparison(
+    comparison: pd.DataFrame,
+    *,
+    decoding_root: Path,
+    report_output: Path,
+    dataset_name: str,
+    alignment_sections: Sequence[Section],
+    alignment_diagnostics: pd.DataFrame,
+    asset_urls: dict[str, str] | str | None,
+) -> tuple[Path, Path] | None:
+    """Write the same-decoder transform/PCA comparison against raw embeddings."""
+    foundation = comparison[
+        comparison["comparison_family"] == "foundation_embedding_flat_baseline"
+    ].copy()
+    baseline = (foundation["transform"] == "none") & (
+        foundation["reduction_mode"] == "all_dimensions"
+    )
+    if foundation.empty or not baseline.any() or not (~baseline).any():
+        return None
+    if "embedding_model_key" not in foundation or foundation["embedding_model_key"].isna().any():
+        raise ValueError(
+            "Foundation transform comparisons require embedding_model_key on every row."
+        )
+
+    foundation["embedding_model_key"] = foundation["embedding_model_key"].astype(str)
+    foundation["decoder_model"] = (
+        foundation["model"].astype(str) if "model" in foundation else "model"
+    )
+    foundation["comparison_family"] = "foundation_transform"
+    foundation.loc[baseline, "comparison_family"] = "foundation_none_all_dimensions"
+    foundation["model"] = (
+        foundation["embedding_model_key"]
+        + " | "
+        + foundation["decoder_model"]
+        + " | "
+        + foundation["transform"].astype(str)
+        + "/"
+        + foundation["reduction_mode"].astype(str)
+    )
+    performance = foundation[foundation["reduction_mode"].astype(str) == "all_dimensions"].copy()
+    performance["model"] = performance["embedding_model_key"]
+    performance["decoder"] = performance["decoder_model"]
+    performance["performance"] = performance["primary_metric"]
+    diagnostic_sections: list[Section] = []
+    coverage_section = build_alignment_coverage_section(alignment_diagnostics)
+    if coverage_section is not None:
+        diagnostic_sections.append(coverage_section)
+    tradeoff_section = build_alignment_tradeoff_section(
+        performance.loc[
+            :,
+            ["model", "decoder", "transform", "scope", "target", "performance"],
+        ],
+        alignment_diagnostics,
+    )
+    if tradeoff_section is not None:
+        diagnostic_sections.append(tradeoff_section)
+    foundation = enrich_head_to_head_frame(foundation)
+    foundation_csv = decoding_root / "foundation_transform_comparison.csv"
+    normalize_head_to_head_frame(
+        foundation,
+        display_columns=(
+            "embedding_model_key",
+            *HEAD_TO_HEAD_DISPLAY_COLUMNS,
+            "transform",
+            "reduction_mode",
+        ),
+    ).to_csv(foundation_csv, index=False)
+    foundation_report = report_output.with_name("foundation_transform_comparison.html")
+    make_head_to_head_report(
+        foundation,
+        baseline_family="foundation_none_all_dimensions",
+        group_columns=(
+            "scope",
+            "target",
+            "embedding_model_key",
+            "decoder_model",
+        ),
+        title=f"Foundation Transform Comparison: {dataset_name}",
+        table_title="Erasure and reduction cells",
+        intro=(
+            "Each foundation-model and decoder pair is matched to its own raw, "
+            "all-dimensions cell. Deltas therefore measure label performance "
+            "after subject erasure or PCA without crossing embedding spaces or "
+            "changing the decoder family."
+        ),
+        paired_delta_title="Paired Delta vs Raw Foundation Embeddings",
+        display_columns=(
+            "embedding_model_key",
+            *HEAD_TO_HEAD_DISPLAY_COLUMNS,
+            "transform",
+            "reduction_mode",
+        ),
+        config={"dataset_name": dataset_name},
+        asset_urls=asset_urls,
+        extra_sections=[*diagnostic_sections, *alignment_sections],
+        output_path=foundation_report,
+    )
+    return foundation_csv, foundation_report
+
+
 def generate_head_to_head_report(
     *,
     bids_root: str | Path,
     reports_root: str | Path,
     dataset_name: str,
     asset_urls: dict[str, str] | str | None = "inline",
+    alignment_diagnostics_cohort_name: str | None = None,
+    alignment_diagnostics_population: str | None = None,
+    generate_foundation_transform_report: bool = False,
 ) -> tuple[Path, Path] | None:
-    """Compare primary classical inputs and linear probes in one table."""
+    """Compare primary classical inputs and linear probes in one table.
+
+    When an exact diagnostic cohort and population are requested, every explicit
+    ``embedding_model_key`` represented by saved-embedding results gets its own
+    section. Model identities are never inferred from paths or display labels.
+    """
     bids_root = Path(bids_root)
     # Classical and foundation runs share one decoding derivative tree; they are
     # distinguished by their per-run result filenames, not separate roots.
@@ -232,6 +465,42 @@ def generate_head_to_head_report(
         / "head_to_head_comparison.html"
     )
     comparison = enrich_head_to_head_frame(comparison)
+    comparison = _apply_legacy_head_to_head_migration_policy(comparison)
+
+    alignment_diagnostics: list[AlignmentDiagnosticsSpec] = []
+    if (
+        alignment_diagnostics_cohort_name is not None
+        or alignment_diagnostics_population is not None
+    ):
+        if not alignment_diagnostics_cohort_name or not alignment_diagnostics_population:
+            raise ValueError(
+                "Foundation alignment diagnostics require both cohort_name and population."
+            )
+        foundation = comparison[
+            comparison["comparison_family"] == "foundation_embedding_flat_baseline"
+        ]
+        if not foundation.empty:
+            if "embedding_model_key" not in foundation:
+                raise ValueError(
+                    "Foundation alignment diagnostics require embedding_model_key on every row."
+                )
+            model_keys = foundation["embedding_model_key"]
+            if model_keys.isna().any() or model_keys.astype(str).str.strip().eq("").any():
+                raise ValueError(
+                    "Foundation alignment diagnostics require embedding_model_key on every row."
+                )
+            alignment_diagnostics = [
+                AlignmentDiagnosticsSpec(
+                    base_model_key=model_key,
+                    cohort_name=alignment_diagnostics_cohort_name,
+                    population=alignment_diagnostics_population,
+                )
+                for model_key in sorted(model_keys.astype(str).unique())
+            ]
+    (
+        alignment_sections,
+        alignment_diagnostics_frame,
+    ) = _build_requested_alignment_diagnostics_sections(bids_root, alignment_diagnostics)
     derivative_output = decoding_root / "head_to_head_comparison.csv"
     derivative_output.parent.mkdir(parents=True, exist_ok=True)
     normalize_head_to_head_frame(comparison).to_csv(derivative_output, index=False)
@@ -239,7 +508,7 @@ def generate_head_to_head_report(
     make_head_to_head_report(
         comparison,
         baseline_family="descriptor_flat_baseline",
-        group_columns=("scope", "target"),
+        group_columns=("scope", "target", "transform", "reduction_mode"),
         title=f"Head-to-Head Decoding: {dataset_name}",
         intro=(
             "Primary flat baseline results and foundation-model linear probes are "
@@ -252,4 +521,15 @@ def generate_head_to_head_report(
         asset_urls=asset_urls,
         output_path=report_output,
     )
+
+    if generate_foundation_transform_report:
+        _generate_foundation_transform_comparison(
+            comparison,
+            decoding_root=decoding_root,
+            report_output=report_output,
+            dataset_name=dataset_name,
+            alignment_sections=alignment_sections,
+            alignment_diagnostics=alignment_diagnostics_frame,
+            asset_urls=asset_urls,
+        )
     return derivative_output, report_output

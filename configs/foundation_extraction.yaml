@@ -9,11 +9,13 @@ models:
     overlap: 0.0
     use_derivatives: true
     window_source: derivative
+    store_tokens: true
   - model_key: labram
     segment_duration: 15.0
     overlap: 0.0
     use_derivatives: false
     window_source: re_epoch
+    store_tokens: true
     batch_size: 16
     backend_kwargs:
       interpolate_channels: true
@@ -22,38 +24,45 @@ models:
     overlap: 0.0
     use_derivatives: true
     window_source: derivative
+    store_tokens: true
   - model_key: reve
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
     window_source: derivative
     pooling: attention
+    store_tokens: true
   - model_key: luna
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
     window_source: derivative
+    store_tokens: true
   - model_key: biot
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
     window_source: derivative
+    store_tokens: true
   - model_key: signaljepa
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: false
     window_source: re_epoch
+    store_tokens: true
     bandpass: [0.5, 40.0]
   - model_key: eegpt
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
     window_source: derivative
+    store_tokens: true
   - model_key: bendr
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
     window_source: derivative
+    store_tokens: true
 device: auto
 precision: fp32
 on_unsupported: skip

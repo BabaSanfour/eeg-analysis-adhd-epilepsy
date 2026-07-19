@@ -2,8 +2,8 @@
 # Pair with a cohort config via --cohort_config. The descriptor table paths are
 # supplied on the CLI (--descriptor_table_path / --descriptor_feature_columns_path).
 #
-# The whole descriptor analysis plan now runs in-process from this one config:
-# the orchestrator sweeps `analysis_modes` and loads each condition once.
+# The whole descriptor analysis plan runs in-process from this one config:
+# the analysis command sweeps `analysis_modes` and loads each condition once.
 input_mode: descriptors
 
 selection_metric: separation_rf_balanced_accuracy
