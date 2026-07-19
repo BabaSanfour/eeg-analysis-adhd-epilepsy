@@ -259,7 +259,7 @@ def reepoch_eeg(
     )
 
 
-def _attach_subject_metadata(
+def attach_subject_metadata(
     container: DataContainer,
     meta_df: pd.DataFrame,
     subject_col: str,
@@ -300,6 +300,35 @@ def _attach_subject_metadata(
         ids=container.ids,
         meta=container.meta,
     )
+
+
+def filter_cohort_container(
+    container: DataContainer,
+    *,
+    group_filters: list[dict[str, list[Any]]] | None,
+    filter_col: list[str],
+    filter_val: list[list[Any]],
+) -> DataContainer:
+    """Select the configured cohort from a metadata-enriched container."""
+    keep = np.ones(container.X.shape[0], dtype=bool)
+    if group_filters:
+        group_keep = np.zeros(container.X.shape[0], dtype=bool)
+        for group in group_filters:
+            current = np.ones(container.X.shape[0], dtype=bool)
+            for column, values in group.items():
+                current &= np.isin(
+                    np.asarray(container.coords[column]).astype(str),
+                    [str(value) for value in values],
+                )
+            group_keep |= current
+        keep &= group_keep
+    for column, values in zip(filter_col, filter_val):
+        if values:
+            keep &= np.isin(
+                np.asarray(container.coords[column]).astype(str),
+                [str(value) for value in values],
+            )
+    return container.isel(obs=np.flatnonzero(keep))
 
 
 def build_dataset(
@@ -467,7 +496,7 @@ def build_dataset(
                 if subject_key in container.coords:
                     container = container.aggregate(by=subject_key, stats="mean")
         if meta_df is not None:
-            container = _attach_subject_metadata(container, meta_df, args.subject_col)
+            container = attach_subject_metadata(container, meta_df, args.subject_col)
         if subjects is not None:
             subject_key = args.subject_col if args.subject_col in container.coords else "subject"
             if subject_key in container.coords:
@@ -476,26 +505,12 @@ def build_dataset(
                 container = container.isel(obs=np.flatnonzero(np.isin(values, list(wanted))))
     else:
         raise ValueError(f"Unsupported input mode '{input_mode}'.")
-    group_filters = args.group_filters
-    if group_filters:
-        n_obs = container.X.shape[0]
-        final_mask = np.zeros(n_obs, dtype=bool)
-        for group_def in group_filters:
-            group_mask = np.ones(n_obs, dtype=bool)
-            for col, vals in group_def.items():
-                if col in container.coords:
-                    group_mask &= np.isin(
-                        np.asarray(container.coords[col]).astype(str), [str(v) for v in vals]
-                    )
-                else:
-                    group_mask[:] = False
-            final_mask |= group_mask
-        container = container.isel(obs=np.flatnonzero(final_mask))
-
-    for column, values in zip(args.filter_col, args.filter_val):
-        if not values:
-            continue
-        container = container.select(**{column: list(values)})
+    container = filter_cohort_container(
+        container,
+        group_filters=args.group_filters,
+        filter_col=args.filter_col,
+        filter_val=args.filter_val,
+    )
     if args.balance_target:
         container = container.balance(
             target=args.balance_target,

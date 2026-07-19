@@ -36,8 +36,10 @@ from eeg_adhd_epilepsy.analysis.utils.decoding import (
     foundation_provenance,
     prepare_decoding_scope,
     resolve_decoding_paths,
+    scientific_config,
 )
 from eeg_adhd_epilepsy.reports.decoding import (
+    generate_foundation_decoding_comparison,
     generate_foundation_decoding_report,
     generate_head_to_head_report,
 )
@@ -182,7 +184,7 @@ def _build_foundation_unit(
         y=y,
         output_dir=output_dir,
         context=context,
-        run_config={**dict(config), **context},
+        run_config={**scientific_config(config), **context},
         groups=groups,
         feature_names=channels,
         sample_ids=sample_metadata["sample_id"].astype(str),
@@ -504,12 +506,19 @@ def run(config: dict[str, Any]) -> Path:
             figures_dir=report_root / "figures",
         )
 
-    generate_head_to_head_report(
-        bids_root=bids_root,
-        reports_root=reports_root,
-        dataset_name=dataset_name_slug,
-        asset_urls=config["report_asset_urls"],
-    )
+    if compare_only or config.get("write_shared_comparison_report", True):
+        generate_foundation_decoding_comparison(
+            bids_root=bids_root,
+            reports_root=reports_root,
+            dataset_name=dataset_name_slug,
+            config=redact_sensitive(config),
+        )
+        generate_head_to_head_report(
+            bids_root=bids_root,
+            reports_root=reports_root,
+            dataset_name=dataset_name_slug,
+            asset_urls=config["report_asset_urls"],
+        )
     return derivative_root
 
 
@@ -532,6 +541,11 @@ def main() -> None:
     parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
     parser.add_argument("--reports_root", default=None, help="Override reports root (else config).")
+    parser.add_argument(
+        "--model_key",
+        default=None,
+        help="Run one model from the analysis config.",
+    )
     parser.add_argument(
         "--representation",
         choices=["epoch", "recording", "subject"],
@@ -556,6 +570,12 @@ def main() -> None:
         action="store_true",
         help="Skip decoding and regenerate only the head-to-head comparison report.",
     )
+    parser.add_argument(
+        "--write-shared-comparison-report",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Write the cohort-level comparison after this run.",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     config = resolve_cli_config(
@@ -569,7 +589,14 @@ def main() -> None:
         overwrite=args.overwrite,
         reports_only=args.reports_only,
         compare_only=args.compare_only,
+        write_shared_comparison_report=args.write_shared_comparison_report,
     )
+    if args.model_key:
+        config["models"] = [
+            model for model in config["models"] if str(model["model_key"]) == args.model_key
+        ]
+        if not config["models"]:
+            parser.error(f"model_key '{args.model_key}' is not declared in the analysis config.")
     run(config)
 
 

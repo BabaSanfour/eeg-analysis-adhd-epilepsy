@@ -12,7 +12,6 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-import yaml
 from coco_pipe.dim_reduction import (
     EVAL_RUN_KEY_FIELDS,
     FIT_METRIC_COLUMNS,
@@ -68,11 +67,13 @@ from eeg_adhd_epilepsy.io.report_paths import (
     default_reports_root,
     summary_report_dir,
 )
+from eeg_adhd_epilepsy.reports._common import AlignmentDiagnosticsSpec
 from eeg_adhd_epilepsy.reports.dim_reduction import (
     collect_mode_leaderboard,
     generate_dataset_report,
     generate_rollup_report,
 )
+from eeg_adhd_epilepsy.utils.artifacts import freeze_config_used
 from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 from eeg_adhd_epilepsy.utils.constants import DEFAULT_ANALYSIS_CONDITIONS
 
@@ -255,9 +256,7 @@ def execute_analysis_mode(
     config_snapshot = {key: value for key, value in vars(args).items() if key != "config"}
     if eval_specs:
         config_snapshot["evals"] = eval_specs
-    (output_root / "config_used.yaml").write_text(
-        yaml.safe_dump(config_snapshot, sort_keys=True), encoding="utf-8"
-    )
+    freeze_config_used(config_snapshot, output_root, overwrite=True)
     fit_runs_path = runs_dir / "fit_runs.json"
     eval_runs_path = runs_dir / "eval_runs.json"
     run_summary_path = runs_dir / "run_summary.json"
@@ -541,11 +540,26 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         reports_root=config.get("reports_root"),
         qc=config.get("qc", {}),
         interactive=bool(config.get("interactive", False)),
+        color_by="subject",
     )
 
 
-def compare_cohort(dim_root: Path, dataset_name: str, reports_root: Path) -> Path | None:
-    """Render the cross-model comparison for one cohort, returning the report path."""
+def compare_cohort(
+    dim_root: Path,
+    dataset_name: str,
+    reports_root: Path,
+    embedding_model_key: str | None = None,
+    bids_root: str | Path | None = None,
+    alignment_diagnostics_cohort_name: str | None = None,
+    alignment_diagnostics_population: str | None = None,
+) -> Path | None:
+    """Render one cohort comparison and any explicitly requested diagnostics.
+
+    ``dataset_name`` identifies the reduction-run directory and report label.
+    The diagnostics assessment uses the separate exact cohort identity in
+    ``alignment_diagnostics_cohort_name``; no BIDS root or cohort name is
+    reconstructed from output paths.
+    """
     cohort_dir = dim_root / slug(dataset_name)
     if not cohort_dir.is_dir():
         raise FileNotFoundError(f"No dim-reduction runs under {cohort_dir}.")
@@ -559,6 +573,13 @@ def compare_cohort(dim_root: Path, dataset_name: str, reports_root: Path) -> Pat
         summary = _load_run(run_dir)
         if summary is None:
             continue
+        leaderboard = summary["leaderboard"].copy()
+        model_keys = leaderboard["model"].astype(str)
+        aligned = model_keys.str.contains("_align-", regex=False)
+        leaderboard.loc[~aligned, "transform"] = "none"
+        leaderboard.loc[aligned, "transform"] = model_keys[aligned].str.split("_align-", n=1).str[1]
+        leaderboard.loc[aligned, "model"] = model_keys[aligned].str.split("_align-", n=1).str[0]
+        summary["leaderboard"] = leaderboard
         summaries.append(summary)
         selection_metric, selection_eval_name = _selection_config(run_dir)
 
@@ -573,7 +594,21 @@ def compare_cohort(dim_root: Path, dataset_name: str, reports_root: Path) -> Pat
         selection_metric=selection_metric,
         selection_eval_name=selection_eval_name,
     )
-    report = generate_rollup_report(args=args, summaries=summaries)
+    alignment_diagnostics = (
+        AlignmentDiagnosticsSpec(
+            base_model_key=embedding_model_key,
+            cohort_name=alignment_diagnostics_cohort_name,
+            population=alignment_diagnostics_population,
+        )
+        if alignment_diagnostics_population
+        else None
+    )
+    report = generate_rollup_report(
+        args=args,
+        summaries=summaries,
+        bids_root=bids_root,
+        alignment_diagnostics=alignment_diagnostics,
+    )
 
     out_dir = summary_report_dir(reports_root, ReportStage.DIM_REDUCTION, create=True) / slug(
         dataset_name
@@ -595,27 +630,19 @@ def compare_cohort(dim_root: Path, dataset_name: str, reports_root: Path) -> Pat
 
 def run(config: dict[str, Any]) -> None:
     """Run the full dimensionality-reduction sweep from a merged config dict."""
-    args = _run_args_from_config(config)
-
-    # --- Global validation (mode-independent; per-mode checks run in the loop) ---
-    validate_inputs(args)
-
-    resolved_n_jobs = resolve_n_jobs(args.n_jobs)
-
     bids_root = Path(config["bids_root"]).expanduser()
 
-    dim_root = (
-        Path(config["derivative_root"]).expanduser()
-        if config.get("derivative_root")
-        else get_derivative_root(bids_root, DerivativeStage.DIM_REDUCTION)
-    )
-    reports_root = (
-        Path(config["reports_root"]).expanduser()
-        if config.get("reports_root")
-        else Path(default_reports_root(bids_root)).expanduser()
-    )
-
     if config.get("compare_only"):
+        dim_root = (
+            Path(config["derivative_root"]).expanduser()
+            if config.get("derivative_root")
+            else get_derivative_root(bids_root, DerivativeStage.DIM_REDUCTION)
+        )
+        reports_root = (
+            Path(config["reports_root"]).expanduser()
+            if config.get("reports_root")
+            else Path(default_reports_root(bids_root)).expanduser()
+        )
         if config.get("dataset_name"):
             cohorts = [str(config["dataset_name"])]
         else:
@@ -628,12 +655,24 @@ def run(config: dict[str, Any]) -> None:
             logger.warning("No cohorts with foundation runs found under %s.", dim_root)
             return
 
-        written: list[Path] = []
         for cohort in cohorts:
-            path = compare_cohort(dim_root, cohort, reports_root)
-            if path is not None:
-                written.append(path)
+            compare_cohort(
+                dim_root,
+                cohort,
+                reports_root,
+                bids_root=bids_root,
+                embedding_model_key=config.get("embedding_model_key"),
+                alignment_diagnostics_cohort_name=config.get(
+                    "alignment_diagnostics_cohort_name",
+                    config.get("dataset_name"),
+                ),
+                alignment_diagnostics_population=config.get("alignment_diagnostics_population"),
+            )
         return
+
+    args = _run_args_from_config(config)
+    validate_inputs(args)
+    resolved_n_jobs = resolve_n_jobs(args.n_jobs)
 
     meta_df = (
         read_table(Path(config["metadata"]).expanduser(), sep=",")
@@ -712,7 +751,12 @@ def run(config: dict[str, Any]) -> None:
         summary_dir = summary_report_dir(reports_root, ReportStage.DIM_REDUCTION, create=True)
         summary_dir = summary_dir / slug(args.run_label or args.dataset_name)
         summary_dir.mkdir(parents=True, exist_ok=True)
-        rollup_path = summary_dir / "rollup_leaderboard.html"
+        rollup_filename = (
+            f"foundation_{slug(str(args.embedding_model_key))}_rollup_leaderboard.html"
+            if args.input_mode == "foundation_embeddings"
+            else "rollup_leaderboard.html"
+        )
+        rollup_path = summary_dir / rollup_filename
         rollup_report.save(rollup_path)
         logger.info("Roll-up leaderboard saved to: %s", rollup_path)
 
@@ -726,14 +770,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run checkpointed EEG dimensionality reduction.")
     parser.add_argument(
         "--cohort_config",
-        required=True,
         help="Cohort/dataset config: subjects + clinical question (configs/cohorts/).",
     )
     parser.add_argument(
         "--analysis_config",
-        required=True,
         help="Analysis/method config: analysis_modes (reducers + sweep per mode) "
         "(configs/analyses/dim_reduction/).",
+    )
+    parser.add_argument(
+        "--alignment_transform",
+        default=None,
+        help="Reduce one materialized alignment variant (for example none, leace, or ra).",
     )
     parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
     parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
@@ -748,6 +795,16 @@ def main() -> None:
         "--reports_root",
         default=None,
         help="Custom root directory for reports (defaults to sibling of bids_root).",
+    )
+    parser.add_argument(
+        "--derivative_root",
+        default=None,
+        help="Dimensionality-reduction derivative root used by --compare_only.",
+    )
+    parser.add_argument(
+        "--dataset_name",
+        default=None,
+        help="Compare one dataset with --compare_only; otherwise discover every dataset.",
     )
     parser.add_argument(
         "--overwrite",
@@ -789,6 +846,23 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.compare_only:
+        if not args.bids_root:
+            parser.error("--compare_only requires --bids_root.")
+        run(
+            {
+                "compare_only": True,
+                "bids_root": args.bids_root,
+                "derivative_root": args.derivative_root,
+                "reports_root": args.reports_root,
+                "dataset_name": args.dataset_name,
+            }
+        )
+        return
+
+    if not args.cohort_config or not args.analysis_config:
+        parser.error("normal runs require --cohort_config and --analysis_config.")
+
     config = resolve_cli_config(
         cohort_config=args.cohort_config,
         analysis_config=args.analysis_config,
@@ -805,6 +879,12 @@ def main() -> None:
         embedding_derivative_root=args.embedding_derivative_root,
         embedding_model_key=args.embedding_model_key,
     )
+    if args.alignment_transform:
+        transform = str(args.alignment_transform)
+        base_model_key = str(config["embedding_model_key"])
+        config["embedding_model_key"] = (
+            base_model_key if transform == "none" else f"{base_model_key}_align-{transform}"
+        )
     run(config)
 
 

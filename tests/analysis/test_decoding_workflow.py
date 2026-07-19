@@ -4,9 +4,16 @@ import logging
 import numpy as np
 import pandas as pd
 import pytest
-from coco_pipe.io import DataContainer
+from coco_pipe.decoding.foundation_models import FoundationEmbeddingResult
+from coco_pipe.diagnostics.variance import subject_probe
+from coco_pipe.io import (
+    DataContainer,
+    load_embedding_derivatives,
+    save_embedding_derivative,
+)
 
 from eeg_adhd_epilepsy.analysis import classical_decoding as decoding
+from eeg_adhd_epilepsy.analysis.align_subject_embeddings import run as run_alignment
 from eeg_adhd_epilepsy.analysis.utils.decoding import build_classical_plan
 
 
@@ -102,7 +109,9 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
     output = decoding.run(config)
     assert (output / "_SUCCESS").exists()
     assert (output / "sweep_results.csv").exists()
-    unit_root = output / "artifacts" / "fits" / "fit_eo_baseline_adhd_flat_all_baseline"
+    unit_root = (
+        output / "artifacts" / "fits" / "fit_eo_baseline_adhd_flat_all_none_all_dimensions_baseline"
+    )
     assert (unit_root / "predictions.csv").exists()
     assert list(
         (tmp_path / "reports" / "summary" / "decoding" / "synthetic").glob(
@@ -261,17 +270,169 @@ def test_foundation_embedding_decoding_flat_mode(tmp_path, monkeypatch):
         coords={**coords, "feature": [f"embedding_{idx:04d}" for idx in range(12)]},
         ids=np.asarray([f"r{idx:03d}" for idx in range(len(groups))]),
     )
-    monkeypatch.setattr(decoding, "build_dataset", lambda *args, **kwargs: container)
+    load_calls = {"count": 0}
+
+    def load_container(*args, **kwargs):
+        load_calls["count"] += 1
+        return container
+
+    monkeypatch.setattr(decoding, "build_dataset", load_container)
 
     embedding_config = _compact_config(
         tmp_path / "embedding",
         input_mode="foundation_embeddings",
         analysis_modes=["flat"],
     )
+    embedding_config["embedding_model_key"] = "demo"
+    embedding_config["transforms"] = ["none", "leace", "ea_mean"]
+    for defaulted_key in (
+        "session_col",
+        "verbose",
+        "overwrite",
+    ):
+        embedding_config.pop(defaulted_key)
     embedding_output = decoding.run(embedding_config)
     embedding_sweep = pd.read_csv(embedding_output / "sweep_results.csv")
     assert set(embedding_sweep["status"]) == {"success"}
+    assert set(embedding_sweep["transform"]) == {"none", "leace", "ea_mean"}
+    # One load for the raw batch (none + fold-local leace), one for the
+    # materialized ea_mean variant.
+    assert load_calls["count"] == 2
     assert (embedding_output / "_SUCCESS").exists()
+    assert (embedding_output.parent / "foundation_transform_comparison.csv").exists()
+    assert (
+        tmp_path
+        / "embedding"
+        / "reports"
+        / "summary"
+        / "decoding"
+        / "synthetic_foundation_embeddings"
+        / "foundation_transform_comparison.html"
+    ).exists()
+
+
+def test_materialized_ra_variant_runs_through_classical_decoding(tmp_path, monkeypatch):
+    rng = np.random.default_rng(31)
+    source_root = tmp_path / "source"
+    n_subjects, windows_per_subject, token_count, token_width = 8, 8, 10, 4
+    for subject_index in range(n_subjects):
+        subject = f"s{subject_index:02d}"
+        diagnosis = "ADHD" if subject_index >= n_subjects // 2 else "Control"
+        center = rng.normal(size=token_width) * 5.0
+        tokens = center + rng.normal(size=(windows_per_subject, token_count, token_width))
+        windows = tokens.mean(axis=1)
+        result = FoundationEmbeddingResult(
+            window_embeddings=windows,
+            recording_embedding=windows.mean(axis=0),
+            window_start=np.arange(windows_per_subject),
+            window_stop=np.arange(1, windows_per_subject + 1),
+            window_index=np.arange(windows_per_subject),
+            metadata={
+                "model_key": "demo",
+                "recording_id": f"sub-{subject}_run-01",
+                "subject": subject,
+                "study_id": subject,
+                "patient_group_id": subject,
+                "session": "01",
+                "condition": "EO_baseline",
+                "combined_diagnosis": diagnosis,
+                "within_window_pooling": "mean",
+                "token_layout": "native",
+                "token_layout_version": 1,
+                "token_source": "test_native_output",
+                "token_axes": ["window", "token", "feature"],
+                "token_observation_axes": ["token"],
+                "token_feature_axis": "feature",
+            },
+            token_embeddings=tokens,
+        )
+        pooled_path = (
+            source_root
+            / f"sub-{subject}"
+            / "ses-01"
+            / "eeg"
+            / f"sub-{subject}_ses-01_task-EO_desc-demo_embedding.npz"
+        )
+        save_embedding_derivative(
+            FoundationEmbeddingResult(
+                window_embeddings=windows,
+                recording_embedding=windows.mean(axis=0),
+                window_start=result.window_start,
+                window_stop=result.window_stop,
+                window_index=result.window_index,
+                metadata=result.metadata,
+            ),
+            pooled_path,
+        )
+        save_embedding_derivative(
+            result,
+            pooled_path.with_name(f"sub-{subject}_tokens.npz"),
+        )
+
+    run_alignment(
+        {
+            "dataset_name": "ra_smoke",
+            "bids_root": str(tmp_path / "BIDS"),
+            "source_embedding_root": str(source_root),
+            "embedding_model_key": "demo",
+            "source_pooling": "mean",
+            "subject_col": "subject",
+            "conditions": ["EO_baseline"],
+            "run_pooled": False,
+            "transforms": ["ra"],
+            "diagnostic_populations": ["clinical_task_subset"],
+            "transform_params": {"ra": {"shrinkage": 0.1}},
+            "evals": [
+                {
+                    "name": "diagnosis",
+                    "target_col": "combined_diagnosis",
+                    "positive_class": "ADHD",
+                }
+            ],
+            "n_null_permutations": 1,
+            "random_state": 3,
+            "overwrite": False,
+        }
+    )
+    raw = load_embedding_derivatives(source_root, representation="epoch", model_key="demo")
+    aligned = load_embedding_derivatives(
+        source_root,
+        representation="epoch",
+        model_key="demo_align-ra",
+    )
+    before, _ = subject_probe(raw.X, raw.coords["subject"], n_splits=4)
+    after, _ = subject_probe(aligned.X, aligned.coords["subject"], n_splits=4)
+    assert before is not None and after is not None and after < before
+
+    monkeypatch.setattr(
+        decoding,
+        "generate_decoding_summary_report",
+        lambda output_path, *args, **kwargs: output_path,
+    )
+    shared_comparison_calls = []
+    monkeypatch.setattr(
+        decoding,
+        "generate_head_to_head_report",
+        lambda **kwargs: shared_comparison_calls.append(kwargs),
+    )
+    config = _compact_config(
+        tmp_path / "decode",
+        input_mode="foundation_embeddings",
+        analysis_modes=["flat"],
+    )
+    config.update(
+        {
+            "embedding_derivative_root": str(source_root),
+            "embedding_model_key": "demo",
+            "transforms": ["ra"],
+            "write_shared_comparison_report": False,
+        }
+    )
+    output = decoding.run(config)
+    sweep = pd.read_csv(output / "sweep_results.csv")
+    assert set(sweep["status"]) == {"success"}
+    assert set(sweep["transform"]) == {"ra"}
+    assert shared_comparison_calls == []
 
 
 def test_foundation_embedding_decoding_rejects_nonflat_mode(tmp_path):
@@ -282,6 +443,49 @@ def test_foundation_embedding_decoding_rejects_nonflat_mode(tmp_path):
     )
     with pytest.raises(ValueError, match="analysis_mode='sensor'"):
         build_classical_plan(config)
+
+
+def test_foundation_plan_builds_transform_and_reduction_axes(tmp_path):
+    config = _compact_config(
+        tmp_path,
+        input_mode="foundation_embeddings",
+        analysis_modes=["flat"],
+    )
+    config["transforms"] = ["none", "leace", "ea_mean"]
+    config["reducer"] = {"enabled": True, "n_components": 0.9}
+    plan = build_classical_plan(config)
+    assert plan.transforms == ["none", "leace", "ea_mean"]
+    assert plan.reducer_enabled
+
+    groups, _labels, coords = _observation_coords()
+    container = DataContainer(
+        X=np.random.default_rng(3).normal(size=(len(groups), 8)),
+        dims=("obs", "feature"),
+        coords={**coords, "feature": [f"e{i}" for i in range(8)]},
+        ids=np.asarray([f"r{idx:03d}" for idx in range(len(groups))]),
+    )
+    failures: list = []
+    units = decoding._classical_scope_units(
+        plan,
+        "EO_baseline",
+        container,
+        config=config,
+        derivative_root=tmp_path,
+        failures=failures,
+    )
+    assert failures == []
+    assert len(units) == 6
+    assert {unit.context["transform"] for unit in units} == {
+        "none",
+        "leace",
+        "ea_mean",
+    }
+    assert {unit.context["reduction_mode"] for unit in units} == {
+        "all_dimensions",
+        "pca",
+    }
+    leace = next(unit for unit in units if unit.context["transform"] == "leace")
+    assert leace.experiment_config.erasure.enabled
 
 
 def test_nonflat_descriptor_sweeps(tmp_path, monkeypatch):
@@ -325,7 +529,7 @@ def test_nonflat_descriptor_sweeps(tmp_path, monkeypatch):
         output
         / "artifacts"
         / "fits"
-        / "fit_eo_baseline_adhd_sensor_fz_sfs"
+        / "fit_eo_baseline_adhd_sensor_fz_none_all_dimensions_sfs"
         / "selected_features.csv"
     ).exists()
     fits_root = output / "artifacts" / "fits"
@@ -435,6 +639,13 @@ def test_foundation_run_wires_sweep_and_capability_without_gpu(tmp_path, monkeyp
             failures.append(skip) or iter(())
         ),
     )
+    shared_comparison_calls = []
+    monkeypatch.setattr(
+        fdn,
+        "generate_head_to_head_report",
+        lambda **kwargs: shared_comparison_calls.append(kwargs),
+    )
+    config["write_shared_comparison_report"] = False
 
     output = fdn.run(config)
     assert (output / "runs" / "sweep_runs.json").exists()
@@ -447,6 +658,7 @@ def test_foundation_run_wires_sweep_and_capability_without_gpu(tmp_path, monkeyp
             "foundation_cfg-*/dataset_summary.html"
         )
     )
+    assert shared_comparison_calls == []
 
     # --reports-only re-run reads the persisted inventory and regenerates reports.
     summary_html = next(

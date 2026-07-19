@@ -5,6 +5,7 @@
 # --representation), so one config serves all foundation models; the
 # cluster array fans model keys × representations out as separate runs.
 input_mode: foundation_embeddings
+alignment_diagnostics_population: clinical_task_subset
 
 selection_metric: separation_rf_balanced_accuracy
 selection_eval_name: med_adhd_vs_ctrl

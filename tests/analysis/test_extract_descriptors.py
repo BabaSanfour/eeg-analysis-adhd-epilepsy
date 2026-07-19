@@ -12,6 +12,7 @@ from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis import extract_descriptors, merge_descriptors
 from eeg_adhd_epilepsy.io.bids import add_recording_id
+from eeg_adhd_epilepsy.utils.artifacts import write_text_atomic
 
 
 def _demo_container() -> DataContainer:
@@ -1033,7 +1034,7 @@ def test_write_text_atomic_is_concurrency_safe(tmp_path: Path) -> None:
         try:
             barrier.wait()
             for _ in range(25):
-                extract_descriptors._write_text_atomic(target, text)
+                write_text_atomic(target, text)
         except BaseException as exc:  # noqa: BLE001 - record any race failure
             errors.append(exc)
 

@@ -12,10 +12,12 @@ experiment assembly, resume, export, reports, record extraction — lives in
 from __future__ import annotations
 
 import argparse
+import copy
 import gc
 import logging
 from collections import Counter
 from collections.abc import Iterator, Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,7 @@ import pandas as pd
 from coco_pipe.decoding import (
     CVConfig,
     DecodingUnit,
+    ErasureConfig,
     ExperimentConfig,
     FeatureSelectionConfig,
     ReducerConfig,
@@ -38,6 +41,7 @@ from coco_pipe.decoding import (
 )
 from coco_pipe.descriptors import build_descriptor_feature_metadata
 from coco_pipe.io import DataContainer, read_json
+from coco_pipe.transforms.subject_alignment import VECTOR_TRANSFORMS, make_subject_transform
 from coco_pipe.utils import slug
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
@@ -54,6 +58,7 @@ from eeg_adhd_epilepsy.analysis.utils.decoding import (
     build_loader_args,
     prepare_decoding_scope,
     resolve_decoding_paths,
+    scientific_config,
 )
 from eeg_adhd_epilepsy.reports.decoding import (
     generate_decoding_summary_report,
@@ -65,6 +70,10 @@ LOGGER = logging.getLogger(__name__)
 
 _FS_METADATA_KEYS = {"name", "analysis_modes"}
 _MAX_FAILURE_REASONS_TO_LOG = 8
+
+_FOLD_LOCAL_TRANSFORMS = frozenset(
+    name for name in VECTOR_TRANSFORMS if make_subject_transform(name).fold_local
+)
 
 
 def _log_enumeration_failures(
@@ -163,7 +172,7 @@ def _build_selection_units(
     random_state: int,
     overwrite: bool,
 ):
-    """Yield DecodingUnit configs for all valid feature selection passes."""
+    """Yield transform x reduction x feature-selection decoding units."""
     flattened = (
         unit["container"]
         if unit["container"].dims == ("obs", "feature")
@@ -180,102 +189,137 @@ def _build_selection_units(
         if str(spec.get("method", "none")) == "none" or X.shape[1] > 1
     ]
 
-    for selection_spec in valid_selection_specs:
-        selection_mode = str(selection_spec.get("name") or selection_spec.get("method") or "fs")
-        stem = (
-            f"fit_{slug(scope)}_{slug(target_name)}"
-            f"_{analysis_mode}_{slug(unit['unit_key'])}_{selection_mode}"
-        )
-        output_dir = derivative_root / "artifacts" / "fits" / stem
-        context = {
-            "scope": scope,
-            "target": target_name,
-            "input_mode": plan.input_mode,
-            "analysis_mode": analysis_mode,
-            "unit_name": unit["unit_name"],
-            "unit_key": unit["unit_key"],
-            "family": unit.get("family"),
-            "subfamily": unit.get("subfamily"),
-            "selection_mode": selection_mode,
-            "primary": analysis_mode == "flat",
-        }
-        cv_config = CVConfig(
-            strategy="stratified_group_kfold",
-            n_splits=unit_n_splits,
-            shuffle=True,
-            random_state=random_state,
-            group_key="group_id",
-        )
-        tuning = (
-            TuningConfig(
+    reduction_modes = [False, True] if plan.reducer_enabled else [False]
+    for transform_name in plan.transforms:
+        erasure = (
+            ErasureConfig(
                 enabled=True,
-                scoring=plan.tuning_cfg.get("scoring"),
-                search_type=plan.tuning_cfg.get("search_type", "grid"),
-                cv=CVConfig(
-                    strategy="stratified_group_kfold",
-                    n_splits=min(int(plan.tuning_cfg.get("n_splits", 3)), unit_n_splits),
-                    shuffle=True,
-                    random_state=random_state,
-                    group_key="group_id",
-                ),
-                n_jobs=1,
-                allow_nongroup_inner_cv=bool(plan.tuning_cfg.get("allow_nongroup_inner_cv", False)),
+                method=transform_name,
+                params=plan.transform_params.get(transform_name, {}),
             )
-            if model_grids and bool(plan.tuning_cfg.get("enabled", True))
-            else None
+            if transform_name in _FOLD_LOCAL_TRANSFORMS
+            else ErasureConfig(enabled=False)
         )
-        reducer = (
-            ReducerConfig(
-                enabled=True,
+        for reduced in reduction_modes:
+            reduction_mode = "pca" if reduced else "all_dimensions"
+            reducer = ReducerConfig(
+                enabled=reduced,
                 method="pca",
                 n_components=plan.reducer_cfg.get("n_components"),
                 whiten=bool(plan.reducer_cfg.get("whiten", False)),
+                svd_solver=plan.reducer_cfg.get("svd_solver", "auto"),
+                random_state=random_state,
             )
-            if plan.reducer_enabled
-            else None
-        )
-        fs_kwargs = {k: v for k, v in selection_spec.items() if k not in _FS_METADATA_KEYS}
-        fs_config = (
-            FeatureSelectionConfig(enabled=True, cv=cv_config, **fs_kwargs)
-            if str(fs_kwargs.get("method", "none")) != "none"
-            else None
-        )
-
-        experiment_config = ExperimentConfig(
-            task="classification",
-            tag=f"{target_name}_{analysis_mode}_{unit['unit_key']}_{selection_mode}",
-            random_state=random_state,
-            models=model_configs,
-            grids=model_grids or None,
-            cv=cv_config,
-            tuning=tuning or TuningConfig(enabled=False),
-            reducer=reducer or ReducerConfig(enabled=False),
-            feature_selection=fs_config or FeatureSelectionConfig(enabled=False),
-            statistical_assessment=grouped_chance_assessment(
-                config["chance_method"],
-                n_permutations=int(config["n_permutations"]),
-                store_null=bool(config["store_null_distribution"]),
-            ),
-            metrics=list(plan.metrics),
-            use_scaler=True,
-            n_jobs=1,
-            verbose=bool(config["verbose"]),
-        )
-        yield DecodingUnit(
-            experiment_config=experiment_config,
-            X=X,
-            y=unit_y,
-            output_dir=output_dir,
-            context=context,
-            run_config={**dict(config), **context},
-            groups=unit_groups,
-            feature_names=names,
-            sample_ids=unit_metadata["sample_id"].astype(str),
-            sample_metadata=unit_metadata,
-            inferential_unit="group_id",
-            overwrite=overwrite,
-            include_p_values=True,
-        )
+            for selection_spec in valid_selection_specs:
+                selection_mode = str(
+                    selection_spec.get("name") or selection_spec.get("method") or "fs"
+                )
+                stem = (
+                    f"fit_{slug(scope)}_{slug(target_name)}_{analysis_mode}_"
+                    f"{slug(unit['unit_key'])}_{slug(transform_name)}_"
+                    f"{slug(reduction_mode)}_{selection_mode}"
+                )
+                output_dir = derivative_root / "artifacts" / "fits" / stem
+                context = {
+                    "scope": scope,
+                    "target": target_name,
+                    "input_mode": plan.input_mode,
+                    "analysis_mode": analysis_mode,
+                    "unit_name": unit["unit_name"],
+                    "unit_key": unit["unit_key"],
+                    "family": unit.get("family"),
+                    "subfamily": unit.get("subfamily"),
+                    "selection_mode": selection_mode,
+                    "embedding_model_key": (
+                        str(config.get("embedding_model_key", ""))
+                        if plan.input_mode == "foundation_embeddings"
+                        else None
+                    ),
+                    "transform": transform_name,
+                    "reduction_mode": reduction_mode,
+                    "primary": (
+                        analysis_mode == "flat" and transform_name == "none" and not reduced
+                    ),
+                }
+                cv_config = CVConfig(
+                    strategy="stratified_group_kfold",
+                    n_splits=unit_n_splits,
+                    shuffle=True,
+                    random_state=random_state,
+                    group_key="group_id",
+                )
+                tuning = (
+                    TuningConfig(
+                        enabled=True,
+                        scoring=plan.tuning_cfg.get("scoring"),
+                        search_type=plan.tuning_cfg.get("search_type", "grid"),
+                        cv=CVConfig(
+                            strategy="stratified_group_kfold",
+                            n_splits=min(
+                                int(plan.tuning_cfg.get("n_splits", 3)),
+                                unit_n_splits,
+                            ),
+                            shuffle=True,
+                            random_state=random_state,
+                            group_key="group_id",
+                        ),
+                        n_jobs=1,
+                        allow_nongroup_inner_cv=bool(
+                            plan.tuning_cfg.get("allow_nongroup_inner_cv", False)
+                        ),
+                    )
+                    if model_grids and bool(plan.tuning_cfg.get("enabled", True))
+                    else TuningConfig(enabled=False)
+                )
+                fs_kwargs = {
+                    key: value
+                    for key, value in selection_spec.items()
+                    if key not in _FS_METADATA_KEYS
+                }
+                fs_config = (
+                    FeatureSelectionConfig(enabled=True, cv=cv_config, **fs_kwargs)
+                    if str(fs_kwargs.get("method", "none")) != "none"
+                    else FeatureSelectionConfig(enabled=False)
+                )
+                experiment_config = ExperimentConfig(
+                    task="classification",
+                    tag=(
+                        f"{target_name}_{analysis_mode}_{unit['unit_key']}_"
+                        f"{transform_name}_{reduction_mode}_{selection_mode}"
+                    ),
+                    random_state=random_state,
+                    models=model_configs,
+                    grids=model_grids or None,
+                    cv=cv_config,
+                    tuning=tuning,
+                    erasure=erasure,
+                    reducer=reducer,
+                    feature_selection=fs_config,
+                    statistical_assessment=grouped_chance_assessment(
+                        config["chance_method"],
+                        n_permutations=int(config["n_permutations"]),
+                        store_null=bool(config["store_null_distribution"]),
+                    ),
+                    metrics=list(plan.metrics),
+                    use_scaler=True,
+                    n_jobs=1,
+                    verbose=bool(config["verbose"]),
+                )
+                yield DecodingUnit(
+                    experiment_config=experiment_config,
+                    X=X,
+                    y=unit_y,
+                    output_dir=output_dir,
+                    context=context,
+                    run_config={**scientific_config(config), **context},
+                    groups=unit_groups,
+                    feature_names=names,
+                    sample_ids=unit_metadata["sample_id"].astype(str),
+                    sample_metadata=unit_metadata,
+                    inferential_unit="group_id",
+                    overwrite=overwrite,
+                    include_p_values=True,
+                )
 
 
 def _enumerate_scope(
@@ -288,8 +332,8 @@ def _enumerate_scope(
     """Yield DecodingUnit objects or failure dicts for a single scope."""
     from coco_pipe.io import iter_analysis_units
 
-    subject_col = str(config.get("subject_col", "study_id"))
-    session_col = str(config.get("session_col", "session_id"))
+    subject_col = str(config["subject_col"])
+    session_col = str(config["session_col"])
     requested_splits = int(config["cv"]["n_splits"])
     random_state = int(config["random_state"])
     overwrite = bool(config["overwrite"])
@@ -465,52 +509,71 @@ def _iter_classical_unit_batches(
     this generator is exhausted.
     """
     run_pooled = bool(config["run_pooled"]) and len(conditions) > 1
-    pool_specs: list[dict[str, Any]] = []
-    pool_loaders: list[Any] = []
-    for condition in conditions:
-        container = build_dataset(loader_args, metadata, condition, target_col=None)
-        if container.meta.get("qc_result") is not None:
-            qc_report_results.append((condition, container.meta["qc_result"]))
-        n_before = len(failures)
-        units = _classical_scope_units(
-            plan,
-            condition,
-            container,
-            config=config,
-            derivative_root=derivative_root,
-            failures=failures,
-        )
-        enum_failures.extend(failures[n_before:])
-        stats["units"] += len(units)
-        if run_pooled:
-            pool_specs.append(container_pool_spec(container))
-            pool_loaders.append(
-                lambda args=loader_args, cond=condition: build_dataset(
-                    args, metadata, cond, target_col=None
-                )
+    raw_transforms = [
+        name for name in plan.transforms if name == "none" or name in _FOLD_LOCAL_TRANSFORMS
+    ]
+    materialized_transforms = [
+        name for name in plan.transforms if name != "none" and name not in _FOLD_LOCAL_TRANSFORMS
+    ]
+    transform_batches: list[tuple[list[str], str | None]] = []
+    if raw_transforms:
+        transform_batches.append((raw_transforms, None))
+    transform_batches.extend(([name], name) for name in materialized_transforms)
+
+    for transform_names, materialized in transform_batches:
+        transform_plan = replace(plan, transforms=transform_names)
+        transform_loader = copy.copy(loader_args)
+        if materialized is not None:
+            transform_loader.embedding_model_key = (
+                f"{loader_args.embedding_model_key}_align-{materialized}"
             )
-        yield units
-        del container, units
+
+        pool_specs: list[dict[str, Any]] = []
+        pool_loaders: list[Any] = []
+        for condition in conditions:
+            container = build_dataset(transform_loader, metadata, condition, target_col=None)
+            if container.meta.get("qc_result") is not None:
+                qc_report_results.append((condition, container.meta["qc_result"]))
+            n_before = len(failures)
+            units = _classical_scope_units(
+                transform_plan,
+                condition,
+                container,
+                config=config,
+                derivative_root=derivative_root,
+                failures=failures,
+            )
+            enum_failures.extend(failures[n_before:])
+            stats["units"] += len(units)
+            if run_pooled:
+                pool_specs.append(container_pool_spec(container))
+                pool_loaders.append(
+                    lambda args=transform_loader, cond=condition: build_dataset(
+                        args, metadata, cond, target_col=None
+                    )
+                )
+            yield units
+            del container, units
+            gc.collect()
+
+        if len(pool_specs) > 1:
+            pooled = pool_containers_streaming(pool_specs, pool_loaders)
+            n_before = len(failures)
+            units = _classical_scope_units(
+                transform_plan,
+                "pooled",
+                pooled,
+                config=config,
+                derivative_root=derivative_root,
+                failures=failures,
+            )
+            enum_failures.extend(failures[n_before:])
+            stats["units"] += len(units)
+            yield units
+            del pooled, units
+
+        del pool_specs, pool_loaders
         gc.collect()
-
-    if len(pool_specs) > 1:
-        pooled = pool_containers_streaming(pool_specs, pool_loaders)
-        n_before = len(failures)
-        units = _classical_scope_units(
-            plan,
-            "pooled",
-            pooled,
-            config=config,
-            derivative_root=derivative_root,
-            failures=failures,
-        )
-        enum_failures.extend(failures[n_before:])
-        stats["units"] += len(units)
-        yield units
-        del pooled, units
-
-    del pool_specs, pool_loaders
-    gc.collect()
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +589,15 @@ def _classical_primary_mask(frame: pd.DataFrame) -> pd.Series:
 
 
 def run(config: dict[str, Any]) -> Path:
+    config = {
+        "session_col": "session",
+        "n_jobs": -1,
+        "verbose": True,
+        "overwrite": False,
+        "report_asset_urls": "inline",
+        "write_shared_comparison_report": True,
+        **config,
+    }
     plan = build_classical_plan(config)
     (
         bids_root,
@@ -578,7 +650,14 @@ def run(config: dict[str, Any]) -> Path:
                 output_root=derivative_root,
                 results_filename="sweep_results.csv",
                 primary_mask=_classical_primary_mask,
-                leaderboard_group_fields=("scope", "target", "analysis_mode", "selection_mode"),
+                leaderboard_group_fields=(
+                    "scope",
+                    "target",
+                    "analysis_mode",
+                    "selection_mode",
+                    "transform",
+                    "reduction_mode",
+                ),
                 reallocate_inner_jobs=True,
                 frame_post=lambda frame: (
                     correct_sweep_pvalues(frame) if "p_value" in frame else frame
@@ -608,7 +687,7 @@ def run(config: dict[str, Any]) -> Path:
                 records,
                 modes=config.get("detailed_unit_report_modes", ["flat"]),
                 feature_metadata=feature_metadata,
-                asset_urls=config.get("report_asset_urls", "inline"),
+                asset_urls=config["report_asset_urls"],
                 title_fn=lambda record: (
                     f"{record.get('target')}: {record.get('analysis_mode')}/"
                     f"{record.get('unit_name')} ({record.get('selection_mode')})"
@@ -622,12 +701,24 @@ def run(config: dict[str, Any]) -> Path:
             qc_results=qc_report_results,
         )
 
-    generate_head_to_head_report(
-        bids_root=bids_root,
-        reports_root=reports_root,
-        dataset_name=dataset_name_slug,
-        asset_urls=config["report_asset_urls"],
-    )
+    if compare_only or config["write_shared_comparison_report"]:
+        alignment_diagnostics_population = (
+            str(config["alignment_diagnostics_population"])
+            if plan.input_mode == "foundation_embeddings"
+            and config.get("alignment_diagnostics_population")
+            else None
+        )
+        generate_head_to_head_report(
+            bids_root=bids_root,
+            reports_root=reports_root,
+            dataset_name=dataset_name_slug,
+            asset_urls=config["report_asset_urls"],
+            alignment_diagnostics_cohort_name=(
+                str(config["dataset_name"]) if alignment_diagnostics_population else None
+            ),
+            alignment_diagnostics_population=alignment_diagnostics_population,
+            generate_foundation_transform_report=(plan.input_mode == "foundation_embeddings"),
+        )
     return derivative_root
 
 
@@ -661,6 +752,16 @@ def main() -> None:
         help="Descriptor feature-columns JSON path (dataset path; supply here, not in config).",
     )
     parser.add_argument(
+        "--embedding_derivative_root",
+        default=None,
+        help="Foundation embedding root for saved-embedding decoding.",
+    )
+    parser.add_argument(
+        "--embedding_model_key",
+        default=None,
+        help="Foundation model key for saved-embedding decoding.",
+    )
+    parser.add_argument(
         "--representation",
         choices=["epoch", "recording", "subject"],
         default=None,
@@ -684,6 +785,12 @@ def main() -> None:
         action="store_true",
         help="Skip decoding and regenerate only the head-to-head comparison report.",
     )
+    parser.add_argument(
+        "--write-shared-comparison-report",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Write the cohort-level comparison after this run.",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     config = resolve_cli_config(
@@ -695,10 +802,13 @@ def main() -> None:
         reports_root=args.reports_root,
         descriptor_table_path=args.descriptor_table_path,
         descriptor_feature_columns_path=args.descriptor_feature_columns_path,
+        embedding_derivative_root=args.embedding_derivative_root,
+        embedding_model_key=args.embedding_model_key,
         overwrite=args.overwrite,
         representation=args.representation,
         reports_only=args.reports_only,
         compare_only=args.compare_only,
+        write_shared_comparison_report=args.write_shared_comparison_report,
     )
     run(config)
 

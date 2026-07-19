@@ -1,4 +1,5 @@
 import pandas as pd
+import pytest
 from coco_pipe.decoding import ExperimentResult
 from coco_pipe.io.quality import QCResult, SubjectDropRecord
 from coco_pipe.report import (
@@ -7,9 +8,17 @@ from coco_pipe.report import (
     primary_metric_column,
     signature_compatibility,
 )
+from coco_pipe.utils import slug
 
+from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+from eeg_adhd_epilepsy.reports._common import (
+    AlignmentDiagnosticsSpec,
+    load_alignment_diagnostics,
+)
 from eeg_adhd_epilepsy.reports.decoding import (
+    _apply_legacy_head_to_head_migration_policy,
     generate_decoding_summary_report,
+    generate_foundation_decoding_comparison,
     generate_foundation_decoding_report,
     generate_head_to_head_report,
 )
@@ -17,6 +26,89 @@ from eeg_adhd_epilepsy.reports.decoding import (
 
 def _asset_urls():
     return {"plotly": "about:blank", "tailwind": "about:blank", "pako": "about:blank"}
+
+
+def test_legacy_head_to_head_migration_policy_is_explicit_and_non_mutating():
+    original = pd.DataFrame(
+        [
+            {"model": "legacy"},
+            {"model": "current", "transform": "leace", "reduction_mode": "pca"},
+        ]
+    )
+
+    migrated = _apply_legacy_head_to_head_migration_policy(original)
+
+    assert pd.isna(original.loc[0, "transform"])
+    assert migrated["transform"].tolist() == ["none", "leace"]
+    assert migrated["reduction_mode"].tolist() == ["all_dimensions", "pca"]
+
+
+def test_alignment_diagnostics_section_matches_decoding_cohort_and_population(tmp_path):
+    bids_root = tmp_path / "BIDS"
+    root = get_derivative_root(bids_root, DerivativeStage.VARIANCE_DIAGNOSTICS) / slug("demo")
+    root.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "transform": "none",
+                "cohort_name": cohort,
+                "population": population,
+                "selection_fingerprint": f"{cohort}-{population}",
+                "scope": "pooled",
+                "eval_name": "diagnosis",
+                "target_col": "diagnosis",
+                "metric": "between_subject_excess_over_null",
+                "value": 0.4,
+            }
+            for cohort, population in (
+                ("wanted", "clinical_task_subset"),
+                ("other", "clinical_task_subset"),
+                ("wanted", "transform_training_population"),
+            )
+        ]
+    ).to_csv(root / "variance_diagnostics.csv", index=False)
+
+    diagnostics = load_alignment_diagnostics(
+        bids_root,
+        AlignmentDiagnosticsSpec(
+            base_model_key="demo",
+            cohort_name="wanted",
+            population="clinical_task_subset",
+        ),
+    )
+
+    assert set(diagnostics["cohort_name"]) == {"wanted"}
+    assert set(diagnostics["population"]) == {"clinical_task_subset"}
+
+
+def test_alignment_diagnostics_rejects_inferred_aligned_model_keys(tmp_path):
+    with pytest.raises(ValueError, match="exact non-empty base model key"):
+        load_alignment_diagnostics(
+            tmp_path,
+            AlignmentDiagnosticsSpec(
+                base_model_key="demo_align-leace",
+                cohort_name="cohort",
+                population="clinical_task_subset",
+            ),
+        )
+
+
+def test_alignment_diagnostics_requires_explicit_schema(tmp_path):
+    root = get_derivative_root(tmp_path, DerivativeStage.VARIANCE_DIAGNOSTICS) / slug("demo")
+    root.mkdir(parents=True)
+    pd.DataFrame([{"metric": "between_subject_excess_over_null", "value": 0.4}]).to_csv(
+        root / "variance_diagnostics.csv", index=False
+    )
+
+    with pytest.raises(ValueError, match="missing required columns"):
+        load_alignment_diagnostics(
+            tmp_path,
+            AlignmentDiagnosticsSpec(
+                base_model_key="demo",
+                cohort_name="cohort",
+                population="clinical_task_subset",
+            ),
+        )
 
 
 def _write_result(tmp_path, name, *, accuracy=0.62, model="logreg"):
@@ -193,6 +285,51 @@ def test_foundation_visual_report_handles_empty_records(tmp_path):
         config={"report_asset_urls": _asset_urls()},
     )
     assert "No foundation decoding units were produced." in output.read_text(encoding="utf-8")
+
+
+def test_foundation_comparison_aggregates_models_modes_and_capabilities(tmp_path):
+    bids_root = tmp_path / "BIDS"
+    decoding_root = bids_root / "derivatives" / "decoding" / "dataset"
+    records = _foundation_records(tmp_path)
+    for model_key in ("labram", "cbramod"):
+        run_root = decoding_root / f"foundation_{model_key}"
+        run_root.mkdir(parents=True)
+        pd.DataFrame([record for record in records if record["model_key"] == model_key]).to_csv(
+            run_root / "foundation_results.csv", index=False
+        )
+        pd.DataFrame(
+            [
+                {
+                    "condition": "EO",
+                    "target": "adhd",
+                    "model_key": model_key,
+                    "train_mode": "lora",
+                    "status": "available",
+                    "reason": "",
+                }
+            ]
+        ).to_csv(run_root / "capability_matrix.csv", index=False)
+
+    outputs = generate_foundation_decoding_comparison(
+        bids_root=bids_root,
+        reports_root=tmp_path / "reports",
+        dataset_name="dataset",
+        config={"report_asset_urls": _asset_urls()},
+    )
+
+    assert outputs is not None
+    comparison_csv, report_path, capability_csv = outputs
+    comparison = pd.read_csv(comparison_csv)
+    assert set(comparison["model_key"]) == {"labram", "cbramod"}
+    assert set(comparison["train_mode"]) == {"linear_probe", "full", "lora"}
+    assert set(comparison["run_variant"]) == {"foundation_labram", "foundation_cbramod"}
+    assert capability_csv is not None
+    capabilities = pd.read_csv(capability_csv)
+    assert set(capabilities["model_key"]) == {"labram", "cbramod"}
+    html = report_path.read_text(encoding="utf-8")
+    assert "Linear Probe Leaderboard" in html
+    assert "Training-Mode Comparison" in html
+    assert "Foundation Capability Matrix" in html
 
 
 def test_decoding_summary_is_grouped_by_scope_and_analysis_plan(tmp_path):
@@ -681,12 +818,62 @@ def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
                 "scope": "EC_baseline",
                 "target": "adhd",
                 "model": "ridge",
+                "embedding_model_key": "cbramod",
                 "balanced_accuracy_mean": 0.66,
                 "cv_strategy": "stratified_group_kfold",
                 "effective_n_splits": 5,
                 "cv_random_state": 42,
                 "cohort_signature": "abc123",
-            }
+            },
+            {
+                "status": "success",
+                "input_mode": "foundation_embeddings",
+                "analysis_mode": "flat",
+                "selection_mode": "baseline",
+                "scope": "EC_baseline",
+                "target": "adhd",
+                "model": "ridge",
+                "embedding_model_key": "cbramod",
+                "transform": "leace",
+                "reduction_mode": "all_dimensions",
+                "balanced_accuracy_mean": 0.63,
+                "cv_strategy": "stratified_group_kfold",
+                "effective_n_splits": 5,
+                "cv_random_state": 42,
+                "cohort_signature": "abc123",
+            },
+            {
+                "status": "success",
+                "input_mode": "foundation_embeddings",
+                "analysis_mode": "flat",
+                "selection_mode": "baseline",
+                "scope": "EC_baseline",
+                "target": "adhd",
+                "model": "ridge",
+                "embedding_model_key": "labram",
+                "balanced_accuracy_mean": 0.71,
+                "cv_strategy": "stratified_group_kfold",
+                "effective_n_splits": 5,
+                "cv_random_state": 42,
+                "cohort_signature": "abc123",
+            },
+            {
+                "status": "success",
+                "input_mode": "foundation_embeddings",
+                "analysis_mode": "flat",
+                "selection_mode": "baseline",
+                "scope": "EC_baseline",
+                "target": "adhd",
+                "model": "ridge",
+                "embedding_model_key": "labram",
+                "transform": "leace",
+                "reduction_mode": "all_dimensions",
+                "balanced_accuracy_mean": 0.61,
+                "cv_strategy": "stratified_group_kfold",
+                "effective_n_splits": 5,
+                "cv_random_state": 42,
+                "cohort_signature": "abc123",
+            },
         ]
     ).to_csv(embedding_root / "sweep_results.csv", index=False)
     foundation_root = bids_root / "derivatives" / "decoding" / "dataset" / "foundation_linear"
@@ -707,12 +894,62 @@ def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
             }
         ]
     ).to_csv(foundation_root / "foundation_results.csv", index=False)
+    for model_key in ("cbramod", "labram"):
+        diagnostics_root = get_derivative_root(
+            bids_root, DerivativeStage.VARIANCE_DIAGNOSTICS
+        ) / slug(model_key)
+        diagnostics_root.mkdir(parents=True)
+        diagnostic_values = {
+            "none": {
+                "subject_probe_linear_balanced_accuracy": 0.82,
+                "subject_probe_chance": 0.25,
+                "between_subject_excess_over_null": 2.0,
+                "marginal_label_excess_over_null": 1.5,
+                "total_sample_variance": 100.0,
+                "variance_participation_ratio": 8.0,
+                "variance_participation_ratio_fraction": 0.8,
+            },
+            "leace": {
+                "subject_probe_linear_balanced_accuracy": 0.55,
+                "subject_probe_chance": 0.25,
+                "between_subject_excess_over_null": 1.0,
+                "marginal_label_excess_over_null": 1.2,
+                "total_sample_variance": 70.0,
+                "variance_participation_ratio": 6.0,
+                "variance_participation_ratio_fraction": 0.6,
+            },
+        }
+        pd.DataFrame(
+            [
+                {
+                    "transform": transform,
+                    "cohort_name": "dataset",
+                    "population": "clinical_task_subset",
+                    "selection_fingerprint": "dataset-selection",
+                    "scope": "EC_baseline",
+                    "eval_name": "adhd",
+                    "target_col": "adhd",
+                    "metric": metric,
+                    "value": value,
+                    "n_subjects": 4,
+                    "n_observations": 48,
+                    "n_features": 10,
+                    "n_constant_features": 0,
+                    "design": "nested_subject_within_label",
+                }
+                for transform, metrics in diagnostic_values.items()
+                for metric, value in metrics.items()
+            ]
+        ).to_csv(diagnostics_root / "variance_diagnostics.csv", index=False)
 
     outputs = generate_head_to_head_report(
         bids_root=bids_root,
         reports_root=tmp_path / "reports",
         dataset_name="dataset",
         asset_urls=_asset_urls(),
+        alignment_diagnostics_cohort_name="dataset",
+        alignment_diagnostics_population="clinical_task_subset",
+        generate_foundation_transform_report=True,
     )
     assert outputs is not None
     comparison_path, report_path = outputs
@@ -732,6 +969,24 @@ def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
     assert "Comparison Compatibility" in html
     assert "Paired Comparisons Limited" in html
     assert "Paired Delta vs Descriptor Baseline" in html
+    assert "Subject Alignment Diagnostics" not in html
+    transform_comparison = pd.read_csv(
+        comparison_path.parent / "foundation_transform_comparison.csv"
+    )
+    assert set(transform_comparison["embedding_model_key"]) == {"cbramod", "labram"}
+    assert {
+        "cbramod | ridge | none/all_dimensions",
+        "cbramod | ridge | leace/all_dimensions",
+        "labram | ridge | none/all_dimensions",
+        "labram | ridge | leace/all_dimensions",
+    } <= set(transform_comparison["model_label"])
+    transform_report_path = report_path.with_name("foundation_transform_comparison.html")
+    transform_html = transform_report_path.read_text(encoding="utf-8")
+    assert "Subject Alignment Diagnostics: cbramod" in transform_html
+    assert "Subject Alignment Diagnostics: labram" in transform_html
+    assert "Cross-Model Diagnostic Coverage" in transform_html
+    assert "Performance-Alignment Trade-off" in transform_html
+    assert "Paired transform ranking" in transform_html
 
 
 def test_head_to_head_ignores_empty_failed_sweep(tmp_path):

@@ -1,22 +1,25 @@
-"""Shared helpers for eeg_adhd_epilepsy report generation.
+"""Shared project-specific helpers for eeg_adhd_epilepsy report generation.
 
-Consolidates small building blocks (image/table embedding, value formatting,
-metric-table construction) that were previously duplicated, with slight
-drift, across `raw_qc.py`, `eeg_report.py`, `preproc_qc.py`, and
-`cohort_report.py`.
+Includes reusable presentation helpers and the explicit BIDS artifact-loading
+boundary used by decoding and dimensionality-reduction reports. Generic table
+validation, selection, and rendering remain in :mod:`coco_pipe.report`.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+from coco_pipe.report import select_subject_alignment_diagnostics
 from coco_pipe.report.core import ImageElement, Section, TableElement
+from coco_pipe.utils import slug
 
+from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
 from eeg_adhd_epilepsy.utils.formatting import format_duration_hms
 
 MODE_TITLES = {
@@ -29,6 +32,50 @@ MODE_TITLES = {
     "descriptor": "Single Descriptor (all stats): All Sensors",
     "descriptor_sensor": "Single Descriptor (all stats) x Single Sensor",
 }
+
+
+@dataclass(frozen=True)
+class AlignmentDiagnosticsSpec:
+    """Exact project diagnostic artifact and assessment population to load."""
+
+    base_model_key: str
+    cohort_name: str
+    population: str
+
+    def __post_init__(self) -> None:
+        """Reject incomplete or derived-model identities at the contract boundary."""
+        if not self.base_model_key or "_align-" in self.base_model_key:
+            raise ValueError(
+                "AlignmentDiagnosticsSpec.base_model_key must be the exact non-empty "
+                f"base model key, got {self.base_model_key!r}."
+            )
+        if not self.cohort_name or not self.population:
+            raise ValueError(
+                "AlignmentDiagnosticsSpec requires explicit cohort_name and population."
+            )
+
+
+def load_alignment_diagnostics(
+    bids_root: str | Path,
+    spec: AlignmentDiagnosticsSpec,
+) -> pd.DataFrame:
+    """Load one BIDS diagnostic artifact and apply coco-pipe's exact selection."""
+    path = (
+        get_derivative_root(Path(bids_root), DerivativeStage.VARIANCE_DIAGNOSTICS)
+        / slug(spec.base_model_key)
+        / "variance_diagnostics.csv"
+    )
+    if not path.exists():
+        raise FileNotFoundError(f"Requested alignment diagnostics do not exist: {path}")
+    diagnostics = pd.read_csv(path)
+    try:
+        return select_subject_alignment_diagnostics(
+            diagnostics,
+            cohort_name=spec.cohort_name,
+            population=spec.population,
+        )
+    except ValueError as exc:
+        raise ValueError(f"Invalid alignment diagnostics {path}: {exc}") from exc
 
 
 def clean_scalar(value: object) -> object:

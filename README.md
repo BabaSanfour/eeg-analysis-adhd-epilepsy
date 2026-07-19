@@ -32,7 +32,6 @@ patient CSVs ─▶ metadata ─▶ cohort report
 | Dimensionality reduction | `eeg-dim-reduce` | `analysis.dimensionality_reduction` |
 | Classical decoding | `eeg-classical-decode` | `analysis.classical_decoding` |
 | Foundation decoding | `eeg-foundation-decode` | `analysis.foundation_decoding` |
-| **Orchestrate all of the above** | **`eeg-run`** | `run` |
 
 ## Quick start
 
@@ -41,27 +40,17 @@ patient CSVs ─▶ metadata ─▶ cohort report
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 
-# 2. See the stage order and preview the whole chain WITHOUT running anything.
-eeg-run --list
-eeg-run --dry-run \
-  --raw_root /path/to/raw --bids_root /path/to/BIDS --metadata /path/to/patients_metadata_clean.csv \
-  --cohort_config configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml \
-  --dim_analysis_config configs/analyses/dim_reduction/descriptors.yaml \
-  --decode_analysis_config configs/analyses/decoding/classical.yaml
+# 2. List the direct local stage targets.
+make help
 
-# 3. Run a single stage, a range, or the whole thing (resume-by-default).
-eeg-run --from preprocess --to merge --bids_root /path/to/BIDS --metadata /path/to/meta.csv
+# 3. Run one stage directly.
+make descriptors BIDS_ROOT=/path/to/BIDS METADATA=/path/to/meta.csv
 ```
 
-`eeg-run` runs the **local, single-machine** form of each stage and skips a stage
-whose output already exists (use `--overwrite` to force). For large jobs use the
-numbered SLURM scripts in [cluster/](cluster/) instead (see
-[cluster/README.md](cluster/README.md)). The [Makefile](Makefile) wraps the same
-commands — `make help` lists targets; set the paths once and run e.g.
-`make descriptors BIDS_ROOT=… METADATA=…`.
-
-The individual `eeg-*` scripts still work standalone — `eeg-run` only sequences
-them.
+Each [Makefile](Makefile) target calls the owning module directly. `make all`
+runs those targets in pipeline order, while individual targets run only the
+named stage. For large jobs use the numbered SLURM scripts in
+[cluster/](cluster/) instead (see [cluster/README.md](cluster/README.md)).
 
 ### Point it at your data
 
@@ -334,7 +323,7 @@ figures, `reports/` assembles the HTML.
 ├── scripts/             # One-off maintenance scripts (e.g. split_configs.py)
 ├── docs/                # Design notes, backlog, and the improvement-plan tracker
 ├── tests/               # Automated tests
-├── Makefile             # Convenience targets over eeg-run / the eeg-* CLIs
+├── Makefile             # Direct convenience targets over the stage CLIs
 ├── pyproject.toml       # Metadata, dependencies, console-script entry points
 └── README.md
 ```

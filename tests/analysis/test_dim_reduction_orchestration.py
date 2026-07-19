@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 from coco_pipe.dim_reduction import SEPARATION_METRIC_KEY
 from coco_pipe.io import DataContainer
+from coco_pipe.utils import slug
 from joblib.parallel import get_active_backend
 
 import eeg_adhd_epilepsy.analysis.dimensionality_reduction as dim_reduction
@@ -20,6 +21,8 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     build_and_validate_mode_specs,
     group_fit_requests,
 )
+from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+from eeg_adhd_epilepsy.reports._common import AlignmentDiagnosticsSpec
 from eeg_adhd_epilepsy.reports.dim_reduction import (
     collect_mode_leaderboard,
     generate_rollup_report,
@@ -404,6 +407,108 @@ def test_generate_rollup_report_builds_leaderboard_and_scatter(tmp_path):
     assert "Task Failures" in titles
 
 
+def test_foundation_leaderboard_tags_alignment_transform(tmp_path):
+    fit_path, eval_path = _write_inventories(tmp_path)
+    args = _leaderboard_args()
+    args.input_mode = "foundation_embeddings"
+    args.embedding_model_key = "labram_align-leace"
+    board = collect_mode_leaderboard(
+        args=args,
+        fit_runs_path=fit_path,
+        eval_runs_path=eval_path,
+        reducers=["PCA", "UMAP"],
+    )
+    assert set(board["transform"]) == {"leace"}
+
+
+def test_rollup_adds_subject_alignment_diagnostics(tmp_path):
+    args = _leaderboard_args()
+    args.embedding_model_key = "demo"
+    bids_root = tmp_path / "BIDS"
+    diagnostics_spec = AlignmentDiagnosticsSpec(
+        base_model_key="demo",
+        cohort_name="cohortX",
+        population="clinical_task_subset",
+    )
+    root = get_derivative_root(bids_root, DerivativeStage.VARIANCE_DIAGNOSTICS) / slug(
+        args.embedding_model_key
+    )
+    root.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "transform": transform,
+                "cohort_name": "cohortX",
+                "population": "clinical_task_subset",
+                "selection_fingerprint": "cohort-selection",
+                "scope": "pooled",
+                "eval_name": "condition_separation",
+                "target_col": "condition",
+                "metric": metric,
+                "value": value,
+            }
+            for transform, value in (("none", 0.8), ("leace", 0.2))
+            for metric in (
+                "subject_probe_linear_balanced_accuracy",
+                "between_subject_eta2",
+            )
+        ]
+    ).to_csv(root / "variance_diagnostics.csv", index=False)
+    report = generate_rollup_report(
+        args=args,
+        summaries=[],
+        bids_root=bids_root,
+        alignment_diagnostics=diagnostics_spec,
+    )
+    titles = [getattr(section, "title", None) for section in report.children]
+    assert "Subject Alignment Diagnostics" in titles
+
+
+def test_alignment_diagnostics_spec_requires_explicit_identity():
+    with pytest.raises(
+        ValueError,
+        match="exact non-empty base model key",
+    ):
+        AlignmentDiagnosticsSpec(
+            base_model_key="",
+            cohort_name="cohortX",
+            population="clinical_task_subset",
+        )
+
+    with pytest.raises(ValueError, match="explicit cohort_name and population"):
+        AlignmentDiagnosticsSpec(
+            base_model_key="demo",
+            cohort_name="",
+            population="clinical_task_subset",
+        )
+
+
+def test_rollup_requires_bids_root_for_requested_diagnostics():
+    spec = AlignmentDiagnosticsSpec(
+        base_model_key="demo",
+        cohort_name="cohortX",
+        population="clinical_task_subset",
+    )
+    with pytest.raises(ValueError, match="bids_root is required"):
+        generate_rollup_report(
+            args=_leaderboard_args(),
+            summaries=[],
+            alignment_diagnostics=spec,
+        )
+
+
+def test_rollup_does_not_probe_legacy_diagnostic_locations(tmp_path):
+    args = _leaderboard_args()
+    pd.DataFrame([{"metric": "between_subject_eta2", "value": 0.4}]).to_csv(
+        tmp_path / "variance_diagnostics.csv", index=False
+    )
+
+    report = generate_rollup_report(args=args, summaries=[])
+
+    titles = [getattr(section, "title", None) for section in report.children]
+    assert "Subject Alignment Diagnostics" not in titles
+
+
 # --- End-to-end orchestration through main() ------------------------------------
 
 
@@ -677,11 +782,54 @@ def test_compare_cohort_merges_per_model_leaderboards(tmp_path):
     _write_foundation_run(
         cohort_dir, "foundation_labram_flat_subject_cfg-b", "labram", "subject", 0.74
     )
+    _write_foundation_run(
+        cohort_dir,
+        "foundation_cbramod_align-ra_flat_epoch_cfg-c",
+        "cbramod_align-ra",
+        "epoch",
+        0.70,
+    )
 
     reports_root = tmp_path / "reports"
     out_path = compare_cohort(dim_root, "cohortx", reports_root)
     assert out_path is not None and out_path.exists()
 
     merged = pd.read_csv(out_path.parent / "foundation_model_comparison.csv")
-    assert sorted(merged["model"]) == ["cbramod", "labram"]
-    assert sorted(merged["representation"]) == ["recording", "subject"]
+    assert sorted(merged["model"]) == ["cbramod", "cbramod", "labram"]
+    assert sorted(merged["transform"]) == ["none", "none", "ra"]
+    assert sorted(merged["representation"]) == ["epoch", "recording", "subject"]
+
+
+def test_compare_only_cli_does_not_require_analysis_configs(tmp_path, monkeypatch):
+    bids_root = tmp_path / "BIDS"
+    bids_root.mkdir()
+    derivative_root = tmp_path / "dim_reduction"
+    reports_root = tmp_path / "reports"
+    captured = {}
+
+    monkeypatch.setattr(dim_reduction, "run", lambda config: captured.update(config))
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "dimensionality_reduction",
+            "--compare_only",
+            "--bids_root",
+            str(bids_root),
+            "--derivative_root",
+            str(derivative_root),
+            "--reports_root",
+            str(reports_root),
+            "--dataset_name",
+            "cohortx",
+        ],
+    )
+
+    dim_reduction.main()
+
+    assert captured == {
+        "compare_only": True,
+        "bids_root": str(bids_root),
+        "derivative_root": str(derivative_root),
+        "reports_root": str(reports_root),
+        "dataset_name": "cohortx",
+    }

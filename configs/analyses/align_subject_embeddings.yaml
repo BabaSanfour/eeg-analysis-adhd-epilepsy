@@ -1,0 +1,26 @@
+# Global subject-alignment producer over foundation-model embeddings. Pair with
+# a cohort config; source/output roots and model key are CLI inputs.
+transforms:
+  - leace
+  - ea_coral
+  - ea_mean
+  - ra
+
+# Vector transforms and raw diagnostics use one explicit pooled representation.
+# RA requires a pooling-independent native token derivative from extraction;
+# the default extraction config enables token storage for every model.
+source_pooling: mean
+
+# Hierarchy-preserving permutations for the subject/label variance nulls.
+n_null_permutations: 20
+
+# Assess the same configured targets twice: once across every observation used
+# to fit/materialize the global transform, and once on the exact filtered cohort
+# used by the decoding experiment. Reports keep these populations separate.
+diagnostic_populations:
+  - transform_training_population
+  - clinical_task_subset
+
+subject_col: study_id
+random_state: 42
+overwrite: false

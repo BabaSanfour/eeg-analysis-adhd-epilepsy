@@ -5,7 +5,9 @@
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
-# Debug convenience runner: run decoding for ONE hardcoded cohort serially.
+# One-cohort integration runner for stages 15–18. The classical branch covers
+# descriptors, saved aligned embeddings, and their comparison; the foundation
+# branch covers direct epoch-level training and its final comparison.
 # Resources are intentionally supplied on the sbatch command line so CPU-only
 # classical runs and GPU foundation runs can use different allocations.
 set -euo pipefail
@@ -25,7 +27,9 @@ dra_load_modules
 # The exact cohort config
 CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 CLASSICAL_ANALYSIS_CONFIG=${CLASSICAL_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/classical.yaml}
+SAVED_FOUNDATION_ANALYSIS_CONFIG=${SAVED_FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation_embeddings.yaml}
 FOUNDATION_ANALYSIS_CONFIG=${FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation.yaml}
+EMBEDDING_ROOT=${EMBEDDING_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 OVERWRITE=${OVERWRITE:-0}
 
 require_dir "$BIDS_ROOT"
@@ -45,12 +49,13 @@ run_classical() {
     echo " 1. CLASSICAL Descriptor Decoding"
     echo "================================================================="
     require_file "$CLASSICAL_ANALYSIS_CONFIG"
+    require_file "$SAVED_FOUNDATION_ANALYSIS_CONFIG"
+    require_dir "$EMBEDDING_ROOT"
 
     dra_pin_threads 1
 
     DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
-    # Main experiment: epoch + recording. Override to narrow/expand if needed.
-    CLASSICAL_REPRESENTATIONS=(${CLASSICAL_REPRESENTATIONS:-epoch recording})
+    CLASSICAL_REPRESENTATIONS=(${CLASSICAL_REPRESENTATIONS:-epoch recording subject})
     table_override="${TABLE_PATH:-}"
     columns_override="${COLUMNS_PATH:-}"
 
@@ -95,12 +100,51 @@ run_classical() {
             --descriptor_feature_columns_path "$columns_path"
             --representation "$rep"
             --n_jobs "$THREADS"
+            --no-write-shared-comparison-report
         )
         if [ "$OVERWRITE" = "1" ]; then
             cmd+=(--overwrite)
         fi
         "${cmd[@]}"
     done
+
+    echo "================================================================="
+    echo " 2. SAVED FOUNDATION EMBEDDING DECODING"
+    echo "================================================================="
+    read -r -a SAVED_MODELS <<< "${SAVED_MODELS:-cbramod}"
+    SAVED_REPRESENTATIONS=(${SAVED_REPRESENTATIONS:-epoch recording subject})
+
+    for model in "${SAVED_MODELS[@]}"; do
+        for rep in "${SAVED_REPRESENTATIONS[@]}"; do
+            echo " -> Model: $model | Representation: $rep"
+            echo "    Transforms: none, fold-local leace, ea_coral, ea_mean, ra"
+            cmd=(
+                python -m eeg_adhd_epilepsy.analysis.classical_decoding
+                --cohort_config "$CONFIG"
+                --analysis_config "$SAVED_FOUNDATION_ANALYSIS_CONFIG"
+                --bids_root "$BIDS_ROOT"
+                --reports_root "$REPORTS_ROOT"
+                --metadata "$METADATA_PATH"
+                --embedding_derivative_root "$EMBEDDING_ROOT"
+                --embedding_model_key "$model"
+                --representation "$rep"
+                --n_jobs "$THREADS"
+                --no-write-shared-comparison-report
+            )
+            if [ "$OVERWRITE" = "1" ]; then
+                cmd+=(--overwrite)
+            fi
+            "${cmd[@]}"
+        done
+    done
+
+    python -m eeg_adhd_epilepsy.analysis.classical_decoding \
+        --compare_only \
+        --cohort_config "$CONFIG" \
+        --analysis_config "$SAVED_FOUNDATION_ANALYSIS_CONFIG" \
+        --bids_root "$BIDS_ROOT" \
+        --reports_root "$REPORTS_ROOT" \
+        --metadata "$METADATA_PATH"
 }
 
 run_foundation() {
@@ -112,26 +156,13 @@ run_foundation() {
     export HF_HOME="${HF_HOME:-${SLURM_TMPDIR:-/tmp}/hf_home}"
     mkdir -p "$HF_HOME"
 
-    if [[ -z "${HF_TOKEN:-}" ]]; then
+    read -r -a DIRECT_MODELS <<< "${DIRECT_MODELS:-cbramod}"
+    if [[ " ${DIRECT_MODELS[*]} " == *" reve "* && -z "${HF_TOKEN:-}" ]]; then
         echo "WARN: HF_TOKEN is unset; REVE (gated) will be skipped." >&2
     fi
 
-    # Main experiment: epoch + recording. Override to narrow/expand if needed.
-    FOUNDATION_REPRESENTATIONS=(${FOUNDATION_REPRESENTATIONS:-epoch recording})
-
-    for rep in "${FOUNDATION_REPRESENTATIONS[@]}"; do
-        case "$rep" in
-            epoch|recording|subject)
-                ;;
-            *)
-                echo "ERROR: Unsupported foundation representation '$rep'." >&2
-                echo "Use one of: epoch recording subject" >&2
-                exit 1
-                ;;
-        esac
-
-        echo " -> Representation: $rep"
-
+    for model in "${DIRECT_MODELS[@]}"; do
+        echo " -> Model: $model | Representation: epoch"
         # For foundation runs --n_jobs is the OUTER sweep concurrency: how many
         # decoding units (each a full CBraMod/REVE backbone) load at once. On a
         # single GPU that must stay at 1, otherwise N backbones + N CUDA contexts
@@ -146,14 +177,25 @@ run_foundation() {
             --bids_root "$BIDS_ROOT"
             --reports_root "$REPORTS_ROOT"
             --metadata "$METADATA_PATH"
-            --representation "$rep"
+            --representation epoch
+            --model_key "$model"
             --n_jobs "${FOUNDATION_N_JOBS:-1}"
+            --no-write-shared-comparison-report
         )
         if [ "$OVERWRITE" = "1" ]; then
             cmd+=(--overwrite)
         fi
         "${cmd[@]}"
     done
+
+
+    python -m eeg_adhd_epilepsy.analysis.foundation_decoding \
+        --compare_only \
+        --cohort_config "$CONFIG" \
+        --analysis_config "$FOUNDATION_ANALYSIS_CONFIG" \
+        --bids_root "$BIDS_ROOT" \
+        --reports_root "$REPORTS_ROOT" \
+        --metadata "$METADATA_PATH"
 }
 
 case "$PIPELINE_TYPE" in

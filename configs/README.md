@@ -39,9 +39,10 @@ the cohort.
 | `eeg-foundation-embeddings` | one dataset-wide `--config` |
 | BIDS conversion, preprocessing, and epoching | CLI arguments; no cohort split |
 
-For an `eeg-run` range containing both consumer stages, pass the method files
-separately as `--dim_analysis_config` and `--decode_analysis_config`. The generic
-`--analysis_config` remains convenient for a range containing only one consumer.
+The Makefile keeps method files explicit and separate: `DIM_ANALYSIS` selects
+the descriptor dimensionality-reduction config, `ALIGN_DIM_ANALYSIS` selects the
+foundation/alignment dimensionality-reduction config, and `DECODE_ANALYSIS`
+selects the classical-decoding config.
 
 ## Create a run configuration
 

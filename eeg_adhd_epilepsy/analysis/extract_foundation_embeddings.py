@@ -5,14 +5,11 @@ from __future__ import annotations
 
 import argparse
 import logging
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
-import yaml
 from coco_pipe.decoding import (
     SignalMetadata,
     config_hash,
@@ -25,8 +22,9 @@ from coco_pipe.decoding.foundation_models import (
     normalize_inclusive_endpoint,
 )
 from coco_pipe.io import (
+    read_json,
     read_table,
-    save_embedding_derivative,
+    save_embedding_outputs,
 )
 from coco_pipe.utils import stable_hash
 from mne_bids import BIDSPath
@@ -46,6 +44,7 @@ from eeg_adhd_epilepsy.io.bids import (
     add_recording_id,
     get_derivative_root,
 )
+from eeg_adhd_epilepsy.utils.artifacts import freeze_config_used
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
@@ -66,52 +65,6 @@ _NO_DATA_MESSAGES = (
 )
 
 
-def _write_text_atomic(path: Path, text: str) -> None:
-    """Atomically write *text* to *path* using a process-unique temp file.
-
-    Many Slurm array tasks share one derivative root and would otherwise race on
-    the top-level ``config_used.yaml``. A unique temp name (``mkstemp``) avoids the
-    shared-".tmp" rename collision, and ``os.replace`` is atomic, so any concurrent
-    reader sees either the old file or the fully-written new one.
-    """
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            handle.write(text)
-        os.replace(tmp_name, path)
-    except BaseException:
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-def _freeze_config_used(config: dict[str, Any], derivative_root: Path) -> None:
-    """Write (or verify) ``config_used.yaml`` for the run, mirroring extract_descriptors.
-
-    The first task to reach the root materializes the redacted, volatile-key-stripped
-    config; later tasks compare byte-for-byte and raise on any drift so that a single
-    derivative root can never mix configs. ``merge_foundation_embeddings`` reads this
-    file back as its sole config source.
-    """
-    snapshot = {key: value for key, value in config.items() if key not in _VOLATILE_CONFIG_KEYS}
-    config_text = yaml.safe_dump(redact_sensitive(snapshot), sort_keys=True)
-    config_used_path = derivative_root / "config_used.yaml"
-    if config_used_path.exists():
-        if config_used_path.read_text(encoding="utf-8") != config_text:
-            if config.get("overwrite", False):
-                _write_text_atomic(config_used_path, config_text)
-            else:
-                raise ValueError(
-                    "Existing foundation-embedding derivative root was generated with a "
-                    "different configuration. Clear the derivative root and re-run."
-                )
-        return
-    derivative_root.mkdir(parents=True, exist_ok=True)
-    _write_text_atomic(config_used_path, config_text)
-
-
 def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "full") -> Path:
     """Extract embeddings for the configured (sliced) subjects into one task shard.
 
@@ -120,7 +73,17 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
     (window-mismatch / unsupported / errored).
     """
     bids_root = Path(config["bids_root"]).expanduser()
-    _freeze_config_used(config, derivative_root)
+    freeze_config_used(
+        config,
+        derivative_root,
+        volatile_keys=_VOLATILE_CONFIG_KEYS,
+        sanitize=redact_sensitive,
+        overwrite=bool(config.get("overwrite", False)),
+        mismatch_message=(
+            "Existing foundation-embedding derivative root was generated with a "
+            "different configuration. Clear the derivative root and re-run."
+        ),
+    )
     metadata_df = (
         read_table(Path(config["metadata"]).expanduser(), sep=None)
         if config.get("metadata")
@@ -138,6 +101,8 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
     for condition in conditions:
         for model_cfg in models:
             model_key = str(model_cfg["model_key"])
+            pooling = str(model_cfg.get("pooling", "mean"))
+            pooled_model_key = model_key if pooling == "mean" else f"{model_key}_pool-{pooling}"
             segment_duration = float(model_cfg["segment_duration"])
             overlap = float(model_cfg["overlap"])
             use_derivatives = bool(model_cfg["use_derivatives"])
@@ -162,7 +127,11 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     f"'{window_source}'; bandpass requires window_source='re_epoch'."
                 )
             spec = get_foundation_model_spec(model_key)
-            provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
+            provenance = {
+                **foundation_provenance(model_cfg, spec, config_hash=cfg_hash),
+                "model_key": pooled_model_key,
+                "source_model_key": model_key,
+            }
 
             LOGGER.info(
                 "Processing %s for %s (segment_duration: %gs, source: %s)",
@@ -241,7 +210,6 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
             frame = container.observation_frame()
             sfreq = float(container.meta["sfreq"])
             channels = [str(value) for value in container.coords["channel"]]
-            pooling = model_cfg.get("pooling", "mean")
             extractor: FoundationEmbeddingExtractor | None = None
 
             for recording_id in pd.unique(frame["recording_id"].astype(str)):
@@ -266,7 +234,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     },
                     "window_mismatch_policy": str(model_cfg.get("window_mismatch_policy", "raise")),
                 }
-                artifact = BIDSPath(
+                artifact_bids_path = BIDSPath(
                     subject=_sanitize_bids_token(row[subject_col], "subject"),
                     session=_sanitize_bids_token(row["session"], "session"),
                     task=_sanitize_bids_token(config["task"], "task"),
@@ -279,10 +247,32 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     datatype="eeg",
                     root=derivative_root,
                     check=False,
-                ).fpath
+                )
+                artifact = artifact_bids_path.fpath
+                token_artifact = (
+                    artifact_bids_path.copy()
+                    .update(
+                        description=_sanitize_bids_token(f"{model_key}{condition}Native", "desc"),
+                        suffix="tokens",
+                    )
+                    .fpath
+                )
 
                 sidecar = artifact.with_suffix(".json")
-                if artifact.exists() and sidecar.exists() and not config.get("overwrite", False):
+                store_tokens = bool(model_cfg.get("store_tokens", False))
+                embedding_complete = artifact.exists() and sidecar.exists()
+                tokens_complete = not store_tokens or (
+                    token_artifact.exists() and token_artifact.with_suffix(".json").exists()
+                )
+                if embedding_complete and not config.get("overwrite", False):
+                    saved_model_key = str(read_json(sidecar).get("model_key", ""))
+                    if saved_model_key != pooled_model_key:
+                        raise ValueError(
+                            f"Existing pooled derivative uses model_key={saved_model_key!r}, "
+                            f"expected {pooled_model_key!r}: {artifact}. Rerun with overwrite "
+                            "enabled to migrate pooling-specific model identities."
+                        )
+                if embedding_complete and tokens_complete and not config.get("overwrite", False):
                     records.append(
                         {
                             **base_metadata,
@@ -334,6 +324,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                             recording_pooling=model_cfg.get("recording_pooling", "mean"),
                             normalize_embeddings=bool(model_cfg.get("normalize_embeddings", True)),
                             resample=bool(model_cfg.get("resample", True)),
+                            store_tokens=store_tokens,
                             batch_size=model_cfg.get("batch_size", config.get("batch_size")),
                             backend_kwargs=model_cfg.get("backend_kwargs", {}),
                         )
@@ -347,8 +338,16 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                         window_stop=starts + n_times,
                         metadata={**base_metadata, "input_units": recording.meta["units"]},
                     )
-                    save_embedding_derivative(
-                        result, artifact, overwrite=bool(config.get("overwrite", False))
+                    overwrite = bool(config.get("overwrite", False))
+                    save_embedding_outputs(
+                        result,
+                        artifact,
+                        token_path=token_artifact,
+                        pooled_metadata={
+                            "model_key": pooled_model_key,
+                            "source_model_key": model_key,
+                        },
+                        overwrite=overwrite,
                     )
                     LOGGER.info(
                         "Successfully extracted %s for %s (shape: %s)",
@@ -357,7 +356,16 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                         result.window_embeddings.shape,
                     )
                     records.append(
-                        {**result.metadata, "artifact_path": str(artifact), "status": "success"}
+                        {
+                            **result.metadata,
+                            "model_key": pooled_model_key,
+                            "source_model_key": model_key,
+                            "artifact_path": str(artifact),
+                            "token_artifact_path": (
+                                str(token_artifact) if result.token_embeddings is not None else None
+                            ),
+                            "status": "success",
+                        }
                     )
                 except (ValueError, TypeError, RuntimeError) as exc:
                     if "OutOfMemory" in type(exc).__name__ or "CUDA out of memory" in str(exc):

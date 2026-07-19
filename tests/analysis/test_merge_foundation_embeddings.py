@@ -1,3 +1,4 @@
+import json
 import sys
 
 import pandas as pd
@@ -7,6 +8,28 @@ from coco_pipe.io import read_json
 
 from eeg_adhd_epilepsy.analysis import merge_foundation_embeddings as mfe
 from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+
+
+def test_scan_artifacts_keeps_pooling_and_alignment_model_keys_separate(tmp_path):
+    raw_path = tmp_path / "sub-0001_desc-demo_embedding.npz"
+    attention_path = tmp_path / "sub-0001_desc-demoAttention_embedding.npz"
+    aligned_path = tmp_path / "sub-0001_proc-alignra_desc-demo_embedding.npz"
+    for path, model_key in (
+        (raw_path, "demo"),
+        (attention_path, "demo_pool-attention"),
+        (aligned_path, "demo_align-ra"),
+    ):
+        path.touch()
+        path.with_suffix(".json").write_text(
+            json.dumps({"model_key": model_key}),
+            encoding="utf-8",
+        )
+
+    by_model, records = mfe._scan_artifacts(tmp_path)
+
+    expected = {"demo", "demo_pool-attention", "demo_align-ra"}
+    assert set(by_model) == expected
+    assert {record["model_key"] for record in records} == expected
 
 
 def test_merge_reads_config_used_and_unions_failure_shards(tmp_path, monkeypatch):

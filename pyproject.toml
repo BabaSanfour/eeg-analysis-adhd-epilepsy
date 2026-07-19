@@ -39,8 +39,6 @@ dependencies = [
 Homepage = "https://github.com/"
 
 [project.scripts]
-# Top-level orchestrator that sequences the stages below (see also the Makefile).
-eeg-run = "eeg_adhd_epilepsy.run:main"
 # Producers (dataset-wide, single config / CLI args), in pipeline order.
 eeg-build-patients-metadata = "eeg_adhd_epilepsy.metadata.patients:main"
 eeg-cohort-report = "eeg_adhd_epilepsy.metadata.cohort:main"
@@ -55,6 +53,7 @@ eeg-foundation-embeddings = "eeg_adhd_epilepsy.analysis.extract_foundation_embed
 eeg-dim-reduce = "eeg_adhd_epilepsy.analysis.dimensionality_reduction:main"
 eeg-classical-decode = "eeg_adhd_epilepsy.analysis.classical_decoding:main"
 eeg-foundation-decode = "eeg_adhd_epilepsy.analysis.foundation_decoding:main"
+eeg-align-subject-embeddings = "eeg_adhd_epilepsy.analysis.align_subject_embeddings:main"
 
 [tool.setuptools]
 packages = { find = { where = ["."], include = ["eeg_adhd_epilepsy*"], exclude = ["tests*"] } }

@@ -47,7 +47,7 @@ _COHORT_REQUIRED_KEYS = ("dataset_name", "evals")
 # A recognizable analysis config declares at least one method block. Dim-reduction
 # is organized around analysis modes (`analysis_modes`, each mode naming its
 # reducers + n_components); decoding/foundation use `models`.
-_ANALYSIS_METHOD_MARKERS = ("analysis_modes", "models", "train_modes")
+_ANALYSIS_METHOD_MARKERS = ("analysis_modes", "models", "train_modes", "transforms")
 
 
 class ConfigError(ValueError):

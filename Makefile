@@ -1,56 +1,46 @@
-# EEG ADHD/Epilepsy pipeline — convenience targets over the eeg-* CLIs.
+# EEG ADHD/Epilepsy pipeline — direct convenience targets over each stage CLI.
 #
-# Set the paths once (env or `make VAR=... target`) and run a stage, a range,
-# or the whole chain. Per-stage core targets delegate to `eeg-run` (which owns
-# stage order, --dry-run, and resume); see `eeg-run --list`.
+# Set paths with environment variables or `make VAR=... target`. Every target
+# invokes its owning Python module directly; `make all` runs the local stages in
+# the order shown below. Large jobs should use the numbered SLURM scripts.
 #
-#   make dry-run BIDS_ROOT=/data/BIDS METADATA=/data/meta.csv RAW_ROOT=/data/raw \
-#                COHORT=configs/cohorts/.../total.yaml \
-#                DIM_ANALYSIS=configs/analyses/dim_reduction/descriptors.yaml \
-#                DECODE_ANALYSIS=configs/analyses/decoding/classical.yaml
 #   make descriptors BIDS_ROOT=/data/BIDS METADATA=/data/meta.csv
-#   make all ...        # whole chain
-#
-# Large jobs: use the numbered SLURM scripts in cluster/ instead.
+#   make dim-reduce BIDS_ROOT=/data/BIDS METADATA=/data/meta.csv \
+#       COHORT=configs/cohorts/.../total.yaml \
+#       DIM_ANALYSIS=configs/analyses/dim_reduction/descriptors.yaml
 
-# --- Configuration (override on the command line or via env) ------------------
+# --- Configuration -----------------------------------------------------------
 BIDS_ROOT        ?=
 METADATA         ?=
 RAW_ROOT         ?=
 COHORT           ?=
-ANALYSIS         ?=
 DIM_ANALYSIS     ?=
 DECODE_ANALYSIS  ?=
-DESCRIPTORS_CFG  ?= configs/descriptors.yaml
-SEGMENT_DURATION ?= 10.0
-N_JOBS           ?= 4
-# Activate your venv first, or pass PYTHON=.venv/bin/python so the targets find
-# the installed package without relying on PATH.
-PYTHON           ?= python
-EEG_RUN          = $(PYTHON) -m eeg_adhd_epilepsy.run
+ALIGN_ANALYSIS   ?= configs/analyses/align_subject_embeddings.yaml
+ALIGN_DIM_ANALYSIS ?= configs/analyses/dim_reduction/foundation.yaml
+SOURCE_EMBEDDING_ROOT ?=
+EMBEDDING_MODEL_KEY   ?=
+ALIGNMENT_TRANSFORM   ?= none
+DESCRIPTORS_CFG       ?= configs/descriptors.yaml
+SEGMENT_DURATION      ?= 10.0
+N_JOBS                ?= 4
+PYTHON                 ?= python
 
-# Extra inputs for the non-core targets.
-ADHD_CSV             ?=
-DRUG_RESISTANT_CSV   ?=
-METADATA_DIR         ?=
-REPORTS_DIR          ?=
-FOUNDATION_EMB_CFG   ?=
+DESCRIPTOR_ROOT = $(BIDS_ROOT)/derivatives/signal_features/descriptors/combined
+DESCRIPTOR_TABLE = $(DESCRIPTOR_ROOT)/sensor_recording_features.parquet
+DESCRIPTOR_COLUMNS = $(DESCRIPTOR_ROOT)/sensor_recording_features_feature_columns.json
 
-# Only pass flags whose variable is set, so unset paths don't become "." .
-RUN_ARGS = \
-	$(if $(RAW_ROOT),--raw_root $(RAW_ROOT)) \
-	$(if $(BIDS_ROOT),--bids_root $(BIDS_ROOT)) \
-	$(if $(METADATA),--metadata $(METADATA)) \
-	$(if $(COHORT),--cohort_config $(COHORT)) \
-	$(if $(ANALYSIS),--analysis_config $(ANALYSIS)) \
-	$(if $(DIM_ANALYSIS),--dim_analysis_config $(DIM_ANALYSIS)) \
-	$(if $(DECODE_ANALYSIS),--decode_analysis_config $(DECODE_ANALYSIS)) \
-	--descriptors_config $(DESCRIPTORS_CFG) \
-	--segment_duration $(SEGMENT_DURATION) \
-	--n_jobs $(N_JOBS)
+# Inputs for additional standalone targets.
+ADHD_CSV                    ?=
+DRUG_RESISTANT_CSV          ?=
+METADATA_DIR                ?=
+REPORTS_DIR                 ?=
+FOUNDATION_EMB_CFG          ?=
+FOUNDATION_DECODE_ANALYSIS  ?= configs/analyses/decoding/foundation.yaml
 
-.PHONY: help install test dry-run all \
-        bids preprocess epochs descriptors merge dim-reduce classical-decode \
+.PHONY: help install test all \
+        bids preprocess epochs descriptors merge align-subject-embeddings \
+        dim-reduce-alignments dim-reduce classical-decode \
         foundation-embeddings foundation-decode cohort-report metadata
 
 help: ## Show this help
@@ -63,47 +53,117 @@ install: ## Editable install (refreshes the eeg-* console scripts)
 test: ## Run the test suite
 	$(PYTHON) -m pytest
 
-dry-run: ## Preview the whole chain without running anything
-	$(EEG_RUN) --dry-run $(RUN_ARGS)
+all: ## Run every local pipeline stage in order
+	$(MAKE) bids
+	$(MAKE) preprocess
+	$(MAKE) epochs
+	$(MAKE) descriptors
+	$(MAKE) merge
+	$(MAKE) align-subject-embeddings
+	$(MAKE) dim-reduce-alignments
+	$(MAKE) dim-reduce
+	$(MAKE) classical-decode
 
-all: ## Run the whole chain (resume-by-default)
-	$(EEG_RUN) $(RUN_ARGS)
-
-# --- Core stages (delegate to eeg-run for ordering/resume) --------------------
-bids: ## raw -> BIDS + pre-base reports
-	$(EEG_RUN) --from to-bids --to to-bids $(RUN_ARGS)
+# --- Core stages --------------------------------------------------------------
+bids: ## Raw EEG -> BIDS
+	$(if $(RAW_ROOT),,$(error Set RAW_ROOT to the raw EEG directory))
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(PYTHON) -m eeg_adhd_epilepsy.preproc.to_bids \
+	  --raw_root $(RAW_ROOT) --bids_root $(BIDS_ROOT) --metadata_csv $(METADATA) --n_jobs $(N_JOBS)
 
 preprocess: ## BIDS -> cleaned desc-base derivatives + QC
-	$(EEG_RUN) --from preprocess --to preprocess $(RUN_ARGS)
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(PYTHON) -m eeg_adhd_epilepsy.preproc.base --bids_root $(BIDS_ROOT) --n_jobs $(N_JOBS)
 
 epochs: ## desc-base -> condition epochs
-	$(EEG_RUN) --from epochs --to epochs $(RUN_ARGS)
-
-descriptors: ## epochs -> descriptor shards (all subjects, sequential)
-	$(EEG_RUN) --from descriptors --to descriptors $(RUN_ARGS)
-
-merge: ## descriptor shards -> combined tables
-	$(EEG_RUN) --from merge --to merge $(RUN_ARGS)
-
-dim-reduce: ## combined descriptors -> dimensionality reduction
-	$(EEG_RUN) --from dim-reduce --to dim-reduce $(RUN_ARGS)
-
-classical-decode: ## combined descriptors -> classical decoding
-	$(EEG_RUN) --from classical-decode --to classical-decode $(RUN_ARGS)
-
-# --- Non-core stages (direct console scripts) ---------------------------------
-foundation-embeddings: ## Extract foundation-model embeddings (dataset-wide)
-	$(if $(FOUNDATION_EMB_CFG),,$(error Set FOUNDATION_EMB_CFG to the dataset-wide embedding config))
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
-	$(PYTHON) -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings --config $(FOUNDATION_EMB_CFG) --bids_root $(BIDS_ROOT) $(if $(METADATA),--metadata $(METADATA))
+	$(PYTHON) -m eeg_adhd_epilepsy.preproc.epochs \
+	  --bids_root $(BIDS_ROOT) --segment_duration $(SEGMENT_DURATION) --ignore_annotations
 
-foundation-decode: ## Foundation-model probing / fine-tuning (cohort + analysis)
-	$(PYTHON) -m eeg_adhd_epilepsy.analysis.foundation_decoding --cohort_config $(COHORT) --analysis_config $(or $(DECODE_ANALYSIS),$(ANALYSIS),configs/analyses/decoding/foundation.yaml) \
-	  $(if $(BIDS_ROOT),--bids_root $(BIDS_ROOT)) $(if $(METADATA),--metadata $(METADATA))
+descriptors: ## Epochs -> descriptor shards for all subjects
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.extract_descriptors \
+	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --config $(DESCRIPTORS_CFG) --conditions all
 
-cohort-report: ## Build the cohort report from clean metadata
-	$(PYTHON) -m eeg_adhd_epilepsy.analysis.cohort --metadata_csv $(METADATA) --output_dir $(REPORTS_DIR)
+merge: ## Descriptor shards -> combined descriptor tables
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.merge_descriptors --bids_root $(BIDS_ROOT)
 
-metadata: ## Build canonical patient metadata tables from the source CSVs
-	$(PYTHON) -m eeg_adhd_epilepsy.io.patients --adhd_csv $(ADHD_CSV) \
-	  --drug_resistant_csv $(DRUG_RESISTANT_CSV) --output_dir $(METADATA_DIR)
+align-subject-embeddings: ## Foundation embeddings -> aligned variants
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(COHORT),,$(error Set COHORT to the cohort config))
+	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the embedding derivatives))
+	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the source model))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.align_subject_embeddings \
+	  --cohort_config $(COHORT) --analysis_config $(ALIGN_ANALYSIS) \
+	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) \
+	  --source_embedding_root $(SOURCE_EMBEDDING_ROOT) \
+	  --embedding_model_key $(EMBEDDING_MODEL_KEY)
+
+dim-reduce-alignments: ## Reduce one explicit raw/aligned embedding variant
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(COHORT),,$(error Set COHORT to the cohort config))
+	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the embedding derivatives))
+	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the base model))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
+	  --cohort_config $(COHORT) --analysis_config $(ALIGN_DIM_ANALYSIS) \
+	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --n_jobs $(N_JOBS) \
+	  --alignment_transform $(ALIGNMENT_TRANSFORM) \
+	  --embedding_derivative_root $(SOURCE_EMBEDDING_ROOT) \
+	  --embedding_model_key $(EMBEDDING_MODEL_KEY)
+
+dim-reduce: ## Combined descriptors -> dimensionality reduction
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(COHORT),,$(error Set COHORT to the cohort config))
+	$(if $(DIM_ANALYSIS),,$(error Set DIM_ANALYSIS to the dimensionality-reduction config))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
+	  --cohort_config $(COHORT) --analysis_config $(DIM_ANALYSIS) \
+	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --n_jobs $(N_JOBS) \
+	  --descriptor_table_path $(DESCRIPTOR_TABLE) \
+	  --descriptor_feature_columns_path $(DESCRIPTOR_COLUMNS)
+
+classical-decode: ## Combined descriptors -> classical decoding
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(COHORT),,$(error Set COHORT to the cohort config))
+	$(if $(DECODE_ANALYSIS),,$(error Set DECODE_ANALYSIS to the classical-decoding config))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.classical_decoding \
+	  --cohort_config $(COHORT) --analysis_config $(DECODE_ANALYSIS) \
+	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --n_jobs $(N_JOBS) \
+	  --descriptor_table_path $(DESCRIPTOR_TABLE) \
+	  --descriptor_feature_columns_path $(DESCRIPTOR_COLUMNS)
+
+# --- Additional standalone stages -------------------------------------------
+foundation-embeddings: ## Extract foundation-model embeddings
+	$(if $(FOUNDATION_EMB_CFG),,$(error Set FOUNDATION_EMB_CFG to the embedding config))
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings \
+	  --config $(FOUNDATION_EMB_CFG) --bids_root $(BIDS_ROOT) \
+	  $(if $(METADATA),--metadata $(METADATA))
+
+foundation-decode: ## Foundation-model probing or fine-tuning
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(COHORT),,$(error Set COHORT to the cohort config))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.foundation_decoding \
+	  --cohort_config $(COHORT) --analysis_config $(FOUNDATION_DECODE_ANALYSIS) \
+	  --bids_root $(BIDS_ROOT) --metadata $(METADATA)
+
+cohort-report: ## Build the cohort report from canonical metadata
+	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(REPORTS_DIR),,$(error Set REPORTS_DIR to the report output directory))
+	$(PYTHON) -m eeg_adhd_epilepsy.metadata.cohort \
+	  --metadata_csv $(METADATA) --output_dir $(REPORTS_DIR)
+
+metadata: ## Build canonical patient metadata from the source CSVs
+	$(if $(ADHD_CSV),,$(error Set ADHD_CSV to the ADHD source CSV))
+	$(if $(DRUG_RESISTANT_CSV),,$(error Set DRUG_RESISTANT_CSV to the drug-resistant source CSV))
+	$(if $(METADATA_DIR),,$(error Set METADATA_DIR to the metadata output directory))
+	$(PYTHON) -m eeg_adhd_epilepsy.metadata.patients \
+	  --adhd_csv $(ADHD_CSV) --drug_resistant_csv $(DRUG_RESISTANT_CSV) \
+	  --output_dir $(METADATA_DIR)

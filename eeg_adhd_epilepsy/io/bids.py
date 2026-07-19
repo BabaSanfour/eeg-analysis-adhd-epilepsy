@@ -72,6 +72,7 @@ class DerivativeStage(StrEnum):
     PREPROC = "preproc"
     DESCRIPTORS = "signal_features/descriptors"
     FOUNDATION_EMBEDDINGS = "eeg_foundation_embeddings"
+    VARIANCE_DIAGNOSTICS = "eeg_variance_diagnostics"
     DIM_REDUCTION = "dim_reduction"
     DECODING = "decoding"
 
