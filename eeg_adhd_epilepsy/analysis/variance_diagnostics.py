@@ -149,8 +149,13 @@ def build_diagnostic_tasks(
                     "transform_fit_all",
                 }:
                     continue
+                diagnostic_container = scoped_container
+                if eval_spec.get("class_order"):
+                    diagnostic_container = scoped_container.select(
+                        **{target_col: list(eval_spec["class_order"])}
+                    )
                 _, y, _, selected_frame = prepare_target(
-                    scoped_container,
+                    diagnostic_container,
                     eval_spec,
                     group_col=str(
                         eval_spec.get("group_col", config.get("group_col", "patient_group_id"))
