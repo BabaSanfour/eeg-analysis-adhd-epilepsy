@@ -223,6 +223,40 @@ def score_variance_diagnostics(
     return rows
 
 
+def skipped_variance_diagnostics(
+    tasks: list[DiagnosticTask],
+    config: Mapping[str, Any],
+    *,
+    transform: str,
+    reason: str,
+    n_features: int,
+) -> list[dict[str, Any]]:
+    """Return report-visible status rows for a transform that was not materialized."""
+    return [
+        {
+            "transform": transform,
+            "cohort_name": str(config["dataset_name"]),
+            "population": task.population,
+            "scope": task.scope,
+            "eval_name": task.eval_name,
+            "target_col": task.target_col,
+            "selection_fingerprint": task.selection_fingerprint,
+            "target_encoding": task.target_encoding,
+            "metric": "total_sample_variance",
+            "value": None,
+            "n_observations": len(task.indices),
+            "n_features": int(n_features),
+            "n_constant_features": int(n_features),
+            "n_subjects": len(np.unique(task.subjects)),
+            "n_labels": len(np.unique(task.labels)),
+            "design": "not_applicable",
+            "status": "skipped",
+            "reason": reason,
+        }
+        for task in tasks
+    ]
+
+
 def write_variance_diagnostics(
     rows: list[dict[str, Any]],
     diagnostics_root: Path,
