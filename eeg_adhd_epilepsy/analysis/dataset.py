@@ -20,6 +20,7 @@ from coco_pipe.io.quality import GROUP_BY_COLUMN, run_qc
 
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
+    add_recording_id,
     bids_session_label,
     bids_subject_label,
     get_derivative_root,
@@ -522,10 +523,7 @@ def build_dataset(
         if representation == "subject":
             container = container.aggregate(by=args.subject_col, stats="mean")
         elif representation == "recording":
-            if "recording_id" not in container.coords:
-                raise ValueError(
-                    "Raw 'recording' representation requires a 'recording_id' coordinate."
-                )
+            container = add_recording_id(container, args.subject_col)
             container = container.aggregate(by="recording_id", stats="mean")
         elif representation != "epoch":
             raise ValueError(
