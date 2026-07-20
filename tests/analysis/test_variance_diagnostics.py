@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pandas as pd
 from coco_pipe.decoding.foundation_models import FoundationEmbeddingResult
@@ -214,3 +216,52 @@ def test_diagnostic_tasks_apply_cohort_filters_label_maps_and_age_groups():
     age = next(task for task in tasks if task.eval_name == "age_separation")
     assert age.labels.tolist() == [0, 1, 1, 2]
     assert age.selection_fingerprint != diagnosis.selection_fingerprint
+
+
+def test_diagnostic_class_order_limits_diagnostics_not_training_population():
+    ages = np.asarray(["0-4", "5-8", "9-12", "13-18"], dtype=object)
+    subjects = np.asarray(["1", "2", "3", "4"], dtype=object)
+    container = DataContainer(
+        X=np.arange(20, dtype=float).reshape(4, 5),
+        dims=("obs", "feature"),
+        coords={
+            "subject": subjects,
+            "patient_group_id": subjects,
+            "condition": np.asarray(["EO"] * 4, dtype=object),
+            "age_group": ages,
+        },
+        ids=np.asarray([f"sample-{index}" for index in range(4)], dtype=object),
+    )
+    config = {
+        "filter_col": ["age_group"],
+        "filter_val": [["5-8", "9-12", "13-18"]],
+        "diagnostic_populations": [
+            "transform_training_population",
+            "clinical_task_subset",
+        ],
+        "evals": [
+            {
+                "name": "age_separation",
+                "target_col": "age_group",
+                "class_order": ["5-8", "9-12", "13-18"],
+            }
+        ],
+    }
+
+    tasks = vd.build_diagnostic_tasks(container, config)
+    global_task = next(task for task in tasks if task.population == "transform_training_population")
+    clinical_task = next(task for task in tasks if task.population == "clinical_task_subset")
+
+    assert global_task.observation_ids.tolist() == ["sample-1", "sample-2", "sample-3"]
+    assert global_task.labels.tolist() == [0, 1, 2]
+    assert json.loads(global_task.target_encoding) == {
+        "5-8": 0,
+        "9-12": 1,
+        "13-18": 2,
+    }
+    assert clinical_task.labels.tolist() == [0, 1, 2]
+    assert json.loads(clinical_task.target_encoding) == {
+        "5-8": 0,
+        "9-12": 1,
+        "13-18": 2,
+    }
