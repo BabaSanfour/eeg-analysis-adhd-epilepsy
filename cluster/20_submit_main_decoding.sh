@@ -14,7 +14,7 @@ set -euo pipefail
 
 if [ "$#" -ne 1 ]; then
     echo "ERROR: You must specify what to run."
-    echo "Usage: sbatch $0 [decoding|classical|foundation|all]"
+    echo "Usage: sbatch $0 [descriptors|embeddings|foundation|all]"
     exit 1
 fi
 
@@ -40,17 +40,15 @@ dra_activate
 THREADS=${SLURM_CPUS_PER_TASK:-1}
 
 if [ "$PIPELINE_TYPE" = "all" ]; then
-    echo "WARN: 'all' runs classical and foundation inside one allocation." >&2
-    echo "      Submit 'decoding' and 'foundation' separately to avoid resource waste." >&2
+    echo "WARN: 'all' runs descriptors, embeddings, and foundation inside one allocation." >&2
+    echo "      Submit the three explicit modes separately to avoid resource waste." >&2
 fi
 
-run_classical() {
+run_descriptor_classical() {
     echo "================================================================="
     echo " 1. CLASSICAL Descriptor Decoding"
     echo "================================================================="
     require_file "$CLASSICAL_ANALYSIS_CONFIG"
-    require_file "$SAVED_FOUNDATION_ANALYSIS_CONFIG"
-    require_dir "$EMBEDDING_ROOT"
 
     dra_pin_threads 1
 
@@ -108,10 +106,17 @@ run_classical() {
         fi
         "${cmd[@]}"
     done
+}
 
+run_saved_embedding_classical() {
     echo "================================================================="
     echo " 2. SAVED FOUNDATION EMBEDDING DECODING"
     echo "================================================================="
+    require_file "$SAVED_FOUNDATION_ANALYSIS_CONFIG"
+    require_dir "$EMBEDDING_ROOT"
+
+    dra_pin_threads 1
+
     read -r -a SAVED_MODELS <<< "${SAVED_MODELS:-cbramod}"
     SAVED_REPRESENTATIONS=(${SAVED_REPRESENTATIONS:-epoch recording subject})
 
@@ -204,19 +209,23 @@ run_foundation() {
 }
 
 case "$PIPELINE_TYPE" in
-    decoding|classical)
-        run_classical
+    descriptors)
+        run_descriptor_classical
+        ;;
+    embeddings)
+        run_saved_embedding_classical
         ;;
     foundation)
         run_foundation
         ;;
     all)
-        run_classical
+        run_descriptor_classical
+        run_saved_embedding_classical
         run_foundation
         ;;
     *)
         echo "ERROR: Invalid pipeline type '$PIPELINE_TYPE'."
-        echo "Usage: sbatch $0 [decoding|classical|foundation|all]"
+        echo "Usage: sbatch $0 [descriptors|embeddings|foundation|all]"
         exit 1
         ;;
 esac
