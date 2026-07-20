@@ -43,6 +43,7 @@ if [ "$PIPELINE_TYPE" == "raw" ]; then
         echo " -> Representation: $rep"
         python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
             --bids_root "$BIDS_ROOT" \
+            --derivative_root "$DIM_REDUCTION_ROOT" \
             --reports_root "$REPORTS_ROOT" \
             --metadata "$METADATA_PATH" \
             --cohort_config "$CONFIG" \
@@ -63,6 +64,7 @@ elif [ "$PIPELINE_TYPE" == "descriptors" ]; then
         require_file "$DESC_ROOT/sensor_${rep}_features_feature_columns.json"
         python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
             --bids_root "$BIDS_ROOT" \
+            --derivative_root "$DIM_REDUCTION_ROOT" \
             --reports_root "$REPORTS_ROOT" \
             --metadata "$METADATA_PATH" \
             --cohort_config "$CONFIG" \
@@ -78,7 +80,6 @@ elif [ "$PIPELINE_TYPE" == "foundation" ]; then
     echo " 3. FOUNDATION Dimensionality Reduction"
     echo "================================================================="
     FOUND_ROOT="$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings"
-    DIM_ROOT="$BIDS_ROOT/derivatives/dim_reduction"
     read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod}"
     read -r -a ALIGNMENT_TRANSFORMS <<< "${ALIGNMENT_TRANSFORMS:-none leace ea_coral ea_mean ra}"
     read -r -a RAW_ONLY_MODELS <<< "${RAW_ONLY_MODELS:-reve_pool-attention}"
@@ -91,6 +92,7 @@ elif [ "$PIPELINE_TYPE" == "foundation" ]; then
                 echo " -> Model: $model | Transform: $transform | Representation: $rep"
                 python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
                     --bids_root "$BIDS_ROOT" \
+                    --derivative_root "$DIM_REDUCTION_ROOT" \
                     --reports_root "$REPORTS_ROOT" \
                     --metadata "$METADATA_PATH" \
                     --cohort_config "$CONFIG" \
@@ -109,6 +111,7 @@ elif [ "$PIPELINE_TYPE" == "foundation" ]; then
             echo " -> Raw-only model: $model | Representation: $rep"
             python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
                 --bids_root "$BIDS_ROOT" \
+                --derivative_root "$DIM_REDUCTION_ROOT" \
                 --reports_root "$REPORTS_ROOT" \
                 --metadata "$METADATA_PATH" \
                 --cohort_config "$CONFIG" \
@@ -123,7 +126,7 @@ elif [ "$PIPELINE_TYPE" == "foundation" ]; then
     python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
         --compare_only \
         --bids_root "$BIDS_ROOT" \
-        --derivative_root "$DIM_ROOT" \
+        --derivative_root "$DIM_REDUCTION_ROOT" \
         --reports_root "$REPORTS_ROOT" \
         --dataset_name "$DATASET_NAME"
 

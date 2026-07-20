@@ -712,6 +712,7 @@ def run(config: dict[str, Any]) -> Path:
             bids_root=bids_root,
             reports_root=reports_root,
             dataset_name=dataset_name_slug,
+            derivative_root=config.get("derivative_root"),
             asset_urls=config["report_asset_urls"],
             alignment_diagnostics_cohort_name=(
                 str(config["dataset_name"]) if alignment_diagnostics_population else None
@@ -741,6 +742,11 @@ def main() -> None:
     parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
     parser.add_argument("--reports_root", default=None, help="Override reports root (else config).")
+    parser.add_argument(
+        "--derivative_root",
+        default=None,
+        help="Custom decoding output root, independent of the input BIDS root.",
+    )
     parser.add_argument(
         "--descriptor_table_path",
         default=None,
@@ -800,6 +806,7 @@ def main() -> None:
         metadata=args.metadata,
         n_jobs=args.n_jobs,
         reports_root=args.reports_root,
+        derivative_root=args.derivative_root,
         descriptor_table_path=args.descriptor_table_path,
         descriptor_feature_columns_path=args.descriptor_feature_columns_path,
         embedding_derivative_root=args.embedding_derivative_root,

@@ -289,7 +289,8 @@ def test_foundation_visual_report_handles_empty_records(tmp_path):
 
 def test_foundation_comparison_aggregates_models_modes_and_capabilities(tmp_path):
     bids_root = tmp_path / "BIDS"
-    decoding_root = bids_root / "derivatives" / "decoding" / "dataset"
+    decoding_base = tmp_path / "scratch" / "derivatives" / "decoding"
+    decoding_root = decoding_base / "dataset"
     records = _foundation_records(tmp_path)
     for model_key in ("labram", "cbramod"):
         run_root = decoding_root / f"foundation_{model_key}"
@@ -315,6 +316,7 @@ def test_foundation_comparison_aggregates_models_modes_and_capabilities(tmp_path
         reports_root=tmp_path / "reports",
         dataset_name="dataset",
         config={"report_asset_urls": _asset_urls()},
+        derivative_root=decoding_base,
     )
 
     assert outputs is not None
@@ -772,7 +774,8 @@ def test_decoding_summary_omits_zero_feature_missingness(tmp_path):
 
 def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
     bids_root = tmp_path / "BIDS"
-    result_root = bids_root / "derivatives" / "decoding" / "dataset" / "descriptors"
+    decoding_base = tmp_path / "scratch" / "derivatives" / "decoding"
+    result_root = decoding_base / "dataset" / "descriptors"
     result_root.mkdir(parents=True)
     pd.DataFrame(
         [
@@ -806,7 +809,7 @@ def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
             },
         ]
     ).to_csv(result_root / "sweep_results.csv", index=False)
-    embedding_root = bids_root / "derivatives" / "decoding" / "dataset" / "foundation_embeddings"
+    embedding_root = decoding_base / "dataset" / "foundation_embeddings"
     embedding_root.mkdir(parents=True)
     pd.DataFrame(
         [
@@ -876,7 +879,7 @@ def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
             },
         ]
     ).to_csv(embedding_root / "sweep_results.csv", index=False)
-    foundation_root = bids_root / "derivatives" / "decoding" / "dataset" / "foundation_linear"
+    foundation_root = decoding_base / "dataset" / "foundation_linear"
     foundation_root.mkdir(parents=True)
     pd.DataFrame(
         [
@@ -950,6 +953,7 @@ def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
         alignment_diagnostics_cohort_name="dataset",
         alignment_diagnostics_population="clinical_task_subset",
         generate_foundation_transform_report=True,
+        derivative_root=decoding_base,
     )
     assert outputs is not None
     comparison_path, report_path = outputs

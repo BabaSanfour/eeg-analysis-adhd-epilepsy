@@ -23,7 +23,6 @@ PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
 source "$PROJECT_ROOT/cluster/env.sh"
 dra_load_modules
 
-DIM_REDUCTION_ROOT=${DIM_REDUCTION_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/dim_reduction}
 # Optional: a single cohort dataset_name. Empty compares every cohort found.
 DATASET_NAME=${DATASET_NAME:-}
 

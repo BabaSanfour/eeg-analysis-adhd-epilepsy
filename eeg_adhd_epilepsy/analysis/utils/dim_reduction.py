@@ -156,7 +156,11 @@ def build_output_root(bids_root: Path, args: Any, mode: str, representation: str
     """Build the final output root directory for a given dim reduction run."""
     from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
 
-    output_base = get_derivative_root(bids_root, DerivativeStage.DIM_REDUCTION)
+    output_base = (
+        Path(args.derivative_root).expanduser()
+        if getattr(args, "derivative_root", None)
+        else get_derivative_root(bids_root, DerivativeStage.DIM_REDUCTION)
+    )
 
     input_token = (
         f"foundation_{args.embedding_model_key}"

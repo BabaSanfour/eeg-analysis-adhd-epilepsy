@@ -42,7 +42,14 @@ sbatch --export=ALL,BIDS_ROOT=/my/BIDS,METADATA_PATH=/my/meta.csv 03_submit_base
 | `METADATA_PATH` | `patients_metadata_clean.csv` | shared project path |
 | `RAW_ROOT` | raw recordings (01 only) | shared project path |
 | `VENV_PATH` | virtualenv | `$PROJECT_ROOT/.venv` |
+| `DECODING_ROOT` | decoding checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/decoding` |
+| `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/dim_reduction` |
 | `OVERWRITE` | `1` to force reprocessing | `0` |
+
+`BIDS_ROOT` remains the input dataset on project storage. The decoding and
+dimensionality-reduction roots are independent output locations, so moving those
+two derivative trees to scratch does not change run hashes or prevent checkpoint
+resume.
 
 Foundation extraction honors `OVERWRITE=0` and resumes complete embedding/token
 pairs. Use `OVERWRITE=1` once when migrating an existing token-free derivative

@@ -94,6 +94,7 @@ run_classical() {
             --cohort_config "$CONFIG"
             --analysis_config "$CLASSICAL_ANALYSIS_CONFIG"
             --bids_root "$BIDS_ROOT"
+            --derivative_root "$DECODING_ROOT"
             --reports_root "$REPORTS_ROOT"
             --metadata "$METADATA_PATH"
             --descriptor_table_path "$table_path"
@@ -123,6 +124,7 @@ run_classical() {
                 --cohort_config "$CONFIG"
                 --analysis_config "$SAVED_FOUNDATION_ANALYSIS_CONFIG"
                 --bids_root "$BIDS_ROOT"
+                --derivative_root "$DECODING_ROOT"
                 --reports_root "$REPORTS_ROOT"
                 --metadata "$METADATA_PATH"
                 --embedding_derivative_root "$EMBEDDING_ROOT"
@@ -143,6 +145,7 @@ run_classical() {
         --cohort_config "$CONFIG" \
         --analysis_config "$SAVED_FOUNDATION_ANALYSIS_CONFIG" \
         --bids_root "$BIDS_ROOT" \
+        --derivative_root "$DECODING_ROOT" \
         --reports_root "$REPORTS_ROOT" \
         --metadata "$METADATA_PATH"
 }
@@ -175,6 +178,7 @@ run_foundation() {
             --cohort_config "$CONFIG"
             --analysis_config "$FOUNDATION_ANALYSIS_CONFIG"
             --bids_root "$BIDS_ROOT"
+            --derivative_root "$DECODING_ROOT"
             --reports_root "$REPORTS_ROOT"
             --metadata "$METADATA_PATH"
             --representation epoch
@@ -194,6 +198,7 @@ run_foundation() {
         --cohort_config "$CONFIG" \
         --analysis_config "$FOUNDATION_ANALYSIS_CONFIG" \
         --bids_root "$BIDS_ROOT" \
+        --derivative_root "$DECODING_ROOT" \
         --reports_root "$REPORTS_ROOT" \
         --metadata "$METADATA_PATH"
 }

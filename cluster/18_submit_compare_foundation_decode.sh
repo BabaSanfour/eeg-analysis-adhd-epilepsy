@@ -35,5 +35,6 @@ python -m eeg_adhd_epilepsy.analysis.foundation_decoding \
     --cohort_config "$COHORT_CONFIG" \
     --analysis_config "$ANALYSIS_CONFIG" \
     --bids_root "$BIDS_ROOT" \
+    --derivative_root "$DECODING_ROOT" \
     --metadata "$METADATA_PATH" \
     --reports_root "$REPORTS_ROOT"

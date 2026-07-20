@@ -55,6 +55,7 @@ THREADS=${SLURM_CPUS_PER_TASK:-16}
 common_args=(
     --cohort_config "$COHORT_CONFIG"
     --bids_root "$BIDS_ROOT"
+    --derivative_root "$DECODING_ROOT"
     --metadata "$METADATA_PATH"
     --n_jobs "$THREADS"
     --no-write-shared-comparison-report
