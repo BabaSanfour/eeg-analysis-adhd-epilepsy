@@ -117,13 +117,17 @@ the method). See `../configs/README.md`.
   intentionally leaves account/time/memory/CPU/GPU resources to the `sbatch`
   command; submit the CPU and GPU branches separately to avoid mixed-allocation
   waste. They are for end-to-end checks of the main cohort, not the full cohort
-  grid.
+  grid. Stage 20 exposes descriptor and saved-embedding classical decoding only
+  through the independent `descriptors` and `embeddings` modes.
 
 For script 20, submit the CPU and GPU branches separately:
 
 ```bash
 sbatch --account=rrg-kjerbi --time=24:00:00 --cpus-per-task=16 --mem=128G \
-  cluster/20_submit_main_decoding.sh decoding
+  cluster/20_submit_main_decoding.sh descriptors
+
+sbatch --account=rrg-kjerbi --time=24:00:00 --cpus-per-task=16 --mem=128G \
+  cluster/20_submit_main_decoding.sh embeddings
 
 sbatch --account=def-kjerbi --time=24:00:00 --cpus-per-task=8 --mem=128G \
   --gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1 \
