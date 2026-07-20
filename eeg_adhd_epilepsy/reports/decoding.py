@@ -197,9 +197,15 @@ def generate_foundation_decoding_comparison(
     reports_root: str | Path,
     dataset_name: str,
     config: Mapping[str, Any],
+    derivative_root: str | Path | None = None,
 ) -> tuple[Path, Path, Path | None] | None:
     """Aggregate every direct foundation run across models and training modes."""
-    decoding_root = get_derivative_root(Path(bids_root), DerivativeStage.DECODING) / dataset_name
+    decoding_base = (
+        Path(derivative_root).expanduser()
+        if derivative_root is not None
+        else get_derivative_root(Path(bids_root), DerivativeStage.DECODING)
+    )
+    decoding_root = decoding_base / dataset_name
     result_frames: list[pd.DataFrame] = []
     capability_frames: list[pd.DataFrame] = []
     for path in sorted(decoding_root.glob("foundation*/foundation_results.csv")):
@@ -416,6 +422,7 @@ def generate_head_to_head_report(
     alignment_diagnostics_cohort_name: str | None = None,
     alignment_diagnostics_population: str | None = None,
     generate_foundation_transform_report: bool = False,
+    derivative_root: str | Path | None = None,
 ) -> tuple[Path, Path] | None:
     """Compare primary classical inputs and linear probes in one table.
 
@@ -426,7 +433,12 @@ def generate_head_to_head_report(
     bids_root = Path(bids_root)
     # Classical and foundation runs share one decoding derivative tree; they are
     # distinguished by their per-run result filenames, not separate roots.
-    decoding_root = get_derivative_root(bids_root, DerivativeStage.DECODING) / dataset_name
+    decoding_base = (
+        Path(derivative_root).expanduser()
+        if derivative_root is not None
+        else get_derivative_root(bids_root, DerivativeStage.DECODING)
+    )
+    decoding_root = decoding_base / dataset_name
     if not decoding_root.exists():
         return None
 

@@ -19,6 +19,7 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     DEFAULT_DIM_REDUCTION_SELECTION_METRIC,
     SEPARATION_RF_METRIC_KEY,
     build_and_validate_mode_specs,
+    build_output_root,
     group_fit_requests,
 )
 from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
@@ -29,6 +30,25 @@ from eeg_adhd_epilepsy.reports.dim_reduction import (
 )
 
 # --- Mode / budgeting resolution -------------------------------------------------
+
+
+def test_dim_reduction_derivative_root_relocates_existing_run_namespace(tmp_path):
+    bids_root = tmp_path / "project" / "BIDS"
+    scratch_root = tmp_path / "scratch" / "BIDS" / "derivatives" / "dim_reduction"
+    common = {
+        "input_mode": "raw",
+        "embedding_model_key": None,
+        "run_config_hash": "unchanged123",
+        "run_label": "Relocation Cohort",
+    }
+
+    default_args = SimpleNamespace(**common, derivative_root=None)
+    relocated_args = SimpleNamespace(**common, derivative_root=str(scratch_root))
+    default_output = build_output_root(bids_root, default_args, "flat", "subject")
+    relocated_output = build_output_root(bids_root, relocated_args, "flat", "subject")
+
+    assert relocated_output == scratch_root / default_output.parent.name / default_output.name
+    assert relocated_output.name == default_output.name
 
 
 def _mode_args(analysis_modes, *, input_mode, representation=None):

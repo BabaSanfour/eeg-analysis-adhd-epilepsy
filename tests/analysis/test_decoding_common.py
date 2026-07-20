@@ -9,6 +9,7 @@ from eeg_adhd_epilepsy.analysis.utils.decoding import (
     foundation_provenance,
     prepare_decoding_scope,
     prepare_target,
+    resolve_decoding_paths,
     safe_group_n_splits,
 )
 
@@ -43,6 +44,27 @@ def test_build_loader_args_sets_raw_units_default_and_override():
         layout_mode="sensor",
     )
     assert override_args.units == "uV"
+
+
+def test_decoding_derivative_root_relocates_output_without_changing_run_identity(tmp_path):
+    bids_root = tmp_path / "project" / "BIDS"
+    scratch_root = tmp_path / "scratch" / "BIDS" / "derivatives" / "decoding"
+    base_config = {
+        "bids_root": str(bids_root),
+        "dataset_name": "Relocation Cohort",
+        "reports_root": str(tmp_path / "reports"),
+        "input_mode": "descriptors",
+    }
+
+    default_paths = resolve_decoding_paths(base_config, input_mode="descriptors")
+    relocated_paths = resolve_decoding_paths(
+        {**base_config, "derivative_root": str(scratch_root)},
+        input_mode="descriptors",
+    )
+
+    assert relocated_paths[1] == scratch_root / default_paths[1].parent.name / default_paths[1].name
+    assert relocated_paths[4] == default_paths[4]
+    assert relocated_paths[1].name == default_paths[1].name
 
 
 def test_foundation_provenance_defaults_pooling_to_mean():

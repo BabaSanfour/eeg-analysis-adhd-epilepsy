@@ -52,6 +52,7 @@ echo "==========================================================================
 
 python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
     --bids_root "$BIDS_ROOT" \
+    --derivative_root "$DIM_REDUCTION_ROOT" \
     --reports_root "$REPORTS_ROOT" \
     --metadata "$METADATA_PATH" \
     --cohort_config "$config" \

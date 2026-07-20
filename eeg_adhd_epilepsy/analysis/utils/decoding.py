@@ -33,6 +33,7 @@ from eeg_adhd_epilepsy.analysis.utils.common import (
 
 _NON_SCIENTIFIC_HASH_KEYS = frozenset(
     {
+        "derivative_root",
         "reports_only",
         "compare_only",
         "reports_root",
@@ -93,9 +94,12 @@ def resolve_decoding_paths(
     run_variant = f"{slug(input_mode)}_cfg-{cfg_hash}"
     dataset_name_slug = slug(config.get("run_label", config["dataset_name"]))
 
-    derivative_root = (
-        get_derivative_root(bids_root, DerivativeStage.DECODING) / dataset_name_slug / run_variant
+    decoding_root = (
+        Path(config["derivative_root"]).expanduser()
+        if config.get("derivative_root")
+        else get_derivative_root(bids_root, DerivativeStage.DECODING)
     )
+    derivative_root = decoding_root / dataset_name_slug / run_variant
     reports_root = Path(config.get("reports_root", default_reports_root(bids_root))).expanduser()
     report_root = (
         summary_report_dir(reports_root, ReportStage.DECODING) / dataset_name_slug / run_variant

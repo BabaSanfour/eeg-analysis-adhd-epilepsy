@@ -251,6 +251,8 @@ accuracy first and LR balanced accuracy second. Outputs are separated by a
 configuration hash under `BIDS/derivatives/dim_reduction/<dataset_name>/...`.
 Re-runs rebuild inventories from reusable checkpoints. `--n_jobs` controls
 outer-task parallelism (start with 4–6).
+Pass `--derivative_root /scratch/.../BIDS/derivatives/dim_reduction` to keep
+checkpointed outputs outside the input BIDS tree without changing run identity.
 
 ## Foundation models and decoding
 
@@ -262,6 +264,11 @@ eeg-foundation-embeddings --config /path/to/foundation_embeddings.yaml
 eeg-classical-decode  --cohort_config <cohort.yaml> --analysis_config configs/analyses/decoding/classical.yaml --bids_root … --metadata …
 eeg-foundation-decode --cohort_config <cohort.yaml> --analysis_config configs/analyses/decoding/foundation.yaml --bids_root … --metadata …
 ```
+
+Both decoding commands accept
+`--derivative_root /scratch/.../BIDS/derivatives/decoding`. This relocates
+checkpoints and aggregate inputs while leaving `--bids_root` pointed at the
+source dataset; the output-only path is excluded from the scientific run hash.
 
 Each model declares its own EEG window requirements; the example configs use
 10-second derivative epochs for CBraMod/REVE/LUNA, and re-epoch the cleaned

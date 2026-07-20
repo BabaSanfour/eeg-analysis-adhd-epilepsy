@@ -522,6 +522,7 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         location_statistic=config.get("location_statistic"),
         # Foundation embeddings
         embedding_derivative_root=config.get("embedding_derivative_root"),
+        derivative_root=config.get("derivative_root"),
         embedding_aggregate_by=config.get("embedding_aggregate_by"),
         embedding_model_key=config.get("embedding_model_key"),
         # Filtering / balancing
@@ -799,7 +800,10 @@ def main() -> None:
     parser.add_argument(
         "--derivative_root",
         default=None,
-        help="Dimensionality-reduction derivative root used by --compare_only.",
+        help=(
+            "Custom dimensionality-reduction output root. Normal runs write "
+            "checkpointed outputs here; --compare_only reads results from here."
+        ),
     )
     parser.add_argument(
         "--dataset_name",
@@ -870,6 +874,7 @@ def main() -> None:
         metadata=args.metadata,
         n_jobs=args.n_jobs,
         reports_root=args.reports_root,
+        derivative_root=args.derivative_root,
         overwrite=args.overwrite,
         reports_only=args.reports_only,
         representation=args.representation,

@@ -21,6 +21,8 @@
 : "${RAW_ROOT:=/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/raw_data}"
 : "${SCRATCH_ROOT:=/home/hamza97/scratch/eeg-epilepsy-adhd}"
 : "${REPORTS_ROOT:=$SCRATCH_ROOT/reports}"
+: "${DECODING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/decoding}"
+: "${DIM_REDUCTION_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/dim_reduction}"
 
 # --- Cluster modules -------------------------------------------------------
 dra_load_modules() {
