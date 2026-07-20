@@ -31,6 +31,7 @@ from eeg_adhd_epilepsy.analysis.dataset import attach_subject_metadata
 from eeg_adhd_epilepsy.analysis.variance_diagnostics import (
     build_diagnostic_tasks,
     score_variance_diagnostics,
+    skipped_variance_diagnostics,
     write_variance_diagnostics,
 )
 from eeg_adhd_epilepsy.io.bids import (
@@ -291,6 +292,8 @@ def run(config: dict[str, Any]) -> Path:
     )
     transform_params = config.get("transform_params", {}) or {}
     overwrite = bool(config["overwrite"])
+    materialized_transforms: list[str] = []
+    skipped_transforms: dict[str, str] = {}
 
     for transform_name in transforms:
         if transform_name == "none":
@@ -309,8 +312,34 @@ def run(config: dict[str, Any]) -> Path:
             )
         else:
             transform = make_subject_transform(transform_name, **params)
+            transform.fit(pooled_embeddings, groups=subjects)
+            if bool(getattr(transform, "degenerate_", False)):
+                rank = int(getattr(transform, "rank_", pooled_embeddings.shape[1]))
+                n_subjects = int(getattr(transform, "n_subjects_", len(np.unique(subjects))))
+                reason = (
+                    "Transform was skipped because its fitted subject projector was "
+                    f"marked degenerate (rank {rank}/{pooled_embeddings.shape[1]}, "
+                    f"{n_subjects} subjects); the aligned representation would be "
+                    "collapsed or scientifically unreliable."
+                )
+                LOGGER.warning(
+                    "%s Skipped %s; existing artifacts, if any, were left unchanged.",
+                    reason,
+                    transform_name,
+                )
+                skipped_transforms[transform_name] = reason
+                diagnostics.extend(
+                    skipped_variance_diagnostics(
+                        diagnostic_tasks,
+                        config,
+                        transform=transform_name,
+                        reason=reason,
+                        n_features=pooled_embeddings.shape[1],
+                    )
+                )
+                continue
             aligned_embeddings = np.asarray(
-                transform.fit_transform(pooled_embeddings, groups=subjects),
+                transform.transform(pooled_embeddings, groups=subjects),
                 dtype=np.float32,
             )
             transform_fingerprint = transform.fingerprint()
@@ -332,6 +361,7 @@ def run(config: dict[str, Any]) -> Path:
                     overwrite=overwrite,
                 )
 
+        materialized_transforms.append(transform_name)
         diagnostics.extend(
             score_variance_diagnostics(
                 aligned_embeddings,
@@ -366,6 +396,8 @@ def run(config: dict[str, Any]) -> Path:
                 ),
                 "source_inventory_signature": source_inventory_signature,
                 "transforms": list(transforms),
+                "materialized_transforms": materialized_transforms,
+                "skipped_transforms": skipped_transforms,
             },
             indent=2,
         ),

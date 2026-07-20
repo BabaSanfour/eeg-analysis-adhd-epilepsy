@@ -9,6 +9,8 @@ import pandas as pd
 import pytest
 from coco_pipe.decoding.foundation_models import FoundationEmbeddingResult
 from coco_pipe.io import load_embedding_derivatives, save_embedding_derivative
+from coco_pipe.report import build_subject_alignment_diagnostics_section
+from coco_pipe.report.elements import InteractiveTableElement
 from coco_pipe.utils import slug
 
 from eeg_adhd_epilepsy.analysis import align_subject_embeddings
@@ -227,3 +229,65 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch):
     assert success["source_inventory_signature"]
     assert token_load_batches
     assert align_subject_embeddings.run(config) == source_root
+
+    degenerate_root = tmp_path / "degenerate_source"
+    shutil.copytree(source_root, degenerate_root)
+    for stale_leace_artifact in degenerate_root.rglob("*_proc-alignleace_*"):
+        stale_leace_artifact.unlink()
+    real_make_transform = align_subject_embeddings.make_subject_transform
+
+    class _DegenerateLeace:
+        def fit(self, X, y=None, groups=None):
+            self.degenerate_ = True
+            self.rank_ = X.shape[1]
+            return self
+
+    def make_degenerate_leace(name, **params):
+        return _DegenerateLeace() if name == "leace" else real_make_transform(name, **params)
+
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "make_subject_transform",
+        make_degenerate_leace,
+    )
+    degenerate_config = {
+        **config,
+        "bids_root": str(tmp_path / "degenerate_bids"),
+        "source_embedding_root": str(degenerate_root),
+        "transforms": ["leace", "ea_mean"],
+        "overwrite": True,
+    }
+    assert align_subject_embeddings.run(degenerate_config) == degenerate_root
+    assert not list(degenerate_root.rglob("*_proc-alignleace_*"))
+    retained = load_embedding_derivatives(
+        degenerate_root,
+        representation="epoch",
+        model_key="demo_align-ea_mean",
+    )
+    assert retained.X.shape == (48, 8)
+
+    degenerate_diagnostics = pd.read_csv(
+        get_derivative_root(
+            tmp_path / "degenerate_bids",
+            DerivativeStage.VARIANCE_DIAGNOSTICS,
+        )
+        / slug("demo")
+        / "variance_diagnostics.csv"
+    )
+    skipped = degenerate_diagnostics[degenerate_diagnostics["transform"] == "leace"]
+    assert set(skipped["status"]) == {"skipped"}
+    assert skipped["reason"].str.contains("degenerate").all()
+    section = build_subject_alignment_diagnostics_section(degenerate_diagnostics)
+    audit = next(
+        child
+        for child in section.children
+        if isinstance(child, InteractiveTableElement)
+        and child.title == "Quantitative before/after audit"
+    )
+    assert audit.data["reason"].fillna("").str.contains("degenerate").any()
+
+    completion = json.loads(
+        (degenerate_root / "_alignment_demo_complete.json").read_text(encoding="utf-8")
+    )
+    assert completion["materialized_transforms"] == ["ea_mean"]
+    assert set(completion["skipped_transforms"]) == {"leace"}
