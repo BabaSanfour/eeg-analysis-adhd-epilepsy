@@ -473,6 +473,53 @@ def test_fit_request_collection_skips_invalid_n_components(tmp_path):
     assert availability[0]["skipped_n_components"] == [4, 10]
 
 
+def test_raw_recording_representation_builds_recording_id(monkeypatch, tmp_path):
+    source = DataContainer(
+        X=np.asarray([1.0, 3.0, 5.0, 7.0]).reshape(4, 1, 1),
+        dims=("obs", "channel", "time"),
+        coords={
+            "channel": np.asarray(["Fz"], dtype=object),
+            "time": np.asarray([0.0]),
+            "study_id": np.asarray(["0001", "0001", "0001", "0001"], dtype=object),
+            "subject": np.asarray(["0001", "0001", "0001", "0001"], dtype=object),
+            "session": np.asarray(["01", "01", "01", "01"], dtype=object),
+            "run": np.asarray(["01", "01", "02", "02"], dtype=object),
+        },
+        ids=np.asarray(["epoch-1", "epoch-2", "epoch-3", "epoch-4"], dtype=object),
+        meta={},
+    )
+    monkeypatch.setattr(
+        "eeg_adhd_epilepsy.analysis.dataset.build_container",
+        lambda **_kwargs: source,
+    )
+    args = SimpleNamespace(
+        input_mode="raw",
+        analysis_mode="flat",
+        representation="recording",
+        bids_root=str(tmp_path),
+        use_derivatives=True,
+        task="clinical",
+        segment_duration=60.0,
+        overlap=0.0,
+        subject_col="study_id",
+        desc="base",
+        window_source="auto",
+        units="V",
+        group_filters=None,
+        filter_col=[],
+        filter_val=[],
+        balance_target=None,
+    )
+
+    container = build_dataset(args, None, "EO_baseline")
+
+    assert container.X[:, 0].tolist() == [2.0, 6.0]
+    assert container.coords["recording_id"].tolist() == [
+        "subject-0001_session-01_run-01",
+        "subject-0001_session-01_run-02",
+    ]
+
+
 def test_dim_reduction_preserves_exact_reducer_names():
     # Reducer names from each mode's `reducers` list are passed through verbatim to
     # coco_pipe; case-normalizing them would break the registry lookup.
