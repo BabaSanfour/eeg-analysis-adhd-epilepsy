@@ -22,19 +22,16 @@ CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/cohorts}
 ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/dim_reduction/descriptors.yaml}
 OVERWRITE=${OVERWRITE:-0}
 
-# Descriptor Data Paths. Recording-level table (one row per recording) — was
-# historically misnamed 'sensor_subject_features'; the merge now writes the honest
-# name. Override to 'sensor_subject_features' for the true subject-pooled level.
+# Descriptor runs use the two canonical granularities. Passing both the matching
+# table and an explicit representation keeps this launcher hash-identical to the
+# one-cohort integration launcher.
 DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
-TABLE_PATH="$DESC_ROOT/sensor_recording_features.parquet"
-COLUMNS_PATH="$DESC_ROOT/sensor_recording_features_feature_columns.json"
+REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording})
 
 require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"
 require_dir "$CONFIGS_DIR"
 require_file "$ANALYSIS_CONFIG"
-require_file "$TABLE_PATH"
-require_file "$COLUMNS_PATH"
 
 dra_activate
 dra_pin_threads 1
@@ -57,24 +54,33 @@ echo "==========================================================================
 echo "DESCRIPTOR DIM REDUCTION ARRAY TASK $TASK_ID / $CONFIG_COUNT"
 echo "Config:   $config"
 echo "Analysis: $ANALYSIS_CONFIG (analysis_modes sweep in-process)"
-echo "Table:    $TABLE_PATH"
 echo "================================================================================"
 
-cmd=(
-    python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction
-    --bids_root "$BIDS_ROOT"
-    --derivative_root "$DIM_REDUCTION_ROOT"
-    --reports_root "$REPORTS_ROOT"
-    --metadata "$METADATA_PATH"
-    --cohort_config "$config"
-    --analysis_config "$ANALYSIS_CONFIG"
-    --descriptor_table_path "$TABLE_PATH"
-    --descriptor_feature_columns_path "$COLUMNS_PATH"
-    --n_jobs "$THREADS"
-)
+for rep in "${REPRESENTATIONS[@]}"; do
+    table_path="$DESC_ROOT/sensor_${rep}_features.parquet"
+    columns_path="$DESC_ROOT/sensor_${rep}_features_feature_columns.json"
+    require_file "$table_path"
+    require_file "$columns_path"
+    echo "Representation: $rep"
+    echo "Table:          $table_path"
 
-if [ "$OVERWRITE" = "1" ]; then
-    cmd+=(--overwrite)
-fi
+    cmd=(
+        python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction
+        --bids_root "$BIDS_ROOT"
+        --derivative_root "$DIM_REDUCTION_ROOT"
+        --reports_root "$REPORTS_ROOT"
+        --metadata "$METADATA_PATH"
+        --cohort_config "$config"
+        --analysis_config "$ANALYSIS_CONFIG"
+        --descriptor_table_path "$table_path"
+        --descriptor_feature_columns_path "$columns_path"
+        --representation "$rep"
+        --n_jobs "$THREADS"
+    )
 
-"${cmd[@]}"
+    if [ "$OVERWRITE" = "1" ]; then
+        cmd+=(--overwrite)
+    fi
+
+    "${cmd[@]}"
+done
