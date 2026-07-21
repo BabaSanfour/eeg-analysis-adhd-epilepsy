@@ -270,7 +270,10 @@ def write_variance_diagnostics(
         incoming_assessments = pd.MultiIndex.from_frame(incoming.loc[:, _ASSESSMENT_KEY_COLUMNS])
         existing_assessments = pd.MultiIndex.from_frame(existing.loc[:, _ASSESSMENT_KEY_COLUMNS])
         existing = existing[~existing_assessments.isin(incoming_assessments)]
-        incoming = pd.concat([existing, incoming], ignore_index=True)
+        incoming = pd.concat(
+            [frame.dropna(axis=1, how="all") for frame in (existing, incoming)],
+            ignore_index=True,
+        )
 
     temporary_path = output_path.with_suffix(".tmp")
     incoming.to_csv(temporary_path, index=False)
