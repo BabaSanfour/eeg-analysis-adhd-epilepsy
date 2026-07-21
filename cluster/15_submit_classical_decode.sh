@@ -6,8 +6,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-# descriptor baseline + 8 foundation models x 2 representations.
-#SBATCH --array=1-17
+# descriptor baseline + 8 foundation models x 3 representations.
+#SBATCH --array=1-25
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -25,10 +25,13 @@ FOUNDATION_ANALYSIS_CONFIG=${FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/a
 EMBEDDING_ROOT=${EMBEDDING_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 
 read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
-REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording})
+REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording subject})
 
-# Descriptor tables (dataset paths -> supplied here, not in the analysis config).
+# Descriptor table (dataset path -> supplied here, not in the analysis config).
+# Recording-level table; override to sensor_subject_features for subject-pooled.
 DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
+TABLE_PATH=${TABLE_PATH:-$DESC_ROOT/sensor_recording_features.parquet}
+COLUMNS_PATH=${COLUMNS_PATH:-$DESC_ROOT/sensor_recording_features_feature_columns.json}
 
 require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"
@@ -64,23 +67,17 @@ echo "Cohort: $COHORT_CONFIG"
 
 if (( TASK_ID == 1 )); then
     require_file "$CLASSICAL_ANALYSIS_CONFIG"
+    require_file "$TABLE_PATH"
+    require_file "$COLUMNS_PATH"
     echo "Input:    descriptors"
     echo "Analysis: $CLASSICAL_ANALYSIS_CONFIG"
-    for representation in "${REPRESENTATIONS[@]}"; do
-        table_path="$DESC_ROOT/sensor_${representation}_features.parquet"
-        columns_path="$DESC_ROOT/sensor_${representation}_features_feature_columns.json"
-        require_file "$table_path"
-        require_file "$columns_path"
-        echo "Representation: $representation"
-        echo "Table:          $table_path"
+    echo "Table:    $TABLE_PATH"
 
-        python -m eeg_adhd_epilepsy.analysis.classical_decoding \
-            "${common_args[@]}" \
-            --analysis_config "$CLASSICAL_ANALYSIS_CONFIG" \
-            --descriptor_table_path "$table_path" \
-            --descriptor_feature_columns_path "$columns_path" \
-            --representation "$representation"
-    done
+    python -m eeg_adhd_epilepsy.analysis.classical_decoding \
+        "${common_args[@]}" \
+        --analysis_config "$CLASSICAL_ANALYSIS_CONFIG" \
+        --descriptor_table_path "$TABLE_PATH" \
+        --descriptor_feature_columns_path "$COLUMNS_PATH"
     exit 0
 fi
 

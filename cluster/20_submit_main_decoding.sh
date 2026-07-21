@@ -53,7 +53,7 @@ run_descriptor_classical() {
     dra_pin_threads 1
 
     DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
-    CLASSICAL_REPRESENTATIONS=(${CLASSICAL_REPRESENTATIONS:-epoch recording})
+    CLASSICAL_REPRESENTATIONS=(${CLASSICAL_REPRESENTATIONS:-epoch recording subject})
     table_override="${TABLE_PATH:-}"
     columns_override="${COLUMNS_PATH:-}"
 
@@ -118,7 +118,7 @@ run_saved_embedding_classical() {
     dra_pin_threads 1
 
     read -r -a SAVED_MODELS <<< "${SAVED_MODELS:-cbramod}"
-    SAVED_REPRESENTATIONS=(${SAVED_REPRESENTATIONS:-epoch recording})
+    SAVED_REPRESENTATIONS=(${SAVED_REPRESENTATIONS:-epoch recording subject})
 
     for model in "${SAVED_MODELS[@]}"; do
         for rep in "${SAVED_REPRESENTATIONS[@]}"; do
