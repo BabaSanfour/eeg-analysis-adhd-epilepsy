@@ -58,7 +58,7 @@ elif [ "$PIPELINE_TYPE" == "descriptors" ]; then
     echo "================================================================="
     DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
 
-    for rep in epoch recording subject; do
+    for rep in epoch recording; do
         echo " -> Representation: $rep"
         require_file "$DESC_ROOT/sensor_${rep}_features.parquet"
         require_file "$DESC_ROOT/sensor_${rep}_features_feature_columns.json"

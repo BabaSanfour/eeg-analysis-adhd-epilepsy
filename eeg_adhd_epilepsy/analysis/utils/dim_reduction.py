@@ -16,6 +16,7 @@ from coco_pipe.io import (
 )
 from coco_pipe.utils import slug
 
+from eeg_adhd_epilepsy.analysis.utils.hashing import normalize_scientific_paths
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
@@ -185,6 +186,8 @@ def build_input_signature(
     """Build the provenance signature for a specific analysis unit."""
     from pathlib import Path
 
+    bids_root = getattr(args, "bids_root", None)
+    portable_bids_root = str(Path(bids_root).expanduser()) if bids_root else None
     filter_specs = [
         {"column": str(col), "values": [str(value) for value in vals]}
         for col, vals in zip(args.filter_col, args.filter_val)
@@ -209,7 +212,7 @@ def build_input_signature(
         input_signature.update(
             {
                 "representation": args.representation,
-                "bids_root": str(Path(args.bids_root).expanduser()),
+                "bids_root": portable_bids_root,
                 "use_derivatives": bool(args.use_derivatives),
                 "task": args.task,
                 "segment_duration": float(args.segment_duration),
@@ -221,6 +224,8 @@ def build_input_signature(
     elif args.input_mode == "descriptors":
         input_signature.update(
             {
+                "bids_root": portable_bids_root,
+                "representation": args.representation or "",
                 "descriptor_table_path": str(Path(args.descriptor_table_path).expanduser()),
                 "descriptor_families": list(args.descriptor_families or []),
                 "descriptor_feature_columns_path": str(
@@ -234,6 +239,7 @@ def build_input_signature(
     elif args.input_mode == "foundation_embeddings":
         input_signature.update(
             {
+                "bids_root": portable_bids_root,
                 "embedding_derivative_root": str(Path(args.embedding_derivative_root).expanduser()),
                 "representation": args.representation or "",
                 "embedding_aggregate_by": args.embedding_aggregate_by,
@@ -243,7 +249,7 @@ def build_input_signature(
     else:
         raise ValueError(f"Unsupported input_mode '{args.input_mode}'.")
 
-    return input_signature
+    return normalize_scientific_paths(input_signature)
 
 
 def build_run_config_payload(
@@ -299,6 +305,7 @@ def build_run_config_payload(
     if args.input_mode == "descriptors" or args.descriptor_families:
         payload.update(
             {
+                "representation": args.representation or "",
                 "descriptor_families": list(args.descriptor_families or []),
                 "descriptor_table_path": args.descriptor_table_path,
                 "descriptor_feature_columns_path": args.descriptor_feature_columns_path,
@@ -307,7 +314,7 @@ def build_run_config_payload(
             }
         )
 
-    return payload
+    return normalize_scientific_paths(payload)
 
 
 def group_fit_requests(
