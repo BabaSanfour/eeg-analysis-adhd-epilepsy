@@ -30,6 +30,7 @@ from eeg_adhd_epilepsy.analysis.utils.common import (
     base_layout_mode,
     require_config,
 )
+from eeg_adhd_epilepsy.analysis.utils.hashing import normalize_scientific_paths
 
 _NON_SCIENTIFIC_HASH_KEYS = frozenset(
     {
@@ -58,9 +59,10 @@ def scientific_config(config: Mapping[str, Any]) -> dict[str, Any]:
     not what it computes, so including them would make a resume after e.g. an
     ``n_jobs`` change spuriously mismatch the stored manifest.
     """
-    return {
+    scientific = {
         key: value for key, value in dict(config).items() if key not in _NON_SCIENTIFIC_HASH_KEYS
     }
+    return normalize_scientific_paths(scientific)
 
 
 def resolve_decoding_paths(
