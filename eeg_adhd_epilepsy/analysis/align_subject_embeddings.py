@@ -29,6 +29,7 @@ from mne_bids import get_bids_path_from_fname
 
 from eeg_adhd_epilepsy.analysis.dataset import attach_subject_metadata
 from eeg_adhd_epilepsy.analysis.variance_diagnostics import (
+    DiagnosticTask,
     build_diagnostic_tasks,
     score_variance_diagnostics,
     skipped_variance_diagnostics,
@@ -67,7 +68,7 @@ def _save_aligned_artifact(
     transform_fingerprint: str,
     params: Mapping[str, Any],
     overwrite: bool,
-) -> None:
+) -> Path:
     aligned_path = get_bids_path_from_fname(source_path, check=False)
     aligned_path.update(
         root=source_root,
@@ -128,8 +129,9 @@ def _save_aligned_artifact(
                 f"Existing aligned artifact has stale provenance: {output_path}; "
                 "rerun with overwrite enabled."
             )
-        return
+        return output_path
     save_embedding_derivative(result, output_path, overwrite=overwrite)
+    return output_path
 
 
 def _align_and_save_ra_by_subject(
@@ -140,7 +142,7 @@ def _align_and_save_ra_by_subject(
     model_key: str,
     params: Mapping[str, Any],
     overwrite: bool,
-) -> np.ndarray:
+) -> tuple[np.ndarray, list[Path]]:
     """Write complete RA embeddings and retain them for diagnostics.
 
     For each subject, native token derivatives are loaded together, reshaped to
@@ -148,6 +150,7 @@ def _align_and_save_ra_by_subject(
     saved immediately.
     """
     diagnostic_values: np.ndarray | None = None
+    output_paths: list[Path] = []
     transform_fingerprint = make_subject_transform("ra", **params).fingerprint()
     for subject_id, subject_paths in sorted(token_paths_by_subject.items()):
         token_container = load_embedding_derivatives(
@@ -186,23 +189,148 @@ def _align_and_save_ra_by_subject(
         ):
             artifact_path = str(artifact_path)
             positions = rows.index.to_numpy(dtype=int)
-            _save_aligned_artifact(
-                source_path=Path(artifact_path),
-                source_metadata=artifact_metadata[artifact_path],
-                aligned_windows=aligned_subject_windows[positions],
-                window_start=window_start[positions],
-                window_stop=window_stop[positions],
-                window_index=window_index[positions],
-                source_root=source_root,
-                model_key=model_key,
-                transform_name="ra",
-                transform_fingerprint=transform_fingerprint,
-                params=params,
-                overwrite=overwrite,
+            output_paths.append(
+                _save_aligned_artifact(
+                    source_path=Path(artifact_path),
+                    source_metadata=artifact_metadata[artifact_path],
+                    aligned_windows=aligned_subject_windows[positions],
+                    window_start=window_start[positions],
+                    window_stop=window_stop[positions],
+                    window_index=window_index[positions],
+                    source_root=source_root,
+                    model_key=model_key,
+                    transform_name="ra",
+                    transform_fingerprint=transform_fingerprint,
+                    params=params,
+                    overwrite=overwrite,
+                )
             )
     if diagnostic_values is None:
         raise ValueError("RA received no source artifacts.")
-    return diagnostic_values
+    return diagnostic_values, output_paths
+
+
+def _load_alignment_progress(
+    path: Path,
+    *,
+    config_fingerprint: str,
+    source_inventory_signature: str,
+    diagnostics_path: Path,
+    overwrite: bool,
+) -> dict[str, Any]:
+    """Load a compatible transform checkpoint or initialize a fresh one."""
+    identity = {
+        "config_fingerprint": config_fingerprint,
+        "source_inventory_signature": source_inventory_signature,
+        "diagnostics_path": str(diagnostics_path),
+    }
+    if not overwrite and path.exists():
+        try:
+            existing = read_json(path)
+        except (OSError, json.JSONDecodeError, TypeError):
+            existing = {}
+        if all(existing.get(key) == value for key, value in identity.items()):
+            return {
+                **identity,
+                "schema_version": 1,
+                "completed_diagnostics": list(existing.get("completed_diagnostics", [])),
+                "materialized_transforms": list(existing.get("materialized_transforms", [])),
+                "skipped_transforms": dict(existing.get("skipped_transforms", {})),
+                "artifacts_by_transform": dict(existing.get("artifacts_by_transform", {})),
+            }
+    return {
+        **identity,
+        "schema_version": 1,
+        "completed_diagnostics": [],
+        "materialized_transforms": [],
+        "skipped_transforms": {},
+        "artifacts_by_transform": {},
+    }
+
+
+def _write_alignment_progress(path: Path, progress: Mapping[str, Any]) -> None:
+    write_text_atomic(path, json.dumps(dict(progress), indent=2))
+
+
+def _diagnostic_checkpoint_exists(
+    diagnostics_path: Path,
+    *,
+    transform: str,
+    cohort_name: str,
+    tasks: list[DiagnosticTask],
+) -> bool:
+    if not diagnostics_path.exists():
+        return False
+    try:
+        frame = read_table(diagnostics_path, sep=",")
+    except (OSError, ValueError, TypeError):
+        return False
+    required = {"transform", "cohort_name", "selection_fingerprint"}
+    if not required.issubset(frame.columns):
+        return False
+    selected = frame[
+        (frame["transform"].astype(str) == transform)
+        & (frame["cohort_name"].astype(str) == cohort_name)
+    ]
+    expected = {task.selection_fingerprint for task in tasks}
+    observed = set(selected["selection_fingerprint"].dropna().astype(str))
+    return bool(expected) and expected <= observed
+
+
+def _transform_checkpoint_complete(
+    progress: Mapping[str, Any],
+    *,
+    transform: str,
+    source_root: Path,
+    diagnostics_path: Path,
+    cohort_name: str,
+    tasks: list[DiagnosticTask],
+) -> bool:
+    if transform not in progress.get("completed_diagnostics", []):
+        return False
+    if not _diagnostic_checkpoint_exists(
+        diagnostics_path,
+        transform=transform,
+        cohort_name=cohort_name,
+        tasks=tasks,
+    ):
+        return False
+    if transform == "none" or transform in progress.get("skipped_transforms", {}):
+        return True
+    relative_paths = progress.get("artifacts_by_transform", {}).get(transform, [])
+    return bool(relative_paths) and all(
+        (source_root / relative_path).exists()
+        and (source_root / relative_path).with_suffix(".json").exists()
+        for relative_path in relative_paths
+    )
+
+
+def _checkpoint_transform(
+    progress: dict[str, Any],
+    path: Path,
+    *,
+    transform: str,
+    artifact_paths: list[Path],
+    source_root: Path,
+    skipped_reason: str | None = None,
+) -> None:
+    completed = progress["completed_diagnostics"]
+    if transform not in completed:
+        completed.append(transform)
+    if skipped_reason is None and transform != "none":
+        materialized = progress["materialized_transforms"]
+        if transform not in materialized:
+            materialized.append(transform)
+        progress["skipped_transforms"].pop(transform, None)
+    elif skipped_reason is not None:
+        progress["skipped_transforms"][transform] = skipped_reason
+        progress["materialized_transforms"] = [
+            value for value in progress["materialized_transforms"] if value != transform
+        ]
+    progress["artifacts_by_transform"][transform] = [
+        str(artifact_path.relative_to(source_root)) for artifact_path in artifact_paths
+    ]
+    _write_alignment_progress(path, progress)
 
 
 def run(config: dict[str, Any]) -> Path:
@@ -284,25 +412,81 @@ def run(config: dict[str, Any]) -> Path:
         else container
     )
     diagnostic_tasks = build_diagnostic_tasks(diagnostic_container, config)
-    diagnostics: list[dict[str, Any]] = score_variance_diagnostics(
-        pooled_embeddings,
-        diagnostic_tasks,
-        config,
-        transform="none",
+    diagnostics_root = get_derivative_root(
+        Path(config["bids_root"]).expanduser(),
+        DerivativeStage.VARIANCE_DIAGNOSTICS,
+    ) / slug(model_key)
+    diagnostics_path = diagnostics_root / "variance_diagnostics.csv"
+    source_inventory_paths = {*pooled_paths, *token_paths}
+    source_inventory_signature = stable_hash(
+        sorted(str(path.relative_to(source_root)) for path in source_inventory_paths),
+        length=16,
     )
+    config_fingerprint = stable_hash(
+        redact_sensitive(
+            {key: value for key, value in config.items() if key not in _VOLATILE_KEYS}
+        ),
+        length=16,
+    )
+    progress_path = source_root / (
+        f"_alignment_{_sanitize_bids_token(model_key, 'model_key')}_progress.json"
+    )
+    progress = _load_alignment_progress(
+        progress_path,
+        config_fingerprint=config_fingerprint,
+        source_inventory_signature=source_inventory_signature,
+        diagnostics_path=diagnostics_path,
+        overwrite=bool(config["overwrite"]),
+    )
+    _write_alignment_progress(progress_path, progress)
+    cohort_name = str(config["dataset_name"])
+    if _transform_checkpoint_complete(
+        progress,
+        transform="none",
+        source_root=source_root,
+        diagnostics_path=diagnostics_path,
+        cohort_name=cohort_name,
+        tasks=diagnostic_tasks,
+    ):
+        LOGGER.info("Resuming raw variance diagnostics from checkpoint.")
+    else:
+        raw_diagnostics = score_variance_diagnostics(
+            pooled_embeddings,
+            diagnostic_tasks,
+            config,
+            transform="none",
+        )
+        write_variance_diagnostics(raw_diagnostics, diagnostics_root)
+        _checkpoint_transform(
+            progress,
+            progress_path,
+            transform="none",
+            artifact_paths=[],
+            source_root=source_root,
+        )
+
     transform_params = config.get("transform_params", {}) or {}
     overwrite = bool(config["overwrite"])
-    materialized_transforms: list[str] = []
-    skipped_transforms: dict[str, str] = {}
 
     for transform_name in transforms:
         if transform_name == "none":
             continue
+        if _transform_checkpoint_complete(
+            progress,
+            transform=transform_name,
+            source_root=source_root,
+            diagnostics_path=diagnostics_path,
+            cohort_name=cohort_name,
+            tasks=diagnostic_tasks,
+        ):
+            LOGGER.info("Resuming completed transform %s from checkpoint.", transform_name)
+            continue
         params = dict(transform_params.get(transform_name, {}) or {})
         LOGGER.info("Materializing global subject transform %s.", transform_name)
+        output_paths: list[Path] = []
 
         if transform_name == "ra":
-            aligned_embeddings = _align_and_save_ra_by_subject(
+            aligned_embeddings, output_paths = _align_and_save_ra_by_subject(
                 token_paths_by_subject,
                 pooled_row_by_id=pooled_row_by_id,
                 source_root=source_root,
@@ -327,15 +511,21 @@ def run(config: dict[str, Any]) -> Path:
                     reason,
                     transform_name,
                 )
-                skipped_transforms[transform_name] = reason
-                diagnostics.extend(
-                    skipped_variance_diagnostics(
-                        diagnostic_tasks,
-                        config,
-                        transform=transform_name,
-                        reason=reason,
-                        n_features=pooled_embeddings.shape[1],
-                    )
+                skipped_rows = skipped_variance_diagnostics(
+                    diagnostic_tasks,
+                    config,
+                    transform=transform_name,
+                    reason=reason,
+                    n_features=pooled_embeddings.shape[1],
+                )
+                write_variance_diagnostics(skipped_rows, diagnostics_root)
+                _checkpoint_transform(
+                    progress,
+                    progress_path,
+                    transform=transform_name,
+                    artifact_paths=[],
+                    source_root=source_root,
+                    skipped_reason=reason,
                 )
                 continue
             aligned_embeddings = np.asarray(
@@ -346,54 +536,50 @@ def run(config: dict[str, Any]) -> Path:
             for artifact_path, rows in observations.groupby("artifact_path", sort=False):
                 artifact_path = str(artifact_path)
                 positions = rows.index.to_numpy(dtype=int)
-                _save_aligned_artifact(
-                    source_path=Path(artifact_path),
-                    source_metadata=dict(artifact_metadata[artifact_path]),
-                    aligned_windows=aligned_embeddings[positions],
-                    window_start=window_start[positions],
-                    window_stop=window_stop[positions],
-                    window_index=window_index[positions],
-                    source_root=source_root,
-                    model_key=model_key,
-                    transform_name=transform_name,
-                    transform_fingerprint=transform_fingerprint,
-                    params=params,
-                    overwrite=overwrite,
+                output_paths.append(
+                    _save_aligned_artifact(
+                        source_path=Path(artifact_path),
+                        source_metadata=dict(artifact_metadata[artifact_path]),
+                        aligned_windows=aligned_embeddings[positions],
+                        window_start=window_start[positions],
+                        window_stop=window_stop[positions],
+                        window_index=window_index[positions],
+                        source_root=source_root,
+                        model_key=model_key,
+                        transform_name=transform_name,
+                        transform_fingerprint=transform_fingerprint,
+                        params=params,
+                        overwrite=overwrite,
+                    )
                 )
 
-        materialized_transforms.append(transform_name)
-        diagnostics.extend(
-            score_variance_diagnostics(
-                aligned_embeddings,
-                diagnostic_tasks,
-                config,
-                transform=transform_name,
-            )
+        transform_diagnostics = score_variance_diagnostics(
+            aligned_embeddings,
+            diagnostic_tasks,
+            config,
+            transform=transform_name,
+        )
+        write_variance_diagnostics(transform_diagnostics, diagnostics_root)
+        _checkpoint_transform(
+            progress,
+            progress_path,
+            transform=transform_name,
+            artifact_paths=output_paths,
+            source_root=source_root,
         )
 
-    diagnostics_root = get_derivative_root(
-        Path(config["bids_root"]).expanduser(),
-        DerivativeStage.VARIANCE_DIAGNOSTICS,
-    ) / slug(model_key)
-    write_variance_diagnostics(
-        diagnostics,
-        diagnostics_root,
-    )
-    source_inventory_paths = {*pooled_paths, *token_paths}
-    source_inventory_signature = stable_hash(
-        sorted(str(path.relative_to(source_root)) for path in source_inventory_paths),
-        length=16,
-    )
+    materialized = set(progress["materialized_transforms"])
+    materialized_transforms = [name for name in transforms if name in materialized]
+    skipped_transforms = {
+        name: progress["skipped_transforms"][name]
+        for name in transforms
+        if name in progress["skipped_transforms"]
+    }
     write_text_atomic(
         source_root / f"_alignment_{_sanitize_bids_token(model_key, 'model_key')}_complete.json",
         json.dumps(
             {
-                "config_fingerprint": stable_hash(
-                    redact_sensitive(
-                        {key: value for key, value in config.items() if key not in _VOLATILE_KEYS}
-                    ),
-                    length=16,
-                ),
+                "config_fingerprint": config_fingerprint,
                 "source_inventory_signature": source_inventory_signature,
                 "transforms": list(transforms),
                 "materialized_transforms": materialized_transforms,

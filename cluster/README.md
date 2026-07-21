@@ -67,7 +67,11 @@ the method). See `../configs/README.md`.
 - **09 (subject alignment)** materializes LEACE, EA-CORAL, EA-Mean, and
   token-based RA variants once per foundation model. It runs after extraction;
   its default cohort supplies the clinical diagnostic subset while transforms
-  are fitted over the configured global population.
+  are fitted over the configured global population. Raw and per-transform
+  diagnostics are checkpointed immediately in `variance_diagnostics.csv`, with
+  atomic `_alignment_<model>_progress.json` state; a compatible resubmission
+  skips completed diagnostics and transforms whose recorded artifacts still
+  exist.
 - **10 (foundation merge)** scans both raw and aligned embedding derivatives,
   then writes their combined tables, manifest, status, and report.
 - **11 / 12 / 13 (dim-reduction)** sweep every cohort under `CONFIGS_DIR`

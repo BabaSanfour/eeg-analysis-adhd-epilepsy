@@ -228,7 +228,81 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch):
     assert success["config_fingerprint"]
     assert success["source_inventory_signature"]
     assert token_load_batches
+    progress = json.loads(
+        (source_root / "_alignment_demo_progress.json").read_text(encoding="utf-8")
+    )
+    assert set(progress["completed_diagnostics"]) == set(config["transforms"])
+
+    real_score_diagnostics = align_subject_embeddings.score_variance_diagnostics
+
+    def fail_if_recomputed(*args, **kwargs):
+        pytest.fail("A completed diagnostic checkpoint was recomputed.")
+
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "score_variance_diagnostics",
+        fail_if_recomputed,
+    )
     assert align_subject_embeddings.run(config) == source_root
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "score_variance_diagnostics",
+        real_score_diagnostics,
+    )
+
+    resume_root = tmp_path / "resume_source"
+    shutil.copytree(source_root, resume_root)
+    resume_config = {
+        **config,
+        "bids_root": str(tmp_path / "resume_bids"),
+        "source_embedding_root": str(resume_root),
+        "transforms": ["ea_mean", "ra"],
+    }
+    real_ra = align_subject_embeddings._align_and_save_ra_by_subject
+
+    def fail_ra_import(*args, **kwargs):
+        raise ImportError("pyriemann is unavailable")
+
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "_align_and_save_ra_by_subject",
+        fail_ra_import,
+    )
+    with pytest.raises(ImportError, match="pyriemann"):
+        align_subject_embeddings.run(resume_config)
+    interrupted_progress = json.loads(
+        (resume_root / "_alignment_demo_progress.json").read_text(encoding="utf-8")
+    )
+    assert interrupted_progress["completed_diagnostics"] == ["none", "ea_mean"]
+
+    resumed_scores = []
+
+    def track_resumed_scores(features, tasks, score_config, *, transform):
+        resumed_scores.append(transform)
+        return real_score_diagnostics(
+            features,
+            tasks,
+            score_config,
+            transform=transform,
+        )
+
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "_align_and_save_ra_by_subject",
+        real_ra,
+    )
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "score_variance_diagnostics",
+        track_resumed_scores,
+    )
+    assert align_subject_embeddings.run(resume_config) == resume_root
+    assert resumed_scores == ["ra"]
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "score_variance_diagnostics",
+        real_score_diagnostics,
+    )
 
     degenerate_root = tmp_path / "degenerate_source"
     shutil.copytree(source_root, degenerate_root)
