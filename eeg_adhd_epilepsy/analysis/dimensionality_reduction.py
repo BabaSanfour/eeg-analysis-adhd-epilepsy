@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import logging
 from itertools import product
 from pathlib import Path
@@ -224,6 +225,17 @@ def _run_shared_memory_batch(
         return run_task_batch(tasks, worker_fn, max_workers)
 
 
+def _run_lazy_eval_request(request: dict[str, Any]) -> dict[str, Any]:
+    """Load one fit artifact only when its evaluation worker starts.
+
+    ``build_eval_request`` materializes the stored embedding, so calling it while
+    enumerating every fit/eval pair retains thousands of embeddings at once.
+    Keeping only its lightweight arguments in the outer queue bounds resident
+    embedding memory by the worker count instead.
+    """
+    return run_eval(**build_eval_request(**request), errors="raise")
+
+
 def execute_analysis_mode(
     *,
     args: Any,
@@ -365,19 +377,22 @@ def execute_analysis_mode(
                             and fit_record["scope"] != "pooled"
                         ):
                             continue
+                        # Keep the queue lightweight. build_eval_request loads the
+                        # full embedding artifact, so defer it to the worker rather
+                        # than retaining one copy for every fit/eval pair here.
                         eval_requests.append(
-                            build_eval_request(
-                                fit_record=fit_record,
-                                eval_spec=eval_spec,
-                                container=unit_container,
-                                output_root=output_root,
-                                overwrite=bool(args.overwrite),
-                            )
+                            {
+                                "fit_record": fit_record,
+                                "eval_spec": eval_spec,
+                                "container": unit_container,
+                                "output_root": output_root,
+                                "overwrite": bool(args.overwrite),
+                            }
                         )
                 logger.info("Queued %d eval request(s) for mode '%s'.", len(eval_requests), mode)
                 for record in _run_shared_memory_batch(
                     eval_requests,
-                    lambda request: run_eval(**request, errors="raise"),
+                    _run_lazy_eval_request,
                     resolved_n_jobs,
                 ):
                     update_runs(eval_runs_path, record, key_fields=EVAL_RUN_KEY_FIELDS)
@@ -739,6 +754,8 @@ def run(config: dict[str, Any]) -> None:
             task_failures.append(
                 {"analysis_mode": mode, "representation": representation, "error": str(exc)}
             )
+        finally:
+            gc.collect()
 
     if not summaries:
         raise RuntimeError("All dimensionality-reduction tasks failed; see the errors above.")

@@ -32,7 +32,7 @@ DATASET_NAME=${DATASET_NAME:-pooled_01_all_subjects_total}
 
 dra_activate
 dra_pin_threads 1
-THREADS=${SLURM_CPUS_PER_TASK:-8}
+THREADS=${DIMRED_N_JOBS:-${SLURM_CPUS_PER_TASK:-8}}
 
 
 if [ "$PIPELINE_TYPE" == "raw" ]; then
