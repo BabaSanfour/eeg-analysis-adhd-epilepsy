@@ -484,6 +484,21 @@ def _classical_scope_units(
     return units
 
 
+def _log_scope_resume_summary(units: list[DecodingUnit], *, scope: str) -> None:
+    """Log completed versus pending decoding units before worker dispatch."""
+    completed = sum(
+        1 for unit in units if not unit.overwrite and (Path(unit.output_dir) / "_SUCCESS").exists()
+    )
+    if completed == 0:
+        return
+    LOGGER.info(
+        "Skipped %d existing decoding unit(s) for scope '%s'; %d pending.",
+        completed,
+        scope,
+        len(units) - completed,
+    )
+
+
 def _iter_classical_unit_batches(
     plan: ClassicalPlan,
     conditions: list[str],
@@ -545,6 +560,7 @@ def _iter_classical_unit_batches(
             )
             enum_failures.extend(failures[n_before:])
             stats["units"] += len(units)
+            _log_scope_resume_summary(units, scope=condition)
             if run_pooled:
                 pool_specs.append(container_pool_spec(container))
                 pool_loaders.append(
@@ -569,6 +585,7 @@ def _iter_classical_unit_batches(
             )
             enum_failures.extend(failures[n_before:])
             stats["units"] += len(units)
+            _log_scope_resume_summary(units, scope="pooled")
             yield units
             del pooled, units
 
