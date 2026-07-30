@@ -1,5 +1,6 @@
 import json
 import logging
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -34,6 +35,22 @@ def test_classical_empty_sweep_logging_summarizes_failures(tmp_path, caplog):
     assert "No classical decoding units were enumerated" in caplog.text
     assert "Enumeration skip x2: ValueError: not enough classes" in caplog.text
     assert str(tmp_path / "failures.csv") in caplog.text
+
+
+def test_classical_resume_logging_summarizes_completed_units(tmp_path, caplog):
+    completed = tmp_path / "completed"
+    completed.mkdir()
+    (completed / "_SUCCESS").write_text("")
+    units = [
+        SimpleNamespace(output_dir=completed, overwrite=False),
+        SimpleNamespace(output_dir=tmp_path / "pending", overwrite=False),
+        SimpleNamespace(output_dir=completed, overwrite=True),
+    ]
+
+    caplog.set_level(logging.INFO, logger=decoding.LOGGER.name)
+    decoding._log_scope_resume_summary(units, scope="EO_baseline")
+
+    assert "Skipped 1 existing decoding unit(s) for scope 'EO_baseline'; 2 pending." in caplog.text
 
 
 def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkeypatch):
