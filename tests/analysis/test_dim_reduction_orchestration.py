@@ -275,6 +275,40 @@ def test_dim_reduction_batches_use_thread_backend_for_parallel_work():
     assert records == [("ThreadingBackend", 1), ("ThreadingBackend", 2)]
 
 
+def test_eval_request_loads_fit_artifact_only_inside_worker(monkeypatch):
+    lightweight_request = {
+        "fit_record": {"fit_id": "fit-1", "artifact_path": "fits/fit-1"},
+        "eval_spec": {"name": "diagnosis"},
+        "container": object(),
+        "output_root": object(),
+        "overwrite": False,
+    }
+    calls = []
+
+    def fake_build_eval_request(**request):
+        calls.append(("build", request))
+        return {"fit_artifact": "loaded", "out_path": "eval-1"}
+
+    def fake_run_eval(**request):
+        calls.append(("run", request))
+        return {"status": "success"}
+
+    monkeypatch.setattr(dim_reduction, "build_eval_request", fake_build_eval_request)
+    monkeypatch.setattr(dim_reduction, "run_eval", fake_run_eval)
+
+    assert "fit_artifact" not in lightweight_request
+    result = dim_reduction._run_lazy_eval_request(lightweight_request)
+
+    assert result == {"status": "success"}
+    assert calls == [
+        ("build", lightweight_request),
+        (
+            "run",
+            {"fit_artifact": "loaded", "out_path": "eval-1", "errors": "raise"},
+        ),
+    ]
+
+
 # --- Leaderboard collection + roll-up rendering ---------------------------------
 
 
