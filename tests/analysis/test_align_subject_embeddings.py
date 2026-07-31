@@ -17,7 +17,7 @@ from eeg_adhd_epilepsy.analysis import align_subject_embeddings
 from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
 
 
-def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch):
+def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, caplog):
     rng = np.random.default_rng(4)
     source_root = tmp_path / "source"
     metadata_rows = []
@@ -198,6 +198,7 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch):
     diagnostics_root = get_derivative_root(
         tmp_path / "bids", DerivativeStage.VARIANCE_DIAGNOSTICS
     ) / slug("demo")
+    assert (diagnostics_root / "config_used.yaml").exists()
     diagnostics = pd.read_csv(diagnostics_root / "variance_diagnostics.csv")
     assert set(diagnostics["transform"]) == set(config["transforms"])
     assert set(diagnostics["population"]) == {
@@ -244,6 +245,8 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch):
         fail_if_recomputed,
     )
     assert align_subject_embeddings.run(config) == source_root
+    with pytest.raises(ValueError, match="different alignment configuration"):
+        align_subject_embeddings.run({**config, "n_null_permutations": 3})
     monkeypatch.setattr(
         align_subject_embeddings,
         "score_variance_diagnostics",
@@ -258,6 +261,40 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch):
         "source_embedding_root": str(resume_root),
         "transforms": ["ea_mean", "ra"],
     }
+    for transform_name in ("ea_mean", "ra"):
+        processing = align_subject_embeddings._sanitize_bids_token(
+            f"align{transform_name}", "processing"
+        )
+        for partial_artifact in (resume_root / "sub-0004").rglob(f"*_proc-{processing}_*"):
+            partial_artifact.unlink()
+
+    real_make_transform = align_subject_embeddings.make_subject_transform
+    resumed_vector_fit_groups = []
+    resumed_vector_groups = []
+
+    def track_resumed_transform(name, **params):
+        transform = real_make_transform(name, **params)
+        if name == "ea_mean":
+            real_fit = transform.fit
+            real_transform = transform.transform
+
+            def track_fit(features, y=None, groups=None):
+                resumed_vector_fit_groups.append(set(np.asarray(groups).astype(str)))
+                return real_fit(features, y=y, groups=groups)
+
+            def track_transform(features, groups=None):
+                resumed_vector_groups.append(set(np.asarray(groups).astype(str)))
+                return real_transform(features, groups=groups)
+
+            transform.fit = track_fit
+            transform.transform = track_transform
+        return transform
+
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "make_subject_transform",
+        track_resumed_transform,
+    )
     real_ra = align_subject_embeddings._align_and_save_ra_by_subject
 
     def fail_ra_import(*args, **kwargs):
@@ -270,6 +307,8 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch):
     )
     with pytest.raises(ImportError, match="pyriemann"):
         align_subject_embeddings.run(resume_config)
+    assert resumed_vector_fit_groups == [{"0004"}]
+    assert resumed_vector_groups == [{"0004"}]
     interrupted_progress = json.loads(
         (resume_root / "_alignment_demo_progress.json").read_text(encoding="utf-8")
     )
@@ -296,8 +335,16 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch):
         "score_variance_diagnostics",
         track_resumed_scores,
     )
+    token_load_batches.clear()
+    caplog.set_level("INFO", logger=align_subject_embeddings.__name__)
     assert align_subject_embeddings.run(resume_config) == resume_root
     assert resumed_scores == ["ra"]
+    assert len(token_load_batches) == 1
+    assert {
+        json.loads(path.with_suffix(".json").read_text(encoding="utf-8"))["subject"]
+        for path in token_load_batches[0]
+    } == {"0004"}
+    assert "Skipped 3 completed subject(s) for transform 'ra'; 1 pending." in caplog.text
     monkeypatch.setattr(
         align_subject_embeddings,
         "score_variance_diagnostics",
@@ -308,9 +355,16 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch):
     shutil.copytree(source_root, degenerate_root)
     for stale_leace_artifact in degenerate_root.rglob("*_proc-alignleace_*"):
         stale_leace_artifact.unlink()
-    real_make_transform = align_subject_embeddings.make_subject_transform
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "make_subject_transform",
+        real_make_transform,
+    )
 
     class _DegenerateLeace:
+        def fingerprint(self):
+            return "degenerate-leace"
+
         def fit(self, X, y=None, groups=None):
             self.degenerate_ = True
             self.rank_ = X.shape[1]
