@@ -13,6 +13,7 @@ from typing import Any
 import numpy as np
 from coco_pipe.decoding import redact_sensitive
 from coco_pipe.decoding.foundation_models import FoundationEmbeddingResult
+from coco_pipe.dim_reduction import occurrence_aligned_positions
 from coco_pipe.io import (
     discover_embedding_derivatives,
     embedding_sidecar_path,
@@ -20,12 +21,10 @@ from coco_pipe.io import (
     normalize_subject_value,
     read_json,
     read_table,
-    save_embedding_derivative,
-    validate_embedding_derivative,
+    save_embedding_outputs,
 )
 from coco_pipe.transforms.subject_alignment import make_subject_transform
 from coco_pipe.utils import slug, stable_hash
-from mne_bids import get_bids_path_from_fname
 
 from eeg_adhd_epilepsy.analysis.dataset import attach_subject_metadata
 from eeg_adhd_epilepsy.analysis.variance_diagnostics import (
@@ -38,9 +37,10 @@ from eeg_adhd_epilepsy.analysis.variance_diagnostics import (
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
     _sanitize_bids_token,
+    get_bids_derivative_variant_path,
     get_derivative_root,
 )
-from eeg_adhd_epilepsy.utils.artifacts import write_text_atomic
+from eeg_adhd_epilepsy.utils.artifacts import freeze_config_used, write_text_atomic
 from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 
 LOGGER = logging.getLogger(__name__)
@@ -52,6 +52,51 @@ _VOLATILE_KEYS = {
     "source_embedding_root",
     "overwrite",
 }
+
+
+def _complete_subject_output_paths(
+    source_paths: list[Path],
+    *,
+    source_root: Path,
+    transform_name: str,
+    overwrite: bool,
+) -> list[Path] | None:
+    """Return output paths only when every NPZ/JSON pair for a subject exists."""
+    if overwrite:
+        return None
+    output_paths: list[Path] = []
+    for source_path in source_paths:
+        output_path = get_bids_derivative_variant_path(
+            source_path,
+            source_root,
+            processing=f"align{transform_name}",
+            suffix="embedding",
+        )
+        output_paths.append(output_path)
+        if not output_path.exists() or not embedding_sidecar_path(output_path).exists():
+            return None
+    return output_paths
+
+
+def _load_completed_subject_rows(
+    output_paths: list[Path],
+    *,
+    pooled_ids: np.ndarray,
+    model_key: str,
+    transform_name: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    container = load_embedding_derivatives(
+        output_paths,
+        representation="epoch",
+        model_key=f"{model_key}_align-{transform_name}",
+    )
+    pooled_rows = occurrence_aligned_positions(pooled_ids, container.ids)
+    if pooled_rows is None:
+        raise ValueError(
+            "Existing aligned artifacts do not match the current source observations; "
+            "rerun with overwrite enabled."
+        )
+    return np.asarray(container.X, dtype=np.float32), np.asarray(pooled_rows, dtype=int)
 
 
 def _save_aligned_artifact(
@@ -69,17 +114,12 @@ def _save_aligned_artifact(
     params: Mapping[str, Any],
     overwrite: bool,
 ) -> Path:
-    aligned_path = get_bids_path_from_fname(source_path, check=False)
-    aligned_path.update(
-        root=source_root,
-        datatype="eeg",
-        processing=_sanitize_bids_token(f"align{transform_name}", "processing"),
+    output_path = get_bids_derivative_variant_path(
+        source_path,
+        source_root,
+        processing=f"align{transform_name}",
         suffix="embedding",
-        check=False,
     )
-    output_path = aligned_path.fpath
-    if output_path is None:
-        raise ValueError(f"Could not construct an aligned BIDS path for {source_path}.")
 
     relative_source = str(source_path.relative_to(source_root))
     aligned_model_key = f"{model_key}_align-{transform_name}"
@@ -111,33 +151,14 @@ def _save_aligned_artifact(
             **({"source_token_metadata": source_token_metadata} if source_token_metadata else {}),
         },
     )
-    sidecar = output_path.with_suffix(".json")
-    if not overwrite and output_path.exists() and sidecar.exists():
-        existing = validate_embedding_derivative(output_path)
-        expected = {
-            "source_artifact": relative_source,
-            "subject_transform_fingerprint": transform_fingerprint,
-            "model_key": aligned_model_key,
-        }
-        mismatched = {
-            key: (existing.get(key), value)
-            for key, value in expected.items()
-            if existing.get(key) != value
-        }
-        if mismatched:
-            raise ValueError(
-                f"Existing aligned artifact has stale provenance: {output_path}; "
-                "rerun with overwrite enabled."
-            )
-        return output_path
-    save_embedding_derivative(result, output_path, overwrite=overwrite)
+    save_embedding_outputs(result, output_path, overwrite=overwrite)
     return output_path
 
 
 def _align_and_save_ra_by_subject(
     token_paths_by_subject: Mapping[str, list[Path]],
     *,
-    pooled_row_by_id: Mapping[str, int],
+    pooled_ids: np.ndarray,
     source_root: Path,
     model_key: str,
     params: Mapping[str, Any],
@@ -150,9 +171,45 @@ def _align_and_save_ra_by_subject(
     saved immediately.
     """
     diagnostic_values: np.ndarray | None = None
+    assigned_rows = np.zeros(len(pooled_ids), dtype=bool)
     output_paths: list[Path] = []
     transform_fingerprint = make_subject_transform("ra", **params).fingerprint()
+    completed_outputs = {
+        subject_id: _complete_subject_output_paths(
+            subject_paths,
+            source_root=source_root,
+            transform_name="ra",
+            overwrite=overwrite,
+        )
+        for subject_id, subject_paths in sorted(token_paths_by_subject.items())
+    }
+    n_completed = sum(paths is not None for paths in completed_outputs.values())
+    LOGGER.info(
+        "Skipped %d completed subject(s) for transform 'ra'; %d pending.",
+        n_completed,
+        len(completed_outputs) - n_completed,
+    )
     for subject_id, subject_paths in sorted(token_paths_by_subject.items()):
+        existing_paths = completed_outputs[subject_id]
+        if existing_paths is not None:
+            aligned_subject_windows, pooled_rows = _load_completed_subject_rows(
+                existing_paths,
+                pooled_ids=pooled_ids,
+                model_key=model_key,
+                transform_name="ra",
+            )
+            if diagnostic_values is None:
+                diagnostic_values = np.empty(
+                    (len(pooled_ids), aligned_subject_windows.shape[1]),
+                    dtype=np.float32,
+                )
+            elif diagnostic_values.shape[1] != aligned_subject_windows.shape[1]:
+                raise ValueError("Existing RA artifacts have inconsistent feature dimensions.")
+            diagnostic_values[pooled_rows] = aligned_subject_windows
+            assigned_rows[pooled_rows] = True
+            output_paths.extend(existing_paths)
+            continue
+
         token_container = load_embedding_derivatives(
             subject_paths,
             representation="token",
@@ -171,16 +228,19 @@ def _align_and_save_ra_by_subject(
         aligned_subject_windows = np.asarray(
             aligner.fit_transform(subject_tokens, groups=groups), dtype=np.float32
         )
-        pooled_rows = np.asarray(
-            [pooled_row_by_id[str(value)] for value in token_container.ids],
-            dtype=int,
-        )
+        pooled_rows = occurrence_aligned_positions(pooled_ids, token_container.ids)
+        if pooled_rows is None:
+            raise ValueError("RA token observations do not match the pooled observations.")
+        pooled_rows = np.asarray(pooled_rows, dtype=int)
         if diagnostic_values is None:
             diagnostic_values = np.empty(
-                (len(pooled_row_by_id), aligned_subject_windows.shape[1]),
+                (len(pooled_ids), aligned_subject_windows.shape[1]),
                 dtype=np.float32,
             )
+        elif diagnostic_values.shape[1] != aligned_subject_windows.shape[1]:
+            raise ValueError("RA artifacts have inconsistent feature dimensions.")
         diagnostic_values[pooled_rows] = aligned_subject_windows
+        assigned_rows[pooled_rows] = True
         window_start = np.asarray(token_container.coords["window_start"])
         window_stop = np.asarray(token_container.coords["window_stop"])
         window_index = np.asarray(token_container.coords["window_index"])
@@ -207,7 +267,129 @@ def _align_and_save_ra_by_subject(
             )
     if diagnostic_values is None:
         raise ValueError("RA received no source artifacts.")
+    if not assigned_rows.all():
+        raise ValueError("RA outputs do not exactly cover the pooled observations.")
     return diagnostic_values, output_paths
+
+
+def _align_and_save_vector_by_subject(
+    transform: Any,
+    pooled_embeddings: np.ndarray,
+    subjects: np.ndarray,
+    observations: Any,
+    artifact_metadata: Mapping[str, Mapping[str, Any]],
+    *,
+    pooled_ids: np.ndarray,
+    window_start: np.ndarray,
+    window_stop: np.ndarray,
+    window_index: np.ndarray,
+    source_root: Path,
+    model_key: str,
+    transform_name: str,
+    params: Mapping[str, Any],
+    overwrite: bool,
+) -> tuple[np.ndarray | None, list[Path], Any]:
+    """Reuse complete subjects and materialize only pending vector outputs."""
+    transform_fingerprint = transform.fingerprint()
+    source_paths_by_subject: dict[str, list[Path]] = {}
+    positions_by_subject: dict[str, np.ndarray] = {}
+    for subject_id in sorted(np.unique(subjects)):
+        positions = np.flatnonzero(subjects == subject_id)
+        positions_by_subject[str(subject_id)] = positions
+        subject_observations = observations.iloc[positions]
+        source_paths_by_subject[str(subject_id)] = [
+            Path(value)
+            for value in subject_observations["artifact_path"].drop_duplicates().tolist()
+        ]
+
+    completed_outputs = {
+        subject_id: _complete_subject_output_paths(
+            source_paths,
+            source_root=source_root,
+            transform_name=transform_name,
+            overwrite=overwrite,
+        )
+        for subject_id, source_paths in source_paths_by_subject.items()
+    }
+    n_completed = sum(paths is not None for paths in completed_outputs.values())
+    LOGGER.info(
+        "Skipped %d completed subject(s) for transform '%s'; %d pending.",
+        n_completed,
+        transform_name,
+        len(completed_outputs) - n_completed,
+    )
+
+    pending_positions = [
+        positions_by_subject[subject_id]
+        for subject_id, outputs in completed_outputs.items()
+        if outputs is None
+    ]
+    if pending_positions:
+        fit_positions = (
+            np.concatenate(pending_positions)
+            if transform_name in {"ea_coral", "ea_mean"}
+            else np.arange(len(pooled_embeddings))
+        )
+        transform.fit(
+            pooled_embeddings[fit_positions],
+            groups=subjects[fit_positions],
+        )
+        if bool(getattr(transform, "degenerate_", False)):
+            return None, [], transform
+
+    aligned_embeddings = np.empty_like(pooled_embeddings, dtype=np.float32)
+    assigned_rows = np.zeros(len(pooled_embeddings), dtype=bool)
+    output_paths: list[Path] = []
+    for subject_id, positions in positions_by_subject.items():
+        existing_paths = completed_outputs[subject_id]
+        if existing_paths is not None:
+            aligned_subject_windows, pooled_rows = _load_completed_subject_rows(
+                existing_paths,
+                pooled_ids=pooled_ids,
+                model_key=model_key,
+                transform_name=transform_name,
+            )
+            if aligned_subject_windows.shape[1] != aligned_embeddings.shape[1]:
+                raise ValueError(
+                    f"Existing {transform_name} artifacts have an inconsistent feature dimension."
+                )
+            aligned_embeddings[pooled_rows] = aligned_subject_windows
+            assigned_rows[pooled_rows] = True
+            output_paths.extend(existing_paths)
+            continue
+
+        aligned_subject_windows = np.asarray(
+            transform.transform(
+                pooled_embeddings[positions],
+                groups=subjects[positions],
+            ),
+            dtype=np.float32,
+        )
+        aligned_embeddings[positions] = aligned_subject_windows
+        assigned_rows[positions] = True
+        subject_observations = observations.iloc[positions]
+        for artifact_path, rows in subject_observations.groupby("artifact_path", sort=False):
+            artifact_path = str(artifact_path)
+            artifact_positions = rows.index.to_numpy(dtype=int)
+            output_paths.append(
+                _save_aligned_artifact(
+                    source_path=Path(artifact_path),
+                    source_metadata=dict(artifact_metadata[artifact_path]),
+                    aligned_windows=aligned_embeddings[artifact_positions],
+                    window_start=window_start[artifact_positions],
+                    window_stop=window_stop[artifact_positions],
+                    window_index=window_index[artifact_positions],
+                    source_root=source_root,
+                    model_key=model_key,
+                    transform_name=transform_name,
+                    transform_fingerprint=transform_fingerprint,
+                    params=params,
+                    overwrite=overwrite,
+                )
+            )
+    if not assigned_rows.all():
+        raise ValueError(f"{transform_name} outputs do not exactly cover the pooled observations.")
+    return aligned_embeddings, output_paths, transform
 
 
 def _load_alignment_progress(
@@ -384,11 +566,8 @@ def run(config: dict[str, Any]) -> Path:
     window_index = np.asarray(container.coords["window_index"])
 
     token_paths_by_subject: dict[str, list[Path]] = {}
-    pooled_row_by_id: dict[str, int] = {}
+    pooled_ids = np.asarray(container.ids, dtype=object)
     if token_paths:
-        pooled_row_by_id = {
-            str(observation_id): row for row, observation_id in enumerate(container.ids)
-        }
         n_token_windows = 0
         for path in token_paths:
             token_metadata = read_json(embedding_sidecar_path(path))
@@ -417,17 +596,25 @@ def run(config: dict[str, Any]) -> Path:
         DerivativeStage.VARIANCE_DIAGNOSTICS,
     ) / slug(model_key)
     diagnostics_path = diagnostics_root / "variance_diagnostics.csv"
+    overwrite = bool(config["overwrite"])
+    alignment_config = redact_sensitive(
+        {key: value for key, value in config.items() if key not in _VOLATILE_KEYS}
+    )
+    freeze_config_used(
+        alignment_config,
+        diagnostics_root,
+        overwrite=overwrite,
+        mismatch_message=(
+            "Existing subject-alignment outputs use a different alignment "
+            "configuration. Use overwrite to replace them."
+        ),
+    )
     source_inventory_paths = {*pooled_paths, *token_paths}
     source_inventory_signature = stable_hash(
         sorted(str(path.relative_to(source_root)) for path in source_inventory_paths),
         length=16,
     )
-    config_fingerprint = stable_hash(
-        redact_sensitive(
-            {key: value for key, value in config.items() if key not in _VOLATILE_KEYS}
-        ),
-        length=16,
-    )
+    config_fingerprint = stable_hash(alignment_config, length=16)
     progress_path = source_root / (
         f"_alignment_{_sanitize_bids_token(model_key, 'model_key')}_progress.json"
     )
@@ -466,8 +653,6 @@ def run(config: dict[str, Any]) -> Path:
         )
 
     transform_params = config.get("transform_params", {}) or {}
-    overwrite = bool(config["overwrite"])
-
     for transform_name in transforms:
         if transform_name == "none":
             continue
@@ -488,7 +673,7 @@ def run(config: dict[str, Any]) -> Path:
         if transform_name == "ra":
             aligned_embeddings, output_paths = _align_and_save_ra_by_subject(
                 token_paths_by_subject,
-                pooled_row_by_id=pooled_row_by_id,
+                pooled_ids=pooled_ids,
                 source_root=source_root,
                 model_key=model_key,
                 params=params,
@@ -496,8 +681,23 @@ def run(config: dict[str, Any]) -> Path:
             )
         else:
             transform = make_subject_transform(transform_name, **params)
-            transform.fit(pooled_embeddings, groups=subjects)
-            if bool(getattr(transform, "degenerate_", False)):
+            aligned_embeddings, output_paths, transform = _align_and_save_vector_by_subject(
+                transform,
+                pooled_embeddings,
+                subjects,
+                observations,
+                artifact_metadata,
+                pooled_ids=pooled_ids,
+                window_start=window_start,
+                window_stop=window_stop,
+                window_index=window_index,
+                source_root=source_root,
+                model_key=model_key,
+                transform_name=transform_name,
+                params=params,
+                overwrite=overwrite,
+            )
+            if aligned_embeddings is None:
                 rank = int(getattr(transform, "rank_", pooled_embeddings.shape[1]))
                 n_subjects = int(getattr(transform, "n_subjects_", len(np.unique(subjects))))
                 reason = (
@@ -528,30 +728,6 @@ def run(config: dict[str, Any]) -> Path:
                     skipped_reason=reason,
                 )
                 continue
-            aligned_embeddings = np.asarray(
-                transform.transform(pooled_embeddings, groups=subjects),
-                dtype=np.float32,
-            )
-            transform_fingerprint = transform.fingerprint()
-            for artifact_path, rows in observations.groupby("artifact_path", sort=False):
-                artifact_path = str(artifact_path)
-                positions = rows.index.to_numpy(dtype=int)
-                output_paths.append(
-                    _save_aligned_artifact(
-                        source_path=Path(artifact_path),
-                        source_metadata=dict(artifact_metadata[artifact_path]),
-                        aligned_windows=aligned_embeddings[positions],
-                        window_start=window_start[positions],
-                        window_stop=window_stop[positions],
-                        window_index=window_index[positions],
-                        source_root=source_root,
-                        model_key=model_key,
-                        transform_name=transform_name,
-                        transform_fingerprint=transform_fingerprint,
-                        params=params,
-                        overwrite=overwrite,
-                    )
-                )
 
         transform_diagnostics = score_variance_diagnostics(
             aligned_embeddings,

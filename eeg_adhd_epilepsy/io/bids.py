@@ -8,7 +8,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from mne_bids import BIDSPath
+from mne_bids import BIDSPath, get_bids_path_from_fname
 
 if TYPE_CHECKING:
     from coco_pipe.io import DataContainer
@@ -87,6 +87,29 @@ def get_derivative_root(bids_root: Path, stage: DerivativeStage) -> Path:
     if not isinstance(stage, DerivativeStage):
         raise TypeError(f"stage must be a DerivativeStage, got {stage!r}")
     return Path(bids_root).expanduser() / "derivatives" / stage.value
+
+
+def get_bids_derivative_variant_path(
+    source_path: Path,
+    derivative_root: Path,
+    *,
+    processing: str,
+    suffix: str,
+    datatype: str = "eeg",
+) -> Path:
+    """Return a BIDS derivative path with explicit updated entities."""
+    variant = get_bids_path_from_fname(Path(source_path), check=False)
+    variant.update(
+        root=Path(derivative_root),
+        datatype=datatype,
+        processing=_sanitize_bids_token(processing, "processing"),
+        suffix=_sanitize_bids_token(suffix, "suffix"),
+        check=False,
+    )
+    output_path = variant.fpath
+    if output_path is None:
+        raise ValueError(f"Could not construct a BIDS derivative path for {source_path}.")
+    return output_path
 
 
 def get_stage_output_path(
