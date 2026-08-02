@@ -189,7 +189,7 @@ def _build_foundation_unit(
         feature_names=channels,
         sample_ids=sample_metadata["sample_id"].astype(str),
         sample_metadata=sample_metadata,
-        inferential_unit="group_id",
+        inferential_unit="group",
         overwrite=bool(config["overwrite"]),
         include_p_values=True,
     )

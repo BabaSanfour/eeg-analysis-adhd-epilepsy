@@ -139,6 +139,62 @@ def _validate_unit_data(
     return safe_group_n_splits(y, groups, requested_splits)
 
 
+def _nonfinite_unit_diagnostic(
+    X: np.ndarray,
+    *,
+    feature_names: list[str],
+    sample_ids: pd.Series,
+    context: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Return a serializable audit record when a decoding unit is non-finite.
+
+    Descriptor loading purges non-finite rows, so reaching this guard indicates
+    that a later per-unit operation created missing values.  Keep the record
+    compact enough for ``failures.csv`` while retaining representative feature
+    and sample identities for targeted investigation.
+    """
+    nonfinite = ~np.isfinite(X)
+    if not nonfinite.any():
+        return None
+
+    bad_rows = np.flatnonzero(nonfinite.any(axis=1))
+    bad_columns = np.flatnonzero(nonfinite.any(axis=0))
+    feature_preview = [
+        feature_names[index] if index < len(feature_names) else f"feature_{index}"
+        for index in bad_columns[:20]
+    ]
+    sample_values = sample_ids.astype(str).to_numpy()
+    sample_preview = [
+        sample_values[index] if index < len(sample_values) else f"row_{index}"
+        for index in bad_rows[:20]
+    ]
+    location = ", ".join(
+        f"{key}={value}" for key, value in context.items() if value is not None and value != ""
+    )
+    reason = (
+        "Non-finite features reached decoding unit after QC "
+        f"({int(nonfinite.sum())} cell(s), {len(bad_rows)} row(s), "
+        f"{len(bad_columns)} feature(s))."
+    )
+    LOGGER.warning(
+        "%s %s Offending feature(s): %s. Sample ID(s): %s.",
+        reason,
+        location,
+        ", ".join(feature_preview),
+        ", ".join(sample_preview),
+    )
+    return {
+        **context,
+        "status": "skipped",
+        "reason": reason,
+        "nonfinite_cell_count": int(nonfinite.sum()),
+        "nonfinite_row_count": int(len(bad_rows)),
+        "nonfinite_feature_count": int(len(bad_columns)),
+        "nonfinite_feature_preview": "|".join(feature_preview),
+        "nonfinite_sample_preview": "|".join(sample_preview),
+    }
+
+
 def _mode_models(
     plan: ClassicalPlan,
     analysis_mode: str,
@@ -316,7 +372,7 @@ def _build_selection_units(
                     feature_names=names,
                     sample_ids=unit_metadata["sample_id"].astype(str),
                     sample_metadata=unit_metadata,
-                    inferential_unit="group_id",
+                    inferential_unit="group",
                     overwrite=overwrite,
                     include_p_values=True,
                 )
@@ -400,9 +456,37 @@ def _enumerate_scope(
                 unit_y = pd.Series(y).iloc[keep_indices].reset_index(drop=True)
                 unit_groups = pd.Series(groups).iloc[keep_indices].reset_index(drop=True)
                 unit_metadata = sample_metadata.iloc[keep_indices].reset_index(drop=True)
+                flattened = (
+                    unit_container
+                    if unit_container.dims == ("obs", "feature")
+                    else unit_container.flatten(preserve="obs")
+                )
+                X = np.asarray(flattened.X)
+                feature_names = [
+                    str(value) for value in flattened.coords.get("feature", np.arange(X.shape[1]))
+                ]
+                context = {
+                    "scope": scope,
+                    "target": target_name,
+                    "analysis_mode": analysis_mode,
+                    "unit_name": unit["unit_name"],
+                    "unit_key": unit["unit_key"],
+                    "family": unit.get("family"),
+                    "subfamily": unit.get("subfamily"),
+                }
+                nonfinite_diagnostic = _nonfinite_unit_diagnostic(
+                    X,
+                    feature_names=feature_names,
+                    sample_ids=unit_metadata["sample_id"],
+                    context=context,
+                )
+                if nonfinite_diagnostic is not None:
+                    yield nonfinite_diagnostic
+                    continue
+
                 try:
                     unit_n_splits = _validate_unit_data(
-                        unit_container.X,
+                        X,
                         unit_y,
                         unit_groups,
                         target_name,
@@ -410,21 +494,11 @@ def _enumerate_scope(
                     )
                 except ValueError as exc:
                     yield {
-                        "scope": scope,
-                        "target": target_name,
-                        "analysis_mode": analysis_mode,
-                        "unit_name": unit["unit_name"],
-                        "unit_key": unit["unit_key"],
-                        "family": unit.get("family"),
-                        "subfamily": unit.get("subfamily"),
+                        **context,
                         "status": "skipped",
                         "reason": f"{type(exc).__name__}: {exc}",
                     }
                     continue
-
-                X = np.asarray(unit_container.X)
-                if X.ndim != 2:
-                    X = unit_container.flatten(preserve="obs").X
 
                 try:
                     yield from _build_selection_units(
