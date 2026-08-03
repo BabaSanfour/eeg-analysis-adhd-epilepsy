@@ -93,7 +93,7 @@ def test_descriptor_analysis_attaches_family_qc(tmp_path):
     assert qc_result.n_rows_entering_qc == 4
 
 
-def test_sensor_descriptor_analysis_attaches_family_qc(tmp_path):
+def test_flat_descriptor_analysis_attaches_family_qc(tmp_path):
     feature_columns = [
         "band_log_abs_alpha_ch-Fz",
         "complexity_sample_entropy_ch-Fz",
@@ -113,7 +113,7 @@ def test_sensor_descriptor_analysis_attaches_family_qc(tmp_path):
     feature_columns_path.write_text(json.dumps(feature_columns), encoding="utf-8")
     args = SimpleNamespace(
         input_mode="descriptors",
-        analysis_mode="sensor",
+        analysis_mode="flat",
         descriptor_table_path=str(table_path),
         descriptor_feature_columns_path=str(feature_columns_path),
         descriptor_families=None,
@@ -133,7 +133,7 @@ def test_sensor_descriptor_analysis_attaches_family_qc(tmp_path):
         condition="EO_baseline",
     )
 
-    assert container.dims == ("obs", "sensor", "feature")
+    assert container.dims == ("obs", "feature")
     qc_result = container.meta["qc_result"]
     assert qc_result.family_qc is not None
     assert qc_result.family_qc["family"].tolist() == ["band", "complexity"]
@@ -568,12 +568,12 @@ def test_pooled_container_preserves_fine_grained_qc_metadata():
     for condition, bad_id in (("EO", "r1"), ("EC", "r2")):
         containers.append(
             DataContainer(
-                X=np.zeros((2, 1, 1)),
-                dims=("obs", "sensor", "feature"),
+                X=np.zeros((2, 1)),
+                dims=("obs", "feature"),
                 coords={
-                    "sensor": np.asarray(["Fz"], dtype=object),
-                    "feature": np.asarray(["alpha"], dtype=object),
+                    "feature": np.asarray(["band_alpha_ch-Fz"], dtype=object),
                     "feature_family": np.asarray(["band"], dtype=object),
+                    "feature_channel": np.asarray(["Fz"], dtype=object),
                     "condition": np.asarray([condition, condition], dtype=object),
                 },
                 ids=np.asarray(["r1", "r2"], dtype=object),
@@ -696,14 +696,15 @@ def test_fit_identity_changes_with_matrix_content_and_qc(tmp_path):
 
 def test_descriptor_sensor_units_have_distinct_fit_ids(tmp_path):
     container = DataContainer(
-        X=np.asarray([[[1.0], [2.0]], [[3.0], [4.0]]]),
-        dims=("obs", "sensor", "feature"),
+        X=np.asarray([[1.0, 2.0], [3.0, 4.0]]),
+        dims=("obs", "feature"),
         coords={
-            "sensor": np.asarray(["Fz", "Cz"], dtype=object),
-            "feature": np.asarray(["alpha_mean"], dtype=object),
-            "feature_family": np.asarray(["band"], dtype=object),
-            "feature_subfamily": np.asarray(["log_abs"], dtype=object),
-            "feature_descriptor": np.asarray(["alpha"], dtype=object),
+            "feature": np.asarray(["band_alpha_mean_ch-Fz", "band_alpha_mean_ch-Cz"], dtype=object),
+            "feature_family": np.asarray(["band", "band"], dtype=object),
+            "feature_channel": np.asarray(["Fz", "Cz"], dtype=object),
+            "feature_measure": np.asarray(["alpha_mean", "alpha_mean"], dtype=object),
+            "feature_subfamily": np.asarray(["log_abs", "log_abs"], dtype=object),
+            "feature_descriptor": np.asarray(["alpha", "alpha"], dtype=object),
         },
         ids=np.asarray(["r1", "r2"], dtype=object),
     )

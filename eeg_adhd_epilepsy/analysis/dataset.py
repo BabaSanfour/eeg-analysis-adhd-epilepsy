@@ -399,7 +399,6 @@ def build_dataset(
             target_col=target_col,
             subjects=subjects,
             subject_col=args.subject_col,
-            analysis_mode=analysis_mode,
             descriptor_families=args.descriptor_families,
             descriptor_max_abs_value=args.descriptor_max_abs_value,
             drop_degenerate_columns=bool(column_prune.get("enabled", False)),
@@ -408,9 +407,7 @@ def build_dataset(
             max_row_drop_rate=column_prune.get("max_row_drop_rate"),
             location_statistic=args.location_statistic,
         )
-        scoring_container = (
-            container if container.dims == ("obs", "feature") else container.flatten(preserve="obs")
-        )
+        scoring_container = container
         feature_names = (
             np.asarray(scoring_container.coords.get("feature", []), dtype=object)
             .astype(str)

@@ -229,12 +229,7 @@ def _build_selection_units(
     overwrite: bool,
 ):
     """Yield transform x reduction x feature-selection decoding units."""
-    flattened = (
-        unit["container"]
-        if unit["container"].dims == ("obs", "feature")
-        else unit["container"].flatten(preserve="obs")
-    )
-    names = [str(value) for value in flattened.coords.get("feature", np.arange(X.shape[1]))]
+    names = [str(value) for value in unit["container"].coords.get("feature", np.arange(X.shape[1]))]
     valid_selection_specs = [
         spec
         for spec in plan.selection_specs
@@ -456,14 +451,15 @@ def _enumerate_scope(
                 unit_y = pd.Series(y).iloc[keep_indices].reset_index(drop=True)
                 unit_groups = pd.Series(groups).iloc[keep_indices].reset_index(drop=True)
                 unit_metadata = sample_metadata.iloc[keep_indices].reset_index(drop=True)
-                flattened = (
-                    unit_container
-                    if unit_container.dims == ("obs", "feature")
-                    else unit_container.flatten(preserve="obs")
-                )
-                X = np.asarray(flattened.X)
+                if unit_container.dims != ("obs", "feature"):
+                    raise ValueError(
+                        "Decoding units must use the ('obs', 'feature') layout; "
+                        f"got {unit_container.dims}."
+                    )
+                X = np.asarray(unit_container.X)
                 feature_names = [
-                    str(value) for value in flattened.coords.get("feature", np.arange(X.shape[1]))
+                    str(value)
+                    for value in unit_container.coords.get("feature", np.arange(X.shape[1]))
                 ]
                 context = {
                     "scope": scope,
@@ -707,7 +703,7 @@ def run(config: dict[str, Any]) -> Path:
         loader_args = build_loader_args(
             config,
             input_mode=plan.input_mode,
-            layout_mode=plan.layout_mode,
+            layout_mode="flat",
         )
         qc_report_results: list[tuple[str, Any]] = []
 
