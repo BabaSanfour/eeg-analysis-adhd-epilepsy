@@ -40,23 +40,6 @@ def require_config(
 
 
 # ---------------------------------------------------------------------------
-# Layout helpers
-# ---------------------------------------------------------------------------
-
-
-def base_layout_mode(input_mode: str) -> str:
-    """Analysis mode used to *load* the shared base container for a scope.
-
-    Descriptor containers are loaded in ``sensor`` layout (``obs × sensor ×
-    feature``) so a single load can be re-sliced into every descriptor analysis
-    unit (flat, family, sensor, descriptor, …) without re-reading the table.
-    Everything else loads flat. Shared by the dim-reduction and decoding loaders
-    so the rule lives in one place.
-    """
-    return "sensor" if input_mode == "descriptors" else "flat"
-
-
-# ---------------------------------------------------------------------------
 # Family QC helpers
 # ---------------------------------------------------------------------------
 
@@ -251,7 +234,6 @@ def pool_containers_streaming(
 
 __all__ = [
     "apply_family_qc_mask",
-    "base_layout_mode",
     "container_pool_spec",
     "families_for_analysis_unit",
     "pool_containers",

@@ -26,10 +26,7 @@ from coco_pipe.io import (
 )
 from coco_pipe.utils import slug, stable_hash
 
-from eeg_adhd_epilepsy.analysis.utils.common import (
-    base_layout_mode,
-    require_config,
-)
+from eeg_adhd_epilepsy.analysis.utils.common import require_config
 from eeg_adhd_epilepsy.analysis.utils.hashing import normalize_scientific_paths
 
 _NON_SCIENTIFIC_HASH_KEYS = frozenset(
@@ -186,14 +183,13 @@ def prepare_decoding_scope(
 class ClassicalPlan:
     """Validated method plan for a classical decoding sweep.
 
-    Holds the derived, checked configuration (input/source/layout modes, the
-    analysis-mode order, per-model configs/grids/mode filters, tuning, selection
+    Holds the derived, checked configuration (input/source modes, the analysis-mode
+    order, per-model configs/grids/mode filters, tuning, selection
     passes, and target specs) so the entry point stays a thin loader + runner,
     mirroring the dim-reduction ``build_and_validate_mode_specs`` split.
     """
 
     input_mode: str
-    layout_mode: str
     analysis_modes: list[str]
     model_configs: dict[str, ClassicalModelConfig]
     model_analysis_modes: dict[str, set[str] | None]
@@ -216,8 +212,6 @@ def build_classical_plan(config: Mapping[str, Any]) -> ClassicalPlan:
             f"Invalid input_mode '{input_mode}'. Classical decoding requires "
             "'descriptors' or 'foundation_embeddings'."
         )
-
-    layout_mode = base_layout_mode(input_mode)
 
     analysis_modes = require_config(
         dict(config),
@@ -278,7 +272,6 @@ def build_classical_plan(config: Mapping[str, Any]) -> ClassicalPlan:
 
     return ClassicalPlan(
         input_mode=input_mode,
-        layout_mode=layout_mode,
         analysis_modes=analysis_modes,
         model_configs=model_configs,
         model_analysis_modes=model_analysis_modes,

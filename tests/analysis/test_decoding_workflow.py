@@ -505,21 +505,27 @@ def test_foundation_plan_builds_transform_and_reduction_axes(tmp_path):
     assert leace.experiment_config.erasure.enabled
 
 
-def test_nonflat_descriptor_sweeps(tmp_path, monkeypatch):
+def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
     groups, labels, coords = _observation_coords()
     rng = np.random.default_rng(15)
-    X = rng.normal(size=(len(groups), 2, 2))
-    X[:, 0, 0] += (labels == "ADHD").astype(float)
+    X = rng.normal(size=(len(groups), 4))
+    X[:, 0] += (labels == "ADHD").astype(float)
     container = DataContainer(
         X=X,
-        dims=("obs", "sensor", "feature"),
+        dims=("obs", "feature"),
         coords={
             **coords,
-            "sensor": ["Fz", "Cz"],
-            "feature": ["alpha", "entropy"],
-            "feature_family": ["band", "complexity"],
-            "feature_subfamily": ["alpha", "entropy"],
-            "feature_descriptor": ["alpha", "entropy"],
+            "feature": [
+                "band_alpha_ch-Fz",
+                "complexity_entropy_ch-Fz",
+                "band_alpha_ch-Cz",
+                "complexity_entropy_ch-Cz",
+            ],
+            "feature_family": ["band", "complexity", "band", "complexity"],
+            "feature_channel": ["Fz", "Fz", "Cz", "Cz"],
+            "feature_measure": ["alpha", "entropy", "alpha", "entropy"],
+            "feature_subfamily": ["alpha", "entropy", "alpha", "entropy"],
+            "feature_descriptor": ["alpha", "entropy", "alpha", "entropy"],
         },
         ids=np.asarray([f"r{idx:03d}" for idx in range(len(groups))]),
     )

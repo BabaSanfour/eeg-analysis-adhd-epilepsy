@@ -14,7 +14,6 @@ from coco_pipe.utils import slug
 from joblib.parallel import get_active_backend
 
 import eeg_adhd_epilepsy.analysis.dimensionality_reduction as dim_reduction
-from eeg_adhd_epilepsy.analysis.utils.common import base_layout_mode
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     DEFAULT_DIM_REDUCTION_SELECTION_METRIC,
     SEPARATION_RF_METRIC_KEY,
@@ -58,12 +57,6 @@ def _mode_args(analysis_modes, *, input_mode, representation=None):
         input_mode=input_mode,
         representation=representation,
     )
-
-
-def test_base_layout_mode():
-    assert base_layout_mode("descriptors") == "sensor"
-    assert base_layout_mode("raw") == "flat"
-    assert base_layout_mode("foundation_embeddings") == "flat"
 
 
 def test_build_mode_specs_from_analysis_modes_mapping():
@@ -210,60 +203,6 @@ def test_validate_foundation_flat_only():
                 representation="foundation_recording",
             )
         )
-
-
-# --- Shared sensor-layout base container flattens for the flat unit -------------
-
-
-def test_collect_flat_unit_flattens_sensor_layout_container(tmp_path):
-    # A descriptor base container is loaded once in (obs, sensor, feature) layout
-    # and reused for every mode; the flat unit must be flattened to 2D.
-    container = DataContainer(
-        X=np.arange(4 * 2 * 2, dtype=float).reshape(4, 2, 2),
-        dims=("obs", "sensor", "feature"),
-        coords={
-            "sensor": np.asarray(["Fz", "Cz"], dtype=object),
-            "feature": np.asarray(["alpha_mean", "beta_mean"], dtype=object),
-            "feature_family": np.asarray(["band", "band"], dtype=object),
-        },
-        ids=np.asarray(["r1", "r2", "r3", "r4"], dtype=object),
-    )
-    args = SimpleNamespace(
-        input_mode="descriptors",
-        representation="features",
-        analysis_mode="flat",
-        descriptor_families=None,
-        filter_col=[],
-        filter_val=[],
-        group_filters=None,
-        balance_target=None,
-        balance_strategy="undersample",
-        descriptor_table_path=str(tmp_path / "features.csv"),
-        descriptor_feature_columns_path=str(tmp_path / "columns.json"),
-        descriptor_max_abs_value=None,
-        location_statistic=None,
-        run_label="test",
-        run_config_hash="cfg",
-        overwrite=True,
-        subject_col="study_id",
-        n_components_sweep=[2, 3],
-        qc={},
-    )
-    requests = dim_reduction._collect_scope_fit_requests(
-        scope="condition",
-        condition="EO_baseline",
-        container=container,
-        args=args,
-        reducers=["PCA"],
-        output_root=tmp_path,
-        unit_containers_by_key={},
-        data_availability=[],
-    )
-    # One flat unit; the flattened matrix has 2 sensors x 2 features = 4 columns,
-    # so the full [2, 3] sweep is valid.
-    assert len(requests) == 2
-    assert {request["fit_payload"]["n_components"] for request in requests} == {2, 3}
-    assert {request["fit_payload"]["unit_name"] for request in requests} == {"all"}
 
 
 def test_dim_reduction_batches_use_thread_backend_for_parallel_work():
@@ -567,16 +506,27 @@ def test_rollup_does_not_probe_legacy_diagnostic_locations(tmp_path):
 
 
 def _synthetic_descriptor_container():
-    n_obs, n_sensor, n_feature = 12, 2, 2
+    n_obs = 12
     rng = np.random.default_rng(0)
     diagnosis = np.array(["ADHD"] * 6 + ["Control"] * 6, dtype=object)
     return DataContainer(
-        X=rng.normal(size=(n_obs, n_sensor, n_feature)),
-        dims=("obs", "sensor", "feature"),
+        X=rng.normal(size=(n_obs, 4)),
+        dims=("obs", "feature"),
         coords={
-            "sensor": np.asarray(["Fz", "Cz"], dtype=object),
-            "feature": np.asarray(["alpha", "sampen"], dtype=object),
-            "feature_family": np.asarray(["band", "complexity"], dtype=object),
+            "feature": np.asarray(
+                [
+                    "band_alpha_ch-Fz",
+                    "complexity_sampen_ch-Fz",
+                    "band_alpha_ch-Cz",
+                    "complexity_sampen_ch-Cz",
+                ],
+                dtype=object,
+            ),
+            "feature_family": np.asarray(
+                ["band", "complexity", "band", "complexity"], dtype=object
+            ),
+            "feature_channel": np.asarray(["Fz", "Fz", "Cz", "Cz"], dtype=object),
+            "feature_measure": np.asarray(["alpha", "sampen", "alpha", "sampen"], dtype=object),
             "study_id": np.asarray([f"{i:04d}" for i in range(1, n_obs + 1)], dtype=object),
             "condition": np.asarray(["EO_baseline"] * n_obs, dtype=object),
             "combined_diagnosis": diagnosis,

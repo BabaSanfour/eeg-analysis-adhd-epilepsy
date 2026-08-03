@@ -42,7 +42,6 @@ from joblib import parallel_backend
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.common import (
     apply_family_qc_mask,
-    base_layout_mode,
     families_for_analysis_unit,
     pool_containers,
     require_config,
@@ -110,8 +109,11 @@ def _collect_scope_fit_requests(
             unit_spec["container"],
             families,
         )
-        if np.asarray(unit_container.X).ndim != 2:
-            unit_container = unit_container.flatten(preserve="obs")
+        if unit_container.dims != ("obs", "feature"):
+            raise ValueError(
+                "Dimensionality-reduction units must use the "
+                f"('obs', 'feature') layout; got {unit_container.dims}."
+            )
         unit_spec = {**unit_spec, "container": unit_container}
         unit_container = unit_spec["container"]
         unit_containers_by_key[(scope, condition, unit_spec["unit_key"])] = unit_container
@@ -732,7 +734,7 @@ def run(config: dict[str, Any]) -> None:
         spec = mode_specs[mode]
         reducers_for_this_mode = spec["reducers"]
         sweep_for_this_mode = [int(value) for value in spec["n_components"]]
-        base_load_mode = "sensor" if args.input_mode == "raw" else base_layout_mode(args.input_mode)
+        base_load_mode = "sensor" if args.input_mode == "raw" else "flat"
         try:
             summary = execute_analysis_mode(
                 args=args,
