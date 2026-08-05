@@ -473,6 +473,57 @@ def test_fit_request_collection_skips_invalid_n_components(tmp_path):
     assert availability[0]["skipped_n_components"] == [4, 10]
 
 
+def test_fit_request_collection_passes_per_reducer_execution_params(tmp_path):
+    container = DataContainer(
+        X=np.zeros((3, 5)),
+        dims=("obs", "feature"),
+        coords={"feature": np.arange(5)},
+        ids=np.asarray(["obs1", "obs2", "obs3"], dtype=object),
+    )
+    args = SimpleNamespace(
+        input_mode="raw",
+        analysis_mode="flat",
+        descriptor_families=None,
+        n_components_sweep=[2],
+        filter_col=[],
+        filter_val=[],
+        group_filters=None,
+        balance_target=None,
+        balance_strategy="undersample",
+        representation="epoch",
+        bids_root=str(tmp_path),
+        use_derivatives=False,
+        task="clinical",
+        segment_duration=60.0,
+        overlap=0.0,
+        desc="base",
+        window_source="auto",
+        qc=None,
+        run_label="test",
+        run_config_hash="cfg",
+        overwrite=False,
+        subject_col="study_id",
+        reducer_params={"UMAP": {"n_jobs": 1}},
+    )
+
+    requests = _collect_scope_fit_requests(
+        scope="condition",
+        condition="EO_baseline",
+        container=container,
+        args=args,
+        reducers=["PCA", "UMAP"],
+        output_root=tmp_path,
+        unit_containers_by_key={},
+        data_availability=[],
+    )
+
+    params_by_reducer = {
+        request["fit_payload"]["reducer"]: request["fit_payload"]["reducer_params"]
+        for request in requests
+    }
+    assert params_by_reducer == {"PCA": {}, "UMAP": {"n_jobs": 1}}
+
+
 def test_raw_recording_representation_builds_recording_id(monkeypatch, tmp_path):
     source = DataContainer(
         X=np.asarray([1.0, 3.0, 5.0, 7.0]).reshape(4, 1, 1),

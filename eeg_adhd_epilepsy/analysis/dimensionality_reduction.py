@@ -24,7 +24,6 @@ from coco_pipe.dim_reduction import (
     parse_eval_specs,
     run_eval,
     run_fit_group,
-    update_runs,
     valid_component_sweep,
     write_run_status,
 )
@@ -36,8 +35,8 @@ from coco_pipe.io import (
     read_table,
     write_json,
 )
-from coco_pipe.utils import resolve_n_jobs, run_task_batch, slug, stable_hash
-from joblib import parallel_backend
+from coco_pipe.utils import resolve_n_jobs, slug, stable_hash
+from joblib import Parallel, delayed, parallel_backend
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.common import (
@@ -79,6 +78,8 @@ from eeg_adhd_epilepsy.utils.constants import DEFAULT_ANALYSIS_CONDITIONS
 
 logger = logging.getLogger(__name__)
 DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
+RUN_INVENTORY_FLUSH_SIZE = 100
+DEFAULT_REDUCER_PARAMS = {"UMAP": {"n_jobs": 1}}
 
 
 def _collect_scope_fit_requests(
@@ -153,6 +154,7 @@ def _collect_scope_fit_requests(
                 overwrite=bool(args.overwrite),
                 subject_col=args.subject_col,
                 container_signature=container_signature,
+                reducer_params=dict(getattr(args, "reducer_params", {}).get(reducer_name, {})),
             )
             if (request["out_path"] / "_SUCCESS").exists() and not request["overwrite"]:
                 num_skipped += 1
@@ -215,16 +217,77 @@ def _get_base_container(
     return container
 
 
+def _iter_shared_memory_batch(
+    tasks: list[Any],
+    worker_fn: Any,
+    max_workers: int,
+) -> Any:
+    """Yield fit/eval results as workers finish without duplicating large arrays."""
+    if not tasks:
+        return
+    if max_workers == 1 or len(tasks) <= 1:
+        for task in tasks:
+            yield worker_fn(task)
+        return
+    with parallel_backend("threading"):
+        yield from Parallel(
+            n_jobs=min(max_workers, len(tasks)),
+            return_as="generator_unordered",
+        )(delayed(worker_fn)(task) for task in tasks)
+
+
 def _run_shared_memory_batch(
     tasks: list[Any],
     worker_fn: Any,
     max_workers: int,
 ) -> list[Any]:
-    """Run fit/eval batches with thread workers to avoid duplicating large arrays."""
-    if max_workers == 1 or len(tasks) <= 1:
-        return run_task_batch(tasks, worker_fn, max_workers)
-    with parallel_backend("threading"):
-        return run_task_batch(tasks, worker_fn, max_workers)
+    """Return a materialized shared-memory batch (kept for small callers/tests)."""
+    return list(_iter_shared_memory_batch(tasks, worker_fn, max_workers))
+
+
+def _update_runs_bulk(
+    path: Path,
+    records: list[dict[str, Any]],
+    *,
+    key_fields: tuple[str, ...],
+) -> None:
+    """Upsert a batch of inventory records with one read/sort/write cycle."""
+    if not records:
+        return
+    existing = read_json(path) if path.exists() else []
+    if not isinstance(existing, list):
+        raise ValueError(f"Expected list payload in {path}.")
+
+    by_key = {tuple(record.get(field) for field in key_fields): dict(record) for record in existing}
+    for record in records:
+        by_key[tuple(record.get(field) for field in key_fields)] = dict(record)
+
+    sort_fields = (
+        *key_fields,
+        "scope",
+        "condition",
+        "analysis_mode",
+        "family",
+        "unit_name",
+        "reducer",
+        "n_components",
+    )
+    merged = sorted(
+        by_key.values(),
+        key=lambda record: tuple(str(record.get(field, "")) for field in sort_fields),
+    )
+    write_json(path, merged, indent=2)
+
+
+def _fit_progress_label(record: dict[str, Any]) -> str:
+    """Return a compact fit label for worker-completion logging."""
+    return (
+        "/".join(
+            str(record.get(field, ""))
+            for field in ("condition", "analysis_mode", "unit_name", "reducer")
+        )
+        + f"/n{record.get('n_components', '')}"
+    )
 
 
 def _run_lazy_eval_request(request: dict[str, Any]) -> dict[str, Any]:
@@ -353,14 +416,38 @@ def execute_analysis_mode(
             )
             fit_groups = group_fit_requests(fit_requests)
             fit_runs = []
-            for group_records in _run_shared_memory_batch(
-                fit_groups,
-                lambda group: run_fit_group(group, errors="raise"),
-                resolved_n_jobs,
-            ):
-                for record in group_records:
-                    update_runs(fit_runs_path, record, key_fields=FIT_RUN_KEY_FIELDS)
-                    fit_runs.append(record)
+            fit_inventory_buffer: list[dict[str, Any]] = []
+            completed_fits = 0
+            try:
+                for group_records in _iter_shared_memory_batch(
+                    fit_groups,
+                    lambda group: run_fit_group(group, errors="raise"),
+                    resolved_n_jobs,
+                ):
+                    for record in group_records:
+                        fit_runs.append(record)
+                        fit_inventory_buffer.append(record)
+                        completed_fits += 1
+                        logger.info(
+                            "Completed fit %d/%d: %s [%s]",
+                            completed_fits,
+                            len(fit_requests),
+                            _fit_progress_label(record),
+                            record.get("status", "unknown"),
+                        )
+                    if len(fit_inventory_buffer) >= RUN_INVENTORY_FLUSH_SIZE:
+                        _update_runs_bulk(
+                            fit_runs_path,
+                            fit_inventory_buffer,
+                            key_fields=FIT_RUN_KEY_FIELDS,
+                        )
+                        fit_inventory_buffer.clear()
+            finally:
+                _update_runs_bulk(
+                    fit_runs_path,
+                    fit_inventory_buffer,
+                    key_fields=FIT_RUN_KEY_FIELDS,
+                )
 
             if eval_specs:
                 eval_requests: list[dict[str, Any]] = []
@@ -392,12 +479,37 @@ def execute_analysis_mode(
                             }
                         )
                 logger.info("Queued %d eval request(s) for mode '%s'.", len(eval_requests), mode)
-                for record in _run_shared_memory_batch(
-                    eval_requests,
-                    _run_lazy_eval_request,
-                    resolved_n_jobs,
-                ):
-                    update_runs(eval_runs_path, record, key_fields=EVAL_RUN_KEY_FIELDS)
+                eval_inventory_buffer: list[dict[str, Any]] = []
+                completed_evals = 0
+                try:
+                    for record in _iter_shared_memory_batch(
+                        eval_requests,
+                        _run_lazy_eval_request,
+                        resolved_n_jobs,
+                    ):
+                        eval_inventory_buffer.append(record)
+                        completed_evals += 1
+                        logger.info(
+                            "Completed eval %d/%d: %s/%s [%s]",
+                            completed_evals,
+                            len(eval_requests),
+                            _fit_progress_label(record),
+                            record.get("eval_name", ""),
+                            record.get("status", "unknown"),
+                        )
+                        if len(eval_inventory_buffer) >= RUN_INVENTORY_FLUSH_SIZE:
+                            _update_runs_bulk(
+                                eval_runs_path,
+                                eval_inventory_buffer,
+                                key_fields=EVAL_RUN_KEY_FIELDS,
+                            )
+                            eval_inventory_buffer.clear()
+                finally:
+                    _update_runs_bulk(
+                        eval_runs_path,
+                        eval_inventory_buffer,
+                        key_fields=EVAL_RUN_KEY_FIELDS,
+                    )
 
         if not fit_runs:
             raise RuntimeError(
@@ -553,6 +665,13 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         n_components_sweep=list(config.get("n_components_sweep", []) or []),
         # Execution / reporting
         n_jobs=config.get("n_jobs", 1),
+        reducer_params={
+            **{name: dict(params) for name, params in DEFAULT_REDUCER_PARAMS.items()},
+            **{
+                str(name): dict(params)
+                for name, params in (config.get("reducer_params", {}) or {}).items()
+            },
+        },
         overwrite=bool(config.get("overwrite", False)),
         reports_only=bool(config.get("reports_only", False)),
         reports_root=config.get("reports_root"),
