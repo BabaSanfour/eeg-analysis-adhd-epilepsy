@@ -45,14 +45,14 @@ dra_activate() {
     mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
 }
 
-# --- BLAS thread pinning ---------------------------------------------------
-# Pin OMP/MKL/OpenBLAS/NumExpr to $1 (default 1). Pin to 1 when parallelism is at
-# the process level (joblib over subjects); pass the core count for a single
-# process that wants threaded BLAS (merges, per-recording descriptor extraction).
+# --- Native-library thread pinning -----------------------------------------
+# Pin BLAS/NumExpr/Numba to $1 (default 1). Pin to 1 when joblib owns the outer
+# task parallelism; pass the core count for one task that wants native threads.
 dra_pin_threads() {
     local n="${1:-1}"
     export OMP_NUM_THREADS="$n" MKL_NUM_THREADS="$n" \
-           OPENBLAS_NUM_THREADS="$n" NUMEXPR_NUM_THREADS="$n"
+           OPENBLAS_NUM_THREADS="$n" NUMEXPR_NUM_THREADS="$n" \
+           NUMBA_NUM_THREADS="$n"
 }
 
 # --- Guards ----------------------------------------------------------------

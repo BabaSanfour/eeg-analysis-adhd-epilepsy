@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from types import SimpleNamespace
 
 import numpy as np
@@ -211,7 +212,40 @@ def test_dim_reduction_batches_use_thread_backend_for_parallel_work():
 
     records = dim_reduction._run_shared_memory_batch([1, 2], worker, max_workers=2)
 
-    assert records == [("ThreadingBackend", 1), ("ThreadingBackend", 2)]
+    assert sorted(records) == [("ThreadingBackend", 1), ("ThreadingBackend", 2)]
+
+
+def test_umap_is_single_threaded_without_changing_analysis_config():
+    args = dim_reduction._run_args_from_config({})
+
+    assert args.reducer_params == {"UMAP": {"n_jobs": 1}}
+
+
+def test_bulk_inventory_update_upserts_many_records_with_one_write(tmp_path, monkeypatch):
+    path = tmp_path / "fit_runs.json"
+    path.write_text(json.dumps([{"fit_id": "fit-1", "status": "old"}]))
+    writes = []
+    real_write_json = dim_reduction.write_json
+
+    def counting_write_json(output_path, payload, **kwargs):
+        writes.append((output_path, payload))
+        return real_write_json(output_path, payload, **kwargs)
+
+    monkeypatch.setattr(dim_reduction, "write_json", counting_write_json)
+    dim_reduction._update_runs_bulk(
+        path,
+        [
+            {"fit_id": "fit-1", "status": "success"},
+            {"fit_id": "fit-2", "status": "success"},
+        ],
+        key_fields=("fit_id",),
+    )
+
+    assert len(writes) == 1
+    assert json.loads(path.read_text()) == [
+        {"fit_id": "fit-1", "status": "success"},
+        {"fit_id": "fit-2", "status": "success"},
+    ]
 
 
 def test_eval_request_loads_fit_artifact_only_inside_worker(monkeypatch):
@@ -537,7 +571,7 @@ def _synthetic_descriptor_container():
     )
 
 
-def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch):
+def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch, caplog):
     bids_root = tmp_path / "BIDS"
     bids_root.mkdir()
     reports_root = tmp_path / "reports"
@@ -607,6 +641,7 @@ def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch):
         "1",
     ]
     monkeypatch.setattr("sys.argv", argv)
+    caplog.set_level(logging.INFO)
     dim_reduction.main()
 
     # Two modes (flat, family) share ONE load of the single condition.
@@ -636,6 +671,8 @@ def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch):
 
     rollups = list(reports_root.rglob("rollup_leaderboard.html"))
     assert len(rollups) == 1
+    assert "Completed fit" in caplog.text
+    assert "Completed eval" in caplog.text
 
 
 def _fit_request(reducer, n_components):
