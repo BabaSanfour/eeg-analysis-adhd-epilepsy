@@ -98,11 +98,14 @@ run_descriptor_classical() {
             --descriptor_table_path "$table_path"
             --descriptor_feature_columns_path "$columns_path"
             --representation "$rep"
-            --n_jobs "$THREADS"
+            --n_jobs "${CLASSICAL_OUTER_N_JOBS:-$THREADS}"
             --no-write-shared-comparison-report
         )
         if [ "$OVERWRITE" = "1" ]; then
             cmd+=(--overwrite)
+        fi
+        if [ -n "${CLASSICAL_INNER_N_JOBS:-}" ]; then
+            cmd+=(--inner_n_jobs "$CLASSICAL_INNER_N_JOBS")
         fi
         "${cmd[@]}"
     done
@@ -135,11 +138,14 @@ run_saved_embedding_classical() {
                 --embedding_derivative_root "$EMBEDDING_ROOT"
                 --embedding_model_key "$model"
                 --representation "$rep"
-                --n_jobs "$THREADS"
+                --n_jobs "${CLASSICAL_OUTER_N_JOBS:-$THREADS}"
                 --no-write-shared-comparison-report
             )
             if [ "$OVERWRITE" = "1" ]; then
                 cmd+=(--overwrite)
+            fi
+            if [ -n "${CLASSICAL_INNER_N_JOBS:-}" ]; then
+                cmd+=(--inner_n_jobs "$CLASSICAL_INNER_N_JOBS")
             fi
             "${cmd[@]}"
         done
