@@ -36,6 +36,7 @@ _NON_SCIENTIFIC_HASH_KEYS = frozenset(
         "compare_only",
         "reports_root",
         "n_jobs",
+        "inner_n_jobs",
         "overwrite",
         "verbose",
         "report_asset_urls",

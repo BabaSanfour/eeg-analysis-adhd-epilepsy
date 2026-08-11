@@ -229,6 +229,7 @@ def _build_selection_units(
     overwrite: bool,
 ):
     """Yield transform x reduction x feature-selection decoding units."""
+    inner_n_jobs = max(1, int(config.get("inner_n_jobs", 1)))
     names = [str(value) for value in unit["container"].coords.get("feature", np.arange(X.shape[1]))]
     valid_selection_specs = [
         spec
@@ -314,7 +315,7 @@ def _build_selection_units(
                             random_state=random_state,
                             group_key="group_id",
                         ),
-                        n_jobs=1,
+                        n_jobs=inner_n_jobs,
                         allow_nongroup_inner_cv=bool(
                             plan.tuning_cfg.get("allow_nongroup_inner_cv", False)
                         ),
@@ -353,7 +354,7 @@ def _build_selection_units(
                     ),
                     metrics=list(plan.metrics),
                     use_scaler=True,
-                    n_jobs=1,
+                    n_jobs=inner_n_jobs,
                     verbose=bool(config["verbose"]),
                 )
                 yield DecodingUnit(
@@ -828,6 +829,12 @@ def main() -> None:
     parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
     parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
+    parser.add_argument(
+        "--inner_n_jobs",
+        type=int,
+        default=None,
+        help="Parallel workers inside each decoding unit (default: 1).",
+    )
     parser.add_argument("--reports_root", default=None, help="Override reports root (else config).")
     parser.add_argument(
         "--derivative_root",
@@ -892,6 +899,7 @@ def main() -> None:
         bids_root=args.bids_root,
         metadata=args.metadata,
         n_jobs=args.n_jobs,
+        inner_n_jobs=args.inner_n_jobs,
         reports_root=args.reports_root,
         derivative_root=args.derivative_root,
         descriptor_table_path=args.descriptor_table_path,
