@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -116,6 +117,9 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
         ],
         "n_null_permutations": 2,
         "random_state": 2,
+        "diagnostic_batch_max_bytes": 512,
+        "participation_ratio_max_gram_bytes": 1,
+        "subject_probe_epochs": 1,
         "overwrite": False,
     }
 
@@ -233,8 +237,15 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
         (source_root / "_alignment_demo_progress.json").read_text(encoding="utf-8")
     )
     assert set(progress["completed_diagnostics"]) == set(config["transforms"])
+    ra_rank = diagnostics[
+        (diagnostics["transform"] == "ra")
+        & diagnostics["metric"].str.startswith("variance_participation_ratio")
+    ]
+    assert set(ra_rank["status"]) == {"skipped"}
+    assert ra_rank["reason"].str.contains("feature Gram matrix").all()
 
     real_score_diagnostics = align_subject_embeddings.score_variance_diagnostics
+    real_streamed_score_diagnostics = align_subject_embeddings.score_streamed_variance_diagnostics
 
     def fail_if_recomputed(*args, **kwargs):
         pytest.fail("A completed diagnostic checkpoint was recomputed.")
@@ -244,6 +255,11 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
         "score_variance_diagnostics",
         fail_if_recomputed,
     )
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "score_streamed_variance_diagnostics",
+        fail_if_recomputed,
+    )
     assert align_subject_embeddings.run(config) == source_root
     with pytest.raises(ValueError, match="different alignment configuration"):
         align_subject_embeddings.run({**config, "n_null_permutations": 3})
@@ -251,6 +267,11 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
         align_subject_embeddings,
         "score_variance_diagnostics",
         real_score_diagnostics,
+    )
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "score_streamed_variance_diagnostics",
+        real_streamed_score_diagnostics,
     )
 
     resume_root = tmp_path / "resume_source"
@@ -316,13 +337,14 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
 
     resumed_scores = []
 
-    def track_resumed_scores(features, tasks, score_config, *, transform):
+    def track_resumed_scores(features, tasks, score_config, *, transform, n_observations):
         resumed_scores.append(transform)
-        return real_score_diagnostics(
+        return real_streamed_score_diagnostics(
             features,
             tasks,
             score_config,
             transform=transform,
+            n_observations=n_observations,
         )
 
     monkeypatch.setattr(
@@ -332,7 +354,7 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
     )
     monkeypatch.setattr(
         align_subject_embeddings,
-        "score_variance_diagnostics",
+        "score_streamed_variance_diagnostics",
         track_resumed_scores,
     )
     token_load_batches.clear()
@@ -347,8 +369,8 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
     assert "Skipped 3 completed subject(s) for transform 'ra'; 1 pending." in caplog.text
     monkeypatch.setattr(
         align_subject_embeddings,
-        "score_variance_diagnostics",
-        real_score_diagnostics,
+        "score_streamed_variance_diagnostics",
+        real_streamed_score_diagnostics,
     )
 
     degenerate_root = tmp_path / "degenerate_source"
@@ -419,3 +441,95 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
     )
     assert completion["materialized_transforms"] == ["ea_mean"]
     assert set(completion["skipped_transforms"]) == {"leace"}
+
+
+def test_aligned_artifact_batch_source_bounds_batches_and_validates(monkeypatch):
+    pooled_ids = np.asarray(["a", "b", "c"], dtype=object)
+    containers = {
+        "first.npz": SimpleNamespace(
+            X=np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+            ids=np.asarray(["a", "b"], dtype=object),
+        ),
+        "second.npz": SimpleNamespace(
+            X=np.asarray([[5.0, 6.0]], dtype=np.float32),
+            ids=np.asarray(["c"], dtype=object),
+        ),
+    }
+
+    def fake_load(paths, **kwargs):
+        assert kwargs == {"representation": "epoch", "model_key": "demo_align-ra"}
+        return containers[Path(paths[0]).name]
+
+    monkeypatch.setattr(align_subject_embeddings, "load_embedding_derivatives", fake_load)
+    source = align_subject_embeddings._AlignedArtifactBatchSource(
+        [Path("first.npz"), Path("second.npz")],
+        pooled_ids=pooled_ids,
+        model_key="demo",
+        transform_name="ra",
+        max_batch_bytes=16,
+    )
+    batches = list(source)
+    assert [len(rows) for rows, _ in batches] == [1, 1, 1]
+    np.testing.assert_array_equal(np.concatenate([rows for rows, _ in batches]), np.arange(3))
+
+    missing = align_subject_embeddings._AlignedArtifactBatchSource(
+        [Path("first.npz")],
+        pooled_ids=pooled_ids,
+        model_key="demo",
+        transform_name="ra",
+        max_batch_bytes=16,
+    )
+    with pytest.raises(ValueError, match="do not exactly cover"):
+        list(missing)
+
+    containers["second.npz"] = SimpleNamespace(
+        X=np.asarray([[np.nan, 6.0]], dtype=np.float32),
+        ids=np.asarray(["c"], dtype=object),
+    )
+    with pytest.raises(ValueError, match="nonfinite"):
+        list(source)
+
+
+def test_aligned_artifact_batch_source_rejects_duplicate_and_inconsistent_rows(
+    monkeypatch,
+):
+    pooled_ids = np.asarray(["a", "b"], dtype=object)
+    containers = {
+        "first.npz": SimpleNamespace(
+            X=np.ones((1, 2), dtype=np.float32),
+            ids=np.asarray(["a"], dtype=object),
+        ),
+        "duplicate.npz": SimpleNamespace(
+            X=np.ones((1, 2), dtype=np.float32),
+            ids=np.asarray(["a"], dtype=object),
+        ),
+        "dimension.npz": SimpleNamespace(
+            X=np.ones((1, 3), dtype=np.float32),
+            ids=np.asarray(["b"], dtype=object),
+        ),
+    }
+    monkeypatch.setattr(
+        align_subject_embeddings,
+        "load_embedding_derivatives",
+        lambda paths, **kwargs: containers[Path(paths[0]).name],
+    )
+
+    duplicate = align_subject_embeddings._AlignedArtifactBatchSource(
+        [Path("first.npz"), Path("duplicate.npz")],
+        pooled_ids=pooled_ids,
+        model_key="demo",
+        transform_name="ra",
+        max_batch_bytes=64,
+    )
+    with pytest.raises(ValueError, match="absent|duplicate"):
+        list(duplicate)
+
+    inconsistent = align_subject_embeddings._AlignedArtifactBatchSource(
+        [Path("first.npz"), Path("dimension.npz")],
+        pooled_ids=pooled_ids,
+        model_key="demo",
+        transform_name="ra",
+        max_batch_bytes=64,
+    )
+    with pytest.raises(ValueError, match="inconsistent feature dimensions"):
+        list(inconsistent)
