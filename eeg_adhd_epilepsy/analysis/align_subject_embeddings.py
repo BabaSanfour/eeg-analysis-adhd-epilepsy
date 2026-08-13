@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +30,7 @@ from eeg_adhd_epilepsy.analysis.dataset import attach_subject_metadata
 from eeg_adhd_epilepsy.analysis.variance_diagnostics import (
     DiagnosticTask,
     build_diagnostic_tasks,
+    score_streamed_variance_diagnostics,
     score_variance_diagnostics,
     skipped_variance_diagnostics,
     write_variance_diagnostics,
@@ -163,16 +164,26 @@ def _align_and_save_ra_by_subject(
     model_key: str,
     params: Mapping[str, Any],
     overwrite: bool,
-) -> tuple[np.ndarray, list[Path]]:
-    """Write complete RA embeddings and retain them for diagnostics.
+) -> tuple[list[Path], dict[str, Any]]:
+    """Write pending RA embeddings without loading completed subject outputs.
 
     For each subject, native token derivatives are loaded together, reshaped to
     ``(window, token, feature)``, aligned, split back into source artifacts, and
     saved immediately.
     """
-    diagnostic_values: np.ndarray | None = None
-    assigned_rows = np.zeros(len(pooled_ids), dtype=bool)
     output_paths: list[Path] = []
+    first_token_path = next(
+        (path for paths in token_paths_by_subject.values() for path in paths), None
+    )
+    if first_token_path is None:
+        raise ValueError("RA received no source artifacts.")
+    first_token_metadata = read_json(embedding_sidecar_path(first_token_path))
+    token_axes = list(first_token_metadata["token_axes"])
+    token_shape = list(first_token_metadata["token_shape"])
+    token_feature_axis = str(first_token_metadata["token_feature_axis"])
+    token_feature_count = int(token_shape[token_axes.index(token_feature_axis)])
+    n_features = token_feature_count * (token_feature_count + 1) // 2
+    n_created_observations = 0
     transform_fingerprint = make_subject_transform("ra", **params).fingerprint()
     completed_outputs = {
         subject_id: _complete_subject_output_paths(
@@ -192,21 +203,6 @@ def _align_and_save_ra_by_subject(
     for subject_id, subject_paths in sorted(token_paths_by_subject.items()):
         existing_paths = completed_outputs[subject_id]
         if existing_paths is not None:
-            aligned_subject_windows, pooled_rows = _load_completed_subject_rows(
-                existing_paths,
-                pooled_ids=pooled_ids,
-                model_key=model_key,
-                transform_name="ra",
-            )
-            if diagnostic_values is None:
-                diagnostic_values = np.empty(
-                    (len(pooled_ids), aligned_subject_windows.shape[1]),
-                    dtype=np.float32,
-                )
-            elif diagnostic_values.shape[1] != aligned_subject_windows.shape[1]:
-                raise ValueError("Existing RA artifacts have inconsistent feature dimensions.")
-            diagnostic_values[pooled_rows] = aligned_subject_windows
-            assigned_rows[pooled_rows] = True
             output_paths.extend(existing_paths)
             continue
 
@@ -231,16 +227,9 @@ def _align_and_save_ra_by_subject(
         pooled_rows = occurrence_aligned_positions(pooled_ids, token_container.ids)
         if pooled_rows is None:
             raise ValueError("RA token observations do not match the pooled observations.")
-        pooled_rows = np.asarray(pooled_rows, dtype=int)
-        if diagnostic_values is None:
-            diagnostic_values = np.empty(
-                (len(pooled_ids), aligned_subject_windows.shape[1]),
-                dtype=np.float32,
-            )
-        elif diagnostic_values.shape[1] != aligned_subject_windows.shape[1]:
+        if n_features != aligned_subject_windows.shape[1]:
             raise ValueError("RA artifacts have inconsistent feature dimensions.")
-        diagnostic_values[pooled_rows] = aligned_subject_windows
-        assigned_rows[pooled_rows] = True
+        n_created_observations += len(aligned_subject_windows)
         window_start = np.asarray(token_container.coords["window_start"])
         window_stop = np.asarray(token_container.coords["window_stop"])
         window_index = np.asarray(token_container.coords["window_index"])
@@ -265,11 +254,104 @@ def _align_and_save_ra_by_subject(
                     overwrite=overwrite,
                 )
             )
-    if diagnostic_values is None:
+    if not output_paths:
         raise ValueError("RA received no source artifacts.")
-    if not assigned_rows.all():
-        raise ValueError("RA outputs do not exactly cover the pooled observations.")
-    return diagnostic_values, output_paths
+    return output_paths, {
+        "n_observations": len(pooled_ids),
+        "n_features": n_features,
+        "dtype": "float32",
+        "n_created_observations": n_created_observations,
+    }
+
+
+class _AlignedArtifactBatchSource:
+    """Re-iterable aligned-artifact reader with exact pooled-row validation."""
+
+    def __init__(
+        self,
+        artifact_paths: list[Path],
+        *,
+        pooled_ids: np.ndarray,
+        model_key: str,
+        transform_name: str,
+        max_batch_bytes: int,
+        expected_n_features: int | None = None,
+    ) -> None:
+        if max_batch_bytes < 1:
+            raise ValueError("diagnostic_batch_max_bytes must be at least 1.")
+        self.artifact_paths = tuple(Path(path) for path in artifact_paths)
+        self.pooled_ids = np.asarray(pooled_ids, dtype=object)
+        self.model_key = model_key
+        self.transform_name = transform_name
+        self.max_batch_bytes = int(max_batch_bytes)
+        self.expected_n_features = expected_n_features
+
+    @property
+    def n_observations(self) -> int:
+        return len(self.pooled_ids)
+
+    def __iter__(self) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+        pooled_positions: dict[str, list[int]] = {}
+        for position, observation_id in enumerate(self.pooled_ids.astype(str)):
+            pooled_positions.setdefault(observation_id, []).append(position)
+        occurrence_counts: dict[str, int] = {}
+        assigned = np.zeros(self.n_observations, dtype=bool)
+        n_features = self.expected_n_features
+        for artifact_path in self.artifact_paths:
+            container = load_embedding_derivatives(
+                [artifact_path],
+                representation="epoch",
+                model_key=f"{self.model_key}_align-{self.transform_name}",
+            )
+            values = np.asarray(container.X)
+            if values.ndim != 2:
+                raise ValueError(f"Aligned artifact must be two-dimensional: {artifact_path}.")
+            if n_features is None:
+                n_features = int(values.shape[1])
+            elif values.shape[1] != n_features:
+                raise ValueError(
+                    "Aligned artifacts have inconsistent feature dimensions: "
+                    f"expected {n_features}, got {values.shape[1]} in {artifact_path}."
+                )
+            if not np.isfinite(values).all():
+                raise ValueError(f"Aligned artifact contains nonfinite values: {artifact_path}.")
+            artifact_rows = np.empty(len(container.ids), dtype=int)
+            for index, observation_id in enumerate(np.asarray(container.ids).astype(str)):
+                occurrence = occurrence_counts.get(observation_id, 0)
+                available = pooled_positions.get(observation_id, [])
+                if not available:
+                    raise ValueError(
+                        "Aligned artifacts contain an observation absent from the pooled "
+                        f"source: {observation_id!r} in {artifact_path}."
+                    )
+                if occurrence >= len(available):
+                    raise ValueError(
+                        "Aligned artifacts contain duplicate pooled assignments for "
+                        f"observation {observation_id!r}."
+                    )
+                artifact_rows[index] = available[occurrence]
+                occurrence_counts[observation_id] = occurrence + 1
+            if assigned[artifact_rows].any() or len(np.unique(artifact_rows)) != len(artifact_rows):
+                raise ValueError("Aligned artifacts contain duplicate pooled assignments.")
+            assigned[artifact_rows] = True
+            # Statistics use float64 sufficient statistics even when artifacts are
+            # float32, so size chunks for their largest in-memory representation.
+            row_bytes = int(values.shape[1]) * max(int(values.dtype.itemsize), 8)
+            if row_bytes > self.max_batch_bytes:
+                raise ValueError(
+                    "One aligned feature row exceeds diagnostic_batch_max_bytes: "
+                    f"{row_bytes} > {self.max_batch_bytes} bytes."
+                )
+            rows_per_batch = max(1, self.max_batch_bytes // max(row_bytes, 1))
+            for start in range(0, len(values), rows_per_batch):
+                stop = min(start + rows_per_batch, len(values))
+                yield artifact_rows[start:stop], values[start:stop]
+        if not assigned.all():
+            missing = int((~assigned).sum())
+            raise ValueError(
+                "Aligned artifacts do not exactly cover the pooled observations: "
+                f"{missing} row(s) are missing."
+            )
 
 
 def _align_and_save_vector_by_subject(
@@ -669,15 +751,24 @@ def run(config: dict[str, Any]) -> Path:
         params = dict(transform_params.get(transform_name, {}) or {})
         LOGGER.info("Materializing global subject transform %s.", transform_name)
         output_paths: list[Path] = []
+        streamed_feature_batches: _AlignedArtifactBatchSource | None = None
 
         if transform_name == "ra":
-            aligned_embeddings, output_paths = _align_and_save_ra_by_subject(
+            output_paths, feature_metadata = _align_and_save_ra_by_subject(
                 token_paths_by_subject,
                 pooled_ids=pooled_ids,
                 source_root=source_root,
                 model_key=model_key,
                 params=params,
                 overwrite=overwrite,
+            )
+            streamed_feature_batches = _AlignedArtifactBatchSource(
+                output_paths,
+                pooled_ids=pooled_ids,
+                model_key=model_key,
+                transform_name="ra",
+                max_batch_bytes=int(config.get("diagnostic_batch_max_bytes", 512 * 1024**2)),
+                expected_n_features=feature_metadata["n_features"],
             )
         else:
             transform = make_subject_transform(transform_name, **params)
@@ -729,12 +820,21 @@ def run(config: dict[str, Any]) -> Path:
                 )
                 continue
 
-        transform_diagnostics = score_variance_diagnostics(
-            aligned_embeddings,
-            diagnostic_tasks,
-            config,
-            transform=transform_name,
-        )
+        if streamed_feature_batches is None:
+            transform_diagnostics = score_variance_diagnostics(
+                aligned_embeddings,
+                diagnostic_tasks,
+                config,
+                transform=transform_name,
+            )
+        else:
+            transform_diagnostics = score_streamed_variance_diagnostics(
+                streamed_feature_batches,
+                diagnostic_tasks,
+                config,
+                transform=transform_name,
+                n_observations=len(pooled_embeddings),
+            )
         write_variance_diagnostics(transform_diagnostics, diagnostics_root)
         _checkpoint_transform(
             progress,

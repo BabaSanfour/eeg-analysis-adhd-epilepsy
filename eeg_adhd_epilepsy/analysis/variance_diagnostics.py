@@ -22,7 +22,7 @@ import argparse
 import json
 import logging
 import os
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -30,6 +30,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from coco_pipe.decoding.targets import prepare_target
+from coco_pipe.diagnostics import streamed_variance_decomposition_report
 from coco_pipe.diagnostics.variance import variance_decomposition_report
 from coco_pipe.io import (
     DataContainer,
@@ -205,6 +206,92 @@ def score_variance_diagnostics(
             label="diagnostic_label",
             n_null_permutations=int(config["n_null_permutations"]),
             rng=np.random.default_rng(int(config["random_state"])),
+        )
+        rows.extend(
+            {
+                "transform": transform,
+                "cohort_name": str(config["dataset_name"]),
+                "population": task.population,
+                "scope": task.scope,
+                "eval_name": task.eval_name,
+                "target_col": task.target_col,
+                "selection_fingerprint": task.selection_fingerprint,
+                "target_encoding": task.target_encoding,
+                **row,
+            }
+            for row in report.to_dict("records")
+        )
+    return rows
+
+
+class _TaskFeatureBatches:
+    """Adapt pooled row indices from a re-iterable source to one task."""
+
+    def __init__(
+        self,
+        source: Iterable[tuple[np.ndarray, np.ndarray]],
+        task_indices: np.ndarray,
+        *,
+        n_observations: int,
+    ) -> None:
+        self.source = source
+        self._task_row = np.full(n_observations, -1, dtype=np.int64)
+        indices = np.asarray(task_indices, dtype=int)
+        if len(np.unique(indices)) != len(indices):
+            raise ValueError("DiagnosticTask indices must not contain duplicates.")
+        if np.any(indices < 0) or np.any(indices >= n_observations):
+            raise ValueError("DiagnosticTask indices fall outside the pooled observations.")
+        self._task_row[indices] = np.arange(len(indices))
+
+    def __iter__(self) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+        for pooled_rows, features in self.source:
+            task_rows = self._task_row[np.asarray(pooled_rows, dtype=int)]
+            selected = task_rows >= 0
+            if selected.any():
+                yield task_rows[selected], np.asarray(features)[selected]
+
+
+def score_streamed_variance_diagnostics(
+    feature_batches: Iterable[tuple[np.ndarray, np.ndarray]],
+    tasks: list[DiagnosticTask],
+    config: Mapping[str, Any],
+    *,
+    transform: str,
+    n_observations: int,
+) -> list[dict[str, Any]]:
+    """Compute configured diagnostics from re-iterable pooled feature batches."""
+    fixed_probe_settings = {
+        "subject_probe_optimizer": "sgd",
+        "subject_probe_device": "cpu",
+        "subject_probe_dtype": "float32",
+    }
+    for key, expected in fixed_probe_settings.items():
+        actual = str(config.get(key, expected)).lower()
+        if actual != expected:
+            raise ValueError(
+                f"{key} is fixed to {expected!r} for streamed diagnostics, got {actual!r}."
+            )
+    rows: list[dict[str, Any]] = []
+    for task in tasks:
+        report = streamed_variance_decomposition_report(
+            _TaskFeatureBatches(
+                feature_batches,
+                task.indices,
+                n_observations=n_observations,
+            ),
+            task.subjects,
+            task.labels,
+            n_null_permutations=int(config["n_null_permutations"]),
+            rng=np.random.default_rng(int(config["random_state"])),
+            probe_cap=int(config.get("subject_probe_cap", 100)),
+            probe_n_splits=int(config.get("subject_probe_n_splits", 5)),
+            probe_seed=int(config.get("subject_probe_seed", 42)),
+            probe_epochs=int(config.get("subject_probe_epochs", 10)),
+            probe_learning_rate=float(config.get("subject_probe_learning_rate", 0.01)),
+            probe_weight_decay=float(config.get("subject_probe_weight_decay", 1e-4)),
+            participation_ratio_max_gram_bytes=int(
+                config.get("participation_ratio_max_gram_bytes", 4 * 1024**3)
+            ),
         )
         rows.extend(
             {
