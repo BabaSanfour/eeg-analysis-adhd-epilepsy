@@ -4,6 +4,7 @@ import json
 
 import numpy as np
 import pandas as pd
+import pytest
 from coco_pipe.decoding.foundation_models import FoundationEmbeddingResult
 from coco_pipe.io import DataContainer, save_embedding_derivative
 
@@ -265,3 +266,113 @@ def test_diagnostic_class_order_limits_diagnostics_not_training_population():
         "9-12": 1,
         "13-18": 2,
     }
+
+
+class _CountingFeatureBatches:
+    """Chunked feature-batch source that records how many times it is iterated."""
+
+    def __init__(self, rows: np.ndarray, features: np.ndarray, chunk_size: int) -> None:
+        self.rows = rows
+        self.features = features
+        self.chunk_size = chunk_size
+        self.iter_count = 0
+
+    def __iter__(self):
+        self.iter_count += 1
+        for start in range(0, len(self.rows), self.chunk_size):
+            stop = start + self.chunk_size
+            yield self.rows[start:stop], self.features[start:stop]
+
+
+def _streamed_diagnostics_probe_config(**overrides):
+    return {
+        "n_null_permutations": 2,
+        "random_state": 0,
+        "dataset_name": "test_cohort",
+        "subject_probe_cap": 100,
+        "subject_probe_n_splits": 2,
+        "subject_probe_seed": 42,
+        "subject_probe_epochs": 1,
+        **overrides,
+    }
+
+
+def _make_streamed_diagnostics_task(rng, n_subjects=4, per_subject=6, n_features=4):
+    n_obs = n_subjects * per_subject
+    subjects = np.repeat([f"sub-{i}" for i in range(n_subjects)], per_subject)
+    labels = np.repeat(np.arange(n_subjects) % 2, per_subject)
+    features = rng.standard_normal((n_obs, n_features)).astype(np.float32)
+    indices = np.arange(n_obs)
+    task = vd.DiagnosticTask(
+        population="clinical_task_subset",
+        scope="pooled",
+        eval_name="diagnosis",
+        target_col="diagnosis",
+        indices=indices,
+        subjects=subjects,
+        labels=labels,
+        observation_ids=indices.astype(str),
+        selection_fingerprint="fp",
+        target_encoding="{}",
+    )
+    return task, indices, features
+
+
+def test_streamed_diagnostics_materializes_task_batches_once():
+    rng = np.random.default_rng(0)
+    task, indices, features = _make_streamed_diagnostics_task(rng)
+    source = _CountingFeatureBatches(indices, features, chunk_size=5)
+
+    rows = vd.score_streamed_variance_diagnostics(
+        source,
+        [task],
+        _streamed_diagnostics_probe_config(diagnostic_task_cache_max_bytes=10 * 1024**2),
+        transform="ra",
+        n_observations=len(indices),
+    )
+
+    assert rows
+    # One pass materializes the task's rows in memory; the ~80 internal passes
+    # streamed_variance_decomposition_report normally makes (null permutations,
+    # subject-probe folds/epochs, ...) then hit that in-memory copy instead of
+    # re-reading from the source.
+    assert source.iter_count == 1
+
+
+def test_streamed_diagnostics_falls_back_to_streaming_when_over_budget():
+    rng = np.random.default_rng(0)
+    task, indices, features = _make_streamed_diagnostics_task(rng)
+
+    materialized_source = _CountingFeatureBatches(indices, features, chunk_size=5)
+    materialized_rows = vd.score_streamed_variance_diagnostics(
+        materialized_source,
+        [task],
+        _streamed_diagnostics_probe_config(diagnostic_task_cache_max_bytes=10 * 1024**2),
+        transform="ra",
+        n_observations=len(indices),
+    )
+
+    streamed_source = _CountingFeatureBatches(indices, features, chunk_size=5)
+    streamed_rows = vd.score_streamed_variance_diagnostics(
+        streamed_source,
+        [task],
+        _streamed_diagnostics_probe_config(diagnostic_task_cache_max_bytes=1),
+        transform="ra",
+        n_observations=len(indices),
+    )
+
+    # A budget too small to cache the task falls back to the original
+    # disk-streaming behavior (many re-iterations), but must produce the same
+    # results as the materialized fast path modulo floating-point
+    # non-associativity from the different batch-summation order (single big
+    # batch vs. several small chunks).
+    assert streamed_source.iter_count > 1
+    assert len(materialized_rows) == len(streamed_rows)
+    for materialized_row, streamed_row in zip(materialized_rows, streamed_rows):
+        assert materialized_row.keys() == streamed_row.keys()
+        for key, materialized_value in materialized_row.items():
+            streamed_value = streamed_row[key]
+            if isinstance(materialized_value, float):
+                assert materialized_value == pytest.approx(streamed_value)
+            else:
+                assert materialized_value == streamed_value

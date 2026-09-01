@@ -251,6 +251,48 @@ class _TaskFeatureBatches:
                 yield task_rows[selected], np.asarray(features)[selected]
 
 
+class _MaterializedFeatureBatches:
+    """Re-iterable in-memory feature batches: no repeated disk reads."""
+
+    def __init__(self, rows: np.ndarray, features: np.ndarray) -> None:
+        self._rows = rows
+        self._features = features
+
+    def __iter__(self) -> Iterator[tuple[np.ndarray, np.ndarray]]:
+        yield self._rows, self._features
+
+
+def _materialize_task_batches(
+    task_batches: Iterable[tuple[np.ndarray, np.ndarray]],
+    *,
+    max_bytes: int,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Read one task's batches into memory, or None if that exceeds max_bytes.
+
+    streamed_variance_decomposition_report re-iterates its feature-batch source
+    ~80 times per task (initial stats, the participation-ratio Gram, one pass
+    per null permutation, and per-fold/per-epoch passes for the subject probe).
+    Handed a disk-backed source directly, that means re-reading every subject's
+    artifact from disk ~80 times per task. Reading once into memory here (a
+    task's own selected rows, not the full cohort) turns those into cheap
+    in-memory re-iterations. Returning None lets the caller fall back to
+    disk-streaming for the rare task whose subset doesn't fit the budget.
+    """
+    collected_rows: list[np.ndarray] = []
+    collected_features: list[np.ndarray] = []
+    total_bytes = 0
+    for rows, features in task_batches:
+        features = np.asarray(features)
+        total_bytes += features.nbytes
+        if total_bytes > max_bytes:
+            return None
+        collected_rows.append(np.asarray(rows))
+        collected_features.append(features)
+    if not collected_rows:
+        return np.empty(0, dtype=np.int64), np.empty((0, 0))
+    return np.concatenate(collected_rows), np.concatenate(collected_features)
+
+
 def score_streamed_variance_diagnostics(
     feature_batches: Iterable[tuple[np.ndarray, np.ndarray]],
     tasks: list[DiagnosticTask],
@@ -271,14 +313,20 @@ def score_streamed_variance_diagnostics(
             raise ValueError(
                 f"{key} is fixed to {expected!r} for streamed diagnostics, got {actual!r}."
             )
+    max_cache_bytes = int(config.get("diagnostic_task_cache_max_bytes", 2 * 1024**3))
     rows: list[dict[str, Any]] = []
     for task in tasks:
+        task_batches = _TaskFeatureBatches(
+            feature_batches,
+            task.indices,
+            n_observations=n_observations,
+        )
+        materialized = _materialize_task_batches(task_batches, max_bytes=max_cache_bytes)
+        report_source = (
+            task_batches if materialized is None else _MaterializedFeatureBatches(*materialized)
+        )
         report = streamed_variance_decomposition_report(
-            _TaskFeatureBatches(
-                feature_batches,
-                task.indices,
-                n_observations=n_observations,
-            ),
+            report_source,
             task.subjects,
             task.labels,
             n_null_permutations=int(config["n_null_permutations"]),
