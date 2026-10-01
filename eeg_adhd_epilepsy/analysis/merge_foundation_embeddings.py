@@ -142,12 +142,15 @@ def _write_combined_tables(derivative_root: Path, by_model: dict[str, list[Path]
         epoch_frame = _embedding_frame(
             load_embedding_derivatives(paths, representation="epoch", model_key=model_key)
         )
+        _write_condition_tables(derivative_root, model_key, "epoch", epoch_frame)
+        _write_condition_tables(derivative_root, model_key, "subject", _subject_frame(epoch_frame))
+        del epoch_frame
+
         recording_frame = _embedding_frame(
             load_embedding_derivatives(paths, representation="recording", model_key=model_key)
         )
-        _write_condition_tables(derivative_root, model_key, "epoch", epoch_frame)
         _write_condition_tables(derivative_root, model_key, "recording", recording_frame)
-        _write_condition_tables(derivative_root, model_key, "subject", _subject_frame(epoch_frame))
+        del recording_frame
 
 
 def run(config: dict[str, Any]) -> Path:
