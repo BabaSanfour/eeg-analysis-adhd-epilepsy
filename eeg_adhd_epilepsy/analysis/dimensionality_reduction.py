@@ -37,6 +37,7 @@ from coco_pipe.io import (
 )
 from coco_pipe.utils import resolve_n_jobs, slug, stable_hash
 from joblib import Parallel, delayed, parallel_backend
+from threadpoolctl import threadpool_info
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.utils.common import (
@@ -229,6 +230,14 @@ def _iter_shared_memory_batch(
         for task in tasks:
             yield worker_fn(task)
         return
+    # threadpoolctl's dl_iterate_phdr-based library scan (triggered by every
+    # sklearn .fit() call, to keep BLAS/OpenMP from oversubscribing) does its
+    # first-use imports lazily. Dozens of freshly spawned threading-backend
+    # workers hitting that for the first time simultaneously pile up on
+    # Python's per-module import lock and can stall for hours. Paying that
+    # import cost once here, from the main thread, before any worker starts,
+    # means workers hit an already-cached import instead of racing on it.
+    threadpool_info()
     with parallel_backend("threading"):
         yield from Parallel(
             n_jobs=min(max_workers, len(tasks)),
