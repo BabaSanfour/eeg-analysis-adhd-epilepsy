@@ -26,6 +26,7 @@ sbatch --export=ALL,BIDS_ROOT=/my/BIDS,METADATA_PATH=/my/meta.csv 03_submit_base
 | 12 | `12_batch_run_dim_reduction_descriptors.sh` | descriptor dim-reduction | array (per cohort) |
 | 13 | `13_batch_run_dim_reduction_foundation.sh` | foundation dim-reduction | array (cohorts × raw/aligned spaces × representations) |
 | 14 | `14_submit_compare_foundation_dim_reduction.sh` | per-model dim-reduction runs → cross-model comparison report | single (run after 13) |
+| 14b | `14b_submit_archive_dim_reduction.sh` | finished dim-reduction run-variant folders → one consolidated `.tar.zst` | single (run per group, after 11-13) |
 | 15 | `15_submit_classical_decode.sh` | descriptor + saved-foundation classical decoding | array (descriptor + models × representations) |
 | 16 | `16_submit_compare_classical_decode.sh` | aggregate stage-15 decoding results | single (run after stage 15) |
 | 17 | `17_submit_foundation_decode.sh` | direct foundation decoding | array (per model, GPU) |
@@ -94,6 +95,24 @@ the method). See `../configs/README.md`.
   It writes `foundation_model_comparison.html` and
   `foundation_model_comparison.csv` for every discovered cohort, or only
   `DATASET_NAME` when that environment variable is set.
+- **14b (dim-reduction archive)** consolidates a *finished* group of 11-13
+  run-variant folders (e.g. every `foundation_*` or `raw_*` folder for one
+  cohort) into a single `.tar.zst`, the same non-destructive tar+zstd pattern
+  as `07b`. `DIRS_FILE` names a text file listing the folders to bundle (one
+  relative name per line, relative to `$BASE`, default the dataset's folder
+  under `DIM_REDUCTION_ROOT`); `ARCHIVE_NAME` names the output. It refuses to
+  run if any listed folder is missing or the archive already exists, and
+  validates the archive by decompressing and listing it back before the final
+  `mv`. It never deletes the source folders — only delete them yourself once
+  the reported entry count looks right, and never for a group still being
+  written by a live 11/12/13 job (per-fit `_SUCCESS` resumability depends on
+  the live directory, not the archive). Example:
+  ```bash
+  printf '%s\n' foundation_bendr_flat_epoch_cfg-... foundation_biot_flat_epoch_cfg-... \
+      > /home/hamza97/foundation_all.txt
+  sbatch --export=ALL,DIRS_FILE=/home/hamza97/foundation_all.txt,ARCHIVE_NAME=foundation_all \
+      cluster/14b_submit_archive_dim_reduction.sh
+  ```
 - **15 (classical decoding)** runs one descriptor baseline plus every configured
   base foundation model × representation. Each foundation task evaluates raw,
   fold-local LEACE, EA-CORAL, EA-Mean, and RA in the same run, so transforms use
