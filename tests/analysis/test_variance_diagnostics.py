@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -376,3 +377,52 @@ def test_streamed_diagnostics_falls_back_to_streaming_when_over_budget():
                 assert materialized_value == pytest.approx(streamed_value)
             else:
                 assert materialized_value == streamed_value
+
+
+def _task_subset(task, eval_name, rows):
+    return replace(
+        task,
+        eval_name=eval_name,
+        indices=task.indices[rows],
+        subjects=task.subjects[rows],
+        labels=task.labels[rows],
+        observation_ids=task.observation_ids[rows],
+    )
+
+
+def _make_parallel_diagnostics_tasks(rng):
+    task, indices, features = _make_streamed_diagnostics_task(rng, n_subjects=6)
+    tasks = [
+        task,
+        _task_subset(task, "first_half", slice(None, 18)),
+        _task_subset(task, "second_half", slice(18, None)),
+    ]
+    return tasks, indices, features
+
+
+@pytest.mark.parametrize("streamed", [False, True])
+def test_parallel_diagnostics_match_sequential(streamed):
+    rng = np.random.default_rng(0)
+    tasks, indices, features = _make_parallel_diagnostics_tasks(rng)
+
+    def score(n_jobs):
+        config = _streamed_diagnostics_probe_config(n_jobs=n_jobs)
+        if streamed:
+            return vd.score_streamed_variance_diagnostics(
+                _CountingFeatureBatches(indices, features, chunk_size=5),
+                tasks,
+                config,
+                transform="ra",
+                n_observations=len(indices),
+            )
+        return vd.score_variance_diagnostics(features, tasks, config, transform="none")
+
+    sequential_rows = score(1)
+    parallel_rows = score(3)
+
+    # Same rows in the same task order: parallelism must not change results or
+    # reorder output relative to the sequential loop.
+    assert [row["eval_name"] for row in parallel_rows] == [
+        row["eval_name"] for row in sequential_rows
+    ]
+    assert parallel_rows == sequential_rows

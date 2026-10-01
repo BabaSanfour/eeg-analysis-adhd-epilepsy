@@ -59,6 +59,7 @@ cmd=(
   --metadata "$METADATA_PATH"
   --source_embedding_root "$SOURCE_EMBEDDING_ROOT"
   --embedding_model_key "$model"
+  --n_jobs "${SLURM_CPUS_PER_TASK:-1}"
 )
 if [[ "$OVERWRITE" == "1" ]]; then
   cmd+=(--overwrite)

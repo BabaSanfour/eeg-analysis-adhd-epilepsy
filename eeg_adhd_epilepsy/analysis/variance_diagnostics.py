@@ -39,6 +39,8 @@ from coco_pipe.io import (
     read_table,
 )
 from coco_pipe.utils import slug, stable_hash
+from joblib import Parallel, delayed, parallel_backend
+from threadpoolctl import threadpool_info
 
 from eeg_adhd_epilepsy.analysis.dataset import (
     attach_subject_metadata,
@@ -181,6 +183,56 @@ def build_diagnostic_tasks(
     return tasks
 
 
+def _task_result_rows(
+    report: pd.DataFrame,
+    task: DiagnosticTask,
+    config: Mapping[str, Any],
+    *,
+    transform: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "transform": transform,
+            "cohort_name": str(config["dataset_name"]),
+            "population": task.population,
+            "scope": task.scope,
+            "eval_name": task.eval_name,
+            "target_col": task.target_col,
+            "selection_fingerprint": task.selection_fingerprint,
+            "target_encoding": task.target_encoding,
+            **row,
+        }
+        for row in report.to_dict("records")
+    ]
+
+
+def _parallel_task_rows(
+    tasks: list[DiagnosticTask],
+    score_one: Any,
+    n_jobs: int,
+) -> list[dict[str, Any]]:
+    """Run ``score_one(task)`` -> rows across tasks, in task order, with n_jobs>1
+    parallelism over independent (embarrassingly parallel) diagnostic tasks.
+
+    threadpoolctl's dl_iterate_phdr-based library scan (triggered by every
+    sklearn/numpy call that manages BLAS/OpenMP thread counts) does its
+    first-use imports lazily. Dozens of freshly spawned threading-backend
+    workers hitting that for the first time simultaneously pile up on
+    Python's per-module import lock and can stall for a very long time.
+    Paying that import cost once here, from the main thread, before any
+    worker starts, means workers hit an already-cached import instead of
+    racing on it.
+    """
+    if n_jobs <= 1 or len(tasks) <= 1:
+        return [row for task in tasks for row in score_one(task)]
+    threadpool_info()
+    with parallel_backend("threading"):
+        results = Parallel(n_jobs=min(n_jobs, len(tasks)))(
+            delayed(score_one)(task) for task in tasks
+        )
+    return [row for task_rows in results for row in task_rows]
+
+
 def score_variance_diagnostics(
     features: np.ndarray,
     tasks: list[DiagnosticTask],
@@ -189,10 +241,12 @@ def score_variance_diagnostics(
     transform: str,
 ) -> list[dict[str, Any]]:
     """Compute every configured diagnostic for one embedding variant."""
-    rows: list[dict[str, Any]] = []
-    for task in tasks:
+    features = np.asarray(features)
+    n_jobs = int(config.get("n_jobs", 1) or 1)
+
+    def score_one(task: DiagnosticTask) -> list[dict[str, Any]]:
         diagnostic_container = DataContainer(
-            X=np.asarray(features)[task.indices],
+            X=features[task.indices],
             dims=("obs", "feature"),
             coords={
                 "diagnostic_subject": task.subjects,
@@ -207,21 +261,9 @@ def score_variance_diagnostics(
             n_null_permutations=int(config["n_null_permutations"]),
             rng=np.random.default_rng(int(config["random_state"])),
         )
-        rows.extend(
-            {
-                "transform": transform,
-                "cohort_name": str(config["dataset_name"]),
-                "population": task.population,
-                "scope": task.scope,
-                "eval_name": task.eval_name,
-                "target_col": task.target_col,
-                "selection_fingerprint": task.selection_fingerprint,
-                "target_encoding": task.target_encoding,
-                **row,
-            }
-            for row in report.to_dict("records")
-        )
-    return rows
+        return _task_result_rows(report, task, config, transform=transform)
+
+    return _parallel_task_rows(tasks, score_one, n_jobs)
 
 
 class _TaskFeatureBatches:
@@ -301,7 +343,15 @@ def score_streamed_variance_diagnostics(
     transform: str,
     n_observations: int,
 ) -> list[dict[str, Any]]:
-    """Compute configured diagnostics from re-iterable pooled feature batches."""
+    """Compute configured diagnostics from re-iterable pooled feature batches.
+
+    ``feature_batches`` must support independent concurrent re-iteration (a
+    fresh, self-contained generator per ``iter()`` call, no shared mutable
+    state) when ``config["n_jobs"]`` > 1 -- every caller's batch source is
+    exactly that kind of re-iterable artifact reader, never a single-use
+    generator.
+    """
+    n_jobs = int(config.get("n_jobs", 1) or 1)
     fixed_probe_settings = {
         "subject_probe_optimizer": "sgd",
         "subject_probe_device": "cpu",
@@ -314,8 +364,8 @@ def score_streamed_variance_diagnostics(
                 f"{key} is fixed to {expected!r} for streamed diagnostics, got {actual!r}."
             )
     max_cache_bytes = int(config.get("diagnostic_task_cache_max_bytes", 2 * 1024**3))
-    rows: list[dict[str, Any]] = []
-    for task in tasks:
+
+    def score_one(task: DiagnosticTask) -> list[dict[str, Any]]:
         task_batches = _TaskFeatureBatches(
             feature_batches,
             task.indices,
@@ -341,21 +391,9 @@ def score_streamed_variance_diagnostics(
                 config.get("participation_ratio_max_gram_bytes", 4 * 1024**3)
             ),
         )
-        rows.extend(
-            {
-                "transform": transform,
-                "cohort_name": str(config["dataset_name"]),
-                "population": task.population,
-                "scope": task.scope,
-                "eval_name": task.eval_name,
-                "target_col": task.target_col,
-                "selection_fingerprint": task.selection_fingerprint,
-                "target_encoding": task.target_encoding,
-                **row,
-            }
-            for row in report.to_dict("records")
-        )
-    return rows
+        return _task_result_rows(report, task, config, transform=transform)
+
+    return _parallel_task_rows(tasks, score_one, n_jobs)
 
 
 def skipped_variance_diagnostics(

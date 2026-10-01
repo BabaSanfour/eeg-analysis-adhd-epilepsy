@@ -52,6 +52,7 @@ _VOLATILE_KEYS = {
     "reports_root",
     "source_embedding_root",
     "overwrite",
+    "n_jobs",
 }
 
 
@@ -880,6 +881,13 @@ def main() -> None:
         action=argparse.BooleanOptionalAction,
         default=None,
     )
+    parser.add_argument(
+        "--n_jobs",
+        type=int,
+        default=None,
+        help="Parallel workers for the (embarrassingly parallel) variance-"
+        "diagnostics scoring loop. Default: 1 (sequential).",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
 
@@ -901,6 +909,7 @@ def main() -> None:
         source_embedding_root=str(source_embedding_root),
         embedding_model_key=args.embedding_model_key,
         overwrite=args.overwrite,
+        n_jobs=args.n_jobs,
     )
     run(config)
 
