@@ -7,7 +7,7 @@ dimensionality reduction.  Nothing in this module is pipeline-specific.
 from __future__ import annotations
 
 import gc
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -61,19 +61,29 @@ def families_for_analysis_unit(
 def apply_family_qc_mask(
     container: DataContainer,
     families: Sequence[str],
+    qc_config: Mapping[str, Any] | None = None,
 ) -> tuple[DataContainer, np.ndarray]:
-    """Filter observations using only the requested families' QC decisions."""
+    """Filter observations using only the requested families' QC decisions.
+
+    An observation is dropped when it is flagged in more than
+    ``qc.outlier.unit_outlier_group_fraction`` (default 0.2) of the requested
+    families. A unit spanning a single family drops every flagged observation;
+    a wide unit (flat, sensor) is not emptied by the union of many single-family
+    flags. A fraction of 0.0 drops an observation flagged in any family.
+    """
     bad_ids_by_family = dict(container.meta.get("family_qc_bad_ids", {}))
     if not bad_ids_by_family:
         indices = np.arange(container.X.shape[0], dtype=int)
         return container, indices
     if container.ids is None:
         raise ValueError("Family-scoped QC requires observation IDs.")
-    bad_ids: set[str] = set()
-    for family in families:
-        bad_ids.update(str(value) for value in bad_ids_by_family.get(str(family), []))
+    outlier_config = (qc_config or {}).get("outlier") or {}
+    max_fraction = float(outlier_config.get("unit_outlier_group_fraction", 0.2))
     ids = np.asarray(container.ids, dtype=object).astype(str)
-    keep_indices = np.flatnonzero(~np.isin(ids, list(bad_ids)))
+    flagged = np.zeros(len(ids), dtype=int)
+    for family in families:
+        flagged += np.isin(ids, [str(value) for value in bad_ids_by_family.get(str(family), [])])
+    keep_indices = np.flatnonzero(flagged / max(len(families), 1) <= max_fraction)
     return container.isel(obs=keep_indices), keep_indices
 
 

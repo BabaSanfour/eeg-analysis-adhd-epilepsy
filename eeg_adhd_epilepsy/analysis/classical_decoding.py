@@ -447,7 +447,9 @@ def _enumerate_scope(
                     unit,
                     config.get("descriptor_families"),
                 )
-                unit_container, keep_indices = apply_family_qc_mask(unit["container"], families)
+                unit_container, keep_indices = apply_family_qc_mask(
+                    unit["container"], families, config.get("qc")
+                )
                 unit["container"] = unit_container
                 unit_y = pd.Series(y).iloc[keep_indices].reset_index(drop=True)
                 unit_groups = pd.Series(groups).iloc[keep_indices].reset_index(drop=True)

@@ -321,6 +321,34 @@ def test_subfamily_grouping_keeps_logabs_outlier_for_relative(tmp_path):
     assert "0006_ses-01_run-01" in retained[rel_unit]
 
 
+def test_wide_unit_is_not_emptied_by_the_union_of_single_group_flags():
+    # Ten QC groups, each flagging a different observation: a unit spanning all
+    # of them must keep those observations (each is flagged in 1 of 10 groups)
+    # and drop only the one flagged in most groups.
+    groups = [f"g{index}" for index in range(10)]
+    bad_ids = {group: [f"r{index}", "r10"] for index, group in enumerate(groups)}
+    container = DataContainer(
+        X=np.zeros((12, 1)),
+        dims=("obs", "feature"),
+        coords={"feature": np.asarray(["band_alpha_ch-Fz"], dtype=object)},
+        ids=np.asarray([f"r{index}" for index in range(12)], dtype=object),
+        meta={"family_qc_group_by": "measure", "family_qc_bad_ids": bad_ids},
+    )
+
+    wide, _ = apply_family_qc_mask(container, groups)
+    assert wide.ids.astype(str).tolist() == [f"r{index}" for index in range(10)] + ["r11"]
+
+    # A unit spanning one group still drops everything that group flags.
+    narrow, _ = apply_family_qc_mask(container, ["g3"])
+    assert set(narrow.ids.astype(str)) == {f"r{i}" for i in range(12)} - {"r3", "r10"}
+
+    # A fraction of 0.0 restores the any-group union.
+    union, _ = apply_family_qc_mask(
+        container, groups, {"outlier": {"unit_outlier_group_fraction": 0.0}}
+    )
+    assert union.ids.astype(str).tolist() == ["r11"]
+
+
 def test_column_prune_removes_all_nan_feature_without_row_drop(tmp_path):
     feature_columns = [
         "band_log_abs_alpha_ch-Fz",

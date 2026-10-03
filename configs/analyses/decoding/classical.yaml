@@ -18,6 +18,9 @@ qc:
     group_by: measure
     epoch_outlier_fraction: 0.3
     subject_outlier_fraction: 0.2
+    # A unit drops an observation flagged in more than this fraction of the QC
+    # groups it spans (0.0 = flagged in any group, which empties wide units).
+    unit_outlier_group_fraction: 0.2
   min_obs: 5
 
 analysis_modes:

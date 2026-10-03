@@ -110,6 +110,7 @@ def _collect_scope_fit_requests(
         unit_container, _ = apply_family_qc_mask(
             unit_spec["container"],
             families,
+            args.qc,
         )
         if unit_container.dims != ("obs", "feature"):
             raise ValueError(
