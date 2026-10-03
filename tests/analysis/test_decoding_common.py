@@ -175,3 +175,42 @@ def test_prepare_scope_adds_canonical_subject_and_session_columns():
     )
     assert metadata["Subject"].tolist() == ["01", "02", "03", "04"]
     assert metadata["Session"].tolist() == ["v1", "v1", "v2", "v2"]
+
+
+def test_prepare_scope_sample_ids_are_natural_keys():
+    # Pooled EO+EC rows share recording ids; condition keeps them distinct, and
+    # the id does not depend on row position, so runs over different row sets
+    # still give the same recording the same SampleID.
+    recordings = ["r1", "r2", "r3", "r4"]
+
+    def sample_ids(order):
+        def column(values):
+            return np.asarray(values)[order]
+
+        container = DataContainer(
+            X=np.ones((8, 1)),
+            dims=("obs", "feature"),
+            coords={
+                "feature": ["x"],
+                "target": column(["Control", "ADHD"] * 4),
+                "condition": column(["EO"] * 4 + ["EC"] * 4),
+                "study_id": column(["01", "02", "03", "04"] * 2),
+                "visit_id": ["v1"] * 8,
+                "patient_group_id": column(["c1", "a1", "c2", "a2"] * 2),
+            },
+            ids=column(recordings * 2),
+        )
+        *_, metadata, _ = prepare_decoding_scope(
+            container,
+            {"target_col": "target", "positive_class": "ADHD"},
+            scope="pooled",
+            group_col="patient_group_id",
+            subject_col="study_id",
+            session_col="visit_id",
+            requested_splits=2,
+        )
+        return metadata["sample_id"].tolist()
+
+    forward = sample_ids(np.arange(8))
+    assert forward == [f"pooled_{c}_{r}" for c in ("EO", "EC") for r in recordings]
+    assert sorted(sample_ids(np.arange(8)[::-1])) == sorted(forward)

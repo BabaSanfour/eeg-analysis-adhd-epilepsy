@@ -173,9 +173,16 @@ def prepare_decoding_scope(
         metadata["Subject"] = metadata[subject_col].astype(str)
     if "session" not in normalized_columns:
         metadata["Session"] = metadata[session_col].astype(str)
-    metadata["sample_id"] = [
-        f"{scope}_{value}_{index}" for index, value in enumerate(metadata["sample_id"].astype(str))
-    ]
+    # Natural keys (scope, condition, observation id): the same recording or epoch
+    # gets the same SampleID in every unit and run, which is what lets two runs'
+    # predictions be paired. A position suffix is added only if keys collide.
+    keys = metadata["sample_id"].astype(str)
+    if "condition" in metadata:
+        keys = metadata["condition"].astype(str) + "_" + keys
+    keys = f"{scope}_" + keys
+    if not keys.is_unique:
+        keys = keys + "_" + pd.Series(range(len(keys)), index=keys.index).astype(str)
+    metadata["sample_id"] = keys.to_numpy()
     n_splits = safe_group_n_splits(y, groups, requested=requested_splits)
     return selected, y, groups, metadata, n_splits
 

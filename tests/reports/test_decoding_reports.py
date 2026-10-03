@@ -231,12 +231,18 @@ def test_decoding_report_best_rows_rank_by_primary_then_fdr():
 
 
 def test_decoding_report_cv_compatibility_detects_mismatches():
+    design = {
+        "cohort_signature": "same-samples",
+        "cv_strategy": "stratified_group_kfold",
+        "effective_n_splits": 5,
+        "cv_random_state": 42,
+    }
     frame = pd.DataFrame(
         [
-            {"scope": "EO", "target": "adhd", "cv_signature": "cv-a"},
-            {"scope": "EO", "target": "adhd", "cv_signature": "cv-b"},
-            {"scope": "EC", "target": "adhd", "cv_signature": "cv-a"},
-            {"scope": "EC", "target": "adhd", "cv_signature": "cv-a"},
+            {"scope": "EO", "target": "adhd", "cv_signature": "cv-a", **design},
+            {"scope": "EO", "target": "adhd", "cv_signature": "cv-b", **design},
+            {"scope": "EC", "target": "adhd", "cv_signature": "cv-a", **design},
+            {"scope": "EC", "target": "adhd", "cv_signature": "cv-a", **design},
         ]
     )
     compatibility = signature_compatibility(frame, ("scope", "target"))
@@ -245,6 +251,10 @@ def test_decoding_report_cv_compatibility_detects_mismatches():
     assert not bool(eo["paired_compatible"])
     assert eo["mismatched_fields"] == "cv_signature"
     assert bool(ec["paired_compatible"])
+
+    # A group whose rows do not record the design is unverified, not compatible.
+    unsigned = signature_compatibility(frame.drop(columns="cohort_signature"), ("scope",))
+    assert not unsigned["paired_compatible"].any()
 
 
 def test_foundation_visual_report_uses_coco_pipe_comparisons(tmp_path):
