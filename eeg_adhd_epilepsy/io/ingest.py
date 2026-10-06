@@ -5,7 +5,6 @@ Raw EEG recording discovery and `.pnt` parsing utilities.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,40 +12,34 @@ import pandas as pd
 
 LOGGER = logging.getLogger(__name__)
 
+_PNT_START = slice(0x40, 0x4E)
+_PNT_ID = slice(0x604, 0x610)
+
 
 def parse_pnt_metadata(pnt_path: Path) -> dict[str, str | datetime | None]:
     """
-    Parse a brainvision-style .pnt file (text) to extract:
-    - 'original_id': The ID string found in the file
-    - 'meas_date': A timezone-aware (UTC) datetime of recording start
+    Read a Nihon Kohden .pnt patient file to extract:
+    - 'original_id': the numeric patient ID (recording suffix dropped), or None
+    - 'meas_date': a timezone-aware (UTC) datetime of recording start, or None
     """
     if not pnt_path.exists():
         return {"original_id": None, "meas_date": None}
 
     try:
-        text = pnt_path.read_bytes().decode("ISO-8859-1", errors="ignore").replace("\x00", "")
-    except Exception as e:
+        data = pnt_path.read_bytes()
+    except OSError as e:
         LOGGER.warning("Failed to read %s: %s", pnt_path, e)
         return {"original_id": None, "meas_date": None}
 
-    # --- parse numeric ID ---
-    original_id = None
-    match = re.search(r"ID(\d+(?:\.\d+)?)", text)
-    if match:
-        original_id = match.group(1).split(".")[0]  # strip potential suffix
+    id_field = data[_PNT_ID].split(b"\x00")[0].decode("ISO-8859-1").split(".")[0]
+    original_id = id_field if id_field.isdigit() else None
 
-    # --- parse Date + Start Time ---
     meas_dt = None
-    date_match = re.search(r"Date(\d{4})/(\d{2})/(\d{2})", text)
-    start_match = re.search(r"Start Time(\d{2})(\d{2})(\d{2})", text)
-    if date_match and start_match:
-        try:
-            year, month, day = map(int, date_match.groups())
-            sh, sm, ss = map(int, start_match.groups())
-            # Recording timestamps need to be UTC-aware for BIDS export
-            meas_dt = datetime(year, month, day, sh, sm, ss, tzinfo=timezone.utc)
-        except ValueError:
-            pass
+    try:
+        meas_dt = datetime.strptime(data[_PNT_START].decode("ISO-8859-1"), "%Y%m%d%H%M%S")
+        meas_dt = meas_dt.replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
 
     return {"original_id": original_id, "meas_date": meas_dt}
 

@@ -17,8 +17,7 @@ results*/
 analysis_*/
 /derivatives
 *upstream_work
-reports/
-!eeg_adhd_epilepsy/reports/
+/reports/
 
 # SLURM output and error logs
 *.out

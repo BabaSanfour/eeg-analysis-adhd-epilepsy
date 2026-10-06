@@ -488,9 +488,6 @@ def process_record(
         return result
 
     raw.info["line_freq"] = 60
-    meas_datetime = pd.to_datetime(record["meas_datetime"], errors="coerce")
-    if pd.notna(meas_datetime):
-        raw.set_meas_date(meas_datetime.to_pydatetime())
 
     raw = canonicalize_annotations(raw)
     segments_df = extract_condition_segments(raw)
