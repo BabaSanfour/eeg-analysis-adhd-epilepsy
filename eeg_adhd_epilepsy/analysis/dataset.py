@@ -431,7 +431,6 @@ def build_dataset(
             bad_ids = {family: ids[~mask].tolist() for family, mask in family_masks.items()}
             container.meta = {
                 **dict(container.meta),
-                "family_qc_keep_masks": family_masks,
                 "family_qc_bad_ids": bad_ids,
                 "family_qc_group_by": group_by,
             }
