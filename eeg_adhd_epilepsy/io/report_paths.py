@@ -5,6 +5,8 @@ from __future__ import annotations
 from enum import StrEnum
 from pathlib import Path
 
+from mne_bids import get_entities_from_fname
+
 from eeg_adhd_epilepsy.io.bids import bids_session_label, bids_subject_label
 
 
@@ -83,12 +85,10 @@ def build_bids_report_ids(
     filepath: Path,
 ) -> dict[str, str | tuple[str | None, str | None] | tuple[str | None, str | None, str | None]]:
     """Build shared run-aware identifiers for reports and aggregation."""
-    from eeg_adhd_epilepsy.io.bids import parse_bids_components
-
-    comps = parse_bids_components(filepath)
-    subject = comps.get("subject", "unknown")
-    session = comps.get("session")
-    run = comps.get("run")
+    comps = get_entities_from_fname(filepath)
+    subject = comps["subject"] or "unknown"
+    session = comps["session"]
+    run = comps["run"]
     subject_id = bids_subject_label(subject)
     subject_session_prefix = (
         subject_id if not session else f"{subject_id}_{bids_session_label(session)}"

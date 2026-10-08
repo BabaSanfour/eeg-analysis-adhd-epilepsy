@@ -223,6 +223,7 @@ def pool_containers_streaming(
 
     obs_axis = specs[0]["dims"].index("obs")
     offset = 0
+    refreshed: dict[str, np.ndarray] = {}
     for index, loader in enumerate(loaders):
         aligned = _align_non_obs(loader(), common)
         n_obs = aligned.X.shape[obs_axis]
@@ -233,11 +234,12 @@ def pool_containers_streaming(
             for key, values in aligned.coords.items():
                 array = np.asarray(values)
                 if not (array.ndim == 1 and len(array) == n_obs):
-                    pooled.coords[key] = array
+                    refreshed[key] = array
         offset += n_obs
         del aligned
         gc.collect()
 
+    pooled = pooled.replace(coords={**pooled.coords, **refreshed})
     pooled.meta = {**dict(pooled.meta), **_pooled_family_qc_meta([spec["meta"] for spec in specs])}
     return pooled
 

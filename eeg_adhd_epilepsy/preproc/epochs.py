@@ -10,6 +10,7 @@ from pathlib import Path
 
 import mne
 import numpy as np
+from mne_bids import get_entities_from_fname
 from tqdm import tqdm
 
 from eeg_adhd_epilepsy.io import bids as bids_io
@@ -178,7 +179,7 @@ def main() -> None:
             else:
                 valid_sids.add(bids_io.study_id_to_bids_subject(int(s)))
         files_to_process = [
-            f for f in found_files if bids_io.parse_bids_components(f)["subject"] in valid_sids
+            f for f in found_files if get_entities_from_fname(f)["subject"] in valid_sids
         ]
     else:
         files_to_process = found_files

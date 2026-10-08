@@ -10,7 +10,6 @@ from mne_bids import BIDSPath, read_raw_bids
 
 from eeg_adhd_epilepsy.io.bids import (
     get_stage_output_path,
-    parse_bids_components,
 )
 
 logger = logging.getLogger(__name__)
@@ -89,23 +88,18 @@ def read_preproc_stage(
     """
     issues = []
     eeg_path = get_stage_output_path(
-        subject=study_id,
-        preproc_root=preproc_root,
-        desc=desc,
-        task=task,
-        session=session,
-        run=run,
+        BIDSPath(subject=study_id, session=session, task=task, run=run),
+        preproc_root,
+        desc,
     )
     if not eeg_path.exists():
-        parsed = parse_bids_components(eeg_path)
-        issues.append(f"missing_eeg:{parsed.get('subject', study_id)}")
+        issues.append(f"missing_eeg:{study_id}")
         return None, {}, issues
 
     try:
         raw = mne.io.read_raw_fif(eeg_path, preload=True, verbose="ERROR")
     except Exception as exc:
-        parsed = parse_bids_components(eeg_path)
-        issues.append(f"invalid_fif:{parsed.get('subject', study_id)}:{exc}")
+        issues.append(f"invalid_fif:{study_id}:{exc}")
         return None, {}, issues
 
     prov_path = eeg_path.with_name(eeg_path.name.replace("_eeg.fif", "_provenance.json"))
@@ -114,7 +108,6 @@ def read_preproc_stage(
         try:
             prov = read_json(prov_path)
         except Exception as exc:
-            parsed = parse_bids_components(prov_path)
-            issues.append(f"invalid_prov:{parsed.get('subject', study_id)}:{exc}")
+            issues.append(f"invalid_prov:{study_id}:{exc}")
 
     return raw, prov, issues

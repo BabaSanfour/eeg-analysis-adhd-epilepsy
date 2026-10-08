@@ -111,8 +111,7 @@ def build_diagnostic_tasks(
         [normalize_subject_value(value) for value in container.coords["subject"]],
         dtype=object,
     )
-    indexed = replace(
-        container,
+    indexed = container.replace(
         coords={**container.coords, "_diagnostic_row": np.arange(container.X.shape[0])},
     )
     clinical = filter_cohort_container(

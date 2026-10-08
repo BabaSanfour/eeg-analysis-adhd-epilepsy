@@ -41,7 +41,6 @@ from eeg_adhd_epilepsy.analysis.utils.subject_resolution import (
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
     _sanitize_bids_token,
-    add_recording_id,
     get_derivative_root,
 )
 from eeg_adhd_epilepsy.utils.artifacts import freeze_config_used
@@ -206,7 +205,6 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     }
                 )
                 continue
-            container = add_recording_id(container, subject_col)
             frame = container.observation_frame()
             sfreq = float(container.meta["sfreq"])
             channels = [str(value) for value in container.coords["channel"]]
@@ -329,13 +327,15 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                             backend_kwargs=model_cfg.get("backend_kwargs", {}),
                         )
                     n_times = recording.X.shape[-1]
-                    starts = np.arange(len(recording.X), dtype=int) * n_times
+                    epoch_numbers = np.asarray(recording.coords["epoch"], dtype=int)
+                    starts = epoch_numbers * n_times
                     # Foundation models expect microvolts, and we natively loaded in uV.
                     result = extractor.extract(
                         np.asarray(recording.X, dtype=np.float32),
                         signal_metadata=SignalMetadata(sfreq=sfreq, ch_names=channels),
                         window_start=starts,
                         window_stop=starts + n_times,
+                        window_index=epoch_numbers,
                         metadata={**base_metadata, "input_units": recording.meta["units"]},
                     )
                     overwrite = bool(config.get("overwrite", False))

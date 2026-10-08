@@ -17,6 +17,7 @@ matplotlib.use("Agg")
 import mne
 import numpy as np
 import pandas as pd
+from mne_bids import get_entities_from_fname
 
 import eeg_adhd_epilepsy.signal_quality.spectral as spectral
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_qc
@@ -708,7 +709,7 @@ def main() -> None:
         LOGGER.error("No base FIF files found in %s (pattern: %s)", preproc_root, base_pattern)
         sys.exit(1)
 
-    subjects_found = sorted({bids.parse_bids_components(f)["subject"] for f in files})
+    subjects_found = sorted({get_entities_from_fname(f)["subject"] for f in files})
     LOGGER.info("Found %d base subjects.", len(subjects_found))
 
     subjects_to_process = select_subjects(

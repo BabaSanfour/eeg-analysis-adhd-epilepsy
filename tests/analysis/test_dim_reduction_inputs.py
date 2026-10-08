@@ -563,6 +563,11 @@ def test_raw_recording_representation_builds_recording_id(monkeypatch, tmp_path)
             "subject": np.asarray(["0001", "0001", "0001", "0001"], dtype=object),
             "session": np.asarray(["01", "01", "01", "01"], dtype=object),
             "run": np.asarray(["01", "01", "02", "02"], dtype=object),
+            "recording_id": np.asarray(
+                ["sub-0001_ses-01_task-clinical_run-01"] * 2
+                + ["sub-0001_ses-01_task-clinical_run-02"] * 2,
+                dtype=object,
+            ),
         },
         ids=np.asarray(["epoch-1", "epoch-2", "epoch-3", "epoch-4"], dtype=object),
         meta={},
@@ -594,8 +599,8 @@ def test_raw_recording_representation_builds_recording_id(monkeypatch, tmp_path)
 
     assert container.X[:, 0].tolist() == [2.0, 6.0]
     assert container.coords["recording_id"].tolist() == [
-        "subject-0001_session-01_run-01",
-        "subject-0001_session-01_run-02",
+        "sub-0001_ses-01_task-clinical_run-01",
+        "sub-0001_ses-01_task-clinical_run-02",
     ]
 
 

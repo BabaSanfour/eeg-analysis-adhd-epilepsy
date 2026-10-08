@@ -41,6 +41,7 @@ from coco_pipe.descriptors import (
 )
 from coco_pipe.io import DataContainer, read_table, save_npz
 from coco_pipe.io.quality import drop_epoch_outliers
+from mne_bids import get_entities_from_fname
 
 from eeg_adhd_epilepsy.analysis.dataset import build_container
 from eeg_adhd_epilepsy.analysis.utils.common import require_config
@@ -51,11 +52,9 @@ from eeg_adhd_epilepsy.analysis.utils.subject_resolution import (
 )
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
-    add_recording_id,
     bids_session_label,
     bids_subject_label,
     get_derivative_root,
-    parse_bids_components,
     study_id_to_bids_subject,
 )
 from eeg_adhd_epilepsy.io.report_paths import (
@@ -403,7 +402,7 @@ def main() -> None:
         epochs_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
         files = list(epochs_root.rglob(f"{bids_subject_label(subject)}*_desc-base_epo.fif"))
 
-        sessions = sorted(list({parse_bids_components(f).get("session", "01") for f in files}))
+        sessions = sorted(list({(get_entities_from_fname(f)["session"] or "01") for f in files}))
         if not sessions:
             sessions = ["01"]
 
@@ -476,7 +475,6 @@ def main() -> None:
             if ids.size == 0:
                 raise ValueError("Loaded EEG container did not include any epochs.")
 
-            dc_loaded = add_recording_id(dc_loaded)
             metadata_df = dc_loaded.obs_table(
                 include_ids=True,
                 include_y=bool(args.target_col),

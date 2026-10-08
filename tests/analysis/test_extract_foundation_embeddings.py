@@ -79,6 +79,8 @@ def test_extraction_pooling_variants_share_one_unchanged_native_token_derivative
             "study_id": np.asarray(["0001", "0001"], dtype=object),
             "session": np.asarray(["01", "01"], dtype=object),
             "run": np.asarray(["01", "01"], dtype=object),
+            "recording_id": np.asarray(["sub-0001_ses-01_task-clinical_run-01"] * 2, dtype=object),
+            "epoch": np.asarray([0, 1]),
         },
         ids=np.asarray(["window-0", "window-1"], dtype=object),
         meta={"sfreq": 10.0, "units": "uV"},

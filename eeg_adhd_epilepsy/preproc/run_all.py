@@ -9,6 +9,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from mne_bids import get_entities_from_fname
+
 from eeg_adhd_epilepsy.io import bids, report_paths
 from eeg_adhd_epilepsy.qc import preproc_qc
 from eeg_adhd_epilepsy.utils.logs import setup_logging
@@ -24,7 +26,7 @@ LOGGER = logging.getLogger("preproc_run_all")
 
 def _discover_input_files(bids_root: Path) -> list[Path]:
     """Discover all raw EEG input runs."""
-    return bids.discover_bids_files(bids_root, suffix="eeg", extension=".vhdr")
+    return bids.discover_raw_eeg(bids_root)
 
 
 def _build_base_config(
@@ -233,7 +235,7 @@ def main() -> None:
         LOGGER.error("No .vhdr EEG files found in BIDS root: %s", bids_root)
         sys.exit(1)
 
-    subjects_found = sorted({bids.parse_bids_components(path)["subject"] for path in input_files})
+    subjects_found = sorted({get_entities_from_fname(path)["subject"] for path in input_files})
     subjects_sorted = select_subjects(
         subjects_found=subjects_found,
         selected_subjects=args.subjects,
@@ -261,7 +263,7 @@ def main() -> None:
     selected_input_files = [
         path
         for path in input_files
-        if bids.parse_bids_components(path)["subject"] in set(subjects_sorted)
+        if get_entities_from_fname(path)["subject"] in set(subjects_sorted)
     ]
 
     LOGGER.info(
@@ -329,8 +331,8 @@ def main() -> None:
 
     for input_file in selected_input_files:
         input_ids = report_paths.build_bids_report_ids(input_file)
-        input_comps = bids.parse_bids_components(input_file)
-        subject = bids.parse_bids_components(input_file)["subject"]
+        input_comps = get_entities_from_fname(input_file)
+        subject = input_comps["subject"]
         subject_id = bids.bids_subject_label(subject)
         run_label = str(input_ids["run_prefix"])
         effective_task = task_token or input_comps.get("task")
@@ -339,29 +341,12 @@ def main() -> None:
         LOGGER.info("RUN %s", run_label)
         LOGGER.info("%s", "=" * 72)
 
-        base_out = bids.get_stage_output_path(
-            subject=subject,
-            preproc_root=preproc_root,
-            desc="base",
-            session=input_comps.get("session"),
-            task=input_comps.get("task"),
-            run=input_comps.get("run"),
-        )
+        base_out = bids.get_stage_output_path(input_file, preproc_root, "base")
         corr_out = bids.get_stage_output_path(
-            subject=subject,
-            preproc_root=preproc_root,
-            desc=correct_desc,
-            session=input_comps.get("session"),
-            task=effective_task,
-            run=input_comps.get("run"),
+            input_file, preproc_root, correct_desc, task=task_token
         )
         den_out = bids.get_stage_output_path(
-            subject=subject,
-            preproc_root=preproc_root,
-            desc=denoise_desc,
-            session=input_comps.get("session"),
-            task=effective_task,
-            run=input_comps.get("run"),
+            input_file, preproc_root, denoise_desc, task=task_token
         )
 
         stage_base_ok = False

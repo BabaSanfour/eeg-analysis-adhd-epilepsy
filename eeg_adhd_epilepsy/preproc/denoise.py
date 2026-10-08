@@ -14,6 +14,7 @@ from typing import Any
 import mne
 import numpy as np
 from meegkit import asr
+from mne_bids import BIDSPath, get_entities_from_fname
 from mne_denoise.dss import IterativeDSS, WienerMaskDenoiser
 from mne_denoise.viz import plot_component_summary, plot_score_curve
 
@@ -404,16 +405,11 @@ def run_denoising_pipeline(
 
         if input_path is None:
             input_path = bids.get_stage_output_path(
-                subject=subject,
-                preproc_root=preproc_root,
-                desc=input_desc,
-                task=condition_name if condition_name else None,
+                BIDSPath(subject=subject), preproc_root, input_desc, task=condition_name
             )
         input_path = Path(input_path)
         input_ids = report_paths.build_bids_report_ids(input_path)
-        input_comps = bids.parse_bids_components(input_path)
-        session_id = input_comps.get("session")
-        run_id = input_comps.get("run")
+        session_id = get_entities_from_fname(input_path)["session"]
         record_label = str(input_ids["run_prefix"])
         if not input_path.exists():
             LOGGER.error("Input file not found: %s", input_path)
@@ -444,15 +440,8 @@ def run_denoising_pipeline(
             subject_id=record_label,
         )
 
-        task_token = condition_name if condition_name else input_comps.get("task")
         out_path = bids.get_stage_output_path(
-            subject=subject,
-            preproc_root=preproc_root,
-            desc=output_desc,
-            session=session_id,
-            task=task_token,
-            run=run_id,
-            create_dir=True,
+            input_path, preproc_root, output_desc, task=condition_name, create_dir=True
         )
         prov_path = out_path.with_name(out_path.name.replace("_eeg.fif", "_provenance.json"))
 
@@ -588,7 +577,7 @@ def main() -> None:
         LOGGER.error("No Stage 1 FIF files found in %s (pattern: %s)", preproc_root, pattern)
         sys.exit(1)
 
-    subjects_found = sorted({bids.parse_bids_components(f)["subject"] for f in files})
+    subjects_found = sorted({get_entities_from_fname(f)["subject"] for f in files})
     LOGGER.info("Found %d stage-1 runs across %d subjects.", len(files), len(subjects_found))
 
     subjects_to_process = select_subjects(
@@ -622,17 +611,11 @@ def main() -> None:
     if args.skip_existing or args.reports_only:
         existing_runs = 0
         for input_file in files:
-            sid = bids.parse_bids_components(input_file)["subject"]
+            sid = get_entities_from_fname(input_file)["subject"]
             if sid not in subjects_to_process:
                 continue
-            comps = bids.parse_bids_components(input_file)
             out_file = bids.get_stage_output_path(
-                subject=sid,
-                preproc_root=preproc_root,
-                desc=output_desc,
-                session=comps.get("session"),
-                task=args.condition if args.condition else comps.get("task"),
-                run=comps.get("run"),
+                input_file, preproc_root, output_desc, task=args.condition
             )
             if not out_file.exists():
                 continue
@@ -675,7 +658,7 @@ def main() -> None:
         if isinstance(record, dict):
             existing_run_keys.add(record.get("run_key"))
     for input_file in files:
-        sid = bids.parse_bids_components(input_file)["subject"]
+        sid = get_entities_from_fname(input_file)["subject"]
         if sid not in subjects_to_process:
             continue
         ids = report_paths.build_bids_report_ids(input_file)
@@ -711,7 +694,7 @@ def main() -> None:
             failed_ids.append(str(result["subject_id"]))
 
     for input_file in files_to_process:
-        sid = bids.parse_bids_components(input_file)["subject"]
+        sid = get_entities_from_fname(input_file)["subject"]
         run_label = str(report_paths.build_bids_report_ids(input_file)["run_prefix"])
         LOGGER.info("Processing %s...", run_label)
         result = run_denoising_pipeline(

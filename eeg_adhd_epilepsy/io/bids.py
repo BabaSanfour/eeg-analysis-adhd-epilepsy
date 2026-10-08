@@ -6,12 +6,8 @@ import logging
 import re
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from mne_bids import BIDSPath, get_bids_path_from_fname
-
-if TYPE_CHECKING:
-    from coco_pipe.io import DataContainer
+from mne_bids import BIDSPath, find_matching_paths, get_bids_path_from_fname
 
 logger = logging.getLogger(__name__)
 
@@ -113,149 +109,40 @@ def get_bids_derivative_variant_path(
 
 
 def get_stage_output_path(
-    subject: str,
+    source: Path | BIDSPath,
     preproc_root: Path,
     desc: str,
-    session: str | None = None,
+    *,
     task: str | None = None,
-    run: str | None = None,
     create_dir: bool = False,
 ) -> Path:
-    """Return stage output FIF path using unified naming."""
-    sid = bids_subject_label(subject)
-    desc_token = validate_stage_desc(desc)
-    directory_parts = [sid]
-    if session:
-        directory_parts.append(bids_session_label(session))
-    eeg_dir = Path(preproc_root).expanduser().joinpath(*directory_parts) / "eeg"
-    if create_dir:
-        eeg_dir.mkdir(parents=True, exist_ok=True)
-    parts = [sid]
-    if session:
-        parts.append(bids_session_label(session))
-    if task:
-        task_token = _sanitize_bids_token(task, "task")
-        parts.append(f"task-{task_token}")
-    if run:
-        run_token = _sanitize_bids_token(run, "run")
-        parts.append(f"run-{run_token}")
-    parts.append(f"desc-{desc_token}")
-    parts.append("eeg")
-    fname = "_".join(parts) + ".fif"
-    return eeg_dir / fname
+    """Return the FIF path of the ``desc`` stage for the recording ``source``.
 
-
-def discover_bids_files(
-    bids_root: Path,
-    subject: str | None = None,
-    session: str | None = None,
-    task: str | None = None,
-    run: str | None = None,
-    acquisition: str | None = None,
-    processing: str | None = None,
-    desc: str | None = None,
-    suffix: str = "eeg",
-    extension: str = ".vhdr",
-    subjects_filter: set[str] | None = None,
-) -> list[Path]:
-    """Use BIDSPath matching to find EEG files under a BIDS root."""
-    template = BIDSPath(
-        root=bids_root,
-        subject=subject,
-        session=session,
-        task=task,
-        run=run,
-        acquisition=acquisition,
-        processing=processing,
-        description=desc,
-        datatype="eeg",
-        suffix=suffix,
-        extension=extension,
-    )
-    matches = template.match()
-    files: list[Path] = []
-    for match in matches:
-        subj = match.subject or ""
-        subj_tag = bids_subject_label(subj) if subj else ""
-        if subjects_filter:
-            if subj_tag not in subjects_filter and subj not in subjects_filter:
-                continue
-        if match.fpath is not None and match.fpath.exists():
-            files.append(match.fpath)
-    return sorted(files)
-
-
-def parse_bids_components(source: Path | str) -> dict[str, str]:
-    """Extract common BIDS entities from a BIDS-style filepath or string."""
-    text = str(source)
-    if isinstance(source, Path):
-        text = source.name
-
-    entities: dict[str, str] = {}
-
-    # Simple split-based extraction for cleanly formatted tokens
-    for part in text.split("_"):
-        if "-" not in part:
-            continue
-        key, value = part.split("-", 1)
-        # Only take alpha-numeric value part (strip extensions if any)
-        value = value.split(".")[0]
-        if key and value:
-            entities[key] = value
-
-    # Fallback to robust regex extraction for missing core keys
-    for short_key in ("sub", "ses", "task", "run", "acq", "proc"):
-        if short_key in entities:
-            continue
-        match = re.search(rf"(?:^|[_/]){short_key}-([A-Za-z0-9]+)", text)
-        if match:
-            entities[short_key] = match.group(1)
-
-    final: dict[str, str] = {}
-    key_map = {
-        "sub": "subject",
-        "ses": "session",
-        "task": "task",
-        "run": "run",
-        "acq": "acquisition",
-        "proc": "processing",
-    }
-    for short_key, full_key in key_map.items():
-        if short_key in entities:
-            final[full_key] = entities[short_key]
-    return final
-
-
-def add_recording_id(
-    container: DataContainer,
-    subject_col: str = "subject",
-) -> DataContainer:
-    """Return a container with a composite ``recording_id`` obs coordinate.
-
-    Relies on the ``subject``/``session``/``run`` coordinates that coco-pipe's
-    ``BIDSDataset`` already attaches at load time, and delegates the composition
-    to :meth:`coco_pipe.io.DataContainer.combine_coords`. The resulting label
-    uses coco-pipe's generic ``"<coord>-<value>"`` form
-    (e.g. ``"subject-0001_session-01_run-02"``).
-
-    Parameters
-    ----------
-    container:
-        Container whose observations carry ``subject``/``session``/``run``
-        coordinates (as produced by ``BIDSDataset``).
-    subject_col:
-        Fallback coordinate name to use for the subject entity when no canonical
-        ``subject`` coordinate is present.
+    ``source`` is any file of the recording (raw or another stage), or a
+    ``BIDSPath`` holding its entities. ``task`` replaces the task of ``source``.
     """
-    if "recording_id" in container.coords:
-        return container
+    if not isinstance(source, BIDSPath):
+        source = get_bids_path_from_fname(source, check=False)
+    path = BIDSPath(
+        root=Path(preproc_root).expanduser(),
+        subject=source.subject,
+        session=source.session,
+        task=_sanitize_bids_token(task, "task") if task else source.task,
+        run=source.run,
+        description=validate_stage_desc(desc),
+        datatype="eeg",
+        suffix="eeg",
+        extension=".fif",
+        check=False,
+    )
+    if create_dir:
+        path.mkdir()
+    return path.fpath
 
-    subject_key = "subject" if "subject" in container.coords else subject_col
-    keys = [subject_key, "session", "run"]
-    missing = [key for key in keys if key not in container.coords]
-    if missing:
-        raise ValueError(
-            f"Cannot build recording_id: missing coordinates {missing}. "
-            f"Available coordinates: {sorted(container.coords)}."
-        )
-    return container.combine_coords(keys, "recording_id")
+
+def discover_raw_eeg(bids_root: Path) -> list[Path]:
+    """Return the raw BrainVision header files of a BIDS dataset."""
+    paths = find_matching_paths(
+        bids_root, datatypes="eeg", suffixes="eeg", extensions=".vhdr", ignore_nosub=True
+    )
+    return sorted(path.fpath for path in paths)

@@ -17,14 +17,13 @@ from coco_pipe.io.embeddings import (
     load_embedding_derivatives,
 )
 from coco_pipe.io.quality import GROUP_BY_COLUMN, run_qc
+from mne_bids import BIDSPath, get_entities_from_fname
 
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
-    add_recording_id,
     bids_session_label,
     bids_subject_label,
     get_derivative_root,
-    parse_bids_components,
 )
 from eeg_adhd_epilepsy.io.readers import read_preproc_stage
 from eeg_adhd_epilepsy.preproc.epochs import make_epochs_from_preproc_raw
@@ -83,6 +82,8 @@ def build_container(
         logger.info(f"Loading saved epochs from {epochs_root}")
         config = BIDSConfig(
             path=epochs_root,
+            task=task,
+            description=desc,
             datatype="eeg",
             suffix="epo",
             loading_mode="load_existing",
@@ -167,13 +168,13 @@ def reepoch_eeg(
         runs_to_process = []
         if search_dir.exists():
             for f in search_dir.glob(f"*_desc-{desc}_eeg.fif"):
-                runs_to_process.append(parse_bids_components(f).get("run", "01"))
+                runs_to_process.append(get_entities_from_fname(f)["run"] or "01")
 
         if not runs_to_process:
             fallback_dir = preproc_root / subject_label / "eeg"
             if fallback_dir.exists():
                 for f in fallback_dir.glob(f"*_desc-{desc}_eeg.fif"):
-                    runs_to_process.append(parse_bids_components(f).get("run", "01"))
+                    runs_to_process.append(get_entities_from_fname(f)["run"] or "01")
 
         if not runs_to_process:
             issues.append(f"missing_eeg:{subject_label}")
@@ -200,6 +201,8 @@ def reepoch_eeg(
                 issues.append(f"missing_condition:{subject_label}_run-{current_run}:{condition}")
                 continue
             cond_epochs = epochs[condition]
+            # The position of each epoch among all those of the recording.
+            epoch_numbers = np.flatnonzero(np.isin(epochs.selection, cond_epochs.selection))
             data = np.asarray(cond_epochs.get_data(units=units), dtype=np.float32)
             if data.shape[0] == 0:
                 continue
@@ -207,13 +210,15 @@ def reepoch_eeg(
                 ch_names = list(cond_epochs.ch_names)
                 sfreq = float(cond_epochs.info["sfreq"])
                 times = np.asarray(cond_epochs.times)
-            recording_id = f"{subject_label}_{session_label}_run-{current_run}"
+            recording_id = BIDSPath(
+                subject=study_id, session=session, task=task, run=current_run
+            ).basename
             meta_row: dict[str, Any] = {}
             if meta_lookup is not None and study_id in meta_lookup.index:
                 meta_row = {
                     str(column): meta_lookup.loc[study_id, column] for column in meta_lookup.columns
                 }
-            for epoch_idx in range(data.shape[0]):
+            for epoch_number in epoch_numbers:
                 obs_rows.append(
                     {
                         subject_col: study_id,
@@ -222,10 +227,11 @@ def reepoch_eeg(
                         "run": current_run,
                         "condition": condition,
                         "recording_id": recording_id,
+                        "epoch": int(epoch_number),
                         **meta_row,
                     }
                 )
-                ids.append(f"{recording_id}_epoch-{epoch_idx:03d}")
+                ids.append(f"{recording_id}_epoch-{epoch_number:04d}")
             x_chunks.append(data)
 
     if not x_chunks:
@@ -520,7 +526,6 @@ def build_dataset(
         if representation == "subject":
             container = container.aggregate(by=args.subject_col, stats="mean")
         elif representation == "recording":
-            container = add_recording_id(container, args.subject_col)
             container = container.aggregate(by="recording_id", stats="mean")
         elif representation != "epoch":
             raise ValueError(

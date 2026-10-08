@@ -31,6 +31,7 @@ import mne
 import numpy as np
 from autoreject import AutoReject
 from joblib import Parallel, delayed
+from mne_bids import get_entities_from_fname
 from pyprep.find_noisy_channels import NoisyChannels
 from tqdm import tqdm
 
@@ -687,7 +688,7 @@ def run_base_record(
         config = dict(config or {})
         subject = subject_id
         ids = report_paths.build_bids_report_ids(source_path)
-        comps = bids.parse_bids_components(source_path)
+        comps = get_entities_from_fname(source_path)
         session_id = comps.get("session")
         task = comps.get("task")
         run_id = comps.get("run")
@@ -732,15 +733,7 @@ def run_base_record(
         )
 
         # Build output paths and persist results
-        out_path = bids.get_stage_output_path(
-            subject=subject,
-            preproc_root=preproc_root,
-            desc="base",
-            session=session_id,
-            task=task,
-            run=run_id,
-            create_dir=True,
-        )
+        out_path = bids.get_stage_output_path(source_path, preproc_root, "base", create_dir=True)
         prov_path = out_path.with_name(out_path.name.replace("_eeg.fif", "_provenance.json"))
         with open(prov_path, "w") as f:
             json.dump(_provenance, f, cls=NumpyEncoder, indent=4)
@@ -841,7 +834,7 @@ def _measure_peak_rss(
     proc = mp.get_context("fork").Process(
         target=run_base_record,
         kwargs={
-            "subject_id": bids.parse_bids_components(file)["subject"],
+            "subject_id": get_entities_from_fname(file)["subject"],
             "source_path": file,
             "bids_root": bids_root,
             "config": config,
@@ -953,13 +946,13 @@ def main():
         LOGGER.error("BIDS root not found: %s", bids_root)
         sys.exit(1)
 
-    files_found = bids.discover_bids_files(bids_root, suffix="eeg", extension=".vhdr")
+    files_found = bids.discover_raw_eeg(bids_root)
 
     if not files_found:
         LOGGER.error("No .vhdr files found in BIDS directory.")
         sys.exit(1)
 
-    subjects_found = sorted({bids.parse_bids_components(path)["subject"] for path in files_found})
+    subjects_found = sorted({get_entities_from_fname(path)["subject"] for path in files_found})
     LOGGER.info(
         "Found %d EEG runs across %d subjects in BIDS directory.",
         len(files_found),
@@ -1009,18 +1002,10 @@ def main():
 
         existing_runs = 0
         for fpath in files_found:
-            sid = bids.parse_bids_components(fpath)["subject"]
+            sid = get_entities_from_fname(fpath)["subject"]
             if sid not in subjects_to_process:
                 continue
-            comps = bids.parse_bids_components(fpath)
-            out_path = bids.get_stage_output_path(
-                subject=sid,
-                preproc_root=preproc_root,
-                desc="base",
-                session=comps.get("session"),
-                task=comps.get("task"),
-                run=comps.get("run"),
-            )
+            out_path = bids.get_stage_output_path(fpath, preproc_root, "base")
             if not out_path.exists():
                 continue
             existing_runs += 1
@@ -1071,7 +1056,7 @@ def main():
         if isinstance(record, dict):
             existing_run_keys.add(record.get("run_key"))
     for fpath in files_found:
-        sid = bids.parse_bids_components(fpath)["subject"]
+        sid = get_entities_from_fname(fpath)["subject"]
         if sid not in subjects_to_process:
             continue
         ids = report_paths.build_bids_report_ids(fpath)
@@ -1132,7 +1117,7 @@ def main():
         with tqdm_joblib(tqdm(total=len(ordered_files), desc="Processing recordings")):
             results = Parallel(n_jobs=concurrency, backend="loky")(
                 delayed(run_base_record)(
-                    subject_id=bids.parse_bids_components(f)["subject"],
+                    subject_id=get_entities_from_fname(f)["subject"],
                     source_path=f,
                     bids_root=bids_root,
                     config=pipeline_config,
@@ -1142,7 +1127,7 @@ def main():
                 for f in ordered_files
             )
         for fpath, result in zip(ordered_files, results):
-            consume_result(result, subject_id=bids.parse_bids_components(fpath)["subject"])
+            consume_result(result, subject_id=get_entities_from_fname(fpath)["subject"])
 
     success_ids = sorted(
         [sid for sid, ok in subject_status.items() if ok and not subject_skipped.get(sid, False)]

@@ -11,7 +11,6 @@ from coco_pipe.descriptors import build_descriptor_tables
 from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis import extract_descriptors, merge_descriptors
-from eeg_adhd_epilepsy.io.bids import add_recording_id
 from eeg_adhd_epilepsy.utils.artifacts import write_text_atomic
 
 
@@ -34,6 +33,15 @@ def _demo_container() -> DataContainer:
             "study_id": np.array(["0001", "0001", "0002", "0002"], dtype=object),
             "session": np.array(["01", "01", "01", "01"], dtype=object),
             "run": np.array(["01", "02", "01", "01"], dtype=object),
+            "recording_id": np.array(
+                [
+                    "sub-0001_ses-01_task-clinical_run-01",
+                    "sub-0001_ses-01_task-clinical_run-02",
+                    "sub-0002_ses-01_task-clinical_run-01",
+                    "sub-0002_ses-01_task-clinical_run-01",
+                ],
+                dtype=object,
+            ),
             "combined_diagnosis": np.array(["Control", "Control", "ADHD", "ADHD"], dtype=object),
             "age": np.array([10, 10, 13, 13], dtype=object),
             "sex": np.array(["F", "F", "M", "M"], dtype=object),
@@ -80,6 +88,13 @@ def _demo_container_for_subjects(subjects: list[str] | None = None) -> DataConta
             "study_id": np.array(all_subjects, dtype=object),
             "session": np.array(sessions, dtype=object),
             "run": np.array(runs, dtype=object),
+            "recording_id": np.array(
+                [
+                    f"sub-{subject}_ses-01_task-clinical_run-{run}"
+                    for subject, run in zip(all_subjects, runs)
+                ],
+                dtype=object,
+            ),
             "combined_diagnosis": np.array(labels, dtype=object),
             "age": np.array([10] * n_per_subject + [13] * n_per_subject, dtype=object),
             "sex": np.array(["F"] * n_per_subject + ["M"] * n_per_subject, dtype=object),
@@ -193,8 +208,7 @@ def test_table_helpers_preserve_metadata_and_feature_names() -> None:
 
 
 def test_epoch_metadata_frame_requires_container_ids() -> None:
-    container = _demo_container()
-    container.ids = None
+    container = _demo_container().replace(ids=None)
 
     with pytest.raises(ValueError, match="DataContainer.ids"):
         container.obs_table(
@@ -212,13 +226,19 @@ def test_feature_outputs_preserve_run_level_aggregation() -> None:
             "subject": np.asarray(["0001", "0001"], dtype=object),
             "session": np.asarray(["01", "01"], dtype=object),
             "run": np.asarray(["01", "02"], dtype=object),
+            "recording_id": np.asarray(
+                [
+                    "sub-0001_ses-01_task-clinical_run-01",
+                    "sub-0001_ses-01_task-clinical_run-02",
+                ],
+                dtype=object,
+            ),
             "feature": np.asarray(["band_abs_alpha_ch-Fz", "band_abs_beta_ch-Fz"], dtype=object),
         },
         ids=np.asarray(
             ["sub-0001_ses-01_run-01_ep-0", "sub-0001_ses-01_run-02_ep-0"], dtype=object
         ),
     )
-    container = add_recording_id(container)
     metadata_df = container.obs_table(include_ids=True)
     metadata_df["obs_id"] = metadata_df["obs_id"].astype(str)
     metadata_df["condition"] = "EO_baseline"
@@ -234,8 +254,8 @@ def test_feature_outputs_preserve_run_level_aggregation() -> None:
     assert subject_df["subject"].tolist() == ["0001", "0001"]
     assert subject_df["run"].tolist() == ["01", "02"]
     assert subject_df["recording_id"].tolist() == [
-        "subject-0001_session-01_run-01",
-        "subject-0001_session-01_run-02",
+        "sub-0001_ses-01_task-clinical_run-01",
+        "sub-0001_ses-01_task-clinical_run-02",
     ]
     assert subject_df["epoch_count"].tolist() == [1, 1]
 

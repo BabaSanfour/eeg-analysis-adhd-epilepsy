@@ -54,8 +54,9 @@ def test_attach_subject_metadata_missing_subject_is_nan():
 
 def test_filter_cohort_container_applies_group_union_and_column_filter():
     container = _embedding_container(["0001", "0002", "0003", "0004"])
-    container.coords.update(
-        {
+    container = container.replace(
+        coords={
+            **container.coords,
             "diagnosis": np.asarray(["ADHD", "Control", "ADHD", "Control"]),
             "medicated": np.asarray(["yes", "no", "no", "yes"]),
             "age_group": np.asarray(["5-8", "5-8", "9-12", "13-18"]),
