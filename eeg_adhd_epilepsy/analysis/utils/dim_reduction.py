@@ -7,14 +7,19 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from coco_pipe.dim_reduction import SEPARATION_METRIC_KEY
 from coco_pipe.io import (
     AGGREGATION_LEVELS,
     DESCRIPTOR_ONLY_ANALYSIS_MODES,
+    DataContainer,
+    SklearnWrapper,
     read_json,
 )
 from coco_pipe.utils import slug
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import FunctionTransformer, RobustScaler, StandardScaler
 
 from eeg_adhd_epilepsy.analysis.utils.hashing import normalize_scientific_paths
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
@@ -206,6 +211,7 @@ def build_input_signature(
         "unit_name": unit_spec["unit_name"],
         "run_label": args.run_label,
         "qc": args.qc,
+        "scaling": getattr(args, "scaling", None),
     }
 
     if args.input_mode == "raw":
@@ -275,6 +281,7 @@ def build_run_config_payload(
         "balance_target": args.balance_target,
         "balance_strategy": args.balance_strategy if args.balance_target else None,
         "qc": args.qc,
+        "scaling": getattr(args, "scaling", None),
         "bids_root": args.bids_root,
         "use_derivatives": bool(args.use_derivatives),
         "task": args.task,
@@ -353,6 +360,26 @@ def group_fit_requests(
     return list(groups.values())
 
 
+def scale_features(container: DataContainer, scaling: Mapping[str, Any] | None):
+    """Scale each feature of an (obs, feature) container as ``scaling`` asks.
+
+    ``scaling`` has a ``method`` (``robust``: median and interquartile range, or
+    ``standard``: mean and standard deviation) and an optional ``clip``, the
+    largest absolute value kept after scaling. Without it the container is
+    returned unchanged.
+    """
+    if not scaling:
+        return container
+    scalers = {"robust": RobustScaler, "standard": StandardScaler}
+    if scaling.get("method") not in scalers:
+        raise ValueError(f"scaling.method must be one of {sorted(scalers)}.")
+    steps = [scalers[scaling["method"]]()]
+    if scaling.get("clip") is not None:
+        clip = float(scaling["clip"])
+        steps.append(FunctionTransformer(np.clip, kw_args={"a_min": -clip, "a_max": clip}))
+    return SklearnWrapper(make_pipeline(*steps)).fit_transform(container)
+
+
 __all__ = [
     "DEFAULT_DIM_REDUCTION_SELECTION_METRIC",
     "DIM_REDUCTION_EVAL_METRIC_COLUMNS",
@@ -360,4 +387,5 @@ __all__ = [
     "build_and_validate_mode_specs",
     "build_run_config_payload",
     "group_fit_requests",
+    "scale_features",
 ]

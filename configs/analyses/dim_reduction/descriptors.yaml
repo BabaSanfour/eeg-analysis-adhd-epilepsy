@@ -32,6 +32,13 @@ qc:
     unit_outlier_group_fraction: 0.2
   min_obs: 5
 
+# Descriptors mix scales (uV^2/Hz power next to 0-1 ratios and entropies), so
+# each feature is scaled before reduction: median and interquartile range, then
+# clipped so a few extreme values cannot set the axes.
+scaling:
+  method: robust
+  clip: 8.0
+
 # Tiered analysis plan, organized around the analysis mode (the unit of work:
 # each mode is loaded once, then swept over reducers × n_components). `feature`
 # (redundant with feature_within_family) and `descriptor_sensor` (too granular

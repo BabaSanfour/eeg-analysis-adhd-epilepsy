@@ -23,6 +23,7 @@ from eeg_adhd_epilepsy.analysis.utils.common import (
     pool_containers,
     pool_containers_streaming,
 )
+from eeg_adhd_epilepsy.analysis.utils.dim_reduction import scale_features
 
 
 def test_descriptor_loader_filters_subjects(tmp_path):
@@ -602,6 +603,21 @@ def test_raw_recording_representation_builds_recording_id(monkeypatch, tmp_path)
         "sub-0001_ses-01_task-clinical_run-01",
         "sub-0001_ses-01_task-clinical_run-02",
     ]
+
+
+def test_scale_features_puts_mixed_scale_features_on_one_scale():
+    rng = np.random.default_rng(0)
+    X = np.column_stack([rng.normal(500.0, 200.0, 200), rng.normal(0.5, 0.1, 200)])
+    X[0, 0] = 1e6
+    container = DataContainer(X=X, dims=("obs", "feature"), ids=np.arange(200))
+
+    scaled = scale_features(container, {"method": "robust", "clip": 8.0})
+
+    assert np.allclose(np.median(scaled.X, axis=0), 0.0)
+    assert np.allclose(np.subtract(*np.percentile(scaled.X, [75, 25], axis=0)), 1.0)
+    assert scaled.X[0, 0] == 8.0
+    assert scaled.ids.tolist() == container.ids.tolist()
+    assert scale_features(container, None) is container
 
 
 def test_dim_reduction_preserves_exact_reducer_names():

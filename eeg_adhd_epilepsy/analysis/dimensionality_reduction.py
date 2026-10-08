@@ -56,6 +56,7 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     build_output_root,
     build_run_config_payload,
     group_fit_requests,
+    scale_features,
     validate_inputs,
 )
 from eeg_adhd_epilepsy.io.bids import (
@@ -117,8 +118,9 @@ def _collect_scope_fit_requests(
                 "Dimensionality-reduction units must use the "
                 f"('obs', 'feature') layout; got {unit_container.dims}."
             )
+        # Scaled after QC, on exactly the rows and features the reducer will see.
+        unit_container = scale_features(unit_container, getattr(args, "scaling", None))
         unit_spec = {**unit_spec, "container": unit_container}
-        unit_container = unit_spec["container"]
         unit_containers_by_key[(scope, condition, unit_spec["unit_key"])] = unit_container
         X = np.asarray(unit_container.X)
         valid_components = valid_component_sweep(unit_container, args.n_components_sweep)
@@ -686,6 +688,7 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         reports_only=bool(config.get("reports_only", False)),
         reports_root=config.get("reports_root"),
         qc=config.get("qc", {}),
+        scaling=config.get("scaling"),
         interactive=bool(config.get("interactive", False)),
         color_by="subject",
     )
