@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+from coco_pipe.decoding import ExperimentResult
 from coco_pipe.decoding.foundation_models import FoundationEmbeddingResult
 from coco_pipe.diagnostics.variance import subject_probe
 from coco_pipe.io import (
@@ -40,7 +41,7 @@ def test_classical_empty_sweep_logging_summarizes_failures(tmp_path, caplog):
 def test_classical_resume_logging_summarizes_completed_units(tmp_path, caplog):
     completed = tmp_path / "completed"
     completed.mkdir()
-    (completed / "_SUCCESS").write_text("")
+    (completed / "run_manifest.json").write_text('{"status": "success"}')
     units = [
         SimpleNamespace(output_dir=completed, overwrite=False),
         SimpleNamespace(output_dir=tmp_path / "pending", overwrite=False),
@@ -129,7 +130,10 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
     unit_root = (
         output / "artifacts" / "fits" / "fit_eo_baseline_adhd_flat_all_none_all_dimensions_baseline"
     )
-    assert (unit_root / "predictions.csv").exists()
+    assert sorted(path.name for path in unit_root.iterdir()) == [
+        "result.joblib",
+        "run_manifest.json",
+    ]
     assert list(
         (tmp_path / "reports" / "summary" / "decoding" / "synthetic").glob(
             "descriptors_cfg-*/dataset_summary.html"
@@ -139,12 +143,6 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
     assert (
         tmp_path / "reports" / "summary" / "decoding" / "synthetic" / "head_to_head_comparison.html"
     ).exists()
-
-    assert (
-        "Model"
-        in np.genfromtxt(unit_root / "summary.csv", delimiter=",", dtype=str, max_rows=1).tolist()
-    )
-    assert (unit_root / "model_artifacts.csv").exists()
 
     # dim_reduction-parity run tracking: runs/ inventory + summary + leaderboard.
     runs_dir = output / "runs"
@@ -158,7 +156,7 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
     assert leaderboard[0]["primary_metric_name"] in {"balanced_accuracy", "accuracy"}
 
     # --reports-only reproduces reports from disk without refitting.
-    predictions_mtime = (unit_root / "predictions.csv").stat().st_mtime_ns
+    result_mtime = (unit_root / "result.joblib").stat().st_mtime_ns
     summary_html = next(
         (tmp_path / "reports" / "summary" / "decoding" / "synthetic").glob(
             "descriptors_cfg-*/dataset_summary.html"
@@ -167,7 +165,7 @@ def test_classical_decoding_end_to_end_with_synthetic_container(tmp_path, monkey
     summary_html.unlink()
     decoding.run({**config, "reports_only": True})
     assert summary_html.exists()
-    assert (unit_root / "predictions.csv").stat().st_mtime_ns == predictions_mtime
+    assert (unit_root / "result.joblib").stat().st_mtime_ns == result_mtime
 
     resumed = decoding.run(config)
     resumed_results = np.genfromtxt(resumed / "sweep_results.csv", delimiter=",", dtype=str)
@@ -548,13 +546,14 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
     output = decoding.run(config)
     sweep = pd.read_csv(output / "sweep_results.csv")
     assert {"flat", "sensor", "descriptor_sensor"}.issubset(set(sweep["analysis_mode"]))
-    assert (
+    sfs_result = ExperimentResult.load(
         output
         / "artifacts"
         / "fits"
         / "fit_eo_baseline_adhd_sensor_fz_none_all_dimensions_sfs"
-        / "selected_features.csv"
-    ).exists()
+        / "result.joblib"
+    )
+    assert not sfs_result.get_selected_features().empty
     fits_root = output / "artifacts" / "fits"
     assert list(fits_root.glob("*descriptor_sensor*baseline*"))
     assert not list(fits_root.glob("*descriptor_sensor*sfs*"))

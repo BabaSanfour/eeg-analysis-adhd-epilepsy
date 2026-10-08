@@ -36,6 +36,7 @@ from coco_pipe.decoding import (
     execute_decoding_sweep_streaming,
     grouped_chance_assessment,
     load_sweep_records,
+    read_run_manifest,
     redact_sensitive,
     safe_group_n_splits,
 )
@@ -560,7 +561,10 @@ def _classical_scope_units(
 def _log_scope_resume_summary(units: list[DecodingUnit], *, scope: str) -> None:
     """Log completed versus pending decoding units before worker dispatch."""
     completed = sum(
-        1 for unit in units if not unit.overwrite and (Path(unit.output_dir) / "_SUCCESS").exists()
+        1
+        for unit in units
+        if not unit.overwrite
+        and (read_run_manifest(unit.output_dir) or {}).get("status") == "success"
     )
     if completed == 0:
         return
