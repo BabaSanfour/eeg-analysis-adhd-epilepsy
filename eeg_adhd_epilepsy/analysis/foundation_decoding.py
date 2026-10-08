@@ -125,21 +125,18 @@ def _build_foundation_unit(
         **mode_defaults,
         **model_cfg["trainer"][train_mode],
     }
-    optimizer = {
-        "name": "adamw",
-        "lr": trainer["lr"],
-    }
     neural = NeuralFineTuneConfig(
         model_key=model_key,
         backend=model_cfg["backend"],
         train_mode=train_mode,
         input_kind="epoched",
-        optimizer=optimizer,
         trainer=TrainerConfig(
             max_epochs=int(trainer["max_epochs"]),
             early_stopping_patience=trainer["early_stopping_patience"],
             batch_size=int(trainer["batch_size"]),
             validation_fraction=float(trainer["validation_fraction"]),
+            lr=float(trainer["lr"]),
+            weight_decay=float(trainer["weight_decay"]),
         ),
         device=DeviceConfig(
             device=model_cfg.get("device", config["device"]),

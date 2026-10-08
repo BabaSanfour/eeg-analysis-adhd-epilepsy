@@ -119,18 +119,21 @@ training_defaults:
   linear_probe:
     max_epochs: 20
     lr: 0.001
+    weight_decay: 0.01
     batch_size: 16
     early_stopping_patience: 5
     validation_fraction: 0.1
   full:
     max_epochs: 10
     lr: 0.00001
+    weight_decay: 0.01
     batch_size: 8
     early_stopping_patience: 3
     validation_fraction: 0.1
   lora:
     max_epochs: 15
     lr: 0.0001
+    weight_decay: 0.01
     batch_size: 8
     early_stopping_patience: 4
     validation_fraction: 0.1
@@ -139,7 +142,9 @@ training_defaults:
 cv:
   n_splits: 5
 
-chance_method: binomial
+# Labels are shuffled within groups and the whole pipeline is refit
+# `n_permutations` times, so the smallest p-value is 1 / (n_permutations + 1).
+chance_method: permutation
 n_permutations: 100
 store_null_distribution: false
 
