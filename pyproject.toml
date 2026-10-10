@@ -20,7 +20,7 @@ classifiers = [
 dependencies = [
   "numpy<2.4",
   "pandas<3.0.0",
-  "mne",
+  "mne>=1.13",
   "mne-bids>=0.20",
   "filelock>=3.20.4",
   "pybv>=0.7.3",

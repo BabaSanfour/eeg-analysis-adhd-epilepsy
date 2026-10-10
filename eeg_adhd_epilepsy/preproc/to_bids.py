@@ -526,7 +526,7 @@ def process_record(
     if available_targets:
         raw.pick(available_targets)
     if raw.ch_names:
-        montage = mne.channels.make_standard_montage("standard_1020")
+        montage = mne.channels.make_standard_montage("colin27_1020")
         raw.set_montage(montage, match_case=False, on_missing="raise")
     try:
         write_raw_bids(

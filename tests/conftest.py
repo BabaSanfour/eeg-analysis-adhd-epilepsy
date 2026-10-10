@@ -31,7 +31,7 @@ os.environ.setdefault("MPLBACKEND", "Agg")
 import numpy as np
 import pytest
 
-# Standard 10-20 channels that resolve to positions in MNE's ``standard_1020``
+# Standard 10-20 channels that resolve to positions in MNE's ``colin27_1020``
 # montage, so topomap-based QC figures have sensor coordinates to plot.
 _SYNTHETIC_CHANNELS = [
     "Fp1",
@@ -87,7 +87,7 @@ def synthetic_raw():
 
     Returns a callable ``make(seed=0, sfreq=250.0, duration=60.0)`` so a test
     can build several independent recordings (e.g. before/after correction)
-    with controllable content. The recording carries the ``standard_1020``
+    with controllable content. The recording carries the ``colin27_1020``
     montage, so topomap-based QC figures have channel positions.
     """
     import mne
@@ -101,7 +101,7 @@ def synthetic_raw():
         data += 10e-6 * np.sin(2 * np.pi * 10.0 * t)
         info = mne.create_info(list(_SYNTHETIC_CHANNELS), sfreq=sfreq, ch_types="eeg")
         raw = mne.io.RawArray(data, info, verbose="ERROR")
-        raw.set_montage("standard_1020", verbose="ERROR")
+        raw.set_montage("colin27_1020", verbose="ERROR")
         return raw
 
     return make
