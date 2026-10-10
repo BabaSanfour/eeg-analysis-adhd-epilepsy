@@ -203,7 +203,7 @@ def test_table_helpers_preserve_metadata_and_feature_names() -> None:
     assert "median_param_offset_ch-Cz" in agg_df.columns
     assert "iqr_param_offset_ch-Cz" in agg_df.columns
     assert "agg_band_ratio_alpha_beta_ch-Fz" in agg_df.columns
-    assert "agg_band_corr_ratio_alpha_beta_ch-Fz" in agg_df.columns
+    assert "agg_band_corr_ratio_alpha_beta_ch-Fz" not in agg_df.columns
     assert agg_df["epoch_count"].tolist() == [2, 2]
 
 
@@ -402,9 +402,9 @@ aggregation:
     assert any(column.startswith("median_band_") for column in sensor_agg_df.columns)
     assert any(column.startswith("iqr_band_") for column in sensor_agg_df.columns)
     assert any(column.startswith("agg_band_ratio_") for column in sensor_agg_df.columns)
-    assert any(column.startswith("agg_band_corr_ratio_") for column in sensor_agg_df.columns)
+    assert not any(column.startswith("agg_band_corr_ratio_") for column in sensor_agg_df.columns)
     assert any(column.startswith("agg_band_ratio_") for column in pooled_agg_df.columns)
-    assert any(column.startswith("agg_band_corr_ratio_") for column in pooled_agg_df.columns)
+    assert not any(column.startswith("agg_band_corr_ratio_") for column in pooled_agg_df.columns)
     assert not any(column.startswith("band_ratio_") for column in sensor_epoch_df.columns)
     pooled_log_col = "band_log_abs_alpha_chgrp-midline"
     assert pooled_log_col in pooled_epoch_df.columns
@@ -515,11 +515,11 @@ aggregation:
     # Aggregated stat columns are present at recording level and inherited by subject.
     for frame in (combined_sensor_recording_df, combined_sensor_subject_df):
         assert any(column.startswith("agg_band_ratio_") for column in frame.columns)
-        assert any(column.startswith("agg_band_corr_ratio_") for column in frame.columns)
+        assert not any(column.startswith("agg_band_corr_ratio_") for column in frame.columns)
     assert any(
         column.startswith("agg_band_ratio_") for column in combined_pooled_recording_df.columns
     )
-    assert any(
+    assert not any(
         column.startswith("agg_band_corr_ratio_") for column in combined_pooled_recording_df.columns
     )
     assert (combined_root / "failures.csv").exists()
