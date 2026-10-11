@@ -96,7 +96,7 @@ def build_bids_report_ids(
     run_prefix = subject_session_prefix if not run else f"{subject_session_prefix}_run-{run}"
     return {
         "subject": subject,
-        "session": session or "01",
+        "session": session or "",
         "subject_id": subject_id,
         "session_id": session or "",
         "run_id": run or "",
