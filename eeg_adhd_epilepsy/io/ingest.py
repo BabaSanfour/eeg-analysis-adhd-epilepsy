@@ -5,7 +5,7 @@ Raw EEG recording discovery and `.pnt` parsing utilities.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -37,7 +37,7 @@ def parse_pnt_metadata(pnt_path: Path) -> dict[str, str | datetime | None]:
     meas_dt = None
     try:
         meas_dt = datetime.strptime(data[_PNT_START].decode("ISO-8859-1"), "%Y%m%d%H%M%S")
-        meas_dt = meas_dt.replace(tzinfo=timezone.utc)
+        meas_dt = meas_dt.replace(tzinfo=UTC)
     except ValueError:
         pass
 

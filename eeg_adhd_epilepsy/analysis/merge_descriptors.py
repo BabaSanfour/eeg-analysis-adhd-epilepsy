@@ -16,7 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pandas as pd
@@ -283,7 +283,7 @@ def main() -> None:
     combined_failures_df.to_csv(combined_root / "failures.csv", index=False)
 
     manifest = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
         "bids_root": str(bids_root),
         "derivative_root": str(derivative_root),
         "config_used_path": str(config_path),

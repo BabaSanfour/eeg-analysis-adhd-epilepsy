@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import mne
@@ -128,7 +128,7 @@ def _write_epoch_provenance(
         "ignore_annotations": ignore_annotations,
         "n_epochs": len(epochs),
         "condition_counts": condition_counts,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at": datetime.now(UTC).isoformat(),
     }
     sidecar_path = output_path.with_name(output_path.name.replace("_epo.fif", "_epo.json"))
     sidecar_path.write_text(json.dumps(provenance, indent=2))
