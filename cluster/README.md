@@ -11,7 +11,7 @@ sbatch --export=ALL,BIDS_ROOT=/my/BIDS,METADATA_PATH=/my/meta.csv 03_submit_base
 
 | # | Script | Stage | Shape |
 |---|--------|-------|-------|
-| 01 | `01_submit_to_bids.sh` | raw → BIDS + pre-base QC | array (per subject) |
+| 01 | `01_submit_to_bids.sh` | raw → BIDS + pre-base QC | single (all subjects) |
 | 02 | `02_tar_raw_data.sh` | archive raw data | single |
 | 03 | `03_submit_base_cleaning.sh` | BIDS → `desc-base` derivatives + QC | single (all subjects) |
 | 04 | `04_submit_epochs.sh` | `desc-base` → condition epochs | single |
@@ -44,6 +44,8 @@ sbatch --export=ALL,BIDS_ROOT=/my/BIDS,METADATA_PATH=/my/meta.csv 03_submit_base
 | `METADATA_PATH` | `patients_metadata_clean.csv` | shared project path |
 | `RAW_ROOT` | raw recordings (01 only) | shared project path |
 | `VENV_PATH` | virtualenv | `$PROJECT_ROOT/.venv` |
+| `SCRATCH_ROOT` | scratch root for outputs | `/home/hamza97/scratch/eeg-epilepsy-adhd` |
+| `REPORTS_ROOT` | generated reports | `$SCRATCH_ROOT/reports` |
 | `DECODING_ROOT` | decoding checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/decoding` |
 | `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/dim_reduction` |
 | `OVERWRITE` | `1` to force reprocessing | `0` |
@@ -165,8 +167,9 @@ Stages **08**, **17**, and the foundation branch of **20** need a GPU
 (foundation dim-reduction), **15** (classical decoding over saved embeddings),
 **16** (classical comparison), and **18** (foundation comparison) are CPU-only.
 For **20**, pass `--gres`
-only when submitting `foundation` or `all`; use separate `decoding` and
-`foundation` submissions to avoid reserving a GPU for classical decoding. REVE
+only when submitting `foundation` or `all`; use separate `descriptors`,
+`embeddings` and `foundation` submissions to avoid reserving a GPU for classical
+decoding. REVE
 is a gated Hugging Face model — run
 `hf auth login` or export `HF_TOKEN` before submitting, or REVE is skipped with
 `authentication_required`.

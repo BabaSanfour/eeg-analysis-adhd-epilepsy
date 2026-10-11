@@ -1,6 +1,6 @@
 # EEG Analysis for ADHD, Epilepsy and Medication Effects
 
-[![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 Analysis code for an EEG study of ADHD, epilepsy, and psychostimulant exposure.
@@ -27,8 +27,10 @@ patient CSVs ─▶ metadata ─▶ cohort report
 | Preprocess (cleaning + QC) | `eeg-preprocess` | `preproc.base` |
 | Epoch | `eeg-save-epochs` | `preproc.epochs` |
 | Descriptors | `eeg-descriptors` | `analysis.extract_descriptors` |
+| Verify descriptors | `eeg-verify-descriptors` | `analysis.verify_descriptors` |
 | Merge descriptors | `eeg-merge-descriptors` | `analysis.merge_descriptors` |
 | Foundation embeddings | `eeg-foundation-embeddings` | `analysis.extract_foundation_embeddings` |
+| Align subject embeddings | `eeg-align-subject-embeddings` | `analysis.align_subject_embeddings` |
 | Dimensionality reduction | `eeg-dim-reduce` | `analysis.dimensionality_reduction` |
 | Classical decoding | `eeg-classical-decode` | `analysis.classical_decoding` |
 | Foundation decoding | `eeg-foundation-decode` | `analysis.foundation_decoding` |
@@ -36,7 +38,7 @@ patient CSVs ─▶ metadata ─▶ cohort report
 ## Quick start
 
 ```bash
-# 1. Install (Python 3.10+). Re-run after pulling changes that touch entry points.
+# 1. Install (Python 3.11+). Re-run after pulling changes that touch entry points.
 python -m venv .venv && source .venv/bin/activate
 pip install -e .
 
@@ -94,10 +96,13 @@ instead of a deep `KeyError`. See [configs/README.md](configs/README.md).
 
 ## Prerequisites
 
-- **Python 3.10+** and the editable install (`pip install -e .`), which pulls
-  `coco-pipe[decoding,foundation]` and `mne-denoise`.
-- **Foundation models** need PyTorch and Braindecode ≥ 1.5. Fine-tuning/LoRA are
-  practical on a CUDA **GPU**; CPU runs are for small validation only.
+- **Python 3.11+** (required by `coco-pipe`) and the editable install
+  (`pip install -e .`), which pulls `coco-pipe` and `mne-denoise` from GitHub
+  `main`, and requires MNE ≥ 1.13.
+- **Foundation models** need coco-pipe's `foundation` extra
+  (`pip install 'coco-pipe[decoding,foundation]'`), which brings Braindecode
+  ≥ 1.8.1. Fine-tuning/LoRA are practical on a CUDA **GPU**; CPU runs are for
+  small validation only.
 - **REVE** is a gated Hugging Face model: run `hf auth login` or export `HF_TOKEN`
   before using it, otherwise it is skipped with `authentication_required`. Saved
   configs are redacted so tokens never reach derivatives or reports.
@@ -164,7 +169,7 @@ annotations, and subject/summary reports under a sibling `reports/` directory.
 [preproc/base.py](eeg_adhd_epilepsy/preproc/base.py) reads raw BIDS, applies
 automated cleaning, and writes analysis-ready derivatives plus QC reports:
 
-- Bandpass filter (0.1–99.5 Hz) + line-noise removal via Adaptive ZapLine (`mne-denoise`)
+- Bandpass filter (0.1–100 Hz by default) + line-noise removal via Adaptive ZapLine (`mne-denoise`)
 - Bad-channel detection via RANSAC (`pyprep`)
 - Robust re-referencing (common average)
 - Condition-wise bad-segment/epoch detection via `AutoReject`
@@ -178,7 +183,7 @@ Incremental by default (`--overwrite` to force, `--subjects` to target). Outputs
 `*_desc-base_eeg.fif` under `BIDS/derivatives/preproc/` and `base_qc` reports.
 
 > An experimental "Part 2" artifact-correction pipeline
-> (`preproc/{correct,denoise,compare,run_all}.py`, `ARTIFACT_STRATEGIES.md`) is
+> (`preproc/{correct,denoise,compare,run_all}.py`) is
 > **not** part of the canonical run; `base.py` is the production path.
 
 ## Epoching
@@ -187,8 +192,9 @@ Incremental by default (`--overwrite` to force, `--subjects` to target). Outputs
 eeg-save-epochs --bids_root /path/to/BIDS --segment_duration 10.0 --ignore_annotations
 ```
 
-Slices `*_desc-base_eeg.fif` by condition annotations into
-`*_task-<condition>_run-XX_desc-base_epo.fif` derivatives.
+Slices each `*_desc-base_eeg.fif` into fixed-length epochs labelled by condition
+and writes them next to it as `*_desc-base_epo.fif`, with an `*_epo.json`
+provenance sidecar.
 
 ## Descriptor extraction and merge
 
@@ -211,7 +217,7 @@ eeg-merge-descriptors --bids_root /path/to/BIDS
 
 Per-subject shards land under
 `BIDS/derivatives/signal_features/descriptors/sub-*/...`; merge writes
-`descriptors/combined/{sensor,pooled}_{epoch,subject}_features.{parquet,csv}`.
+`descriptors/combined/{sensor,pooled}_{epoch,recording,subject}_features` tables.
 
 ## Dimensionality reduction
 
@@ -224,27 +230,29 @@ eeg-dim-reduce \
   --bids_root /path/to/BIDS --metadata /path/to/patients_metadata_clean.csv \
   --cohort_config   configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml \
   --analysis_config configs/analyses/dim_reduction/raw.yaml \
-  --input_mode raw --analysis_mode flat --representation subject \
+  --representation subject \
   --n_jobs 4
 ```
 
 ### Core concepts
 
-Three arguments define what is loaded and what one “analysis unit” is:
+Three settings define what is loaded and what one “analysis unit” is. The first
+two live in the analysis config; the third can also be given on the command line:
 
-- `--input_mode`: `raw` (BIDS/derivatives), `descriptors` (merged tables), or
-  `foundation_embeddings` (a model-specific embedding derivative).
-- `--analysis_mode`: `flat`, `sensor`, `family`, `subfamily`,
-  `sensor_within_family`, `sensor_within_subfamily`, `feature`,
-  `feature_within_family`, `descriptor`, `descriptor_sensor` — progressively finer
-  units (most are descriptor-only).
-- `--representation`: for `raw` inputs, this is the averaging granularity (`epoch`
-  or `subject`). For `descriptors` and `foundation_embeddings`, it dictates which
-  pre-computed representation file to load (e.g., `epoch`, `recording`, `subject`).
-  It is orthogonal to `--analysis_mode`.
+- `input_mode`: `raw` (BIDS/derivatives), `descriptors` (merged tables), or
+  `foundation_embeddings` (a model-specific embedding derivative, chosen with
+  `--embedding_derivative_root` and `--embedding_model_key`).
+- `analysis_modes`: a mapping of mode → spec (reducers and n_components sweep).
+  Modes are `flat`, `sensor`, `family`, `subfamily`, `sensor_within_family`,
+  `sensor_within_subfamily`, `feature`, `feature_within_family`, `descriptor`,
+  `descriptor_sensor` — progressively finer units (most are descriptor-only).
+- `representation` / `--representation`: `epoch`, `recording` or `subject`. For
+  `raw` inputs this is the averaging granularity. For `descriptors` and
+  `foundation_embeddings`, it selects which pre-computed table to load. It is
+  orthogonal to the analysis mode.
 
-The most common subject-level raw setup is `--input_mode raw --analysis_mode flat
---representation subject`: one row per subject over the joint sensor×time
+The most common subject-level raw setup is `raw.yaml` with the `flat` mode and
+`--representation subject`: one row per subject over the joint sensor×time
 space. Best-fit selection is driven by `selection_metric` /`selection_eval_name`
 (in the analysis config); the default separation ranking uses RF balanced
 accuracy first and LR balanced accuracy second. Outputs are separated by a
@@ -257,8 +265,8 @@ checkpointed outputs outside the input BIDS tree without changing run identity.
 ## Foundation models and decoding
 
 ```bash
-# Dataset-wide embedding extraction (CBraMod, LaBraM, REVE, LUNA).
-eeg-foundation-embeddings --config /path/to/foundation_embeddings.yaml
+# Dataset-wide embedding extraction (CBraMod, LaBraM, REVE, LUNA, BIOT, SignalJEPA, EEGPT, BENDR).
+eeg-foundation-embeddings --config configs/foundation_extraction.yaml --bids_root … --metadata …
 
 # Decoding (two-config). Classical = descriptors/embeddings; foundation = direct probing/fine-tune/LoRA.
 eeg-classical-decode  --cohort_config <cohort.yaml> --analysis_config configs/analyses/decoding/classical.yaml --bids_root … --metadata …
@@ -270,13 +278,13 @@ Both decoding commands accept
 checkpoints and aggregate inputs while leaving `--bids_root` pointed at the
 source dataset; the output-only path is excluded from the scientific run hash.
 
-Each model declares its own EEG window requirements; the example configs use
-10-second derivative epochs for CBraMod/REVE/LUNA, and re-epoch the cleaned
-continuous `desc-base` recording at 15 s for LaBraM (3000 samples at 200 Hz).
-`window_mismatch_policy` is `error` | `skip` | `re_epoch` — nothing silently pads
-or crops. Grouped CV uses `patient_group_id`; scaling/reduction/selection/fitting
-happen inside each training fold. See
-[docs/design/foundation_models_and_decoding.md](docs/design/foundation_models_and_decoding.md).
+Each model declares its own EEG window requirements in the config. Most use the
+saved 10-second derivative epochs (`window_source: derivative`); a model that
+needs another window, such as LaBraM at 15 s, is re-epoched from the cleaned
+continuous `desc-base` recording (`window_source: re_epoch`).
+`window_mismatch_policy` is `raise` | `skip` — nothing silently pads or crops.
+Grouped CV uses `patient_group_id`; scaling/reduction/selection/fitting happen
+inside each training fold.
 
 ## Cluster (SLURM)
 
@@ -295,7 +303,7 @@ pip install -e .
 To develop against a local `coco-pipe` checkout in the same env:
 
 ```bash
-pip install -e '/Users/hamzaabdelhedi/Projects/packages/coco-pipe[decoding,foundation]'
+pip install -e '/path/to/coco-pipe[decoding,foundation]'
 ```
 
 ## Module map
@@ -303,7 +311,8 @@ pip install -e '/Users/hamzaabdelhedi/Projects/packages/coco-pipe[decoding,found
 ```text
 eeg_adhd_epilepsy/
 ├── io/           # BIDS layout/paths + recording-id grouping (bids), raw ingest
-│                 # (ingest), analysis-input loading (containers)
+│                 # (ingest), table/JSON readers (readers), report directories
+│                 # (report_paths)
 ├── metadata/     # clinical patient-metadata concern: builder (patients), cohort
 │                 # analysis + possible-study enumeration (cohort), the study
 │                 # schema (analysis_opportunities_schema), shared constants (schema)
@@ -314,7 +323,8 @@ eeg_adhd_epilepsy/
 ├── qc/           # stage-level QC orchestration (raw_qc, preproc_qc, descriptor_qc)
 ├── reports/      # HTML report composition (one per stage)
 ├── viz/          # figures embedded in the reports
-└── utils/        # config (two-config loader), yaml, constants, logging
+└── utils/        # config (two-config loader), yaml, constants, logs, events,
+                  # artifacts, formatting
 ```
 
 Per-stage QC follows a consistent split: `qc/` computes metrics, `viz/` draws the
@@ -325,10 +335,9 @@ figures, `reports/` assembles the HTML.
 ```text
 .
 ├── eeg_adhd_epilepsy/   # Main package (io, metadata, preproc, analysis, qc, signal_quality, reports, viz, utils)
-├── configs/             # cohorts/ (dataset+question) and analyses/ (method); descriptors.yaml; examples
+├── configs/             # cohorts/ (dataset+question) and analyses/ (method); descriptors.yaml,
+│                        # annotations.yaml, foundation_extraction.yaml
 ├── cluster/             # Numbered SLURM scripts, one per stage (see cluster/README.md)
-├── scripts/             # One-off maintenance scripts (e.g. split_configs.py)
-├── docs/                # Design notes, backlog, and the improvement-plan tracker
 ├── tests/               # Automated tests
 ├── Makefile             # Direct convenience targets over the stage CLIs
 ├── pyproject.toml       # Metadata, dependencies, console-script entry points

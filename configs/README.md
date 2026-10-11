@@ -13,8 +13,10 @@ configs/
 │   └── medicated_adhd_vs_controls/  # populations and clinical questions
 ├── analyses/
 │   ├── dim_reduction/              # reducers and selection settings
-│   └── decoding/                   # classical + foundation decoding methods
+│   ├── decoding/                   # classical + foundation decoding methods
+│   └── align_subject_embeddings.yaml   # subject-alignment transforms
 ├── descriptors.yaml                    # dataset-wide descriptor extraction
+├── foundation_extraction.yaml          # dataset-wide embedding extraction
 ├── annotations.yaml                    # annotation normalization
 ```
 
@@ -35,8 +37,9 @@ the cohort.
 | `eeg-dim-reduce` | `--cohort_config` + `--analysis_config` |
 | `eeg-classical-decode` | `--cohort_config` + `--analysis_config` |
 | `eeg-foundation-decode` | `--cohort_config` + `--analysis_config` |
+| `eeg-align-subject-embeddings` | `--cohort_config` + `--analysis_config` |
 | `eeg-descriptors` | `--config configs/descriptors.yaml` |
-| `eeg-foundation-embeddings` | one dataset-wide `--config` |
+| `eeg-foundation-embeddings` | `--config configs/foundation_extraction.yaml` |
 | BIDS conversion, preprocessing, and epoching | CLI arguments; no cohort split |
 
 The Makefile keeps method files explicit and separate: `DIM_ANALYSIS` selects
@@ -69,11 +72,11 @@ reducers × n_components. `analysis_modes` is a mapping of mode -> spec, where e
 spec **fully declares that mode's run**: the `reducers` to fit and the
 `n_components` to sweep. There is no global default — each mode is the single
 source of truth for its own sweep, so granular modes simply list a smaller range.
-Every input uses the same `analysis_modes` mapping. For raw inputs the averaging
-granularity is a single top-level `representation: epoch | subject` (orthogonal to
-the mode's flat/sensor axis), so it lives outside `analysis_modes`, not per spec.
-Descriptor/foundation inputs omit it — their granularity is set by which file is
-loaded (optionally labelled for output paths via `granularity_label`).
+Every input uses the same `analysis_modes` mapping. The granularity is a single
+top-level `representation: epoch | recording | subject` (orthogonal to the mode's
+flat/sensor axis), so it lives outside `analysis_modes`, not per spec, and
+`--representation` overrides it. For raw inputs it is the averaging granularity;
+for descriptor/foundation inputs it selects which pre-computed table is loaded.
 (This deliberately diverges from decoding, which stays organized around `models`
 because a model carries rich per-estimator config; a reducer is just a name, so
 the mode owns it.)

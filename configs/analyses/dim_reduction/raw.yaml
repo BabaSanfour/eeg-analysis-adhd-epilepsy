@@ -32,7 +32,8 @@ window_source: auto
 
 # Two orthogonal axes for raw EEG:
 #   representation (top-level, one per run) = averaging granularity:
-#     'subject' averages every epoch to one row per subject; 'epoch' keeps each epoch.
+#     'subject' averages every epoch to one row per subject, 'recording' to one
+#     row per recording; 'epoch' keeps each epoch.
 #   analysis_mode (per spec below) = sensor handling: flat concatenates all
 #     channels into one vector; sensor keeps the native per-channel layout.
 representation: subject
