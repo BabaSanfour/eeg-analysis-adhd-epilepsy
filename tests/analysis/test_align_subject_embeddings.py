@@ -241,7 +241,8 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
         (diagnostics["transform"] == "ra")
         & diagnostics["metric"].str.startswith("variance_participation_ratio")
     ]
-    assert set(ra_rank["status"]) == {"skipped"}
+    assert set(ra_rank["status"]) == {"estimated"}
+    assert ra_rank["value"].notna().all()
     assert ra_rank["reason"].str.contains("feature Gram matrix").all()
 
     real_score_diagnostics = align_subject_embeddings.score_variance_diagnostics
