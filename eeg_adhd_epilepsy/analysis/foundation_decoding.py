@@ -81,6 +81,15 @@ def _build_foundation_unit(
 
     segment_duration = float(model_cfg["segment_duration"])
     window_source = str(model_cfg["window_source"])
+    # One fit gives both levels: every metric is scored per epoch and, as
+    # "<metric>_by_recording", on the mean probability of a recording's test
+    # epochs. EO and EC epochs of one file share recording_id; they are scored
+    # apart.
+    sample_metadata = sample_metadata.assign(
+        recording=sample_metadata["condition"].astype(str)
+        + "_"
+        + sample_metadata["recording_id"].astype(str)
+    )
 
     # capability record is always top-level in every returned record
     capability_record = {
@@ -156,6 +165,7 @@ def _build_foundation_unit(
             shuffle=True,
             random_state=int(config["random_state"]),
             group_key="group_id",
+            score_by="recording",
         ),
         statistical_assessment=grouped_chance_assessment(
             config["chance_method"],
@@ -376,6 +386,8 @@ def _iter_foundation_unit_batches(
             use_derivatives=bool(model_cfg["use_derivatives"]),
             window_source=window_source,
         )
+        # The models take epochs, never a signal averaged over a recording.
+        loader_args.representation = "epoch"
         spec = get_foundation_model_spec(model_key)
         provenance = foundation_provenance(model_cfg, spec, config_hash=cfg_hash)
 
@@ -544,12 +556,6 @@ def main() -> None:
         help="Run one model from the analysis config.",
     )
     parser.add_argument(
-        "--representation",
-        choices=["epoch", "recording", "subject"],
-        default=None,
-        help="Override the raw representation granularity for foundation decoding.",
-    )
-    parser.add_argument(
         "--overwrite",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -583,7 +589,6 @@ def main() -> None:
         n_jobs=args.n_jobs,
         reports_root=args.reports_root,
         derivative_root=args.derivative_root,
-        representation=args.representation,
         overwrite=args.overwrite,
         reports_only=args.reports_only,
         compare_only=args.compare_only,

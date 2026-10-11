@@ -115,6 +115,9 @@ the method). See `../configs/README.md`.
   sbatch --export=ALL,DIRS_FILE=/home/hamza97/foundation_all.txt,ARCHIVE_NAME=foundation_all \
       cluster/14b_submit_archive_dim_reduction.sh
   ```
+- **17 (direct foundation decoding)** trains on epochs and reports both levels
+  from one run: every metric per epoch, and as `<metric>_by_recording` on the mean
+  probability of each recording's test epochs.
 - **15 (classical decoding)** runs one descriptor baseline plus every configured
   base foundation model × representation. Each foundation task evaluates raw,
   fold-local LEACE, EA-CORAL, EA-Mean, and RA in the same run, so transforms use

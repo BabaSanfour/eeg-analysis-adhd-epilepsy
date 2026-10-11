@@ -59,6 +59,5 @@ python -m eeg_adhd_epilepsy.analysis.foundation_decoding \
     --derivative_root "$DECODING_ROOT" \
     --metadata "$METADATA_PATH" \
     --reports_root "$REPORTS_ROOT" \
-    --representation epoch \
     --model_key "$model" \
     --no-write-shared-comparison-report

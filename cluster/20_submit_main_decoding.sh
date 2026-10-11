@@ -176,7 +176,7 @@ run_foundation() {
     fi
 
     for model in "${DIRECT_MODELS[@]}"; do
-        echo " -> Model: $model | Representation: epoch"
+        echo " -> Model: $model | epoch and recording scores"
         # For foundation runs --n_jobs is the OUTER sweep concurrency: how many
         # decoding units (each a full CBraMod/REVE backbone) load at once. On a
         # single GPU that must stay at 1, otherwise N backbones + N CUDA contexts
@@ -192,7 +192,6 @@ run_foundation() {
             --derivative_root "$DECODING_ROOT"
             --reports_root "$REPORTS_ROOT"
             --metadata "$METADATA_PATH"
-            --representation epoch
             --model_key "$model"
             --n_jobs "${FOUNDATION_N_JOBS:-1}"
             --no-write-shared-comparison-report
