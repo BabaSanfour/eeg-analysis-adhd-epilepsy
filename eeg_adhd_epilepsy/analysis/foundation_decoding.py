@@ -130,14 +130,7 @@ def _build_foundation_unit(
         backend=model_cfg["backend"],
         train_mode=train_mode,
         input_kind="epoched",
-        trainer=TrainerConfig(
-            max_epochs=int(trainer["max_epochs"]),
-            early_stopping_patience=trainer["early_stopping_patience"],
-            batch_size=int(trainer["batch_size"]),
-            validation_fraction=float(trainer["validation_fraction"]),
-            lr=float(trainer["lr"]),
-            weight_decay=float(trainer["weight_decay"]),
-        ),
+        trainer=TrainerConfig(**trainer),
         device=DeviceConfig(
             device=model_cfg.get("device", config["device"]),
             precision=model_cfg.get("precision", config["precision"]),
