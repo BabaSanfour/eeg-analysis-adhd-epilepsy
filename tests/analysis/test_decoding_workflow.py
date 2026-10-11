@@ -542,7 +542,15 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
             "tol": 0.0,
             "analysis_modes": ["sensor"],
         },
+        {
+            "name": "sfsepoch",
+            "method": "sfs",
+            "direction": "forward",
+            "tol": 0.0,
+            "representations": ["epoch"],
+        },
     ]
+    config["representation"] = "recording"
     output = decoding.run(config)
     sweep = pd.read_csv(output / "sweep_results.csv")
     assert {"flat", "sensor", "descriptor_sensor"}.issubset(set(sweep["analysis_mode"]))
@@ -557,6 +565,8 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
     fits_root = output / "artifacts" / "fits"
     assert list(fits_root.glob("*descriptor_sensor*baseline*"))
     assert not list(fits_root.glob("*descriptor_sensor*sfs*"))
+    # a variant limited to another representation is not run
+    assert not list(fits_root.glob("*sfsepoch*"))
 
 
 def test_classical_plan_rejects_reduced_dimensions(tmp_path):

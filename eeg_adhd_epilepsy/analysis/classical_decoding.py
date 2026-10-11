@@ -69,7 +69,7 @@ from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 
 LOGGER = logging.getLogger(__name__)
 
-_FS_METADATA_KEYS = {"name", "analysis_modes"}
+_FS_METADATA_KEYS = {"name", "analysis_modes", "representations"}
 _MAX_FAILURE_REASONS_TO_LOG = 8
 
 _FOLD_LOCAL_TRANSFORMS = frozenset(
@@ -238,6 +238,10 @@ def _build_selection_units(
         if (
             not spec.get("analysis_modes")
             or analysis_mode in {str(mode) for mode in spec["analysis_modes"]}
+        )
+        if (
+            not spec.get("representations")
+            or str(config.get("representation")) in {str(r) for r in spec["representations"]}
         )
         if str(spec.get("method", "none")) == "none" or X.shape[1] > 1
     ]

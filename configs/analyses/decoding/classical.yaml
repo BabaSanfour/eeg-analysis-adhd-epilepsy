@@ -44,6 +44,10 @@ feature_selection:
       - sensor
       - subfamily
       - sensor_within_subfamily
+    # SFS refits every candidate feature on every fold; at epoch level one unit
+    # took 5.7 days (fix 6), so it runs on recording-level data only.
+    representations:
+      - recording
 
 tuning:
   enabled: true
