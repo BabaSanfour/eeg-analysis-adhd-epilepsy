@@ -1,0 +1,26 @@
+# Check for fix 2 (fine-tunes collapsed to one class): EO vs EC, the strongest effect in
+# resting EEG, on the 9-12 age group. Pair with configs/analyses/decoding/foundation_check.yaml.
+dataset_name: check_finetune_eo_vs_ec_age_9-12
+subject_col: study_id
+conditions:
+- EO_baseline
+- EC_baseline
+run_pooled: true
+group_filters:
+- adhd:
+  - 0
+  psychostimulant:
+  - 0
+- adhd:
+  - 1
+  psychostimulant:
+  - 1
+filter_col:
+- age_group
+filter_val:
+- - 9-12
+evals:
+- name: condition_separation
+  target_col: condition
+  group_col: patient_group_id
+  positive_class: EC_baseline

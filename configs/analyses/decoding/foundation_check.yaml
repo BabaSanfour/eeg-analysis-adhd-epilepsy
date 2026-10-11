@@ -1,0 +1,81 @@
+# Check for fix 2: CBraMod only, in all three train modes. Same training settings as
+# foundation.yaml. Binomial chance only, to skip 100 permutation fine-tunes per fit: the
+# check reads balanced accuracy and the predicted classes, not p-values.
+
+models:
+  - model_key: cbramod
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_source: derivative
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+
+# --- Training regime --------------------------------------------------------
+train_modes: [linear_probe, full, lora]
+training_defaults:
+  linear_probe:
+    max_epochs: 20
+    lr: 0.001
+    weight_decay: 0.01
+    batch_size: 16
+    early_stopping_patience: 5
+    validation_fraction: 0.1
+  full:
+    max_epochs: 10
+    lr: 0.00001
+    weight_decay: 0.01
+    batch_size: 8
+    early_stopping_patience: 3
+    validation_fraction: 0.1
+  lora:
+    max_epochs: 15
+    lr: 0.0001
+    weight_decay: 0.01
+    batch_size: 8
+    early_stopping_patience: 4
+    validation_fraction: 0.1
+
+# --- Evaluation -------------------------------------------------------------
+cv:
+  n_splits: 5
+
+chance_method: binomial
+n_permutations: 1  # unused with binomial
+store_null_distribution: false
+
+metrics:
+  - accuracy
+  - balanced_accuracy
+  - f1
+  - precision
+  - recall
+  - roc_auc
+
+# --- Hardware / runtime -----------------------------------------------------
+device: auto
+precision: fp32
+on_unsupported: skip
+representation: epoch
+
+# --- Column identity --------------------------------------------------------
+session_col: session
+subject_col: study_id
+
+# --- Run controls -----------------------------------------------------------
+random_state: 42
+verbose: true
+overwrite: false
+n_jobs: 1
+class_weight: balanced
+run_pooled: true
+
+# --- Reporting --------------------------------------------------------------
+detailed_unit_reports: true
+report_asset_urls: inline
