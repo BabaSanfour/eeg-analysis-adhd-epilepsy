@@ -161,6 +161,8 @@ device: auto
 precision: fp32
 on_unsupported: skip
 representation: epoch
+# The models expect microvolts; the loader default is volts.
+units: uV
 
 # --- Column identity --------------------------------------------------------
 session_col: session

@@ -1,4 +1,4 @@
-# Check for fix 2 (fine-tunes collapsed to one class): EO vs EC, the strongest effect in
+# Check that fine-tunes learn (not one predicted class): EO vs EC, the strongest effect in
 # resting EEG, on the 9-12 age group. Pair with configs/analyses/decoding/foundation_check.yaml.
 dataset_name: check_finetune_eo_vs_ec_age_9-12
 subject_col: study_id

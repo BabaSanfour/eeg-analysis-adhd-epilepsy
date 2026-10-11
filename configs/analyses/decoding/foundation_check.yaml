@@ -1,4 +1,4 @@
-# Check for fix 2: CBraMod only, in all three train modes. Same training settings as
+# Fine-tune check: CBraMod only, in all three train modes. Same training settings as
 # foundation.yaml. Binomial chance only, to skip 100 permutation fine-tunes per fit: the
 # check reads balanced accuracy and the predicted classes, not p-values.
 
@@ -63,6 +63,8 @@ device: auto
 precision: fp32
 on_unsupported: skip
 representation: epoch
+# The models expect microvolts; the loader default is volts.
+units: uV
 
 # --- Column identity --------------------------------------------------------
 session_col: session

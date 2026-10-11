@@ -97,12 +97,11 @@ instead of a deep `KeyError`. See [configs/README.md](configs/README.md).
 ## Prerequisites
 
 - **Python 3.11+** (required by `coco-pipe`) and the editable install
-  (`pip install -e .`), which pulls `coco-pipe` and `mne-denoise` from GitHub
-  `main`, and requires MNE ≥ 1.13.
-- **Foundation models** need coco-pipe's `foundation` extra
-  (`pip install 'coco-pipe[decoding,foundation]'`), which brings Braindecode
-  ≥ 1.8.1. Fine-tuning/LoRA are practical on a CUDA **GPU**; CPU runs are for
-  small validation only.
+  (`pip install -e .`), which pulls `coco-pipe[decoding,descriptors,foundation]`
+  and `mne-denoise` from GitHub `main`, and requires MNE ≥ 1.13.
+- **Foundation models** run on PyTorch and Braindecode ≥ 1.8.1 (from coco-pipe's
+  `foundation` extra). Fine-tuning/LoRA are practical on a CUDA **GPU**; CPU runs
+  are for small validation only.
 - **REVE** is a gated Hugging Face model: run `hf auth login` or export `HF_TOKEN`
   before using it, otherwise it is skipped with `authentication_required`. Saved
   configs are redacted so tokens never reach derivatives or reports.
