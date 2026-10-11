@@ -9,9 +9,9 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from coco_pipe.viz import plot_bar, plot_histogram
+from coco_pipe.viz import plot_bar, plot_histogram, plot_topomap_from_channel_values
 
-from eeg_adhd_epilepsy.viz import qc_plots, topo, utils
+from eeg_adhd_epilepsy.viz import qc_plots, utils
 
 matplotlib.use("Agg")
 
@@ -143,7 +143,7 @@ def _save_topomap_figures(
         if not payload:
             continue
         channels, values = payload
-        fig = topo.plot_topomap_from_channel_values(
+        fig = plot_topomap_from_channel_values(
             channels,
             values,
             title=title,
