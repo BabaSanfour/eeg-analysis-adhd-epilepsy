@@ -24,7 +24,7 @@ dependencies = [
   "mne-bids @ git+https://github.com/BabaSanfour/mne-bids@read-epochs-fif",
   "filelock>=3.20.4",
   "pybv>=0.7.3",
-  "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@feat/score-by-column",
+  "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@main",
   "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",
