@@ -45,7 +45,9 @@ HF_HOME=$SCRATCH/eeg-epilepsy-adhd/hf_home .venv/bin/python -c "
 from coco_pipe.decoding import get_foundation_model_spec
 from huggingface_hub import snapshot_download
 for key in 'cbramod labram reve luna biot signaljepa eegpt bendr'.split():
-    snapshot_download(get_foundation_model_spec(key).hub_repo)"
+    spec = get_foundation_model_spec(key)
+    snapshot_download(spec.hub_repo, revision=spec.checkpoint_revision)
+snapshot_download('brain-bzh/reve-positions')"
 ```
 
 ## Order
