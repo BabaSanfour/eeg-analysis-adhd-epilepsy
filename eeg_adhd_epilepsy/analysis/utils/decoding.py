@@ -183,6 +183,15 @@ def prepare_decoding_scope(
     if not keys.is_unique:
         keys = keys + "_" + pd.Series(range(len(keys)), index=keys.index).astype(str)
     metadata["sample_id"] = keys.to_numpy()
+    # The chance test pools predictions per unit and needs one label per unit: a
+    # group counts once for a between-subject target, and once per label when the
+    # target varies within it (EO vs EC), where pooling a subject's two conditions
+    # into one prediction is wrong for one of them by construction.
+    metadata["inference_unit"] = (
+        metadata["group_id"].astype(str)
+        + "_"
+        + pd.Series(list(y), index=metadata.index).astype(str)
+    )
     n_splits = safe_group_n_splits(y, groups, requested=requested_splits)
     return selected, y, groups, metadata, n_splits
 

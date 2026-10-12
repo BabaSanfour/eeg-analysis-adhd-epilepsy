@@ -356,6 +356,7 @@ def _build_selection_units(
                         config["chance_method"],
                         n_permutations=int(config["n_permutations"]),
                         store_null=bool(config["store_null_distribution"]),
+                        unit_column="inference_unit",
                     ),
                     metrics=list(plan.metrics),
                     use_scaler=True,

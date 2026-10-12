@@ -177,6 +177,39 @@ def test_prepare_scope_adds_canonical_subject_and_session_columns():
     assert metadata["Session"].tolist() == ["v1", "v1", "v2", "v2"]
 
 
+def test_prepare_scope_chance_units_have_one_label_each():
+    # Four subjects with an EO and an EC row each. For EO vs EC a subject is two
+    # chance-test units, one per label; for a between-subject target it is one.
+    container = DataContainer(
+        X=np.ones((8, 1)),
+        dims=("obs", "feature"),
+        coords={
+            "feature": ["x"],
+            "condition": ["EO", "EC"] * 4,
+            "target": ["Control"] * 4 + ["ADHD"] * 4,
+            "study_id": ["01", "01", "02", "02", "03", "03", "04", "04"],
+            "visit_id": ["v1"] * 8,
+            "patient_group_id": ["c1", "c1", "c2", "c2", "a1", "a1", "a2", "a2"],
+        },
+        ids=np.array(["r1", "r1", "r2", "r2", "r3", "r3", "r4", "r4"]),
+    )
+
+    def units(eval_spec):
+        *_, metadata, _ = prepare_decoding_scope(
+            container,
+            eval_spec,
+            scope="pooled",
+            group_col="patient_group_id",
+            subject_col="study_id",
+            session_col="visit_id",
+            requested_splits=2,
+        )
+        return metadata["inference_unit"].nunique()
+
+    assert units({"target_col": "condition", "positive_class": "EO"}) == 8
+    assert units({"target_col": "target", "positive_class": "ADHD"}) == 4
+
+
 def test_prepare_scope_sample_ids_are_natural_keys():
     # Pooled EO+EC rows share recording ids; condition keeps them distinct, and
     # the id does not depend on row position, so runs over different row sets
