@@ -37,7 +37,8 @@ Every cluster has the same layout: inputs under
 `/project/rrg-kjerbi/shared/eeg-adhdh-epilepsy` (`BIDS/`, `csv/`), outputs under
 `$SCRATCH/eeg-epilepsy-adhd`. trillium-gpu takes GPU stages only (08, 17), and
 its compute nodes have no internet. Jobs on every cluster read model weights
-from `$HF_HOME` only; fill it once per cluster, on a login node:
+from `$HF_HOME` and the report scripts from a cache on scratch; fill both once per
+cluster, on a login node:
 
 ```bash
 cd ~/eeg_analysis_adhd_epilepsy
@@ -48,6 +49,8 @@ for key in 'cbramod labram reve luna biot signaljepa eegpt bendr'.split():
     spec = get_foundation_model_spec(key)
     snapshot_download(spec.hub_repo, revision=spec.checkpoint_revision)
 snapshot_download('brain-bzh/reve-positions')"
+COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets \
+    .venv/bin/python -c "from coco_pipe.report._assets import vendor_assets; vendor_assets()"
 ```
 
 ## Order

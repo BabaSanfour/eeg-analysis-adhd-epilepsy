@@ -44,6 +44,9 @@ fi
 # read that cache and never the network, which some compute nodes do not have.
 export HF_HOME="${HF_HOME:-$SCRATCH_ROOT/hf_home}"
 export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+# Report scripts (plotly, ...) are cached like the weights: home is read-only on
+# some compute nodes.
+export COCO_PIPE_REPORT_ASSET_CACHE="${COCO_PIPE_REPORT_ASSET_CACHE:-$SCRATCH_ROOT/coco_pipe_report_assets}"
 
 # --- venv + interpreter env + scratch caches -------------------------------
 # cd into the project, activate the venv, and point numba/MNE/matplotlib caches
