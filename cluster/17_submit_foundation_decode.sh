@@ -30,6 +30,8 @@ if (( TASK_ID < 1 || TASK_ID > MODEL_COUNT )); then
 fi
 model=${MODELS[$((TASK_ID - 1))]}
 
+# FOUNDATION_N_JOBS is how many fits share the GPU at once: 1 on a 10 or 20 GB
+# slice, more on a full H100 (each fit also needs one core and its own memory).
 # GPU job (training runs on-device); no BLAS pinning. Add a HuggingFace cache on
 # node-local scratch on top of the standard numba/MNE/matplotlib caches.
 dra_activate
@@ -51,4 +53,5 @@ python -m eeg_adhd_epilepsy.analysis.foundation_decoding \
     --metadata "$METADATA_PATH" \
     --reports_root "$REPORTS_ROOT" \
     --model_key "$model" \
+    --n_jobs "${FOUNDATION_N_JOBS:-1}" \
     --no-write-shared-comparison-report

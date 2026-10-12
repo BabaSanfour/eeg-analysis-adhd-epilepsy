@@ -12,12 +12,14 @@ cluv login fir trillium-gpu     # opens the SSH connections (asks for MFA)
 # CPU stage, on fir
 cluv submit fir cluster/07_submit_merge_descriptors.sh
 
-# GPU stage, on fir (GPU slice, CPUs and memory on the command line)
-cluv submit fir cluster/17_submit_foundation_decode.sh \
+# GPU stage, on fir: the rrg allocation there is CPU only, so def-kjerbi, plus
+# the GPU slice, CPUs and memory
+cluv submit fir cluster/17_submit_foundation_decode.sh --account=def-kjerbi \
     --gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1 --cpus-per-task=1 --mem=32G
 
-# GPU stage, on trillium (one H100 with 24 cores, from [tool.cluv])
-cluv submit trillium-gpu cluster/17_submit_foundation_decode.sh
+# GPU stage, on trillium: one full H100 with 24 cores (from [tool.cluv]), shared
+# by several fits at once
+cluv submit trillium-gpu cluster/17_submit_foundation_decode.sh -- FOUNDATION_N_JOBS=4
 
 # variables of a script go after `--`; paths are relative to the project root
 cluv submit fir cluster/17_submit_foundation_decode.sh --array=1 ... \
@@ -34,8 +36,17 @@ to `logs/` here by `cluv sync`.
 Every cluster has the same layout: inputs under
 `/project/rrg-kjerbi/shared/eeg-adhdh-epilepsy` (`BIDS/`, `csv/`), outputs under
 `$SCRATCH/eeg-epilepsy-adhd`. trillium-gpu takes GPU stages only (08, 17), and
-its compute nodes have no internet: download the model weights into `$HF_HOME`
-on a login node first.
+its compute nodes have no internet. Jobs on every cluster read model weights
+from `$HF_HOME` only; fill it once per cluster, on a login node:
+
+```bash
+cd ~/eeg_analysis_adhd_epilepsy
+HF_HOME=$SCRATCH/eeg-epilepsy-adhd/hf_home .venv/bin/python -c "
+from coco_pipe.decoding import get_foundation_model_spec
+from huggingface_hub import snapshot_download
+for key in 'cbramod labram reve luna biot signaljepa eegpt bendr'.split():
+    snapshot_download(get_foundation_model_spec(key).hub_repo)"
+```
 
 ## Order
 

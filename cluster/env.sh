@@ -40,8 +40,10 @@ done
 if [ -n "${SLURM_JOB_ACCOUNT:-}" ]; then
     export SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-$SLURM_JOB_ACCOUNT}"
 fi
-# Model weights are downloaded once on a login node; compute nodes may be offline.
+# Model weights are downloaded once on a login node (cluster/README.md); jobs
+# read that cache and never the network, which some compute nodes do not have.
 export HF_HOME="${HF_HOME:-$SCRATCH_ROOT/hf_home}"
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 
 # --- venv + interpreter env + scratch caches -------------------------------
 # cd into the project, activate the venv, and point numba/MNE/matplotlib caches

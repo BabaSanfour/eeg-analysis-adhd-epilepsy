@@ -122,12 +122,11 @@ results_symlink = "logs"
 env = { SCRATCH = "$HOME/scratch" }
 
 [tool.cluv.clusters.fir]
-# CPU stages and GPU stages. A GPU stage also needs, on the command line:
-#   --gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1 --cpus-per-task=1 --mem=32G
-sbatch_args = { account = "def-kjerbi" }
+# The rrg-kjerbi allocation on fir is CPU only. A GPU stage runs on def-kjerbi
+# and needs, on the command line:
+#   --account=def-kjerbi --gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1 --cpus-per-task=1 --mem=32G
+sbatch_args = { account = "rrg-kjerbi" }
 
 [tool.cluv.clusters.trillium-gpu]
 # GPU stages only. One H100 comes with 24 cores; --mem is not accepted there.
-# Compute nodes have no internet: model weights must already be in $HF_HOME.
 sbatch_args = { account = "rrg-kjerbi", gpus-per-node = 1 }
-env = { HF_HUB_OFFLINE = "1" }
