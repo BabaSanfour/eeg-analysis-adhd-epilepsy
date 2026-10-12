@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_foundation_emb_merge
-#SBATCH --account=rrg-kjerbi
-#SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%j.out
-#SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%j.err
 #SBATCH --time=02:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -17,9 +14,8 @@
 # is loaded. Submit this manually after the stage 09 alignment array completes.
 
 set -euo pipefail
-PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
-dra_load_modules
 
 DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 

@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_epochs
-#SBATCH --account=rrg-kjerbi
-#SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.out
-#SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.err
 #SBATCH --time=01:30:00
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
@@ -10,9 +7,8 @@
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 set -euo pipefail
-PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
-dra_load_modules
 
 SEGMENT_DURATION=${SEGMENT_DURATION:-10.0}
 OVERLAP=${OVERLAP:-0.0}

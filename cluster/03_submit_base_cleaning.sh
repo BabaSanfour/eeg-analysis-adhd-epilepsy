@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=base_clean
-#SBATCH --account=rrg-kjerbi
-#SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.out
-#SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.err
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=192G
@@ -11,9 +8,8 @@
 
 set -euo pipefail
 
-PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
-dra_load_modules
 
 OVERWRITE=${OVERWRITE:-0}
 THREADS=${SLURM_CPUS_PER_TASK:-32}

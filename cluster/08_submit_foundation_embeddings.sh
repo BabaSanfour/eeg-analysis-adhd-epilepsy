@@ -1,20 +1,14 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_foundation_emb
-#SBATCH --account=def-kjerbi
-#SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.out
-#SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A_%a.err
 #SBATCH --time=12:00:00
-#SBATCH --mem=64G
-#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3_2g.20gb:1
 #SBATCH --array=1-1000
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 set -euo pipefail
 
-PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
-dra_load_modules
 
 FOUNDATION_CONFIG=${FOUNDATION_CONFIG:-$PROJECT_ROOT/configs/foundation_extraction.yaml}
 METADATA=${METADATA:-$METADATA_PATH}
@@ -38,8 +32,6 @@ require_file "$EXTRACTION_SCRIPT"
 # GPU job (embedding extraction runs on-device); no BLAS pinning. Add a
 # HuggingFace cache on node-local scratch on top of the standard caches.
 dra_activate
-export HF_HOME="${HF_HOME:-${SLURM_TMPDIR:-/tmp}/hf_home}"
-mkdir -p "$HF_HOME"
 
 if [[ -z "${HF_TOKEN:-}" ]]; then
   echo "WARN: HF_TOKEN is unset; REVE (gated) will be skipped." >&2

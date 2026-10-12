@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_archive_dimred_group
-#SBATCH --account=rrg-kjerbi
-#SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%j.out
-#SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%j.err
 #SBATCH --time=06:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=8G
@@ -21,9 +18,8 @@
 
 set -euo pipefail
 
-PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
-dra_load_modules
 
 BASE=${BASE:-$DIM_REDUCTION_ROOT/pooled_01_all_subjects_total}
 DIRS_FILE=${DIRS_FILE:?Set DIRS_FILE to a file listing folder names, one per line}

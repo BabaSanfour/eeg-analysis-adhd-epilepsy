@@ -24,7 +24,7 @@ dependencies = [
   "mne-bids>=0.20",
   "filelock>=3.20.4",
   "pybv>=0.7.3",
-  "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@main",
+  "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@feat/score-by-column",
   "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",
@@ -95,3 +95,32 @@ ignore = [
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
+
+[tool.cluv]
+# Jobs are submitted from the project root with
+#   cluv submit <cluster> cluster/<NN_script>.sh [sbatch flags] [-- VAR=value ...]
+# cluv pushes the commit, checks it out on the cluster, runs `uv sync` there, and
+# adds the per-cluster sbatch flags below. See cluster/README.md.
+
+# Same checkout location on every cluster.
+project_dir = "$HOME/eeg_analysis_adhd_epilepsy"
+
+# Slurm logs. cluv copies this folder back to the machine that submitted, so it
+# holds logs only; analysis outputs go to $SCRATCH/eeg-epilepsy-adhd (cluster/env.sh).
+results_path = "$SCRATCH/logs/eeg_analysis_adhd_epilepsy"
+results_symlink = "logs"
+
+[tool.cluv.local]
+# Where the logs land on a machine without $SCRATCH.
+env = { SCRATCH = "$HOME/scratch" }
+
+[tool.cluv.clusters.fir]
+# CPU stages and GPU stages. A GPU stage also needs, on the command line:
+#   --gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1 --cpus-per-task=1 --mem=32G
+sbatch_args = { account = "def-kjerbi" }
+
+[tool.cluv.clusters.trillium-gpu]
+# GPU stages only. One H100 comes with 24 cores; --mem is not accepted there.
+# Compute nodes have no internet: model weights must already be in $HF_HOME.
+sbatch_args = { account = "rrg-kjerbi", gpus-per-node = 1 }
+env = { HF_HUB_OFFLINE = "1" }

@@ -2,33 +2,42 @@
 # Shared environment + helpers for the EEG cluster scripts.
 #
 # This file is *sourced*, never submitted. Each numbered SLURM script keeps its
-# own `#SBATCH` header (those must be literal at the top of the submitted file),
-# but everything below `set -euo pipefail` -- module load, path defaults, venv
-# activation, BLAS/cache pinning, and the small guard helpers -- lives here so a
-# change lands in one place instead of ~15 copies.
+# own `#SBATCH` header for what the stage needs (time, CPUs, memory, array), and
+# everything below `set -euo pipefail` -- path defaults, venv activation,
+# BLAS/cache pinning, and the small guard helpers -- lives here.
 #
-# SLURM copies the batch script to a spool dir, so `$0` at run time is not the
-# cluster/ path. Each script therefore sets PROJECT_ROOT (its one bootstrap line)
-# and then `source "$PROJECT_ROOT/cluster/env.sh"` to locate this file robustly.
+# Nothing here or in the headers names a cluster. Jobs are submitted with
+# `cluv submit <cluster> cluster/<script>` from the project root: cluv syncs the
+# code, builds the venv with `uv sync`, and adds what differs per cluster
+# (account, GPU request, log folder, working directory) from `[tool.cluv]` in
+# pyproject.toml. The job starts in the project directory, hence `$PWD` below.
+#
+# The same layout is used on every cluster:
+#   /project/rrg-kjerbi/shared/eeg-adhdh-epilepsy   inputs (BIDS, csv)
+#   $SCRATCH/eeg-epilepsy-adhd                      outputs, reports, model cache
+
+# --- Job variables -----------------------------------------------------------
+# `cluv submit <cluster> <script> -- MODELS=cbramod COHORT_CONFIG=...` passes
+# variables as script arguments; export them before the defaults are read.
+for _assignment in "$@"; do
+    export "$_assignment"
+done
 
 # --- Shared path defaults --------------------------------------------------
-# `:=` only assigns when unset, so `sbatch --export=...,VAR=...` (or an exported
+# `:=` only assigns when unset, so `--export=ALL,VAR=...` (or an exported
 # environment variable) still overrides any of these.
-: "${PROJECT_ROOT:=/home/hamza97/EEG_psychostimulant}"
+: "${PROJECT_ROOT:=$PWD}"
 : "${VENV_PATH:=$PROJECT_ROOT/.venv}"
-: "${BIDS_ROOT:=/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/BIDS}"
-: "${METADATA_PATH:=/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/csv/patients_metadata_clean.csv}"
-: "${RAW_ROOT:=/home/hamza97/projects/rrg-kjerbi/shared/eeg-adhdh-epilepsy/raw_data}"
-: "${SCRATCH_ROOT:=/home/hamza97/scratch/eeg-epilepsy-adhd}"
+: "${DATA_ROOT:=/project/rrg-kjerbi/shared/eeg-adhdh-epilepsy}"
+: "${BIDS_ROOT:=$DATA_ROOT/BIDS}"
+: "${METADATA_PATH:=$DATA_ROOT/csv/patients_metadata_clean.csv}"
+: "${RAW_ROOT:=$DATA_ROOT/raw_data}"
+: "${SCRATCH_ROOT:=$SCRATCH/eeg-epilepsy-adhd}"
 : "${REPORTS_ROOT:=$SCRATCH_ROOT/reports}"
 : "${DECODING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/decoding}"
 : "${DIM_REDUCTION_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/dim_reduction}"
-
-# --- Cluster modules -------------------------------------------------------
-dra_load_modules() {
-    module purge
-    module load gcc arrow/23.0.1 python/3.11
-}
+# Model weights are downloaded once on a login node; compute nodes may be offline.
+export HF_HOME="${HF_HOME:-$SCRATCH_ROOT/hf_home}"
 
 # --- venv + interpreter env + scratch caches -------------------------------
 # cd into the project, activate the venv, and point numba/MNE/matplotlib caches

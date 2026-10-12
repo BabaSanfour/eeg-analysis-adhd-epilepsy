@@ -22,3 +22,6 @@ analysis_*/
 # SLURM output and error logs
 *.out
 *.err
+
+# cluv: local copy of the cluster logs
+/logs

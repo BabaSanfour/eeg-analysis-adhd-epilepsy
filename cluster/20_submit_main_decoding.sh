@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_main_decode
-#SBATCH --output=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.out
-#SBATCH --error=/home/hamza97/EEG_psychostimulant/cluster/logs/slurm-%x-%A.err
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -20,9 +18,8 @@ fi
 
 PIPELINE_TYPE=$1
 
-PROJECT_ROOT=${PROJECT_ROOT:-/home/hamza97/EEG_psychostimulant}
+PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
-dra_load_modules
 
 # The exact cohort config
 CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
@@ -167,8 +164,6 @@ run_foundation() {
     echo "================================================================="
     require_file "$FOUNDATION_ANALYSIS_CONFIG"
 
-    export HF_HOME="${HF_HOME:-${SLURM_TMPDIR:-/tmp}/hf_home}"
-    mkdir -p "$HF_HOME"
 
     read -r -a DIRECT_MODELS <<< "${DIRECT_MODELS:-cbramod}"
     if [[ " ${DIRECT_MODELS[*]} " == *" reve "* && -z "${HF_TOKEN:-}" ]]; then
