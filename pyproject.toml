@@ -21,7 +21,7 @@ dependencies = [
   "numpy<2.4",
   "pandas<3.0.0",
   "mne>=1.13",
-  "mne-bids>=0.20",
+  "mne-bids @ git+https://github.com/BabaSanfour/mne-bids@read-epochs-fif",
   "filelock>=3.20.4",
   "pybv>=0.7.3",
   "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@feat/score-by-column",
@@ -96,6 +96,12 @@ ignore = [
 quote-style = "double"
 indent-style = "space"
 line-ending = "lf"
+
+[tool.uv.extra-build-variables]
+# mne-bids comes from the branch of mne-tools/mne-bids#1679 (read_epochs_bids on
+# saved epochs) until that is released. The fork has no tags, so the version is
+# given by hand; without it the build reports 0.1.0.dev and fails `mne-bids>=0.20`.
+mne-bids = { SETUPTOOLS_SCM_PRETEND_VERSION = "0.21.0.dev0" }
 
 [tool.cluv]
 # Jobs are submitted from the project root with

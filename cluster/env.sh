@@ -36,6 +36,10 @@ done
 : "${REPORTS_ROOT:=$SCRATCH_ROOT/reports}"
 : "${DECODING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/decoding}"
 : "${DIM_REDUCTION_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/dim_reduction}"
+# A script that submits a follow-up job reuses the account it runs under.
+if [ -n "${SLURM_JOB_ACCOUNT:-}" ]; then
+    export SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-$SLURM_JOB_ACCOUNT}"
+fi
 # Model weights are downloaded once on a login node; compute nodes may be offline.
 export HF_HOME="${HF_HOME:-$SCRATCH_ROOT/hf_home}"
 

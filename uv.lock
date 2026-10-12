@@ -1008,7 +1008,7 @@ requires-dist = [
     { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=feat%2Fscore-by-column" },
     { name = "filelock", specifier = ">=3.20.4" },
     { name = "mne", specifier = ">=1.13" },
-    { name = "mne-bids", specifier = ">=0.20" },
+    { name = "mne-bids", git = "https://github.com/BabaSanfour/mne-bids?rev=read-epochs-fif" },
     { name = "mne-denoise", git = "https://github.com/mne-tools/mne-denoise.git?rev=main" },
     { name = "numpy", specifier = "<2.4" },
     { name = "pandas", specifier = "<3.0.0" },
@@ -1929,17 +1929,13 @@ hdf5 = [
 
 [[package]]
 name = "mne-bids"
-version = "0.20.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.21.0.dev0"
+source = { git = "https://github.com/BabaSanfour/mne-bids?rev=read-epochs-fif#d9bf2fb945040fc2a4fc90b368c516823b2a83ab" }
 dependencies = [
     { name = "mne" },
     { name = "numpy" },
     { name = "scipy", version = "1.17.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
     { name = "scipy", version = "1.18.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/68/86/fee96dbc4664e3fec6c98739870eded9fc08fdcbbc4509b205e59b74fb2f/mne_bids-0.20.0.tar.gz", hash = "sha256:8d196664a2f0a3bd2d5afd41777cf6cf43606201c3b9118ab43dc92758681c23", size = 163873, upload-time = "2026-09-29T00:00:56.019Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/42/05928f81af2d0ceddfcbf2153e60bca7b6e3412c9dfe703b64a91f1e3a96/mne_bids-0.20.0-py3-none-any.whl", hash = "sha256:f4ffa7071b5f6f3472cfe6b5f538010b01560df8f0a7b2b4e1abeb7d09b915d0", size = 202484, upload-time = "2026-09-29T00:00:54.01Z" },
 ]
 
 [[package]]

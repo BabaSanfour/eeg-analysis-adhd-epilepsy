@@ -1,11 +1,41 @@
 # Cluster (SLURM) submission scripts
 
-Scripts are numbered in execution order. Each script is self-contained: it loads modules, activates the venv, sets thread/cache env, validates its inputs, and runs one stage. Override the defaults with environment variables (they all use
-`${VAR:-default}`), e.g.:
+Scripts are numbered in execution order. Each script activates the venv, sets
+thread/cache env, validates its inputs, and runs one stage. No script names a
+cluster: jobs are submitted with [cluv](https://github.com/mila-iqia/cluv) from
+the project root on your own machine.
 
 ```bash
-sbatch --export=ALL,BIDS_ROOT=/my/BIDS,METADATA_PATH=/my/meta.csv 03_submit_base_cleaning.sh
+uv tool install cluster-uv      # once
+cluv login fir trillium-gpu     # opens the SSH connections (asks for MFA)
+
+# CPU stage, on fir
+cluv submit fir cluster/07_submit_merge_descriptors.sh
+
+# GPU stage, on fir (GPU slice, CPUs and memory on the command line)
+cluv submit fir cluster/17_submit_foundation_decode.sh \
+    --gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1 --cpus-per-task=1 --mem=32G
+
+# GPU stage, on trillium (one H100 with 24 cores, from [tool.cluv])
+cluv submit trillium-gpu cluster/17_submit_foundation_decode.sh
+
+# variables of a script go after `--`; paths are relative to the project root
+cluv submit fir cluster/17_submit_foundation_decode.sh --array=1 ... \
+    -- MODELS=cbramod COHORT_CONFIG=configs/cohorts/checks/finetune_eo_vs_ec.yaml
 ```
+
+`cluv submit` needs a clean git tree. It pushes the commit, checks it out in
+`$HOME/eeg_analysis_adhd_epilepsy` on the cluster, runs `uv sync` there (the
+environment is `uv.lock`), and submits with the account and GPU request of that
+cluster from `[tool.cluv]` in `pyproject.toml`. Slurm logs go to
+`$SCRATCH/logs/eeg_analysis_adhd_epilepsy/<cluster>_<jobid>/` and are copied back
+to `logs/` here by `cluv sync`.
+
+Every cluster has the same layout: inputs under
+`/project/rrg-kjerbi/shared/eeg-adhdh-epilepsy` (`BIDS/`, `csv/`), outputs under
+`$SCRATCH/eeg-epilepsy-adhd`. trillium-gpu takes GPU stages only (08, 17), and
+its compute nodes have no internet: download the model weights into `$HF_HOME`
+on a login node first.
 
 ## Order
 
@@ -39,12 +69,14 @@ sbatch --export=ALL,BIDS_ROOT=/my/BIDS,METADATA_PATH=/my/meta.csv 03_submit_base
 
 | Variable | Meaning | Default |
 |----------|---------|---------|
-| `PROJECT_ROOT` | repo checkout on the cluster | `/home/hamza97/EEG_psychostimulant` |
-| `BIDS_ROOT` | BIDS dataset root | shared project path |
-| `METADATA_PATH` | `patients_metadata_clean.csv` | shared project path |
-| `RAW_ROOT` | raw recordings (01 only) | shared project path |
+| `PROJECT_ROOT` | repo checkout on the cluster | the job's working directory |
+| `DATA_ROOT` | shared inputs | `/project/rrg-kjerbi/shared/eeg-adhdh-epilepsy` |
+| `BIDS_ROOT` | BIDS dataset root | `$DATA_ROOT/BIDS` |
+| `METADATA_PATH` | `patients_metadata_clean.csv` | `$DATA_ROOT/csv/...` |
+| `RAW_ROOT` | raw recordings (01 only) | `$DATA_ROOT/raw_data` |
 | `VENV_PATH` | virtualenv | `$PROJECT_ROOT/.venv` |
-| `SCRATCH_ROOT` | scratch root for outputs | `/home/hamza97/scratch/eeg-epilepsy-adhd` |
+| `SCRATCH_ROOT` | scratch root for outputs | `$SCRATCH/eeg-epilepsy-adhd` |
+| `HF_HOME` | model weights cache | `$SCRATCH_ROOT/hf_home` |
 | `REPORTS_ROOT` | generated reports | `$SCRATCH_ROOT/reports` |
 | `DECODING_ROOT` | decoding checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/decoding` |
 | `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/dim_reduction` |
