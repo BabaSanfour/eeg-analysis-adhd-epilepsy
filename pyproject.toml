@@ -35,6 +35,7 @@ dependencies = [
   "asrpy",
   "autoreject",
   "pyyaml",
+  "pyarrow",
 ]
 
 [project.urls]
