@@ -1,9 +1,103 @@
-# Fine-tune check: CBraMod only, in all three train modes. Same training settings as
-# foundation.yaml. Binomial chance only, to skip 100 permutation fine-tunes per fit: the
-# check reads balanced accuracy and the predicted classes, not p-values.
+# Fine-tune check: the models and training settings of foundation.yaml, in all three
+# train modes (pick models with MODELS=...). Binomial chance only, to skip 100
+# permutation fine-tunes per fit: the check reads balanced accuracy and the predicted
+# classes, not p-values.
 
 models:
   - model_key: cbramod
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_source: derivative
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: labram
+    segment_duration: 15.0
+    overlap: 0.0
+    use_derivatives: false
+    window_source: re_epoch
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs:
+      interpolate_channels: true
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: reve
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_source: derivative
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: luna
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_source: derivative
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: biot
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_source: derivative
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: signaljepa
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: false
+    window_source: re_epoch
+    window_mismatch_policy: raise
+    bandpass: [0.5, 40.0]
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: eegpt
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_source: derivative
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: bendr
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true

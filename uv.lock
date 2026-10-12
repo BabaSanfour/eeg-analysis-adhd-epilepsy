@@ -634,7 +634,7 @@ wheels = [
 [[package]]
 name = "coco-pipe"
 version = "0.0.3"
-source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#65933637ebf9163d7389c17a268e52df67c6d669" }
+source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=fix%2Ffoundation-input-normalization#d57eb183b1609854930aac9580bd8e7d7c2e7fe3" }
 dependencies = [
     { name = "filelock" },
     { name = "hydra-core" },
@@ -1005,7 +1005,7 @@ dependencies = [
 requires-dist = [
     { name = "asrpy" },
     { name = "autoreject" },
-    { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main" },
+    { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=fix%2Ffoundation-input-normalization" },
     { name = "filelock", specifier = ">=3.20.4" },
     { name = "mne", specifier = ">=1.13" },
     { name = "mne-bids", git = "https://github.com/BabaSanfour/mne-bids?rev=read-epochs-fif" },
