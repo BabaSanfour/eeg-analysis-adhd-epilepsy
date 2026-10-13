@@ -183,6 +183,13 @@ def prepare_decoding_scope(
     if not keys.is_unique:
         keys = keys + "_" + pd.Series(range(len(keys)), index=keys.index).astype(str)
     metadata["sample_id"] = keys.to_numpy()
+    # What an epoch-level fit is also scored by (CVConfig.score_by). EO and EC
+    # epochs of one file share recording_id; they are scored apart.
+    if "recording_id" in metadata:
+        recording = metadata["recording_id"].astype(str)
+        if "condition" in metadata:
+            recording = metadata["condition"].astype(str) + "_" + recording
+        metadata["recording"] = recording
     # The chance test pools predictions per unit and needs one label per unit: a
     # group counts once for a between-subject target, and once per label when the
     # target varies within it (EO vs EC), where pooling a subject's two conditions

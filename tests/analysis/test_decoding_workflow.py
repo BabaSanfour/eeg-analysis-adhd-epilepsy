@@ -439,6 +439,7 @@ def test_materialized_ra_variant_runs_through_classical_decoding(tmp_path, monke
         {
             "embedding_derivative_root": str(source_root),
             "embedding_model_key": "demo",
+            "representation": "epoch",
             "transforms": ["ra"],
             "write_shared_comparison_report": False,
         }
@@ -448,6 +449,8 @@ def test_materialized_ra_variant_runs_through_classical_decoding(tmp_path, monke
     assert set(sweep["status"]) == {"success"}
     assert set(sweep["transform"]) == {"ra"}
     assert shared_comparison_calls == []
+    # an epoch-level fit is also scored per recording
+    assert sweep["accuracy_by_recording_mean"].between(0, 1).all()
 
 
 def test_foundation_embedding_decoding_rejects_nonflat_mode(tmp_path):

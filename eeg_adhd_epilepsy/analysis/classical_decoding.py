@@ -304,6 +304,8 @@ def _build_selection_units(
                     shuffle=True,
                     random_state=random_state,
                     group_key="group_id",
+                    # epochs: every metric also as "<metric>_by_recording"
+                    score_by="recording" if config.get("representation") == "epoch" else None,
                 )
                 tuning = (
                     TuningConfig(

@@ -83,13 +83,7 @@ def _build_foundation_unit(
     window_source = str(model_cfg["window_source"])
     # One fit gives both levels: every metric is scored per epoch and, as
     # "<metric>_by_recording", on the mean probability of a recording's test
-    # epochs. EO and EC epochs of one file share recording_id; they are scored
-    # apart.
-    sample_metadata = sample_metadata.assign(
-        recording=sample_metadata["condition"].astype(str)
-        + "_"
-        + sample_metadata["recording_id"].astype(str)
-    )
+    # epochs.
 
     # capability record is always top-level in every returned record
     capability_record = {
