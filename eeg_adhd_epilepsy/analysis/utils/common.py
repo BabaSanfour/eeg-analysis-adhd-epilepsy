@@ -117,8 +117,8 @@ def _align_non_obs(container: DataContainer, common: dict[str, list]) -> DataCon
     return aligned
 
 
-def _pooled_family_qc_meta(metas: list[dict[str, Any]]) -> dict[str, Any]:
-    """Merge deferred family-QC bad-id sets across pooled inputs."""
+def _pooled_meta(metas: list[dict[str, Any]]) -> dict[str, Any]:
+    """Sampling rate and units shared by the inputs, plus their merged family-QC bad ids."""
     group_by_values = {
         str(meta["family_qc_group_by"])
         for meta in metas
@@ -144,6 +144,9 @@ def _pooled_family_qc_meta(metas: list[dict[str, Any]]) -> dict[str, Any]:
     }
     if group_by_values:
         merged["family_qc_group_by"] = next(iter(group_by_values))
+    for key in ("sfreq", "units"):
+        if len({meta.get(key) for meta in metas}) == 1 and metas[0].get(key) is not None:
+            merged[key] = metas[0][key]
     return merged
 
 
@@ -153,7 +156,7 @@ def pool_containers(containers: list[DataContainer]) -> DataContainer:
         raise ValueError("No containers to pool.")
     common = _common_non_obs_coords(containers[0].dims, [c.coords for c in containers])
     pooled = DataContainer.concat([_align_non_obs(c, common) for c in containers])
-    pooled.meta = {**dict(pooled.meta), **_pooled_family_qc_meta([c.meta for c in containers])}
+    pooled.meta = {**dict(pooled.meta), **_pooled_meta([c.meta for c in containers])}
     return pooled
 
 
@@ -240,7 +243,7 @@ def pool_containers_streaming(
         gc.collect()
 
     pooled = pooled.replace(coords={**pooled.coords, **refreshed})
-    pooled.meta = {**dict(pooled.meta), **_pooled_family_qc_meta([spec["meta"] for spec in specs])}
+    pooled.meta = {**dict(pooled.meta), **_pooled_meta([spec["meta"] for spec in specs])}
     return pooled
 
 

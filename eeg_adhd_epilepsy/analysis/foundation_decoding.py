@@ -214,7 +214,8 @@ def _enumerate_foundation_scope(
 
     model_key = str(model_cfg["model_key"])
     segment_duration = float(model_cfg["segment_duration"])
-    sfreq = float(spec.pretrained_sfreq)
+    # The rate of the data: the estimator resamples it to the model's.
+    sfreq = float(container.meta["sfreq"])
 
     container, window_reason = normalize_inclusive_endpoint(
         container,

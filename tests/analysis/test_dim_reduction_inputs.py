@@ -712,6 +712,7 @@ def _pool_equivalence_containers(channels_per_condition):
                 ids=np.asarray([f"{condition}_r{i}" for i in range(n_obs)], dtype=object),
                 meta={
                     "condition": condition,
+                    "sfreq": 200.0,
                     "family_qc_group_by": "family",
                     "family_qc_bad_ids": {"fam": [f"{condition}_r0"]},
                 },
@@ -747,6 +748,7 @@ def test_streaming_pool_matches_eager_pool(channels_per_condition):
         )
     assert streamed.meta["family_qc_bad_ids"] == eager.meta["family_qc_bad_ids"]
     assert streamed.meta["family_qc_group_by"] == eager.meta["family_qc_group_by"]
+    assert streamed.meta["sfreq"] == eager.meta["sfreq"] == 200.0
 
 
 def test_fit_identity_changes_with_matrix_content_and_qc(tmp_path):
