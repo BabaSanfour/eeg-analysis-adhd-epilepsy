@@ -634,7 +634,7 @@ wheels = [
 [[package]]
 name = "coco-pipe"
 version = "0.0.3"
-source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#fd0542689ff05066f42c8fb5952335becec92fcc" }
+source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#dd35e943295025aa5cf41f8f2b39d1dcb89dd159" }
 dependencies = [
     { name = "filelock" },
     { name = "hydra-core" },
