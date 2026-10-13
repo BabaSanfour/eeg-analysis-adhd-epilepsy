@@ -60,7 +60,8 @@ dra_activate() {
     export NUMBA_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/numba_cache"
     export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
     export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
-    mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR"
+    export TRITON_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/triton"
+    mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR" "$TRITON_CACHE_DIR"
 }
 
 # --- Native-library thread pinning -----------------------------------------
