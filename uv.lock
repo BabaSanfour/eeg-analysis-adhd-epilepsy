@@ -634,7 +634,7 @@ wheels = [
 [[package]]
 name = "coco-pipe"
 version = "0.0.3"
-source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=fix%2Ffoundation-input-normalization#d57eb183b1609854930aac9580bd8e7d7c2e7fe3" }
+source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=fix%2Ffoundation-input-normalization#e01c9512349b25185af8f3fe7a186d6285c1740e" }
 dependencies = [
     { name = "filelock" },
     { name = "hydra-core" },

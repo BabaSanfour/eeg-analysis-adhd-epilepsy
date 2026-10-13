@@ -17,8 +17,7 @@ models:
     window_source: re_epoch
     store_tokens: true
     batch_size: 16
-    backend_kwargs:
-      interpolate_channels: true
+    backend_kwargs: {}
   - model_key: reve
     segment_duration: 10.0
     overlap: 0.0

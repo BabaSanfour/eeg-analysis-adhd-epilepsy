@@ -26,8 +26,7 @@ models:
     window_source: re_epoch
     window_mismatch_policy: raise
     backend: auto
-    backend_kwargs:
-      interpolate_channels: true
+    backend_kwargs: {}
     lora: {}
     trainer:
       linear_probe: {}
