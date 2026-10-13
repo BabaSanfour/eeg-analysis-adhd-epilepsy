@@ -58,6 +58,18 @@ def families_for_analysis_unit(
     return labels or ([str(unit["family"])] if unit.get("family") else [])
 
 
+def qc_keys(container: DataContainer) -> np.ndarray:
+    """What a family-QC flag names: an observation in one condition.
+
+    EO and EC rows of a recording share an observation ID, so the condition is
+    part of the key: a flag in one condition leaves the other in a pooled run.
+    """
+    ids = np.asarray(container.ids, dtype=object).astype(str)
+    if "condition" not in container.coords:
+        return ids
+    return np.char.add(np.asarray(container.coords["condition"]).astype(str), "|" + ids)
+
+
 def apply_family_qc_mask(
     container: DataContainer,
     families: Sequence[str],
@@ -79,7 +91,7 @@ def apply_family_qc_mask(
         raise ValueError("Family-scoped QC requires observation IDs.")
     outlier_config = (qc_config or {}).get("outlier") or {}
     max_fraction = float(outlier_config.get("unit_outlier_group_fraction", 0.2))
-    ids = np.asarray(container.ids, dtype=object).astype(str)
+    ids = qc_keys(container)
     flagged = np.zeros(len(ids), dtype=int)
     for family in families:
         flagged += np.isin(ids, [str(value) for value in bad_ids_by_family.get(str(family), [])])
@@ -249,6 +261,7 @@ def pool_containers_streaming(
 
 __all__ = [
     "apply_family_qc_mask",
+    "qc_keys",
     "container_pool_spec",
     "families_for_analysis_unit",
     "pool_containers",

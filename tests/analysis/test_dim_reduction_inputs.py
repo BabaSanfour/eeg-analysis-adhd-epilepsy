@@ -22,6 +22,7 @@ from eeg_adhd_epilepsy.analysis.utils.common import (
     families_for_analysis_unit,
     pool_containers,
     pool_containers_streaming,
+    qc_keys,
 )
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import scale_features
 
@@ -663,9 +664,10 @@ def test_dim_reduction_report_uses_public_coco_pipe_imports():
     assert "coco_pipe.io.structures" not in source
 
 
-def test_pooled_container_preserves_fine_grained_qc_metadata():
+def test_pooled_qc_drops_only_the_flagged_condition_of_a_recording():
+    # EO and EC rows of a recording share an ID; r1 is flagged in EO, r2 in EC
     containers = []
-    for condition, bad_id in (("EO", "r1"), ("EC", "r2")):
+    for condition, bad_row in (("EO", 0), ("EC", 1)):
         containers.append(
             DataContainer(
                 X=np.zeros((2, 1)),
@@ -677,19 +679,20 @@ def test_pooled_container_preserves_fine_grained_qc_metadata():
                     "condition": np.asarray([condition, condition], dtype=object),
                 },
                 ids=np.asarray(["r1", "r2"], dtype=object),
-                meta={
-                    "condition": condition,
-                    "family_qc_group_by": "subfamily",
-                    "family_qc_bad_ids": {"log_abs": [bad_id]},
-                },
+                meta={"condition": condition, "family_qc_group_by": "subfamily"},
             )
         )
+        flagged = qc_keys(containers[-1])[[bad_row]].tolist()
+        containers[-1].meta["family_qc_bad_ids"] = {"log_abs": flagged}
 
     pooled = pool_containers(containers)
-
     assert pooled.meta["family_qc_group_by"] == "subfamily"
-    assert "family_qc_descriptor_names" not in pooled.meta
-    assert pooled.meta["family_qc_bad_ids"] == {"log_abs": ["r1", "r2"]}
+
+    kept, _ = apply_family_qc_mask(pooled, ["log_abs"])
+    assert list(zip(kept.coords["condition"], kept.ids, strict=True)) == [
+        ("EO", "r2"),
+        ("EC", "r1"),
+    ]
 
 
 def _pool_equivalence_containers(channels_per_condition):

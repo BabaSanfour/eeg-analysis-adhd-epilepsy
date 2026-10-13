@@ -19,6 +19,7 @@ from coco_pipe.io.embeddings import (
 from coco_pipe.io.quality import GROUP_BY_COLUMN, run_qc
 from mne_bids import BIDSPath, get_entities_from_fname
 
+from eeg_adhd_epilepsy.analysis.utils.common import qc_keys
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
     bids_session_label,
@@ -427,7 +428,7 @@ def build_dataset(
             family_masks, qc_result = compute_grouped_qc_masks(
                 scoring_container, subject_col=args.subject_col, qc_config=qc_config
             )
-            ids = np.asarray(scoring_container.ids, dtype=object).astype(str)
+            ids = qc_keys(scoring_container)
             bad_ids = {family: ids[~mask].tolist() for family, mask in family_masks.items()}
             container.meta = {
                 **dict(container.meta),
