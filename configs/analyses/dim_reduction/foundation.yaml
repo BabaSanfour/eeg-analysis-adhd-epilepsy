@@ -12,6 +12,11 @@ selection_eval_name: med_adhd_vs_ctrl
 interactive: true
 overwrite: false
 
+# each embedding dimension is scaled before reduction (mean and standard
+# deviation), as classical decoding does on the same embeddings.
+scaling:
+  method: standard
+
 # Foundation embeddings are a single dense space per model -> flat mode only, so
 # the whole plan is one mode running every reducer over its n_components sweep.
 # `representation` is one of the canonical levels epoch/recording/subject;
