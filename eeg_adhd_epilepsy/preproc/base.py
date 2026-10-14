@@ -54,6 +54,12 @@ DEFAULT_HIGHPASS_HZ = 0.1
 DEFAULT_LOWPASS_HZ = 100.0
 DEFAULT_ARTIFACT_SEGMENT_S = 1.0
 DEFAULT_ARTIFACT_MIN_EPOCHS = 5
+# Line noise: ZapLine keeps at most this many components, and spectrum interpolation
+# removes a line peak still above this many dB over the floor. Line noise from many
+# sources otherwise takes ZapLine 13-19 of 19 components and 5-6 dB of 30-55 Hz power;
+# interpolating only a recording with a peak leaves the others as ZapLine made them.
+ZAPLINE_MAX_COMPONENTS = 3
+LINE_PEAK_MAX_DB = 3.0
 
 
 def _group_consecutive_indices(indices: list[int]) -> list[tuple[int, int]]:
@@ -314,6 +320,49 @@ def _compute_clean_stats(raw: mne.io.BaseRaw) -> dict[str, float]:
     }
 
 
+def _line_peak_db(raw: mne.io.BaseRaw, freq: float) -> float:
+    """Median over EEG channels of the power within 0.5 Hz of ``freq`` over the 3-8 Hz around it."""
+    n_fft = min(int(4 * raw.info["sfreq"]), raw.n_times)
+    spectrum = raw.compute_psd(
+        method="welch", fmin=freq - 8, fmax=freq + 8, n_fft=n_fft, picks="eeg", verbose="ERROR"
+    )
+    psd, freqs = spectrum.get_data(return_freqs=True)
+    distance = np.abs(freqs - freq)
+    peak = psd[:, distance <= 0.5].mean(axis=1)
+    floor = np.median(psd[:, (distance >= 3) & (distance <= 8)], axis=1)
+    return float(np.median(10 * np.log10(peak / floor)))
+
+
+def _remove_line_noise(
+    raw: mne.io.BaseRaw, line_freq: float, adaptive: bool
+) -> tuple[mne.io.BaseRaw, dict[str, Any]]:
+    """ZapLine with at most ``ZAPLINE_MAX_COMPONENTS``, then spectrum interpolation if needed."""
+    from mne_denoise.spectrum_interpolation import SpectrumInterpolation
+    from mne_denoise.zapline import ZapLine
+
+    sfreq = raw.info["sfreq"]
+    zapline = ZapLine(sfreq=sfreq, line_freq=line_freq, adaptive=adaptive)
+    cleaned = zapline.fit_transform(raw)
+    n_auto = int(zapline.n_removed_)
+    # Adaptive mode bounds its components per segment itself.
+    if not adaptive and n_auto > ZAPLINE_MAX_COMPONENTS:
+        zapline = ZapLine(sfreq=sfreq, line_freq=line_freq, n_select=ZAPLINE_MAX_COMPONENTS)
+        cleaned = zapline.fit_transform(raw)
+    peak_db = _line_peak_db(cleaned, line_freq)
+    interpolated = peak_db > LINE_PEAK_MAX_DB
+    if interpolated:
+        cleaned = SpectrumInterpolation(line_freq=line_freq, n_harmonics=1).fit_transform(cleaned)
+    return cleaned, {
+        "method": "zapline",
+        "line_freq": line_freq,
+        "adaptive": adaptive,
+        "n_selected_auto": n_auto,
+        "n_removed": int(zapline.n_removed_),
+        "line_peak_db_after_zapline": peak_db,
+        "spectrum_interpolation": interpolated,
+    }
+
+
 def run_base_pipeline(
     raw: mne.io.BaseRaw,
     config: PreprocConfig,
@@ -390,23 +439,9 @@ def run_base_pipeline(
 
         # 3. Line Noise Removal
         adaptive = line_noise_cfg.get("adaptive", False)
-
-        from mne_denoise.zapline import ZapLine
-
         LOGGER.info("Applying ZapLine (%s Hz, adaptive=%s)...", line_freq, adaptive)
-
-        # ZapLine Class Usage
-        zapline_obj = ZapLine(sfreq=raw.info["sfreq"], line_freq=line_freq, adaptive=adaptive)
-        # fit_transform works for both adaptive and standard modes
-        raw = zapline_obj.fit_transform(raw)
-
+        raw, provenance["zapline_stats"] = _remove_line_noise(raw, line_freq, adaptive)
         provenance["steps_completed"].append("zapline")
-        provenance["zapline_stats"] = {
-            "method": "zapline",
-            "line_freq": line_freq,
-            "adaptive": adaptive,
-            "n_removed": int(zapline_obj.n_removed_),
-        }
 
     # 4. Resample
     # Downsample last among the band-limiting steps (filter-then-downsample
