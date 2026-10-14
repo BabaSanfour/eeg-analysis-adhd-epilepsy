@@ -29,3 +29,4 @@ python -m eeg_adhd_epilepsy.analysis.merge_foundation_embeddings \
   --bids_root "$BIDS_ROOT" \
   --derivative_root "$DERIVATIVE_ROOT" \
   --reports_root "$REPORTS_ROOT"
+validate_bids "$DERIVATIVE_ROOT"

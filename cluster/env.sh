@@ -78,6 +78,13 @@ dra_pin_threads() {
 require_dir()  { [ -d "$1" ] || { echo "Directory not found: $1" >&2; exit 1; }; }
 require_file() { [ -f "$1" ] || { echo "File not found: $1" >&2; exit 1; }; }
 
+# Fail the job when the BIDS validator finds an error in the dataset at $1. Without
+# `--max-rows -1` it reads only part of participants.tsv and reports a false
+# PARTICIPANT_ID_MISMATCH. Call it after `dra_activate`: the validator is in the venv.
+validate_bids() {
+    bids-validator-deno "$1" --max-rows -1
+}
+
 # Fail fast when a stale `#SBATCH --array` bound != the real task count ($1),
 # which would otherwise silently drop the trailing tasks.
 guard_array_size() {

@@ -952,6 +952,8 @@ def main():
         LOGGER.error("No .vhdr files found in BIDS directory.")
         sys.exit(1)
 
+    bids.write_preproc_dataset_description(preproc_root)
+
     subjects_found = sorted({get_entities_from_fname(path)["subject"] for path in files_found})
     LOGGER.info(
         "Found %d EEG runs across %d subjects in BIDS directory.",

@@ -7,7 +7,14 @@ import re
 from enum import StrEnum
 from pathlib import Path
 
-from mne_bids import BIDSPath, find_matching_paths, get_bids_path_from_fname
+from mne_bids import (
+    BIDSPath,
+    find_matching_paths,
+    get_bids_path_from_fname,
+    make_dataset_description,
+)
+
+from eeg_adhd_epilepsy.utils.artifacts import write_text_atomic
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +90,42 @@ def get_derivative_root(bids_root: Path, stage: DerivativeStage) -> Path:
     if not isinstance(stage, DerivativeStage):
         raise TypeError(f"stage must be a DerivativeStage, got {stage!r}")
     return Path(bids_root).expanduser() / "derivatives" / stage.value
+
+
+# Authors of the raw dataset and of the derivatives this repo writes.
+DATASET_AUTHORS = ["Hamza Abdelhedi"]
+# What the preproc tree holds that BIDS does not define: FIF is not a BIDS EEG
+# format and saved epochs have no standard yet.
+PREPROC_BIDSIGNORE = ("*_eeg.fif", "*_epo.fif", "*_epo.json", "*_provenance.json")
+# For a tree where BIDS defines nothing but the dataset description.
+DESCRIPTION_ONLY_BIDSIGNORE = ("/*", "!/dataset_description.json")
+
+
+def write_bidsignore(dataset_root: Path, patterns: tuple[str, ...]) -> None:
+    """Write the ``.bidsignore`` of a dataset, for the validator to skip ``patterns``."""
+    write_text_atomic(Path(dataset_root) / ".bidsignore", "\n".join(patterns) + "\n")
+
+
+def write_preproc_dataset_description(preproc_root: Path) -> None:
+    """Make ``derivatives/preproc`` a valid BIDS derivative dataset."""
+    preproc_root = Path(preproc_root)
+    preproc_root.mkdir(parents=True, exist_ok=True)
+    make_dataset_description(
+        path=preproc_root,
+        name="Preprocessed EEG",
+        authors=DATASET_AUTHORS,
+        dataset_type="derivative",
+        generated_by=[
+            {
+                "Name": "eeg-preprocess",
+                "Description": "Cleaned continuous EEG (desc-base) and fixed-length epochs",
+            }
+        ],
+        source_datasets=[{"URL": "../../"}],
+        overwrite=True,
+        verbose=False,
+    )
+    write_bidsignore(preproc_root, PREPROC_BIDSIGNORE)
 
 
 def get_bids_derivative_variant_path(
