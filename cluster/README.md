@@ -80,6 +80,10 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 19 | `19_submit_main_dim_reduction.sh` | main-cohort dim-reduction smoke runner | single (raw/descriptors/foundation) |
 | 20 | `20_submit_main_decoding.sh` | stages 15–18 one-cohort integration runner | single (CPU/GPU branches via `sbatch`) |
 
+Stages 01, 03, 04, 07 and 10 end by running the BIDS validator on the dataset they
+wrote (`validate_bids` in `env.sh`); the job fails when it reports an error. Each
+derivative tree has a `.bidsignore` for the files BIDS does not define.
+
 
 ## Common environment variables
 

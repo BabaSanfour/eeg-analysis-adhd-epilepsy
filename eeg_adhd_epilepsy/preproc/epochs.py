@@ -168,6 +168,7 @@ def main() -> None:
     log_file.parent.mkdir(parents=True, exist_ok=True)
     setup_logging(log_file, "INFO")
 
+    bids_io.write_preproc_dataset_description(preproc_root)
     LOGGER.info("Discovering preprocessed files in %s", preproc_root)
     found_files = list(preproc_root.rglob(f"*desc-{args.desc}_eeg.fif"))
 

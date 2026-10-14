@@ -38,7 +38,12 @@ from coco_pipe.io import (
 )
 from coco_pipe.report import make_foundation_embedding_report
 
-from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+from eeg_adhd_epilepsy.io.bids import (
+    DESCRIPTION_ONLY_BIDSIGNORE,
+    DerivativeStage,
+    get_derivative_root,
+    write_bidsignore,
+)
 from eeg_adhd_epilepsy.io.report_paths import (
     ReportStage,
     default_reports_root,
@@ -178,8 +183,9 @@ def run(config: dict[str, Any]) -> Path:
         generated_by=[
             {"Name": "coco-pipe", "Description": "EEG foundation-model embedding extraction"}
         ],
-        source_datasets=[{"URL": str(bids_root)}],
+        source_datasets=[{"URL": bids_root.resolve().as_uri()}],
     )
+    write_bidsignore(derivative_root, DESCRIPTION_ONLY_BIDSIGNORE)
     pd.DataFrame(failures).to_csv(derivative_root / "failures.csv", index=False)
     _write_combined_tables(derivative_root, by_model)
 

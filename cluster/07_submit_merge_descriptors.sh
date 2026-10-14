@@ -23,3 +23,4 @@ python -m eeg_adhd_epilepsy.analysis.merge_descriptors \
   --bids_root "$SCRATCH_BIDS_ROOT" \
   --reports_root "$SCRATCH_ROOT/reports" \
   --skip_inconsistent
+validate_bids "$SCRATCH_BIDS_ROOT/derivatives/signal_features/descriptors"

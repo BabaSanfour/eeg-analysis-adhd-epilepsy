@@ -48,3 +48,4 @@ if [ "$OVERWRITE" = "1" ]; then
 fi
 
 "${cmd[@]}"
+validate_bids "$BIDS_ROOT/derivatives/preproc"

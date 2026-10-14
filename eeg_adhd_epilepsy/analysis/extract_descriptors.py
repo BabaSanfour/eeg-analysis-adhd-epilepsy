@@ -51,11 +51,13 @@ from eeg_adhd_epilepsy.analysis.utils.subject_resolution import (
     resolve_metadata_row,
 )
 from eeg_adhd_epilepsy.io.bids import (
+    DESCRIPTION_ONLY_BIDSIGNORE,
     DerivativeStage,
     bids_session_label,
     bids_subject_label,
     get_derivative_root,
     study_id_to_bids_subject,
+    write_bidsignore,
 )
 from eeg_adhd_epilepsy.io.report_paths import (
     ReportStage,
@@ -376,6 +378,7 @@ def main() -> None:
             dataset_description_path,
             json.dumps(dataset_description, indent=2) + "\n",
         )
+    write_bidsignore(derivative_root, DESCRIPTION_ONLY_BIDSIGNORE)
 
     descriptor_config = DescriptorConfig.model_validate(raw_config)
     pipeline = DescriptorPipeline(descriptor_config)

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import json
 import logging
 import re
 import shutil
@@ -18,7 +19,7 @@ import mne
 import numpy as np
 import pandas as pd
 from joblib import Parallel, delayed, effective_n_jobs
-from mne_bids import BIDSPath, write_raw_bids
+from mne_bids import BIDSPath, make_dataset_description, write_raw_bids
 from tqdm import tqdm
 
 import eeg_adhd_epilepsy.qc.raw_qc as qc_raw
@@ -31,6 +32,56 @@ from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 
 LOGGER = logging.getLogger(__name__)
 SEGMENT_COLUMNS = list(constants.SEGMENT_COLUMNS)
+
+DATASET_NAME = "Clinical EEG in ADHD and epilepsy"
+DATASET_LICENSE = (
+    "Restricted: clinical data, not for redistribution or reuse without the written "
+    "permission of the authors"
+)
+DATASET_README = """\
+Clinical EEG in ADHD and epilepsy
+=================================
+
+Routine clinical EEG recordings, converted from Nihon Kohden files by
+`eeg_adhd_epilepsy.preproc.to_bids`.
+
+Layout
+------
+- `sub-<label>`: the `study_id` of the patient metadata, zero-padded to four digits.
+- One session (`ses-01`) and one task (`task-clinical`) per subject; the runs of a
+  subject are numbered in the chronological order of the recordings.
+- 19 channels of the 10-20 system, BrainVision format. Recordings missing one of
+  them are not converted. Electrode positions are the `colin27_1020` template, not
+  measured positions.
+- Power line frequency: 60 Hz.
+
+Events
+------
+The clinical annotations are rewritten to one vocabulary. `BLOCK_<condition>`
+events mark the segments used in the analyses: eyes open and eyes closed at
+baseline (`EO_baseline`, `EC_baseline`), and during and after hyperventilation and
+photic stimulation, split by eye state.
+
+Other folders
+-------------
+- `sourcedata/raw_record_inventory.csv`: every raw recording found and the run it
+  became.
+- `derivatives/preproc`: the cleaned recordings and their epochs, a BIDS derivative
+  dataset.
+
+References
+----------
+Appelhoff, S., Sanderson, M., Brooks, T., Vliet, M., Quentin, R., Holdgraf, C.,
+Chaumon, M., Mikulan, E., Tavabi, K., Höchenberger, R., Welke, D., Brunner, C.,
+Rockhill, A., Larson, E., Gramfort, A. and Jas, M. (2019). MNE-BIDS: Organizing
+electrophysiological data into the BIDS format and facilitating their analysis.
+Journal of Open Source Software 4: (1896). https://doi.org/10.21105/joss.01896
+
+Pernet, C. R., Appelhoff, S., Gorgolewski, K. J., Flandin, G., Phillips, C.,
+Delorme, A., Oostenveld, R. (2019). EEG-BIDS, an extension to the brain imaging
+data structure for electroencephalography. Scientific Data, 6, 103.
+https://doi.org/10.1038/s41597-019-0104-8
+"""
 
 
 def _slug_label(label: str) -> str:
@@ -652,22 +703,44 @@ def _build_run_inventory(
     return inventory_df
 
 
-def _write_participants_tsv(
-    bids_root: Path, metadata_df: pd.DataFrame, successful_ids: set[int]
-) -> None:
-    """Write ``participants.tsv`` for the successfully converted subjects."""
-    converted_meta = metadata_df[metadata_df["study_id"].isin(sorted(successful_ids))].copy()
-    participants_df = converted_meta[["study_id", "age", "sex"]].dropna(subset=["study_id"]).copy()
+def _write_participants(bids_root: Path, metadata_df: pd.DataFrame) -> None:
+    """Write ``participants.tsv`` and its sidecar for every subject in ``bids_root``."""
+    participants_df = metadata_df[["study_id", "age", "sex"]].dropna(subset=["study_id"]).copy()
     participants_df["participant_id"] = participants_df["study_id"].apply(
         lambda value: bids_io.bids_subject_label(bids_io.study_id_to_bids_subject(int(value)))
     )
+    converted = {path.name for path in bids_root.glob("sub-*") if path.is_dir()}
     participants_df = (
-        participants_df[["participant_id", "age", "sex"]]
+        participants_df.loc[
+            participants_df["participant_id"].isin(converted), ["participant_id", "age", "sex"]
+        ]
         .drop_duplicates("participant_id")
         .sort_values("participant_id")
         .reset_index(drop=True)
     )
-    participants_df.to_csv(bids_root / "participants.tsv", sep="\t", index=False)
+    participants_df.to_csv(bids_root / "participants.tsv", sep="\t", index=False, na_rep="n/a")
+
+    # mne-bids describes the columns it writes; keep the ones of the table above.
+    sidecar_path = bids_root / "participants.json"
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar_path.write_text(
+        json.dumps({column: sidecar[column] for column in participants_df.columns}, indent=4)
+        + "\n",
+        encoding="utf-8",
+    )
+
+
+def _write_dataset_description(bids_root: Path) -> None:
+    """Replace the placeholder ``dataset_description.json`` and README of mne-bids."""
+    make_dataset_description(
+        path=bids_root,
+        name=DATASET_NAME,
+        authors=bids_io.DATASET_AUTHORS,
+        data_license=DATASET_LICENSE,
+        overwrite=True,
+        verbose=False,
+    )
+    (bids_root / "README").write_text(DATASET_README, encoding="utf-8")
 
 
 def main() -> None:
@@ -741,8 +814,8 @@ def main() -> None:
 
     inventory_df = _build_run_inventory(args.raw_root, metadata_df, selected_study_ids)
 
-    args.bids_root.mkdir(parents=True, exist_ok=True)
-    inventory_path = args.bids_root / "raw_record_inventory.csv"
+    inventory_path = args.bids_root / "sourcedata" / "raw_record_inventory.csv"
+    inventory_path.parent.mkdir(parents=True, exist_ok=True)
     inventory_df.to_csv(inventory_path, index=False)
     LOGGER.info("Wrote inventory to %s", inventory_path)
 
@@ -810,8 +883,10 @@ def main() -> None:
         )
         sys.exit(1)
 
+    if successful_ids or skipped_ids:
+        _write_participants(args.bids_root, metadata_df)
+        _write_dataset_description(args.bids_root)
     if successful_ids:
-        _write_participants_tsv(args.bids_root, metadata_df, successful_ids)
         if args.with_eeg_reports:
             LOGGER.info("Generating EEG aggregate reports in %s", eeg_reports_dir)
             report_eeg.write_eeg_aggregate_reports(eeg_reports_dir, eeg_run_records)
