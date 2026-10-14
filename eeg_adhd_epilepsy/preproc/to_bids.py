@@ -34,6 +34,10 @@ LOGGER = logging.getLogger(__name__)
 SEGMENT_COLUMNS = list(constants.SEGMENT_COLUMNS)
 
 DATASET_NAME = "Clinical EEG in ADHD and epilepsy"
+DATASET_LICENSE = (
+    "Restricted: clinical data, not for redistribution or reuse without the written "
+    "permission of the authors"
+)
 DATASET_README = """\
 Clinical EEG in ADHD and epilepsy
 =================================
@@ -732,6 +736,7 @@ def _write_dataset_description(bids_root: Path) -> None:
         path=bids_root,
         name=DATASET_NAME,
         authors=bids_io.DATASET_AUTHORS,
+        data_license=DATASET_LICENSE,
         overwrite=True,
         verbose=False,
     )
