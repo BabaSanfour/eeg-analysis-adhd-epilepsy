@@ -5,9 +5,9 @@ from __future__ import annotations
 import numpy as np
 
 from eeg_adhd_epilepsy.preproc.base import (
-    LINE_PEAK_MAX_DB,
+    LINE_NOISE_RATIO_MAX,
     ZAPLINE_MAX_COMPONENTS,
-    _line_peak_db,
+    _line_noise_ratio,
     _remove_line_noise,
 )
 
@@ -27,7 +27,7 @@ def test_line_from_many_sources_is_capped_then_interpolated(synthetic_raw):
     assert stats["n_selected_auto"] > ZAPLINE_MAX_COMPONENTS
     assert stats["n_removed"] == ZAPLINE_MAX_COMPONENTS
     assert stats["spectrum_interpolation"]
-    assert _line_peak_db(cleaned, 60.0) < LINE_PEAK_MAX_DB
+    assert _line_noise_ratio(cleaned, 60.0) < LINE_NOISE_RATIO_MAX
 
     _, stats = _remove_line_noise(raw, 60.0, adaptive=False)
     assert not stats["spectrum_interpolation"]

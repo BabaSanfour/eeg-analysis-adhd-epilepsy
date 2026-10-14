@@ -45,6 +45,7 @@ from eeg_adhd_epilepsy.preproc.utils import (
     inflate_bad_annotations,
 )
 from eeg_adhd_epilepsy.qc import preproc_qc
+from eeg_adhd_epilepsy.signal_quality.spectral import compute_line_noise_index
 from eeg_adhd_epilepsy.utils import events
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 
@@ -55,11 +56,13 @@ DEFAULT_LOWPASS_HZ = 100.0
 DEFAULT_ARTIFACT_SEGMENT_S = 1.0
 DEFAULT_ARTIFACT_MIN_EPOCHS = 5
 # Line noise: ZapLine keeps at most this many components, and spectrum interpolation
-# removes a line peak still above this many dB over the floor. Line noise from many
-# sources otherwise takes ZapLine 13-19 of 19 components and 5-6 dB of 30-55 Hz power;
-# interpolating only a recording with a peak leaves the others as ZapLine made them.
+# removes what is left when the QC line-noise index (median over channels) is above
+# LINE_NOISE_RATIO_MAX, which on this dataset selects a 60 Hz peak about 3 dB over the
+# floor. Line noise from many sources otherwise takes ZapLine 13-19 of 19 components and
+# 5-6 dB of 30-55 Hz power; interpolating only a recording with a peak leaves the others
+# as ZapLine made them.
 ZAPLINE_MAX_COMPONENTS = 3
-LINE_PEAK_MAX_DB = 3.0
+LINE_NOISE_RATIO_MAX = 1.5
 
 
 def _group_consecutive_indices(indices: list[int]) -> list[tuple[int, int]]:
@@ -320,17 +323,12 @@ def _compute_clean_stats(raw: mne.io.BaseRaw) -> dict[str, float]:
     }
 
 
-def _line_peak_db(raw: mne.io.BaseRaw, freq: float) -> float:
-    """Median over EEG channels of the power within 0.5 Hz of ``freq`` over the 3-8 Hz around it."""
-    n_fft = min(int(4 * raw.info["sfreq"]), raw.n_times)
-    spectrum = raw.compute_psd(
-        method="welch", fmin=freq - 8, fmax=freq + 8, n_fft=n_fft, picks="eeg", verbose="ERROR"
+def _line_noise_ratio(raw: mne.io.BaseRaw, line_freq: float) -> float:
+    """The QC line-noise index (``compute_line_noise_index``), median over EEG channels."""
+    psd, freqs = raw.compute_psd(picks="eeg", fmin=0.5, fmax=99.5, verbose="ERROR").get_data(
+        return_freqs=True
     )
-    psd, freqs = spectrum.get_data(return_freqs=True)
-    distance = np.abs(freqs - freq)
-    peak = psd[:, distance <= 0.5].mean(axis=1)
-    floor = np.median(psd[:, (distance >= 3) & (distance <= 8)], axis=1)
-    return float(np.median(10 * np.log10(peak / floor)))
+    return float(np.median(compute_line_noise_index(psd, freqs, line_freq=line_freq)[1]))
 
 
 def _remove_line_noise(
@@ -348,8 +346,8 @@ def _remove_line_noise(
     if not adaptive and n_auto > ZAPLINE_MAX_COMPONENTS:
         zapline = ZapLine(sfreq=sfreq, line_freq=line_freq, n_select=ZAPLINE_MAX_COMPONENTS)
         cleaned = zapline.fit_transform(raw)
-    peak_db = _line_peak_db(cleaned, line_freq)
-    interpolated = peak_db > LINE_PEAK_MAX_DB
+    line_ratio = _line_noise_ratio(cleaned, line_freq)
+    interpolated = line_ratio > LINE_NOISE_RATIO_MAX
     if interpolated:
         cleaned = SpectrumInterpolation(line_freq=line_freq, n_harmonics=1).fit_transform(cleaned)
     return cleaned, {
@@ -358,7 +356,7 @@ def _remove_line_noise(
         "adaptive": adaptive,
         "n_selected_auto": n_auto,
         "n_removed": int(zapline.n_removed_),
-        "line_peak_db_after_zapline": peak_db,
+        "line_noise_ratio_after_zapline": line_ratio,
         "spectrum_interpolation": interpolated,
     }
 
