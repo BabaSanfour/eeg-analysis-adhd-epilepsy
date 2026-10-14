@@ -71,11 +71,10 @@ def resolve_decoding_paths(
     Calculates the stable config hash and constructs identical `run_variant` layouts
     for classical and foundation scripts.
     """
-    from coco_pipe.io import read_table
-
     from eeg_adhd_epilepsy.io.bids import (
         DerivativeStage,
         get_derivative_root,
+        read_participants,
     )
     from eeg_adhd_epilepsy.io.report_paths import (
         ReportStage,
@@ -85,9 +84,7 @@ def resolve_decoding_paths(
 
     bids_root = Path(config["bids_root"]).expanduser()
     metadata = (
-        read_table(Path(config["metadata"]).expanduser(), sep=None)
-        if config.get("metadata")
-        else None
+        read_participants(Path(config["metadata"]).expanduser()) if config.get("metadata") else None
     )
 
     cfg_hash = stable_hash(redact_sensitive(scientific_config(config)), length=12)
@@ -356,7 +353,7 @@ def build_loader_args(
         ),
         overlap=overlap if overlap is not None else float(config.get("overlap", 0.0)),
         units=config.get("units", "V"),
-        subject_col=config.get("subject_col", "study_id"),
+        subject_col=config.get("subject_col", "subject"),
         desc=config.get("desc", "base"),
         descriptor_table_path=config.get("descriptor_table_path"),
         descriptor_feature_columns_path=config.get("descriptor_feature_columns_path"),

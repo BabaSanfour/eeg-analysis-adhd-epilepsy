@@ -176,9 +176,9 @@ def main() -> None:
         valid_sids = set()
         for s in args.subjects:
             if s.startswith("sub-"):
-                valid_sids.add(bids_io.study_id_to_bids_subject(s))
+                valid_sids.add(bids_io.bids_subject(s))
             else:
-                valid_sids.add(bids_io.study_id_to_bids_subject(int(s)))
+                valid_sids.add(bids_io.bids_subject(int(s)))
         files_to_process = [
             f for f in found_files if get_entities_from_fname(f)["subject"] in valid_sids
         ]

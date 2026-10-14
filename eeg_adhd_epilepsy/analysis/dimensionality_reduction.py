@@ -32,7 +32,6 @@ from coco_pipe.io import (
     fingerprint_container,
     iter_analysis_units,
     read_json,
-    read_table,
     write_json,
 )
 from coco_pipe.utils import resolve_n_jobs, slug, stable_hash
@@ -62,6 +61,7 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
     get_derivative_root,
+    read_participants,
 )
 from eeg_adhd_epilepsy.io.report_paths import (
     ReportStage,
@@ -637,7 +637,7 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         run_label=config.get("run_label"),
         conditions=list(config.get("conditions", DEFAULT_CONDITIONS)),
         subjects=config.get("subjects"),
-        subject_col=config.get("subject_col", "study_id"),
+        subject_col=config.get("subject_col", "subject"),
         run_pooled=bool(config.get("run_pooled", False)),
         selection_metric=config.get("selection_metric", DEFAULT_DIM_REDUCTION_SELECTION_METRIC),
         selection_eval_name=config.get("selection_eval_name"),
@@ -825,9 +825,7 @@ def run(config: dict[str, Any]) -> None:
     resolved_n_jobs = resolve_n_jobs(args.n_jobs)
 
     meta_df = (
-        read_table(Path(config["metadata"]).expanduser(), sep=",")
-        if config.get("metadata")
-        else None
+        read_participants(Path(config["metadata"]).expanduser()) if config.get("metadata") else None
     )
 
     eval_specs = parse_eval_specs(
@@ -935,7 +933,7 @@ def main() -> None:
         help="Reduce one materialized alignment variant (for example none, leace, or ra).",
     )
     parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
-    parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
+    parser.add_argument("--metadata", default=None, help="Override the participants.tsv path.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
     parser.add_argument(
         "--representation",

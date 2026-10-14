@@ -25,7 +25,7 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
     for subject in range(4):
         metadata_rows.append(
             {
-                "study_id": f"{subject + 1:04d}",
+                "participant_id": f"sub-{subject + 1:04d}",
                 "patient_group_id": f"group-{subject + 1:04d}",
                 "diagnosis": subject % 2,
             }
@@ -87,8 +87,8 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
                 ),
             )
 
-    metadata_path = tmp_path / "metadata.csv"
-    pd.DataFrame(metadata_rows).to_csv(metadata_path, index=False)
+    metadata_path = tmp_path / "participants.tsv"
+    pd.DataFrame(metadata_rows).to_csv(metadata_path, sep="\t", index=False)
     config = {
         "dataset_name": "synthetic",
         "bids_root": str(tmp_path / "bids"),
@@ -96,7 +96,7 @@ def test_alignment_producer_variants_reload_and_report(tmp_path, monkeypatch, ca
         "embedding_model_key": "demo",
         "source_pooling": "mean",
         "metadata": str(metadata_path),
-        "subject_col": "study_id",
+        "subject_col": "subject",
         "transforms": ["none", "leace", "ea_mean", "ra"],
         "diagnostic_populations": [
             "transform_training_population",

@@ -46,7 +46,7 @@ pip install -e .
 make help
 
 # 3. Run one stage directly.
-make descriptors BIDS_ROOT=/path/to/BIDS METADATA=/path/to/meta.csv
+make descriptors BIDS_ROOT=/path/to/BIDS METADATA=/path/to/BIDS/participants.tsv
 ```
 
 Each [Makefile](Makefile) target calls the owning module directly. `make all`
@@ -58,10 +58,10 @@ named stage. For large jobs use the numbered SLURM scripts in
 
 This repo targets one real dataset. To run it on your own (similar) data:
 
-1. Convert/point to a **BIDS** EEG dataset (`--bids_root`) and a cleaned
-   **metadata CSV** (`--metadata`) with the columns the configs reference
-   (e.g. `study_id`, `session`, `patient_group_id`, `combined_diagnosis`, `adhd`,
-   `psychostimulant`, `age_group`, `sex`). Dataset paths are **CLI/env arguments**,
+1. Convert/point to a **BIDS** EEG dataset (`--bids_root`) whose `participants.tsv`
+   (`--metadata`) has the columns the configs reference (e.g. `patient_group_id`,
+   `combined_diagnosis`, `adhd`, `psychostimulant`, `age_group`, `sex`), keyed by
+   `participant_id`. Dataset paths are **CLI/env arguments**,
    never stored in the configs.
 2. Copy a cohort config from `configs/cohorts/` and an analysis config from
    `configs/analyses/` and edit them for your question (see below and
@@ -86,7 +86,7 @@ The analysis stages (`eeg-dim-reduce`, `eeg-classical-decode`,
 eeg-classical-decode \
   --cohort_config   configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml \
   --analysis_config configs/analyses/decoding/classical.yaml \
-  --bids_root /path/to/BIDS --metadata /path/to/meta.csv
+  --bids_root /path/to/BIDS --metadata /path/to/BIDS/participants.tsv
 ```
 
 The two files are validated and deep-merged (the analysis config overrides the
@@ -124,7 +124,9 @@ eeg-build-patients-metadata \
   --output_dir /path/to/csv
 ```
 
-The downstream entry point is `patients_metadata_clean.csv`.
+`patients_metadata_clean.csv` is the input of the BIDS conversion, which writes its
+subject-level columns (all but `study_id`, `patient_id` and `eeg_date`) to
+`participants.tsv`. Every analysis reads its labels from that `participants.tsv`.
 
 ## Cohort report
 
@@ -206,9 +208,9 @@ measures, with region-based channel pooling, then joins clinical targets.
 # All subjects (sequential). For the cluster array form see cluster/05.
 eeg-descriptors \
   --bids_root /path/to/BIDS \
-  --metadata /path/to/patients_metadata_clean.csv \
+  --metadata /path/to/BIDS/participants.tsv \
   --config configs/descriptors.yaml \
-  --subject_col study_id --conditions all
+  --conditions all
 
 # Merge the per-subject shards into combined tables.
 eeg-merge-descriptors --bids_root /path/to/BIDS
@@ -226,7 +228,7 @@ on `coco-pipe.dim_reduction`).
 
 ```bash
 eeg-dim-reduce \
-  --bids_root /path/to/BIDS --metadata /path/to/patients_metadata_clean.csv \
+  --bids_root /path/to/BIDS --metadata /path/to/BIDS/participants.tsv \
   --cohort_config   configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml \
   --analysis_config configs/analyses/dim_reduction/raw.yaml \
   --representation subject \

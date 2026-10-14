@@ -23,7 +23,6 @@ from coco_pipe.decoding.foundation_models import (
 )
 from coco_pipe.io import (
     read_json,
-    read_table,
     save_embedding_outputs,
 )
 from coco_pipe.utils import stable_hash
@@ -42,6 +41,7 @@ from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
     _sanitize_bids_token,
     get_derivative_root,
+    read_participants,
 )
 from eeg_adhd_epilepsy.utils.artifacts import freeze_config_used
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
@@ -84,11 +84,9 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
         ),
     )
     metadata_df = (
-        read_table(Path(config["metadata"]).expanduser(), sep=None)
-        if config.get("metadata")
-        else None
+        read_participants(Path(config["metadata"]).expanduser()) if config.get("metadata") else None
     )
-    subject_col = config.get("subject_col", "study_id")
+    subject_col = config.get("subject_col", "subject")
     subjects = resolve_cohort_subjects(metadata_df, subject_col, config.get("subjects"))
     conditions = require_config(config, "conditions", expected_type=list, cast_str=True)
     models = require_config(config, "models", expected_type=list)
@@ -400,7 +398,7 @@ def main() -> None:
     )
     parser.add_argument("--config", required=True)
     parser.add_argument("--bids_root", required=True, help="Path to BIDS dataset")
-    parser.add_argument("--metadata", default=None, help="Path to metadata CSV")
+    parser.add_argument("--metadata", default=None, help="Path to the BIDS participants.tsv")
     parser.add_argument(
         "--derivative_root",
         type=str,
@@ -444,9 +442,9 @@ def main() -> None:
     if args.metadata_row is not None:
         if not config.get("metadata"):
             raise ValueError("--metadata_row requires config['metadata'].")
-        meta_df = read_table(Path(config["metadata"]).expanduser(), sep=None)
+        meta_df = read_participants(Path(config["metadata"]).expanduser())
         subject = resolve_metadata_row(
-            meta_df, args.metadata_row, config.get("subject_col", "study_id")
+            meta_df, args.metadata_row, config.get("subject_col", "subject")
         )
         if subject is None:
             return

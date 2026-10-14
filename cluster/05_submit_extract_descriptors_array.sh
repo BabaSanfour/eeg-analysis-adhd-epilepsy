@@ -15,7 +15,6 @@ CONFIG_PATH=${CONFIG_PATH:-$PROJECT_ROOT/configs/descriptors.yaml}
 SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.descriptor_array_state}
 AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-1}
 FIRST_BATCH_SIZE=${FIRST_BATCH_SIZE:-1000}
-SECOND_BATCH_SIZE=${SECOND_BATCH_SIZE:-241}
 
 THREADS=${SLURM_CPUS_PER_TASK:-16}
 ROW_OFFSET=${ROW_OFFSET:-0}
@@ -23,6 +22,8 @@ METADATA_ROW=$((SLURM_ARRAY_TASK_ID + ROW_OFFSET))
 
 require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"
+# One task per participants.tsv row: the second batch takes the rows past the first.
+SECOND_BATCH_SIZE=${SECOND_BATCH_SIZE:-$(($(tail -n +2 "$METADATA_PATH" | wc -l) - FIRST_BATCH_SIZE))}
 require_file "$CONFIG_PATH"
 require_dir "$VENV_PATH"
 
@@ -36,7 +37,6 @@ python -m eeg_adhd_epilepsy.analysis.extract_descriptors \
   --reports_root "$SCRATCH_ROOT/reports" \
   --metadata "$METADATA_PATH" \
   --config "$CONFIG_PATH" \
-  --subject_col study_id \
   --metadata_row "$METADATA_ROW" \
   --conditions all
 

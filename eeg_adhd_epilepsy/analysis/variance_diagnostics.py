@@ -36,7 +36,6 @@ from coco_pipe.io import (
     DataContainer,
     load_embedding_derivatives,
     normalize_subject_value,
-    read_table,
 )
 from coco_pipe.utils import slug, stable_hash
 from joblib import Parallel, delayed, parallel_backend
@@ -46,7 +45,7 @@ from eeg_adhd_epilepsy.analysis.dataset import (
     attach_subject_metadata,
     filter_cohort_container,
 )
-from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root, read_participants
 from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 
 LOGGER = logging.getLogger(__name__)
@@ -464,7 +463,7 @@ def run(config: dict[str, Any]) -> Path:
         representation="epoch",
         model_key=model_key,
     )
-    metadata = read_table(Path(config["metadata"]).expanduser(), sep=None)
+    metadata = read_participants(Path(config["metadata"]).expanduser())
     container = attach_subject_metadata(
         container,
         metadata,

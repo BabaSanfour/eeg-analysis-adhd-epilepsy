@@ -57,7 +57,7 @@ def read_bids_raw(
 
 
 def read_preproc_stage(
-    study_id: str,
+    subject: str,
     preproc_root: Path,
     desc: str = "base",
     task: str = "clinical",
@@ -68,8 +68,8 @@ def read_preproc_stage(
 
     Parameters
     ----------
-    study_id
-        The identifier for the study/subject.
+    subject
+        Bare BIDS subject entity (``0001``).
     preproc_root
         Path to the derivatives/preproc folder.
     desc
@@ -88,18 +88,18 @@ def read_preproc_stage(
     """
     issues = []
     eeg_path = get_stage_output_path(
-        BIDSPath(subject=study_id, session=session, task=task, run=run),
+        BIDSPath(subject=subject, session=session, task=task, run=run),
         preproc_root,
         desc,
     )
     if not eeg_path.exists():
-        issues.append(f"missing_eeg:{study_id}")
+        issues.append(f"missing_eeg:{subject}")
         return None, {}, issues
 
     try:
         raw = mne.io.read_raw_fif(eeg_path, preload=True, verbose="ERROR")
     except Exception as exc:
-        issues.append(f"invalid_fif:{study_id}:{exc}")
+        issues.append(f"invalid_fif:{subject}:{exc}")
         return None, {}, issues
 
     prov_path = eeg_path.with_name(eeg_path.name.replace("_eeg.fif", "_provenance.json"))
@@ -108,6 +108,6 @@ def read_preproc_stage(
         try:
             prov = read_json(prov_path)
         except Exception as exc:
-            issues.append(f"invalid_prov:{study_id}:{exc}")
+            issues.append(f"invalid_prov:{subject}:{exc}")
 
     return raw, prov, issues

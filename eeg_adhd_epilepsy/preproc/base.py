@@ -962,7 +962,7 @@ def main():
     )
 
     if args.subjects:
-        normalized_subjects = [bids.study_id_to_bids_subject(s) for s in args.subjects]
+        normalized_subjects = [bids.bids_subject(s) for s in args.subjects]
         subjects_to_process = set(normalized_subjects)
         LOGGER.info("Selected specific subjects: %s", normalized_subjects)
     else:

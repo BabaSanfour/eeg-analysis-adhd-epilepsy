@@ -115,7 +115,7 @@ def _demo_container_for_subjects(subjects: list[str] | None = None) -> DataConta
 def _demo_raw_metadata() -> pd.DataFrame:
     return pd.DataFrame(
         {
-            "study_id": ["0001", "0002"],
+            "subject": ["0001", "0002"],
             "combined_diagnosis": ["Control", "ADHD"],
             "age": [10, 13],
             "sex": ["F", "M"],
@@ -306,8 +306,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "read_table",
-        lambda metadata_path, sep=None: _demo_raw_metadata(),
+        "read_participants",
+        lambda metadata_path: _demo_raw_metadata(),
     )
 
     monkeypatch.setattr(
@@ -456,8 +456,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "read_table",
-        lambda metadata_path, sep=None: _demo_raw_metadata(),
+        "read_participants",
+        lambda metadata_path: _demo_raw_metadata(),
     )
 
     monkeypatch.setattr(
@@ -581,8 +581,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "read_table",
-        lambda metadata_path, sep=None: _demo_raw_metadata(),
+        "read_participants",
+        lambda metadata_path: _demo_raw_metadata(),
     )
 
     def _load_demo_data(**kwargs):
@@ -651,8 +651,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "read_table",
-        lambda metadata_path, sep=None: _demo_raw_metadata(),
+        "read_participants",
+        lambda metadata_path: _demo_raw_metadata(),
     )
 
     load_calls: list[tuple[str, ...]] = []
@@ -740,8 +740,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "read_table",
-        lambda metadata_path, sep=None: _demo_raw_metadata(),
+        "read_participants",
+        lambda metadata_path: _demo_raw_metadata(),
     )
 
     monkeypatch.setattr(
@@ -823,8 +823,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "read_table",
-        lambda metadata_path, sep=None: _demo_raw_metadata(),
+        "read_participants",
+        lambda metadata_path: _demo_raw_metadata(),
     )
 
     def _raise_missing_data(**kwargs):
@@ -884,8 +884,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "read_table",
-        lambda metadata_path, sep=None: _demo_raw_metadata(),
+        "read_participants",
+        lambda metadata_path: _demo_raw_metadata(),
     )
 
     load_calls = []
@@ -952,8 +952,8 @@ aggregation:
 
     monkeypatch.setattr(
         extract_descriptors,
-        "read_table",
-        lambda metadata_path, sep=None: _demo_raw_metadata(),
+        "read_participants",
+        lambda metadata_path: _demo_raw_metadata(),
     )
 
     def _raise_missing_data(**kwargs):

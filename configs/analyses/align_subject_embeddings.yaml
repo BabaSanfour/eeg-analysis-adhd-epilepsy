@@ -21,6 +21,6 @@ diagnostic_populations:
   - transform_training_population
   - clinical_task_subset
 
-subject_col: study_id
+subject_col: subject
 random_state: 42
 overwrite: false

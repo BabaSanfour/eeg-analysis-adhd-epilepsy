@@ -40,6 +40,7 @@ from eeg_adhd_epilepsy.io.bids import (
     _sanitize_bids_token,
     get_bids_derivative_variant_path,
     get_derivative_root,
+    read_participants,
 )
 from eeg_adhd_epilepsy.utils.artifacts import freeze_config_used, write_text_atomic
 from eeg_adhd_epilepsy.utils.config import resolve_cli_config
@@ -664,9 +665,7 @@ def run(config: dict[str, Any]) -> Path:
             )
 
     cohort_metadata = (
-        read_table(Path(config["metadata"]).expanduser(), sep=None)
-        if config.get("metadata")
-        else None
+        read_participants(Path(config["metadata"]).expanduser()) if config.get("metadata") else None
     )
     diagnostic_container = (
         attach_subject_metadata(container, cohort_metadata, str(config["subject_col"]))

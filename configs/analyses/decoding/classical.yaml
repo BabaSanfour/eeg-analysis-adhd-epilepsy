@@ -131,7 +131,7 @@ metrics:
   - roc_auc
 
 session_col: session
-subject_col: study_id
+subject_col: subject
 task: clinical
 desc: base
 representation: recording

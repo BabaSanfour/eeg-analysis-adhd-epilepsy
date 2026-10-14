@@ -575,13 +575,15 @@ def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch, c
     bids_root = tmp_path / "BIDS"
     bids_root.mkdir()
     reports_root = tmp_path / "reports"
-    metadata = tmp_path / "meta.csv"
-    pd.DataFrame({"study_id": [1, 2, 3, 4, 5, 6]}).to_csv(metadata, index=False)
+    metadata = tmp_path / "participants.tsv"
+    pd.DataFrame({"participant_id": [f"sub-{i:04d}" for i in range(1, 7)]}).to_csv(
+        metadata, sep="\t", index=False
+    )
 
     cohort = tmp_path / "cohort.yaml"
     cohort.write_text(
         "dataset_name: smoke\n"
-        "subject_col: study_id\n"
+        "subject_col: participant_id\n"
         "conditions: [EO_baseline]\n"
         "run_pooled: false\n"
         "evals:\n"

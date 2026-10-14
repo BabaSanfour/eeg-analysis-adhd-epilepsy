@@ -538,7 +538,7 @@ def main() -> None:
         ),
     )
     parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
-    parser.add_argument("--metadata", default=None, help="Override metadata CSV path.")
+    parser.add_argument("--metadata", default=None, help="Override the participants.tsv path.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
     parser.add_argument("--reports_root", default=None, help="Override reports root (else config).")
     parser.add_argument(

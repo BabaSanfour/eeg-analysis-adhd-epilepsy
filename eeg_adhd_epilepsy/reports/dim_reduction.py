@@ -69,7 +69,7 @@ _PLOT_META_EXCLUDED_COLUMNS = {
     "channel",
     "time",
     "subject",
-    "study_id",
+    "participant_id",
     "patient_id",
     "patient_group_id",
     "obs_id",

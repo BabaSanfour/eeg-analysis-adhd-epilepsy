@@ -39,7 +39,7 @@ from coco_pipe.descriptors import (
     mad_failures_from_qc,
     save_descriptor_table,
 )
-from coco_pipe.io import DataContainer, read_table, save_npz
+from coco_pipe.io import DataContainer, save_npz
 from coco_pipe.io.quality import drop_epoch_outliers
 from mne_bids import get_entities_from_fname
 
@@ -56,7 +56,7 @@ from eeg_adhd_epilepsy.io.bids import (
     bids_session_label,
     bids_subject_label,
     get_derivative_root,
-    study_id_to_bids_subject,
+    read_participants,
     write_bidsignore,
 )
 from eeg_adhd_epilepsy.io.report_paths import (
@@ -258,7 +258,7 @@ def main() -> None:
     parser.add_argument(
         "--metadata",
         required=True,
-        help="Path to the canonical metadata CSV.",
+        help="Path to the BIDS participants.tsv.",
     )
     parser.add_argument(
         "--config",
@@ -282,13 +282,13 @@ def main() -> None:
         type=int,
         default=None,
         help=(
-            "One-based row number in the metadata CSV to process. "
+            "One-based row number in participants.tsv to process. "
             "Useful for Slurm job arrays where SLURM_ARRAY_TASK_ID selects a metadata row."
         ),
     )
     parser.add_argument(
         "--subject_col",
-        default="study_id",
+        default="subject",
         help="Subject identifier column in cleaned metadata.",
     )
     parser.add_argument(
@@ -389,7 +389,7 @@ def main() -> None:
         aggregated_ratio_pairs = []
         aggregated_ratio_floor = 0.0
 
-    meta_df = read_table(metadata_path, sep=None)
+    meta_df = read_participants(metadata_path)
     requested: list[Any] | None = list(args.subjects) if args.subjects else None
     if args.metadata_row is not None:
         subject = resolve_metadata_row(meta_df, args.metadata_row, args.subject_col)
@@ -439,18 +439,12 @@ def main() -> None:
                 )
                 continue
 
-            subject_meta_df = meta_df[
-                meta_df[args.subject_col].map(study_id_to_bids_subject) == subject
-            ].copy()
-
             LOGGER.info("Loading %s for %s (ses %s)", condition, subject, session)
             try:
                 dc_loaded = build_container(
                     bids_root=bids_root,
                     use_derivatives=True,
                     subjects=[subject],
-                    metadata_df=subject_meta_df,
-                    subject_col=args.subject_col,
                     target_col=args.target_col,
                     desc="base",
                     condition=condition,
