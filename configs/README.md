@@ -60,7 +60,7 @@ eeg-classical-decode \
   --cohort_config configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml \
   --analysis_config configs/analyses/decoding/classical.yaml \
   --bids_root /path/to/BIDS \
-  --metadata /path/to/patients_metadata_clean.csv
+  --metadata /path/to/BIDS/participants.tsv
 ```
 
 For dimensionality reduction, pick the analysis config that matches the input:

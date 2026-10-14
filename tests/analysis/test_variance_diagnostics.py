@@ -19,7 +19,7 @@ def _make_raw_embeddings(source_root, seed=0):
     for subject in range(4):
         metadata_rows.append(
             {
-                "study_id": f"{subject + 1:04d}",
+                "participant_id": f"sub-{subject + 1:04d}",
                 "patient_group_id": f"group-{subject + 1:04d}",
                 "diagnosis": subject % 2,
             }
@@ -50,8 +50,8 @@ def _make_raw_embeddings(source_root, seed=0):
 def test_standalone_run_scores_raw_embeddings_without_alignment(tmp_path):
     source_root = tmp_path / "source"
     metadata_rows = _make_raw_embeddings(source_root)
-    metadata_path = tmp_path / "metadata.csv"
-    pd.DataFrame(metadata_rows).to_csv(metadata_path, index=False)
+    metadata_path = tmp_path / "participants.tsv"
+    pd.DataFrame(metadata_rows).to_csv(metadata_path, sep="\t", index=False)
 
     config = {
         "dataset_name": "standalone_test",
@@ -60,7 +60,7 @@ def test_standalone_run_scores_raw_embeddings_without_alignment(tmp_path):
         "embedding_model_key": "demo",
         "diagnostic_transform": "none",
         "metadata": str(metadata_path),
-        "subject_col": "study_id",
+        "subject_col": "subject",
         "diagnostic_populations": ["clinical_task_subset"],
         "evals": [
             {

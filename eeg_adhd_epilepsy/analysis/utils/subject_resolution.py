@@ -8,7 +8,7 @@ from typing import Any
 
 import pandas as pd
 
-from eeg_adhd_epilepsy.io.bids import study_id_to_bids_subject
+from eeg_adhd_epilepsy.io.bids import bids_subject
 
 LOGGER = logging.getLogger(__name__)
 
@@ -32,7 +32,7 @@ def resolve_metadata_row(
             len(metadata_df),
         )
         return None
-    return study_id_to_bids_subject(metadata_df.iloc[position][subject_col])
+    return bids_subject(metadata_df.iloc[position][subject_col])
 
 
 def resolve_cohort_subjects(
@@ -43,7 +43,7 @@ def resolve_cohort_subjects(
     """Resolve the BIDS subjects to process, with the metadata as the authority.
 
     The metadata cohort is the gate: ``requested`` ids are converted with
-    :func:`study_id_to_bids_subject` and intersected with it, so a typo'd id
+    :func:`bids_subject` and intersected with it, so a typo'd id
     raises and an out-of-cohort id is dropped rather than silently extracted.
     Extraction entry points have no target-label step downstream to cull
     subjects, so this intersection is their only cohort gate.
@@ -53,11 +53,11 @@ def resolve_cohort_subjects(
     """
     if metadata_df is None or subject_col not in metadata_df:
         return list(requested) if requested is not None else None
-    valid_subjects = {study_id_to_bids_subject(value) for value in metadata_df[subject_col]}
+    valid_subjects = {bids_subject(value) for value in metadata_df[subject_col]}
     if requested:
         subjects = [
             subject
-            for subject in (study_id_to_bids_subject(value) for value in requested)
+            for subject in (bids_subject(value) for value in requested)
             if subject in valid_subjects
         ]
     else:

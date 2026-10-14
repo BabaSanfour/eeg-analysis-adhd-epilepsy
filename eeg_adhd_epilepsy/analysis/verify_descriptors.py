@@ -44,8 +44,9 @@ from coco_pipe.io import read_table
 from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import required_descriptor_files
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
+    bids_subject,
     get_derivative_root,
-    study_id_to_bids_subject,
+    read_participants,
 )
 from eeg_adhd_epilepsy.io.report_paths import (
     ReportStage,
@@ -218,13 +219,13 @@ def _print_counter(title: str, counter: Counter, top_n: int = 15) -> None:
 
 
 def expected_subjects(metadata_path: Path, subject_col: str, rows: list[int]) -> list[str]:
-    """Bare BIDS subject labels for the given one-based *rows* of the metadata CSV."""
-    meta_df = read_table(metadata_path, sep=None)
+    """Bare BIDS subject labels for the given one-based *rows* of ``participants.tsv``."""
+    meta_df = read_participants(metadata_path)
     labels: list[str] = []
     for row in rows:
         position = row - 1
         if 0 <= position < len(meta_df):
-            labels.append(study_id_to_bids_subject(meta_df.iloc[position][subject_col]))
+            labels.append(bids_subject(meta_df.iloc[position][subject_col]))
     return sorted(set(labels))
 
 
@@ -251,9 +252,9 @@ def main() -> None:
     parser.add_argument(
         "--metadata",
         default=None,
-        help="Metadata CSV; with --rows enables the expected-subject coverage check.",
+        help="participants.tsv; with --rows enables the expected-subject coverage check.",
     )
-    parser.add_argument("--subject_col", default="study_id", help="Subject id column in metadata.")
+    parser.add_argument("--subject_col", default="subject", help="Subject id column in metadata.")
     parser.add_argument(
         "--rows",
         default=None,

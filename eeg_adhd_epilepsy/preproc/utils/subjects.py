@@ -10,7 +10,7 @@ from eeg_adhd_epilepsy.io import bids
 
 def _normalize_subject_list(subjects: Sequence[str]) -> list[str]:
     """Convert metadata study IDs to sorted bare BIDS subject entities."""
-    return sorted({bids.study_id_to_bids_subject(s) for s in subjects})
+    return sorted({bids.bids_subject(s) for s in subjects})
 
 
 def select_subjects(
@@ -52,7 +52,7 @@ def select_subjects(
         return _normalize_subject_list(selected_subjects)
 
     if start_from:
-        start_sid = bids.study_id_to_bids_subject(start_from)
+        start_sid = bids.bids_subject(start_from)
         return [sid for sid in found_sorted if sid >= start_sid]
 
     if use_test:

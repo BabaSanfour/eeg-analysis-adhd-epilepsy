@@ -23,6 +23,7 @@ from eeg_adhd_epilepsy.analysis.utils.common import qc_keys
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
     bids_session_label,
+    bids_subject,
     bids_subject_label,
     get_derivative_root,
 )
@@ -42,7 +43,7 @@ def build_container(
     segment_duration: float = 10.0,
     overlap: float = 0.0,
     metadata_df: pd.DataFrame | None = None,
-    subject_col: str = "study_id",
+    subject_col: str = "subject",
     target_col: str | None = None,
     desc: str = "base",
     condition: str | None = None,
@@ -72,12 +73,6 @@ def build_container(
             units=units,
             bandpass=bandpass,
         )
-    external_metadata_df = metadata_df.copy() if metadata_df is not None else None
-    if external_metadata_df is not None:
-        external_metadata_df[subject_col] = (
-            external_metadata_df[subject_col].astype(int).map(lambda value: f"{value:04d}")
-        )
-
     if use_derivatives:
         epochs_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
         logger.info(f"Loading saved epochs from {epochs_root}")
@@ -93,11 +88,7 @@ def build_container(
             target_col=target_col,
             units=units,
         )
-        return load_data(
-            config=config,
-            subject_metadata_df=external_metadata_df,
-            subject_key=subject_col if external_metadata_df is not None else None,
-        )
+        return load_data(config=config)
 
     logger.info(f"Loading data for {len(subjects)} subjects. Task: {task}")
     config = BIDSConfig(
@@ -113,11 +104,7 @@ def build_container(
         target_col=target_col,
         units=units,
     )
-    container = load_data(
-        config=config,
-        subject_metadata_df=external_metadata_df,
-        subject_key=subject_col if external_metadata_df is not None else None,
-    )
+    container = load_data(config=config)
     logger.info(f"Initial Container Shape: {container.X.shape}, Dims: {container.dims}")
     return container
 
@@ -130,7 +117,7 @@ def reepoch_eeg(
     overlap: float,
     condition: str | None,
     metadata_df: pd.DataFrame | None = None,
-    subject_col: str = "study_id",
+    subject_col: str = "subject",
     desc: str = "base",
     session: str = "01",
     units: str = "V",
@@ -146,11 +133,7 @@ def reepoch_eeg(
     preproc_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
     meta_lookup: pd.DataFrame | None = None
     if metadata_df is not None:
-        meta_lookup = metadata_df.copy()
-        meta_lookup[subject_col] = (
-            meta_lookup[subject_col].astype(int).map(lambda value: f"{value:04d}")
-        )
-        meta_lookup = meta_lookup.set_index(subject_col)
+        meta_lookup = metadata_df.set_index(subject_col)
 
     x_chunks: list[np.ndarray] = []
     obs_rows: list[dict[str, Any]] = []
@@ -161,8 +144,8 @@ def reepoch_eeg(
     issues: list[str] = []
 
     for raw_sid in subjects or []:
-        study_id = f"{int(raw_sid):04d}" if str(raw_sid).isdigit() else str(raw_sid)
-        subject_label = bids_subject_label(study_id)
+        subject = bids_subject(raw_sid)
+        subject_label = bids_subject_label(subject)
         session_label = bids_session_label(session)
         search_dir = preproc_root / subject_label / session_label / "eeg"
 
@@ -183,7 +166,7 @@ def reepoch_eeg(
 
         for current_run in sorted(set(runs_to_process)):
             raw, _prov, load_issues = read_preproc_stage(
-                study_id, preproc_root, desc=desc, task=task, session=session, run=current_run
+                subject, preproc_root, desc=desc, task=task, session=session, run=current_run
             )
             if raw is None:
                 issues.extend(load_issues)
@@ -212,18 +195,17 @@ def reepoch_eeg(
                 sfreq = float(cond_epochs.info["sfreq"])
                 times = np.asarray(cond_epochs.times)
             recording_id = BIDSPath(
-                subject=study_id, session=session, task=task, run=current_run
+                subject=subject, session=session, task=task, run=current_run
             ).basename
             meta_row: dict[str, Any] = {}
-            if meta_lookup is not None and study_id in meta_lookup.index:
+            if meta_lookup is not None and subject in meta_lookup.index:
                 meta_row = {
-                    str(column): meta_lookup.loc[study_id, column] for column in meta_lookup.columns
+                    str(column): meta_lookup.loc[subject, column] for column in meta_lookup.columns
                 }
             for epoch_number in epoch_numbers:
                 obs_rows.append(
                     {
-                        subject_col: study_id,
-                        "subject": subject_label,
+                        "subject": subject,
                         "session": session,
                         "run": current_run,
                         "condition": condition,
@@ -277,7 +259,7 @@ def attach_subject_metadata(
     Foundation embeddings arrive with only identity coords; this adds every
     ``meta_df`` column not already present (e.g. ``combined_diagnosis``,
     ``patient_group_id``) so downstream evals can read their target/group columns,
-    mirroring what the BIDS/descriptor loaders do via ``subject_metadata_df``.
+    as coco-pipe's BIDS loader does from ``participants.tsv`` for epochs.
     Subjects with no metadata row get NaN, which the evals already treat as
     missing. A no-op if the container carries no recognizable subject coord.
     """

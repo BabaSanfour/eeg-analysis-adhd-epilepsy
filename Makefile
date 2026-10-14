@@ -4,8 +4,8 @@
 # invokes its owning Python module directly; `make all` runs the local stages in
 # the order shown below. Large jobs should use the numbered SLURM scripts.
 #
-#   make descriptors BIDS_ROOT=/data/BIDS METADATA=/data/meta.csv
-#   make dim-reduce BIDS_ROOT=/data/BIDS METADATA=/data/meta.csv \
+#   make descriptors BIDS_ROOT=/data/BIDS METADATA=/data/BIDS/participants.tsv
+#   make dim-reduce BIDS_ROOT=/data/BIDS METADATA=/data/BIDS/participants.tsv \
 #       COHORT=configs/cohorts/.../total.yaml \
 #       DIM_ANALYSIS=configs/analyses/dim_reduction/descriptors.yaml
 
@@ -68,7 +68,7 @@ all: ## Run every local pipeline stage in order
 bids: ## Raw EEG -> BIDS
 	$(if $(RAW_ROOT),,$(error Set RAW_ROOT to the raw EEG directory))
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
-	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
 	$(PYTHON) -m eeg_adhd_epilepsy.preproc.to_bids \
 	  --raw_root $(RAW_ROOT) --bids_root $(BIDS_ROOT) --metadata_csv $(METADATA) --n_jobs $(N_JOBS)
 
@@ -83,7 +83,7 @@ epochs: ## desc-base -> condition epochs
 
 descriptors: ## Epochs -> descriptor shards for all subjects
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
-	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.extract_descriptors \
 	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --config $(DESCRIPTORS_CFG) --conditions all
 
@@ -93,7 +93,7 @@ merge: ## Descriptor shards -> combined descriptor tables
 
 align-subject-embeddings: ## Foundation embeddings -> aligned variants
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
-	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
 	$(if $(COHORT),,$(error Set COHORT to the cohort config))
 	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the embedding derivatives))
 	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the source model))
@@ -105,7 +105,7 @@ align-subject-embeddings: ## Foundation embeddings -> aligned variants
 
 dim-reduce-alignments: ## Reduce one explicit raw/aligned embedding variant
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
-	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
 	$(if $(COHORT),,$(error Set COHORT to the cohort config))
 	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the embedding derivatives))
 	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the base model))
@@ -118,7 +118,7 @@ dim-reduce-alignments: ## Reduce one explicit raw/aligned embedding variant
 
 dim-reduce: ## Combined descriptors -> dimensionality reduction
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
-	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
 	$(if $(COHORT),,$(error Set COHORT to the cohort config))
 	$(if $(DIM_ANALYSIS),,$(error Set DIM_ANALYSIS to the dimensionality-reduction config))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
@@ -129,7 +129,7 @@ dim-reduce: ## Combined descriptors -> dimensionality reduction
 
 classical-decode: ## Combined descriptors -> classical decoding
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
-	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
 	$(if $(COHORT),,$(error Set COHORT to the cohort config))
 	$(if $(DECODE_ANALYSIS),,$(error Set DECODE_ANALYSIS to the classical-decoding config))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.classical_decoding \
@@ -148,14 +148,14 @@ foundation-embeddings: ## Extract foundation-model embeddings
 
 foundation-decode: ## Foundation-model probing or fine-tuning
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
-	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
 	$(if $(COHORT),,$(error Set COHORT to the cohort config))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.foundation_decoding \
 	  --cohort_config $(COHORT) --analysis_config $(FOUNDATION_DECODE_ANALYSIS) \
 	  --bids_root $(BIDS_ROOT) --metadata $(METADATA)
 
 cohort-report: ## Build the cohort report from canonical metadata
-	$(if $(METADATA),,$(error Set METADATA to the canonical metadata CSV))
+	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
 	$(if $(REPORTS_DIR),,$(error Set REPORTS_DIR to the report output directory))
 	$(PYTHON) -m eeg_adhd_epilepsy.metadata.cohort \
 	  --metadata_csv $(METADATA) --output_dir $(REPORTS_DIR)

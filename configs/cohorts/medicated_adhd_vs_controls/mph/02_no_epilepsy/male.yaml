@@ -2,7 +2,7 @@
 # Cohort config: subjects + clinical question. Pair it with an analysis
 # config (configs/analyses/<type>/) via --cohort_config + --analysis_config.
 dataset_name: mph_02_no_epilepsy_male
-subject_col: study_id
+subject_col: subject
 conditions:
 - EO_baseline
 - EC_baseline

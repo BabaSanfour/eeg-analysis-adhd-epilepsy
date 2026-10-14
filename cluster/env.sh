@@ -30,7 +30,9 @@ done
 : "${VENV_PATH:=$PROJECT_ROOT/.venv}"
 : "${DATA_ROOT:=/project/rrg-kjerbi/shared/eeg-adhdh-epilepsy}"
 : "${BIDS_ROOT:=$DATA_ROOT/BIDS}"
-: "${METADATA_PATH:=$DATA_ROOT/csv/patients_metadata_clean.csv}"
+# Subject labels of every analysis stage; stage 01 writes them from PATIENTS_CSV.
+: "${METADATA_PATH:=$BIDS_ROOT/participants.tsv}"
+: "${PATIENTS_CSV:=$DATA_ROOT/csv/patients_metadata_clean.csv}"
 : "${RAW_ROOT:=$DATA_ROOT/raw_data}"
 : "${SCRATCH_ROOT:=$SCRATCH/eeg-epilepsy-adhd}"
 : "${REPORTS_ROOT:=$SCRATCH_ROOT/reports}"

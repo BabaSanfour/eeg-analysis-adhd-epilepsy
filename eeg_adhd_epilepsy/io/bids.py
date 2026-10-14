@@ -7,6 +7,7 @@ import re
 from enum import StrEnum
 from pathlib import Path
 
+import pandas as pd
 from mne_bids import (
     BIDSPath,
     find_matching_paths,
@@ -30,11 +31,11 @@ def _sanitize_bids_token(value: str, field_name: str) -> str:
     return token
 
 
-def study_id_to_bids_subject(study_id: int | str) -> str:
-    """Convert a metadata ``study_id`` to a bare BIDS subject entity."""
-    text = str(study_id).strip()
+def bids_subject(value: int | str) -> str:
+    """Bare BIDS subject entity of ``sub-0001``, ``0001`` or a patient-list ``study_id`` (1)."""
+    text = str(value).strip().removeprefix("sub-")
     if not text.isdigit():
-        raise ValueError(f"study_id must be an integer, got {study_id!r}")
+        raise ValueError(f"Expected a participant_id or a study_id number, got {value!r}")
     return f"{int(text):04d}"
 
 
@@ -181,6 +182,13 @@ def get_stage_output_path(
     if create_dir:
         path.mkdir()
     return path.fpath
+
+
+def read_participants(path: str | Path) -> pd.DataFrame:
+    """Read ``participants.tsv`` keyed by ``subject``, the bare entity coco-pipe uses (``0001``)."""
+    participants = pd.read_csv(path, sep="\t", na_values="n/a", keep_default_na=False)
+    participants.insert(0, "subject", participants.pop("participant_id").map(bids_subject))
+    return participants
 
 
 def discover_raw_eeg(bids_root: Path) -> list[Path]:

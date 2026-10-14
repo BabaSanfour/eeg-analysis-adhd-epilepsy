@@ -13,7 +13,7 @@ source "$PROJECT_ROOT/cluster/env.sh"
 OVERWRITE=${OVERWRITE:-1}
 
 require_dir "$RAW_ROOT"
-require_file "$METADATA_PATH"
+require_file "$PATIENTS_CSV"
 require_dir "$VENV_PATH"
 
 mkdir -p "$BIDS_ROOT"
@@ -26,7 +26,7 @@ cmd=(
   python -m eeg_adhd_epilepsy.preproc.to_bids
   --raw_root "$RAW_ROOT"
   --bids_root "$BIDS_ROOT"
-  --metadata_csv "$METADATA_PATH"
+  --metadata_csv "$PATIENTS_CSV"
   --reports_root "$SCRATCH_ROOT/reports"
   --with_eeg_reports
   --with_raw_qc

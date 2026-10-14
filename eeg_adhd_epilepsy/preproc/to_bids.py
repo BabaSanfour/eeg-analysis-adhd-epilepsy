@@ -26,6 +26,7 @@ import eeg_adhd_epilepsy.qc.raw_qc as qc_raw
 import eeg_adhd_epilepsy.reports.eeg_report as report_eeg
 from eeg_adhd_epilepsy.io import bids as bids_io
 from eeg_adhd_epilepsy.io import ingest, readers, report_paths
+from eeg_adhd_epilepsy.metadata import schema
 from eeg_adhd_epilepsy.reports._common import clean_scalar
 from eeg_adhd_epilepsy.utils import constants, events
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
@@ -472,7 +473,7 @@ def process_record(
     eeg_path = Path(record["eeg_path"])
     study_id = int(record["study_id"])
     run = str(record["run"])
-    subject = bids_io.study_id_to_bids_subject(study_id)
+    subject = bids_io.bids_subject(study_id)
     subject_id = bids_io.bids_subject_label(subject)
     bids_path = BIDSPath(
         root=str(bids_root),
@@ -704,25 +705,34 @@ def _build_run_inventory(
 
 
 def _write_participants(bids_root: Path, metadata_df: pd.DataFrame) -> None:
-    """Write ``participants.tsv`` and its sidecar for every subject in ``bids_root``."""
-    participants_df = metadata_df[["study_id", "age", "sex"]].dropna(subset=["study_id"]).copy()
-    participants_df["participant_id"] = participants_df["study_id"].apply(
-        lambda value: bids_io.bids_subject_label(bids_io.study_id_to_bids_subject(int(value)))
+    """Write ``participants.tsv`` and its sidecar for every subject in ``bids_root``.
+
+    The table carries the subject-level metadata the analyses read (``PARTICIPANTS_COLUMNS``).
+    """
+    participants_df = metadata_df.dropna(subset=["study_id"]).copy()
+    participants_df.insert(
+        0,
+        "participant_id",
+        participants_df["study_id"].apply(
+            lambda value: bids_io.bids_subject_label(bids_io.bids_subject(int(value)))
+        ),
     )
     converted = {path.name for path in bids_root.glob("sub-*") if path.is_dir()}
     participants_df = (
         participants_df.loc[
-            participants_df["participant_id"].isin(converted), ["participant_id", "age", "sex"]
+            participants_df["participant_id"].isin(converted),
+            ["participant_id", *schema.PARTICIPANTS_COLUMNS],
         ]
         .drop_duplicates("participant_id")
         .sort_values("participant_id")
+        .astype({column: "Int64" for column in schema.PARTICIPANTS_INTEGER_COLUMNS})
         .reset_index(drop=True)
     )
     participants_df.to_csv(bids_root / "participants.tsv", sep="\t", index=False, na_rep="n/a")
 
-    # mne-bids describes the columns it writes; keep the ones of the table above.
+    # mne-bids describes participant_id, age and sex; the schema the other columns.
     sidecar_path = bids_root / "participants.json"
-    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+    sidecar = json.loads(sidecar_path.read_text(encoding="utf-8")) | schema.PARTICIPANTS_SIDECAR
     sidecar_path.write_text(
         json.dumps({column: sidecar[column] for column in participants_df.columns}, indent=4)
         + "\n",
@@ -803,9 +813,7 @@ def main() -> None:
 
     selected_study_ids: set[int] | None = None
     if args.subjects:
-        selected_study_ids = {
-            int(bids_io.study_id_to_bids_subject(subject)) for subject in args.subjects
-        }
+        selected_study_ids = {int(bids_io.bids_subject(subject)) for subject in args.subjects}
         LOGGER.info(
             "Filtering to %d selected subject(s): %s",
             len(selected_study_ids),
@@ -823,7 +831,7 @@ def main() -> None:
         for study_id in sorted(
             inventory_df.loc[inventory_df["run"].notna(), "study_id"].dropna().astype(int).unique()
         ):
-            subject_id = bids_io.bids_subject_label(bids_io.study_id_to_bids_subject(int(study_id)))
+            subject_id = bids_io.bids_subject_label(bids_io.bids_subject(int(study_id)))
             sub_dir = args.bids_root / subject_id
             if sub_dir.exists():
                 LOGGER.info("Overwriting %s", subject_id)

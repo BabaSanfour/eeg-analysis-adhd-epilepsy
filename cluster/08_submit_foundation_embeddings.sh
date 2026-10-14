@@ -17,7 +17,6 @@ SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.foundation_array_sta
 EXTRACTION_SCRIPT=${EXTRACTION_SCRIPT:-$PROJECT_ROOT/cluster/08_submit_foundation_embeddings.sh}
 AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-1}
 FIRST_BATCH_SIZE=${FIRST_BATCH_SIZE:-1000}
-SECOND_BATCH_SIZE=${SECOND_BATCH_SIZE:-218}
 OVERWRITE=${OVERWRITE:-0}
 
 ROW_OFFSET=${ROW_OFFSET:-0}
@@ -26,6 +25,8 @@ METADATA_ROW=$((SLURM_ARRAY_TASK_ID + ROW_OFFSET))
 require_file "$FOUNDATION_CONFIG"
 require_dir "$BIDS_ROOT"
 require_file "$METADATA"
+# One task per participants.tsv row: the second batch takes the rows past the first.
+SECOND_BATCH_SIZE=${SECOND_BATCH_SIZE:-$(($(tail -n +2 "$METADATA" | wc -l) - FIRST_BATCH_SIZE))}
 require_dir "$VENV_PATH"
 require_file "$EXTRACTION_SCRIPT"
 

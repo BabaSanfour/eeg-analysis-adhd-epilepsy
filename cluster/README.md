@@ -92,7 +92,8 @@ derivative tree has a `.bidsignore` for the files BIDS does not define.
 | `PROJECT_ROOT` | repo checkout on the cluster | the job's working directory |
 | `DATA_ROOT` | shared inputs | `/project/rrg-kjerbi/shared/eeg-adhdh-epilepsy` |
 | `BIDS_ROOT` | BIDS dataset root | `$DATA_ROOT/BIDS` |
-| `METADATA_PATH` | `patients_metadata_clean.csv` | `$DATA_ROOT/csv/...` |
+| `METADATA_PATH` | subject labels read by the analyses | `$BIDS_ROOT/participants.tsv` |
+| `PATIENTS_CSV` | patient metadata stage 01 writes `participants.tsv` from | `$DATA_ROOT/csv/patients_metadata_clean.csv` |
 | `RAW_ROOT` | raw recordings (01 only) | `$DATA_ROOT/raw_data` |
 | `VENV_PATH` | virtualenv | `$PROJECT_ROOT/.venv` |
 | `SCRATCH_ROOT` | scratch root for outputs | `$SCRATCH/eeg-epilepsy-adhd` |
