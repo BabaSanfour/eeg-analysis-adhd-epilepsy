@@ -268,7 +268,7 @@ def main() -> None:
     parser.add_argument(
         "--desc",
         default="base",
-        help="Desc of the saved epochs to read: base (every epoch) or clean (after rejection).",
+        help="Desc of the saved epochs to read: base (every epoch) or baserejected.",
     )
     parser.add_argument(
         "--conditions",

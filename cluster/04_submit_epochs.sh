@@ -16,7 +16,7 @@ source "$PROJECT_ROOT/cluster/env.sh"
 
 SEGMENT_DURATION=${SEGMENT_DURATION:-10.0}
 OVERLAP=${OVERLAP:-0.0}
-# 1: drop the epochs overlapping a BAD_ annotation and write them as desc-clean;
+# 1: drop the epochs overlapping a BAD_ annotation and write them as desc-baserejected;
 # 0: every epoch, as desc-base.
 REJECT_BY_ANNOTATION=${REJECT_BY_ANNOTATION:-0}
 

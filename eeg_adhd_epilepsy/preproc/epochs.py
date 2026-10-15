@@ -22,8 +22,9 @@ from eeg_adhd_epilepsy.utils import events as events_utils
 from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 
 LOGGER = logging.getLogger(__name__)
-# The desc of the epochs left after rejection by annotation; without it they keep the raw's.
-CLEAN_DESC = "clean"
+# The epochs left after rejection by annotation are written as <input desc>rejected
+# (desc-base -> desc-baserejected), so each variant's name keeps what it was cut from.
+REJECTED_SUFFIX = "rejected"
 
 
 def build_block_events_by_condition(
@@ -198,7 +199,7 @@ def main() -> None:
         action="store_true",
         help=(
             "Drop the epochs overlapping a BAD_ annotation and write them as "
-            f"desc-{CLEAN_DESC}; without it every epoch is written under --desc."
+            f"desc-<desc>{REJECTED_SUFFIX}; without it every epoch is written under --desc."
         ),
     )
     parser.add_argument("--n_jobs", type=int, default=1, help="Recordings epoched in parallel")
@@ -225,7 +226,7 @@ def main() -> None:
         sys.exit(1)
     # Largest first: the long recordings start early and the short ones fill the tail.
     files.sort(key=lambda path: path.stat().st_size, reverse=True)
-    out_desc = CLEAN_DESC if args.reject_by_annotation else args.desc
+    out_desc = f"{args.desc}{REJECTED_SUFFIX}" if args.reject_by_annotation else args.desc
     LOGGER.info(
         "Epoching %d recordings into desc-%s on %d workers.", len(files), out_desc, args.n_jobs
     )
