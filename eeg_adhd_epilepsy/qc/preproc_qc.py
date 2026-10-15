@@ -240,19 +240,12 @@ def compute_clean_duration(raw: mne.io.BaseRaw) -> float:
 
 
 def compute_usable_condition_coverage(raw: mne.io.BaseRaw) -> float:
-    segments_df = events.segments_from_block_annotations(raw)
-    if segments_df is None or segments_df.empty:
-        return 0.0
+    # Blocks can overlap; merged, as the raw stage's total_duration is.
+    blocks = events.merge_intervals([(b.onset, b.stop) for b in events.collect_block_windows(raw)])
     bad_intervals = _annotation_intervals(raw)
-    total = 0.0
-    for row in segments_df.itertuples(index=False):
-        start = float(getattr(row, "t_start", 0.0) or 0.0)
-        stop = float(getattr(row, "t_stop", 0.0) or 0.0)
-        if stop <= start:
-            continue
-        overlap = _interval_overlap(start, stop, bad_intervals)
-        total += max((stop - start) - overlap, 0.0)
-    return total
+    return sum(
+        stop - start - _interval_overlap(start, stop, bad_intervals) for start, stop in blocks
+    )
 
 
 def _omit_global_bad_spans(raw: mne.io.BaseRaw, picks: Sequence[str]) -> mne.io.BaseRaw:
