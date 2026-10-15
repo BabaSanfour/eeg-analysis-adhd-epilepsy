@@ -55,14 +55,14 @@ DEFAULT_HIGHPASS_HZ = 0.1
 DEFAULT_LOWPASS_HZ = 100.0
 DEFAULT_ARTIFACT_SEGMENT_S = 1.0
 DEFAULT_ARTIFACT_MIN_EPOCHS = 5
-# Line noise: ZapLine keeps at most this many components, and spectrum interpolation
+# Line noise: ZapLine keeps at most this many components, then spectrum interpolation
 # removes what is left when the QC line-noise index (median over channels) is above
-# LINE_NOISE_RATIO_MAX, which on this dataset selects a 60 Hz peak about 3 dB over the
-# floor. Line noise from many sources otherwise takes ZapLine 13-19 of 19 components and
-# 5-6 dB of 30-55 Hz power; interpolating only a recording with a peak leaves the others
-# as ZapLine made them.
+# LINE_NOISE_RATIO_MAX. Line noise from many sources otherwise takes ZapLine 13-19 of 19
+# components and 5-6 dB of 30-55 Hz power. Measured on all 1,237 recordings (2026-10-15):
+# 259 are interpolated, 11 keep a 60 Hz peak above 3 dB over the floor, and the others
+# stay as ZapLine made them.
 ZAPLINE_MAX_COMPONENTS = 3
-LINE_NOISE_RATIO_MAX = 1.5
+LINE_NOISE_RATIO_MAX = 1.25
 
 
 def _group_consecutive_indices(indices: list[int]) -> list[tuple[int, int]]:
