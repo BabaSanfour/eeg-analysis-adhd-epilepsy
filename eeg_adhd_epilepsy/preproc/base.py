@@ -20,7 +20,6 @@ import argparse
 import json
 import logging
 import sys
-from collections import defaultdict
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -648,6 +647,7 @@ def run_base_record(
             output_desc="base",
             raw_lookup=raw_lookup,
             pipeline_warnings=_provenance.get("pipeline_warnings", []),
+            provenance=_provenance,
         )
         result["success"] = True
         return result
@@ -766,15 +766,7 @@ def main():
             for f in files
         )
 
-    profile = preproc_qc.get_preproc_qc_profile("base")
     qc_run_records = [r["qc_record"] for r in results if r["success"]]
-    by_subject: dict[tuple[str, str], list[dict[str, object]]] = defaultdict(list)
-    for record in qc_run_records:
-        by_subject[record["subject_session_key"]].append(record)
-    for records in by_subject.values():
-        preproc_qc.write_subject_preproc_qc_report(
-            reports_root, records, profile=profile, output_desc="base"
-        )
 
     failed = sorted({r["subject_id"] for r in results if not r["success"]})
     LOGGER.info(
@@ -788,9 +780,12 @@ def main():
         LOGGER.error("All recordings failed the base stage — aborting (likely a systemic error).")
         sys.exit(1)
 
-    LOGGER.info("Generating shared base QC dataset report...")
+    LOGGER.info("Writing the base QC reports (one per subject, one for the dataset)...")
     preproc_qc.write_preproc_qc_aggregate_reports(
-        reports_root, qc_run_records, profile=profile, output_desc="base"
+        reports_root,
+        qc_run_records,
+        profile=preproc_qc.get_preproc_qc_profile("base"),
+        output_desc="base",
     )
 
 

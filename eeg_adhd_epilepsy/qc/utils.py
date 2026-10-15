@@ -316,6 +316,15 @@ def compute_channel_failure_rates(
     return {ch: (flat_counter[ch] + noisy_counter[ch]) / total for ch in sorted(all_channels)}
 
 
+def _n_bad_channels(metrics_row: Mapping[str, object]) -> float:
+    """The record's bad channels: the stage's own when it has them, else flat + noisy."""
+    if "n_bad_channels" in metrics_row:
+        return float(metrics_row["n_bad_channels"] or 0)
+    return float(metrics_row.get("n_flat_channels", 0) or 0) + float(
+        metrics_row.get("n_noisy_channels", 0) or 0
+    )
+
+
 # ---------------------------------------------------------------------------
 # Continuous QC score  (state-of-the-art: soft ranking vs. binary flag)
 # ---------------------------------------------------------------------------
@@ -347,9 +356,7 @@ def compute_qc_score(
     t = thresholds or DEFAULT_SIGNAL_THRESHOLDS
     components: list[float] = []
 
-    n_bad = float(metrics_row.get("n_flat_channels", 0) or 0) + float(
-        metrics_row.get("n_noisy_channels", 0) or 0
-    )
+    n_bad = _n_bad_channels(metrics_row)
     components.append(min(n_bad / max(t.n_bad_unusable, 1), 1.0))
 
     amp = pd.to_numeric(metrics_row.get("amplitude_max_uv"), errors="coerce")
@@ -407,9 +414,7 @@ def evaluate_signal_qc_flag(
     t = thresholds or DEFAULT_SIGNAL_THRESHOLDS
     reasons: list[str] = []
 
-    n_bad = float(metrics_row.get("n_flat_channels", 0) or 0) + float(
-        metrics_row.get("n_noisy_channels", 0) or 0
-    )
+    n_bad = _n_bad_channels(metrics_row)
     if n_bad >= t.n_bad_unusable:
         reasons.append("too_many_bad_channels")
     elif n_bad >= t.n_bad_borderline:
