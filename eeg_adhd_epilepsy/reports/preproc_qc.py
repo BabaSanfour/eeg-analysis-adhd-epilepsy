@@ -143,18 +143,12 @@ def build_delta_table(
 
 
 def build_retention_table(record: Mapping[str, object]) -> pd.DataFrame:
-    """Retention outside global BAD spans; per-channel spans are reported apart."""
+    """Retention outside global BAD spans."""
     return pd.DataFrame(
         [
             {
                 "Metric": "Recording retention",
                 "Value": format_value(record.get("duration_retention_pct"), suffix="%"),
-            },
-            {
-                "Metric": "Time with a channel marked bad",
-                "Value": format_value(
-                    100.0 * float(record.get("channel_bad_span_fraction") or 0.0), suffix="%"
-                ),
             },
             {
                 "Metric": "Clean time in condition segments",
@@ -230,7 +224,9 @@ def build_run_summary_table(records: Sequence[Mapping[str, object]]) -> pd.DataF
                     if record.get("spectrum_interpolation")
                     else "no",
                     "AutoReject Bad Epochs": record.get("autoreject_bad_epochs"),
-                    "AutoReject Channel Spans": record.get("autoreject_bad_channel_spans"),
+                    "AutoReject Bad Channels In Kept Epochs": record.get(
+                        "autoreject_bad_channels_in_kept_epochs"
+                    ),
                     "Clean": _pct(record.get("clean_fraction")),
                     "Manual BAD": _pct(record.get("manual_bad_fraction")),
                     "AutoReject BAD": _pct(record.get("autoreject_bad_fraction")),
@@ -267,10 +263,6 @@ def build_dataset_stage_actions_table(runs_df: pd.DataFrame) -> pd.DataFrame:
             {
                 "Metric": "Median AutoReject BAD time",
                 "Value": median_pct("autoreject_bad_fraction"),
-            },
-            {
-                "Metric": "Median time with a channel marked bad",
-                "Value": median_pct("channel_bad_span_fraction"),
             },
         ]
     )

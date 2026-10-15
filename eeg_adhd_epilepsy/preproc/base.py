@@ -49,10 +49,13 @@ LOGGER = logging.getLogger("preproc_base")
 
 DEFAULT_HIGHPASS_HZ = 0.1
 DEFAULT_LOWPASS_HZ = 100.0
-# AutoReject: fitted on 1 s segments, per condition, only when a condition has at least
-# AR_MIN_EPOCHS of them; longer conditions are fitted in AR_CHUNK_MINUTES chunks (73
-# conditions on 2026-10-14). It only rejects: no channel is interpolated.
-AR_SEGMENT_S = 1.0
+# AutoReject: fitted per condition on the 10 s epochs stage 04 cuts (same grid,
+# `build_block_events_by_condition`), so each rejection drops one analysis epoch; only when a
+# condition has at least AR_MIN_EPOCHS of them; longer conditions are fitted in
+# AR_CHUNK_MINUTES chunks. It only rejects: no channel is interpolated, and the channels it
+# finds bad in the epochs it keeps are counted, not annotated (MNE would reject a
+# channel-specific BAD_ span for every channel).
+AR_SEGMENT_S = 10.0
 AR_MIN_EPOCHS = 5
 AR_CHUNK_MINUTES = 30.0
 RANDOM_SEED = 42
@@ -64,25 +67,6 @@ RANDOM_SEED = 42
 # stay as ZapLine made them.
 ZAPLINE_MAX_COMPONENTS = 3
 LINE_NOISE_RATIO_MAX = 1.25
-
-
-def _group_consecutive_indices(indices: list[int]) -> list[tuple[int, int]]:
-    """Group consecutive integers into inclusive (start, end) tuples."""
-    if len(indices) == 0:
-        return []
-    groups: list[tuple[int, int]] = []
-    start = int(indices[0])
-    prev = start
-    for idx in indices[1:]:
-        idx = int(idx)
-        if idx == prev + 1:
-            prev = idx
-            continue
-        groups.append((start, prev))
-        start = idx
-        prev = idx
-    groups.append((start, prev))
-    return groups
 
 
 def _event_sample_to_onset(raw: mne.io.BaseRaw, event_sample: int) -> float:
@@ -158,34 +142,26 @@ def _reject_log_to_annotations(
     reject_log,
     condition_name: str,
 ) -> tuple[list[tuple[float, float, str, tuple[str, ...]]], int, int]:
-    """Convert an AutoReject reject log into raw-time annotations."""
-    new_annots: list[tuple[float, float, str, tuple[str, ...]]] = []
-    bad_epoch_count = 0
-    bad_span_count = 0
+    """A ``BAD_epoch_<condition>`` span per rejected epoch, and the count of channels
+    AutoReject found bad in the epochs it kept.
 
-    for ep_idx, is_bad_epoch in enumerate(reject_log.bad_epochs):
-        if not is_bad_epoch:
-            continue
-        onset_s = _event_sample_to_onset(raw, int(epochs_chunk.events[ep_idx, 0]))
-        new_annots.append((onset_s, AR_SEGMENT_S, f"BAD_epoch_{condition_name}", ()))
-        bad_epoch_count += 1
-
-    labels = np.asarray(reject_log.labels)
-    if labels.ndim == 2 and labels.shape[0] == len(epochs_chunk):
-        for ch_idx, ch_name in enumerate(epochs_chunk.ch_names):
-            bad_idx = np.flatnonzero(labels[:, ch_idx] != 0)
-            for first_idx, last_idx in _group_consecutive_indices(bad_idx):
-                start_samp = int(epochs_chunk.events[first_idx, 0])
-                end_samp = int(epochs_chunk.events[last_idx, 0])
-                start_s = _event_sample_to_onset(raw, start_samp)
-                end_s = _event_sample_to_onset(raw, end_samp) + AR_SEGMENT_S
-                duration_s = end_s - start_s
-                if duration_s <= 0:
-                    continue
-                new_annots.append((start_s, duration_s, f"BAD_{condition_name}", (ch_name,)))
-                bad_span_count += 1
-
-    return new_annots, bad_epoch_count, bad_span_count
+    A span starts half a sample after its epoch and ends half a sample before the next:
+    MNE compares span and epoch edges as floats, and a span ending exactly where the next
+    epoch starts can reject that epoch too (seen at 256 and 512 Hz).
+    """
+    half_sample = 0.5 / raw.info["sfreq"]
+    bad_epochs = np.flatnonzero(reject_log.bad_epochs)
+    new_annots = [
+        (
+            _event_sample_to_onset(raw, int(epochs_chunk.events[ep_idx, 0])) + half_sample,
+            AR_SEGMENT_S - 2 * half_sample,
+            f"BAD_epoch_{condition_name}",
+            (),
+        )
+        for ep_idx in bad_epochs
+    ]
+    kept_labels = np.asarray(reject_log.labels)[~np.asarray(reject_log.bad_epochs, dtype=bool)]
+    return new_annots, len(bad_epochs), int(np.count_nonzero(np.nan_to_num(kept_labels)))
 
 
 def _run_autoreject_chunk(
@@ -243,7 +219,7 @@ def _compute_clean_stats(raw: mne.io.BaseRaw) -> dict[str, float]:
     autoreject_bad: list[tuple[float, float]] = []
     for annot in raw.annotations:
         desc = str(annot["description"])
-        if not desc.startswith("BAD_") or annot["ch_names"]:
+        if not desc.startswith("BAD_") or annot.get("ch_names"):
             continue  # non-BAD or channel-specific span
         start = max(float(annot["onset"]), 0.0)
         stop = min(float(annot["onset"]) + float(annot["duration"]), total_duration_s)
@@ -506,7 +482,7 @@ def annotate_artifacts_blockwise(
         "blocks_total": len(block_windows),
         "blocks_processed": 0,
         "bad_epochs": 0,
-        "bad_channel_spans": 0,
+        "bad_channels_in_kept_epochs": 0,
         "artifacts_count": 0,
         "by_block": [],
     }
@@ -548,12 +524,12 @@ def annotate_artifacts_blockwise(
 
         for chunk_idx, epochs_chunk in epoch_chunks:
             chunk_suffix = f"_chunk{chunk_idx + 1}" if len(epoch_chunks) > 1 else ""
-            chunk_annots, chunk_bad_epochs, chunk_bad_spans = _run_autoreject_chunk(
+            chunk_annots, chunk_bad_epochs, chunk_bad_channels = _run_autoreject_chunk(
                 raw, epochs_chunk, condition_name, chunk_suffix, n_jobs
             )
             new_annots.extend(chunk_annots)
             stats["bad_epochs"] += chunk_bad_epochs
-            stats["bad_channel_spans"] += chunk_bad_spans
+            stats["bad_channels_in_kept_epochs"] += chunk_bad_channels
 
         stats["blocks_processed"] += len(blocks)
         stats["by_block"].append(

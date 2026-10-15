@@ -196,18 +196,11 @@ def _prepare_signal(raw: mne.io.BaseRaw) -> tuple[mne.io.BaseRaw, list[str]]:
     return prepared, picks
 
 
-def _annotation_intervals(
-    raw: mne.io.BaseRaw, *, channel_specific: bool = False
-) -> list[tuple[float, float]]:
-    """Merged ``BAD_`` spans: global ones, or with ``channel_specific`` the per-channel ones.
-
-    A per-channel span marks one channel bad, not the time for every channel.
-    """
+def _annotation_intervals(raw: mne.io.BaseRaw) -> list[tuple[float, float]]:
+    """Merged global ``BAD_`` spans; a per-channel span marks one channel, not the time."""
     intervals = []
     for annot in raw.annotations:
-        if str(annot["description"]).startswith("BAD_") and bool(annot["ch_names"]) == (
-            channel_specific
-        ):
+        if str(annot["description"]).startswith("BAD_") and not annot.get("ch_names"):
             onset = float(annot["onset"])
             duration = float(annot["duration"])
             stop = onset + duration
@@ -224,13 +217,6 @@ def _interval_overlap(start: float, stop: float, overlaps: Sequence[tuple[float,
         if overlap_stop > overlap_start:
             total += overlap_stop - overlap_start
     return total
-
-
-def _channel_bad_span_fraction(raw: mne.io.BaseRaw) -> float:
-    """Share of the recording with at least one channel in a per-channel BAD span."""
-    total_duration = float(raw.times[-1]) if raw.times.size else 0.0
-    covered = sum(stop - start for start, stop in _annotation_intervals(raw, channel_specific=True))
-    return covered / total_duration if total_duration > 0 else float("nan")
 
 
 def compute_clean_duration(raw: mne.io.BaseRaw) -> float:
@@ -274,7 +260,7 @@ def _stage_actions(provenance: Mapping[str, object] | None) -> dict[str, object]
         "line_noise_ratio_after_zapline": zapline.get("line_noise_ratio_after_zapline"),
         "spectrum_interpolation": zapline.get("spectrum_interpolation"),
         "autoreject_bad_epochs": artifacts.get("bad_epochs"),
-        "autoreject_bad_channel_spans": artifacts.get("bad_channel_spans"),
+        "autoreject_bad_channels_in_kept_epochs": artifacts.get("bad_channels_in_kept_epochs"),
         "clean_fraction": integrity.get("clean_fraction"),
         "manual_bad_fraction": integrity.get("manual_bad_fraction"),
         "autoreject_bad_fraction": integrity.get("autoreject_bad_fraction"),
@@ -386,7 +372,6 @@ def build_preproc_qc_run_record(
         "usable_condition_coverage_sec": usable_condition_coverage_sec,
         "duration_retention_pct": duration_retention_pct,
         "condition_coverage_retention_pct": condition_coverage_retention_pct,
-        "channel_bad_span_fraction": _channel_bad_span_fraction(prepared_raw),
         "amplitude_mean_uv": metrics.get("amplitude_mean_uv"),
         "amplitude_max_uv": metrics.get("amplitude_max_uv"),
         "bad_channels": ",".join(bad_channels),
