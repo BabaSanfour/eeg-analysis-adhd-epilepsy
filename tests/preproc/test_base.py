@@ -1,4 +1,4 @@
-"""Stage 03 line-noise removal: ZapLine with a component cap, then interpolation if needed."""
+"""Stage 03, `preproc/base.py`."""
 
 from __future__ import annotations
 
