@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-import tempfile
+import uuid
 from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 from typing import Any
@@ -15,11 +15,10 @@ def write_text_atomic(path: str | Path, text: str) -> None:
     """Atomically replace a text file using a process-unique sibling temporary."""
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(
-        dir=str(destination.parent),
-        prefix=f".{destination.name}.",
-        suffix=".tmp",
-    )
+    # os.open applies the umask as for any new file; tempfile.mkstemp would make it
+    # owner-only (0600), and the rename keeps that mode.
+    temporary = destination.with_name(f".{destination.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             handle.write(text)
