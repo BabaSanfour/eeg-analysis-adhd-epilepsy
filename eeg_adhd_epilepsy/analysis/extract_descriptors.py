@@ -266,6 +266,11 @@ def main() -> None:
         help="Path to descriptor YAML config.",
     )
     parser.add_argument(
+        "--desc",
+        default="base",
+        help="Desc of the saved epochs to read: base (every epoch) or clean (after rejection).",
+    )
+    parser.add_argument(
         "--conditions",
         nargs="+",
         default=DEFAULT_CONDITIONS,
@@ -403,7 +408,7 @@ def main() -> None:
 
     for subject in subjects:
         epochs_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
-        files = list(epochs_root.rglob(f"{bids_subject_label(subject)}*_desc-base_epo.fif"))
+        files = list(epochs_root.rglob(f"{bids_subject_label(subject)}*_desc-{args.desc}_epo.fif"))
 
         sessions = sorted(list({(get_entities_from_fname(f)["session"] or "01") for f in files}))
         if not sessions:
@@ -446,7 +451,7 @@ def main() -> None:
                     use_derivatives=True,
                     subjects=[subject],
                     target_col=args.target_col,
-                    desc="base",
+                    desc=args.desc,
                     condition=condition,
                     session=session,
                     units=args.units,

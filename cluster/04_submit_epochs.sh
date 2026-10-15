@@ -12,14 +12,12 @@ source "$PROJECT_ROOT/cluster/env.sh"
 
 SEGMENT_DURATION=${SEGMENT_DURATION:-10.0}
 OVERLAP=${OVERLAP:-0.0}
-OVERWRITE=${OVERWRITE:-0}
+# 1: drop the epochs overlapping a BAD_ annotation and write them as desc-clean;
+# 0: every epoch, as desc-base.
+REJECT_BY_ANNOTATION=${REJECT_BY_ANNOTATION:-0}
 
 require_dir "$BIDS_ROOT"
 require_dir "$VENV_PATH"
-
-BASE_COUNT=$(find "$BIDS_ROOT/derivatives/preproc" -name '*desc-base_eeg.fif' -type f | wc -l)
-[ "$BASE_COUNT" -gt 0 ] || { echo "No base-cleaned FIF files found under: $BIDS_ROOT/derivatives/preproc"; exit 1; }
-echo "Found $BASE_COUNT base-cleaned FIF files for epoching."
 
 dra_activate
 dra_pin_threads 1
@@ -30,12 +28,11 @@ cmd=(
   --desc base
   --segment_duration "$SEGMENT_DURATION"
   --overlap "$OVERLAP"
+  --n_jobs "${SLURM_CPUS_PER_TASK:-8}"
   --reports_root "$SCRATCH_ROOT/reports"
-  --ignore_annotations
 )
-
-if [ "$OVERWRITE" = "1" ]; then
-  cmd+=(--overwrite)
+if [ "$REJECT_BY_ANNOTATION" = "1" ]; then
+  cmd+=(--reject_by_annotation)
 fi
 
 "${cmd[@]}"
