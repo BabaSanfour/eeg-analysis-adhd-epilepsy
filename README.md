@@ -180,7 +180,7 @@ automated cleaning, and writes analysis-ready derivatives plus QC reports:
 eeg-preprocess --bids_root /path/to/BIDS --n_jobs 4
 ```
 
-Incremental by default (`--overwrite` to force, `--subjects` to target). Outputs
+Rewrites its outputs on every run (`--subjects` to target). Outputs
 `*_desc-base_eeg.fif` under `BIDS/derivatives/preproc/` and `base_qc` reports.
 
 > An experimental "Part 2" artifact-correction pipeline
@@ -190,12 +190,15 @@ Incremental by default (`--overwrite` to force, `--subjects` to target). Outputs
 ## Epoching
 
 ```bash
-eeg-save-epochs --bids_root /path/to/BIDS --segment_duration 10.0 --ignore_annotations
+eeg-save-epochs --bids_root /path/to/BIDS --segment_duration 10.0 --n_jobs 8
 ```
 
 Slices each `*_desc-base_eeg.fif` into fixed-length epochs labelled by condition
 and writes them next to it as `*_desc-base_epo.fif`, with an `*_epo.json`
-provenance sidecar.
+provenance sidecar. With `--reject_by_annotation` it drops the epochs overlapping a
+`BAD_` annotation and writes `*_desc-baserejected_epo.fif` instead; descriptor extraction
+reads either with `--desc`. Every run rewrites its outputs, and the job fails when a
+recording fails.
 
 ## Descriptor extraction and merge
 

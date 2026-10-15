@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 import warnings
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import mne
@@ -19,6 +20,7 @@ import eeg_adhd_epilepsy.signal_quality.metrics as signal_quality
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_preproc_qc
 from eeg_adhd_epilepsy.qc.utils import (
     _BASE_WEIGHTED_METRICS,
+    DEFAULT_SIGNAL_THRESHOLDS,
     MAX_METRICS,
     SignalQCThresholds,
     _build_channel_diagnostics,
@@ -29,6 +31,12 @@ from eeg_adhd_epilepsy.qc.utils import (
     evaluate_signal_qc_flag,
 )
 from eeg_adhd_epilepsy.utils import events
+
+# No amplitude limit after stage 03: AutoReject has rejected the epochs over the thresholds
+# it fits per recording and condition. In the epochs it kept (2026-10-15, all 1,237
+# recordings) the worst channel's 10 s peak-to-peak has a median of 236 µV, blinks and
+# slow drift; the 800 µV whole-run limit made 992 recordings unusable whatever they kept.
+PREPROC_SIGNAL_THRESHOLDS = replace(DEFAULT_SIGNAL_THRESHOLDS, amplitude_max_uv=None)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -196,9 +204,10 @@ def _prepare_signal(raw: mne.io.BaseRaw) -> tuple[mne.io.BaseRaw, list[str]]:
 
 
 def _annotation_intervals(raw: mne.io.BaseRaw) -> list[tuple[float, float]]:
+    """Merged global ``BAD_`` spans; a per-channel span marks one channel, not the time."""
     intervals = []
     for annot in raw.annotations:
-        if str(annot["description"]).startswith("BAD_"):
+        if str(annot["description"]).startswith("BAD_") and not annot.get("ch_names"):
             onset = float(annot["onset"])
             duration = float(annot["duration"])
             stop = onset + duration
@@ -224,19 +233,45 @@ def compute_clean_duration(raw: mne.io.BaseRaw) -> float:
 
 
 def compute_usable_condition_coverage(raw: mne.io.BaseRaw) -> float:
-    segments_df = events.segments_from_block_annotations(raw)
-    if segments_df is None or segments_df.empty:
-        return 0.0
+    # Blocks can overlap; merged, as the raw stage's total_duration is.
+    blocks = events.merge_intervals([(b.onset, b.stop) for b in events.collect_block_windows(raw)])
     bad_intervals = _annotation_intervals(raw)
-    total = 0.0
-    for row in segments_df.itertuples(index=False):
-        start = float(getattr(row, "t_start", 0.0) or 0.0)
-        stop = float(getattr(row, "t_stop", 0.0) or 0.0)
-        if stop <= start:
-            continue
-        overlap = _interval_overlap(start, stop, bad_intervals)
-        total += max((stop - start) - overlap, 0.0)
-    return total
+    return sum(
+        stop - start - _interval_overlap(start, stop, bad_intervals) for start, stop in blocks
+    )
+
+
+def _omit_global_bad_spans(raw: mne.io.BaseRaw, picks: Sequence[str]) -> mne.io.BaseRaw:
+    """The EEG outside global ``BAD_`` spans, as a new Raw without annotations.
+
+    MNE's own ``reject_by_annotation`` also drops per-channel spans for every channel.
+    """
+    sfreq = raw.info["sfreq"]
+    keep = np.ones(raw.n_times, dtype=bool)
+    for start, stop in _annotation_intervals(raw):
+        keep[int(round(start * sfreq)) : int(round(stop * sfreq))] = False
+    clean = raw.copy().pick(list(picks))
+    return mne.io.RawArray(clean.get_data()[:, keep], clean.info, first_samp=0, verbose="ERROR")
+
+
+def _stage_actions(provenance: Mapping[str, object] | None) -> dict[str, object]:
+    """What the base stage did to a recording, from its provenance."""
+    if not provenance:
+        return {}
+    zapline = provenance.get("zapline_stats") or {}
+    artifacts = provenance.get("artifact_stats") or {}
+    integrity = provenance.get("integrity_stats") or {}
+    return {
+        "zapline_n_auto": zapline.get("n_selected_auto"),
+        "zapline_n_removed": zapline.get("n_removed"),
+        "line_noise_ratio_after_zapline": zapline.get("line_noise_ratio_after_zapline"),
+        "spectrum_interpolation": zapline.get("spectrum_interpolation"),
+        "autoreject_bad_epochs": artifacts.get("bad_epochs"),
+        "autoreject_bad_channels_in_kept_epochs": artifacts.get("bad_channels_in_kept_epochs"),
+        "clean_fraction": integrity.get("clean_fraction"),
+        "manual_bad_fraction": integrity.get("manual_bad_fraction"),
+        "autoreject_bad_fraction": integrity.get("autoreject_bad_fraction"),
+    }
 
 
 def _delta(current_value: object, reference_value: object) -> float:
@@ -265,15 +300,23 @@ def build_preproc_qc_run_record(
     pipeline_warnings: Sequence[str] | None = None,
     line_freq: float = 60.0,
     thresholds: SignalQCThresholds | None = None,
+    provenance: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    thresholds = thresholds or PREPROC_SIGNAL_THRESHOLDS
     ids = report_paths.build_bids_report_ids(current_filepath)
     prepared_raw, picks = _prepare_signal(current_raw)
+    # Metrics on the data outside global BAD spans: the annotated stretches are what the
+    # stage marked as artifact, so they would only measure what it already caught.
     metrics = signal_quality.compute_signal_qc_metrics(
-        prepared_raw,
+        _omit_global_bad_spans(prepared_raw, picks),
         picks=picks,
         line_freq=line_freq,
         include_channel_metrics=True,
     )
+    # The stage's bad channels (RANSAC), not the variance-percentile flat/noisy detector,
+    # which names the quietest and the loudest channel of every recording.
+    bad_channels = [ch for ch in prepared_raw.info["bads"] if ch in picks]
+    metrics["flat_channels"], metrics["noisy_channels"] = [], bad_channels
     retained_duration_sec = compute_clean_duration(prepared_raw)
     usable_condition_coverage_sec = compute_usable_condition_coverage(prepared_raw)
     subject_session_prefix = str(ids["subject_session_prefix"])
@@ -339,17 +382,23 @@ def build_preproc_qc_run_record(
         "condition_coverage_retention_pct": condition_coverage_retention_pct,
         "amplitude_mean_uv": metrics.get("amplitude_mean_uv"),
         "amplitude_max_uv": metrics.get("amplitude_max_uv"),
-        "n_flat_channels": int(metrics.get("n_flat_channels", 0) or 0),
-        "n_noisy_channels": int(metrics.get("n_noisy_channels", 0) or 0),
-        "pct_bad_channels": metrics.get("pct_bad_channels"),
+        "bad_channels": ",".join(bad_channels),
+        "n_bad_channels": len(bad_channels),
+        "pct_bad_channels": len(bad_channels) / len(picks) * 100.0,
         "line_noise_ratio": metrics.get("line_noise_ratio"),
         "hf_lf_ratio": metrics.get("hf_lf_ratio"),
         "alpha_peak_hz": metrics.get("alpha_peak_hz"),
         "aperiodic_slope": metrics.get("aperiodic_slope"),
+        **_stage_actions(provenance),
     }
+    metrics["pct_bad_channels"] = run_metrics["pct_bad_channels"]  # the delta uses RANSAC's
 
+    # With no previous stage the previous stage is the raw reference: no _prev deltas.
     for metric in _DELTA_METRICS:
-        run_metrics[f"{metric}_delta_prev"] = _delta(metrics.get(metric), prev_metrics.get(metric))
+        if profile.previous_stage is not None:
+            run_metrics[f"{metric}_delta_prev"] = _delta(
+                metrics.get(metric), prev_metrics.get(metric)
+            )
         run_metrics[f"{metric}_delta_raw"] = _delta(
             metrics.get(metric), _reference_metric(raw_reference, metric)
         )
@@ -594,7 +643,7 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
         else:
             aggregate[metric] = np.nan
 
-    for metric in MAX_METRICS:
+    for metric in (*MAX_METRICS, "n_bad_channels"):
         series = pd.to_numeric([record.get(metric) for record in records], errors="coerce")
         aggregate[metric] = float(np.nanmax(series)) if np.isfinite(series).any() else np.nan
 
@@ -675,41 +724,25 @@ def write_subject_preproc_qc_report(
         create=True,
     )
     output_path = report_dir / f"{report_stem}_{stage_name.value}_report.html"
-    figures_dir = output_path.parent / "figures"
-    figure_paths = viz_preproc_qc.save_subject_preproc_qc_figures(
-        record=aggregate,
-        topomap_aggregates=aggregate.get("topomap_aggregates"),
-        segments_df=aggregate.get("segments_df"),
-        output_dir=figures_dir,
-    )
-
-    # Reconstruct AutoReject figures dir deterministically: during run_base_pipeline() the AR
-    # PNGs are saved to <stage_report_dir>/figures/<run_prefix>/ for each run.
-    autoreject_figures: dict[str, Path] = {}
-    for record in records:
-        run_prefix = str(record.get("run_prefix") or "")
-        if not run_prefix:
-            continue
-        ar_dir = output_path.parent / "figures" / run_prefix
-        if ar_dir.is_dir():
-            for png in sorted(ar_dir.glob("*_autoreject_*.png")):
-                # Key: "<run_prefix>/<condition>" so multiple runs don't collide
-                stem = png.stem  # e.g. sub-01_ses-01_run-01_autoreject_EO_baseline
-                autoreject_figures[f"{run_prefix}/{stem}"] = png
-
-    run_summary_df = report_preproc_qc.build_run_summary_table(records)
-    report_preproc_qc.generate_subject_report(
-        record=aggregate,
-        previous_stage_label=profile.previous_stage_label,
-        raw_reference_label=profile.raw_reference_label,
-        stage_display_name=profile.display_name,
-        figures=figure_paths,
-        run_summary_df=run_summary_df,
-        output_path=output_path,
-        channel_diagnostics=aggregate.get("channel_diagnostics") or {},
-        autoreject_figures=autoreject_figures,
-        segment_comparison=aggregate.get("segment_comparison"),
-    )
+    # The report embeds its figures, so they only exist until it is saved.
+    with tempfile.TemporaryDirectory() as figures_dir:
+        figure_paths = viz_preproc_qc.save_subject_preproc_qc_figures(
+            record=aggregate,
+            topomap_aggregates=aggregate.get("topomap_aggregates"),
+            segments_df=aggregate.get("segments_df"),
+            output_dir=Path(figures_dir),
+        )
+        report_preproc_qc.generate_subject_report(
+            record=aggregate,
+            previous_stage_label=profile.previous_stage_label,
+            raw_reference_label=profile.raw_reference_label,
+            stage_display_name=profile.display_name,
+            figures=figure_paths,
+            run_summary_df=report_preproc_qc.build_run_summary_table(records),
+            output_path=output_path,
+            channel_diagnostics=aggregate.get("channel_diagnostics") or {},
+            segment_comparison=aggregate.get("segment_comparison"),
+        )
     aggregate["report_path"] = str(output_path)
     return aggregate
 
@@ -728,15 +761,9 @@ def write_preproc_qc_aggregate_reports(
     )
     stage_name = get_preproc_qc_stage_name(profile.stage, output_desc)
     summary_dir = report_paths.summary_report_dir(reports_root, stage_name, create=True)
+    in_memory = {"topomap_aggregates", "channel_diagnostics", "segment_comparison", "segments_df"}
     runs_df = pd.DataFrame(
-        [
-            {
-                k: v
-                for k, v in record.items()
-                if k not in {"topomap_aggregates", "channel_diagnostics"}
-            }
-            for record in run_records
-        ]
+        [{k: v for k, v in record.items() if k not in in_memory} for record in run_records]
     )
     runs_df.to_csv(summary_dir / f"{stage_name}_runs.csv", index=False)
 
@@ -759,15 +786,9 @@ def write_preproc_qc_aggregate_reports(
             }
         )
     subjects_df = pd.DataFrame(subject_rows)
-    subjects_df.to_csv(summary_dir / f"{stage_name}_subjects.csv", index=False)
 
     topomap_aggregates = _combine_weighted_topomaps(
         record.get("topomap_aggregates", {}) for record in run_records
-    )
-    figure_paths = viz_preproc_qc.save_dataset_preproc_qc_figures(
-        runs_df=runs_df,
-        topomap_aggregates=topomap_aggregates,
-        output_dir=summary_dir / "figures",
     )
     # Build cross-subject per-condition summary by aggregating all run segment_comparisons.
     seg_frames = [
@@ -794,14 +815,20 @@ def write_preproc_qc_aggregate_reports(
     else:
         condition_summary_df = pd.DataFrame()
 
-    report_preproc_qc.generate_dataset_report(
-        runs_df=runs_df,
-        subjects_df=subjects_df,
-        stage_display_name=profile.display_name,
-        previous_stage_label=profile.previous_stage_label,
-        raw_reference_label=profile.raw_reference_label,
-        figures=figure_paths,
-        condition_summary_df=condition_summary_df,
-        output_path=summary_dir / f"{stage_name}_dataset_summary.html",
-    )
+    # The report embeds its figures, so they only exist until it is saved.
+    with tempfile.TemporaryDirectory() as figures_dir:
+        report_preproc_qc.generate_dataset_report(
+            runs_df=runs_df,
+            subjects_df=subjects_df,
+            stage_display_name=profile.display_name,
+            previous_stage_label=profile.previous_stage_label,
+            raw_reference_label=profile.raw_reference_label,
+            figures=viz_preproc_qc.save_dataset_preproc_qc_figures(
+                runs_df=runs_df,
+                topomap_aggregates=topomap_aggregates,
+                output_dir=Path(figures_dir),
+            ),
+            condition_summary_df=condition_summary_df,
+            output_path=summary_dir / f"{stage_name}_dataset_summary.html",
+        )
     return summary_dir

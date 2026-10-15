@@ -8,7 +8,7 @@ from functools import partial
 from pathlib import Path
 
 import pandas as pd
-from coco_pipe.report.core import ImageElement, Report, Section
+from coco_pipe.report.core import Report, Section
 
 from eeg_adhd_epilepsy.reports import _common
 from eeg_adhd_epilepsy.reports._common import (
@@ -33,8 +33,6 @@ def build_stage_overview_table(
                 "Subject": record.get("subject_id", ""),
                 "Session": record.get("session_id", ""),
                 "Stage": stage_display_name,
-                "Reference Stage": previous_stage_label,
-                "Source Stage": record.get("source_stage", ""),
                 "Raw Duration": format_duration_hms(record.get("raw_duration_sec", 0.0)),
                 "Retained Duration": format_duration_hms(record.get("retained_duration_sec", 0.0)),
                 "QC Status": record.get("qc_flag", ""),
@@ -145,9 +143,13 @@ def build_delta_table(
 
 
 def build_retention_table(record: Mapping[str, object]) -> pd.DataFrame:
-    """Retention table — condition-segment level only."""
+    """Retention outside global BAD spans."""
     return pd.DataFrame(
         [
+            {
+                "Metric": "Recording retention",
+                "Value": format_value(record.get("duration_retention_pct"), suffix="%"),
+            },
             {
                 "Metric": "Clean time in condition segments",
                 "Value": format_duration_hms(record.get("usable_condition_coverage_sec", 0.0)),
@@ -164,14 +166,6 @@ def build_residual_metrics_table(
     record: Mapping[str, object],
     channel_diagnostics: Mapping[str, object] | None = None,
 ) -> pd.DataFrame:
-    flat_names = (
-        ", ".join(str(ch) for ch in ((channel_diagnostics or {}).get("flat_channels") or []))
-        or "None"
-    )
-    noisy_names = (
-        ", ".join(str(ch) for ch in ((channel_diagnostics or {}).get("noisy_channels") or []))
-        or "None"
-    )
     base = build_record_metric_table(
         record,
         (
@@ -182,19 +176,15 @@ def build_residual_metrics_table(
     extra = pd.DataFrame(
         [
             {
-                "Metric": "Flat channels",
-                "Value": f"{int(record.get('n_flat_channels', 0) or 0)}  \u2192  {flat_names}",
-            },
-            {
-                "Metric": "Noisy channels",
-                "Value": f"{int(record.get('n_noisy_channels', 0) or 0)}  \u2192  {noisy_names}",
+                "Metric": "Bad channels (RANSAC)",
+                "Value": f"{int(record.get('n_bad_channels', 0) or 0)}  \u2192  "
+                f"{record.get('bad_channels') or 'None'}",
             },
         ]
     )
     rest = build_record_metric_table(
         record,
         (
-            ("Bad channels (%)", "pct_bad_channels", "%"),
             ("Line-noise ratio", "line_noise_ratio", ""),
             ("HF/LF ratio", "hf_lf_ratio", ""),
             ("Alpha peak", "alpha_peak_hz", " Hz"),
@@ -207,20 +197,75 @@ def build_residual_metrics_table(
     return pd.concat([base, extra, rest, flag_reasons], ignore_index=True)
 
 
+def _pct(value: object) -> str:
+    return format_value(100.0 * float(value), suffix="%") if value is not None else "—"
+
+
 def build_run_summary_table(records: Sequence[Mapping[str, object]]) -> pd.DataFrame:
+    """One row per run: its QC status and what the stage did to it."""
     rows = []
     for record in records:
-        rows.append(
-            {
-                "Run": record.get("run_id", "") or record.get("source_stage", ""),
-                "QC Status": record.get("qc_flag", ""),
-                "Retention (%)": format_value(record.get("duration_retention_pct")),
-                "Bad Channels (%)": format_value(record.get("pct_bad_channels")),
-                "Line Noise": format_value(record.get("line_noise_ratio")),
-                "HF/LF": format_value(record.get("hf_lf_ratio")),
-            }
-        )
+        row = {
+            "Run": record.get("run_id", "") or record.get("source_stage", ""),
+            "QC Status": record.get("qc_flag", ""),
+            "Retention (%)": format_value(record.get("duration_retention_pct")),
+            "Bad Channels (RANSAC)": record.get("bad_channels") or "None",
+        }
+        if record.get("zapline_n_removed") is not None:
+            row.update(
+                {
+                    "ZapLine Components (auto \u2192 kept)": (
+                        f"{record.get('zapline_n_auto')} \u2192 {record.get('zapline_n_removed')}"
+                    ),
+                    "Line-Noise Index After ZapLine": format_value(
+                        record.get("line_noise_ratio_after_zapline")
+                    ),
+                    "Spectrum Interpolation": "yes"
+                    if record.get("spectrum_interpolation")
+                    else "no",
+                    "AutoReject Bad Epochs": record.get("autoreject_bad_epochs"),
+                    "AutoReject Bad Channels In Kept Epochs": record.get(
+                        "autoreject_bad_channels_in_kept_epochs"
+                    ),
+                    "Clean": _pct(record.get("clean_fraction")),
+                    "Manual BAD": _pct(record.get("manual_bad_fraction")),
+                    "AutoReject BAD": _pct(record.get("autoreject_bad_fraction")),
+                }
+            )
+        rows.append(row)
     return pd.DataFrame(rows)
+
+
+def build_dataset_stage_actions_table(runs_df: pd.DataFrame) -> pd.DataFrame:
+    """What the stage did across recordings, from the per-run provenance columns."""
+    if "zapline_n_removed" not in runs_df:
+        return pd.DataFrame()
+    n = len(runs_df)
+
+    def num(column: str) -> pd.Series:
+        return pd.to_numeric(runs_df.get(column), errors="coerce")
+
+    def median_pct(column: str) -> str:
+        return format_value(100.0 * num(column).median(), suffix="%")
+
+    capped = int((num("zapline_n_auto") > num("zapline_n_removed")).sum())
+    interpolated = int(runs_df["spectrum_interpolation"].fillna(False).astype(bool).sum())
+    n_bad = num("n_bad_channels")
+    return pd.DataFrame(
+        [
+            {"Metric": "Recordings", "Value": n},
+            {"Metric": "With RANSAC bad channels", "Value": int((n_bad > 0).sum())},
+            {"Metric": "RANSAC bad channels, max", "Value": format_value(n_bad.max())},
+            {"Metric": "ZapLine capped at its component limit", "Value": capped},
+            {"Metric": "Spectrum interpolation applied", "Value": interpolated},
+            {"Metric": "Median clean time", "Value": median_pct("clean_fraction")},
+            {"Metric": "Median manual BAD time", "Value": median_pct("manual_bad_fraction")},
+            {
+                "Metric": "Median AutoReject BAD time",
+                "Value": median_pct("autoreject_bad_fraction"),
+            },
+        ]
+    )
 
 
 def build_dataset_summary_table(
@@ -319,7 +364,6 @@ def generate_subject_report(
     run_summary_df: pd.DataFrame,
     output_path: Path,
     channel_diagnostics: Mapping[str, object] | None = None,
-    autoreject_figures: Mapping[str, Path] | None = None,
     segment_comparison: pd.DataFrame | None = None,
 ) -> Path:
     prefix = record.get("subject_session_prefix", record.get("subject_id", "unknown"))
@@ -401,8 +445,8 @@ def generate_subject_report(
         )
         report.add_section(cond_section)
 
-    if run_summary_df is not None and not run_summary_df.empty and len(run_summary_df) > 1:
-        runs = Section("Per-Run Summary", icon="🗂️")
+    if run_summary_df is not None and not run_summary_df.empty:
+        runs = Section("What The Stage Did, Per Run", icon="🗂️")
         add_optional_table(runs, run_summary_df, "Per-Run Summary")
         report.add_section(runs)
 
@@ -429,20 +473,6 @@ def generate_subject_report(
         ),
     )
     report.add_section(figures_section)
-
-    # AutoReject reject-log plots — one per condition (and chunk if applicable)
-    if autoreject_figures:
-        ar_section = Section("AutoReject Logs", icon="🔍")
-        ar_section.add_markdown(
-            "Epoch × channel reject-log heatmaps produced by AutoReject for each experimental "
-            "condition. Red cells indicate epochs or channel spans flagged as bad."
-        )
-        for key in sorted(autoreject_figures):
-            path = autoreject_figures[key]
-            if path.exists():
-                caption = key.split("/", 1)[-1].replace("_autoreject_", " → ").replace("_", " ")
-                ar_section.add_element(ImageElement(str(path), caption=caption))
-        report.add_section(ar_section)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     report.save(str(output_path))
@@ -473,6 +503,12 @@ def generate_dataset_report(
         "Dataset Summary",
     )
     report.add_section(definition)
+
+    actions = build_dataset_stage_actions_table(runs_df)
+    if not actions.empty:
+        did = Section("What The Stage Did", icon="🛠️")
+        add_optional_table(did, actions, "Stage Actions")
+        report.add_section(did)
 
     usability = Section("Usability Summary", icon="🧪")
     add_optional_table(usability, build_flag_reason_table(runs_df), "Flag Reasons")

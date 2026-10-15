@@ -1967,8 +1967,8 @@ dependencies = [
 
 [[package]]
 name = "mne-denoise"
-version = "0.0.4.dev1+g3cf5e19bd"
-source = { git = "https://github.com/mne-tools/mne-denoise.git?rev=main#3cf5e19bd9c7e3724cd9c7f91eff1ded4f8acf01" }
+version = "0.0.4.dev3+g8b66d48b1"
+source = { git = "https://github.com/mne-tools/mne-denoise.git?rev=main#8b66d48b106f9a7ef0d4561a7d25a57a0d3be085" }
 dependencies = [
     { name = "joblib" },
     { name = "numpy" },

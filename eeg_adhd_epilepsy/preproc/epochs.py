@@ -5,20 +5,26 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import sys
+from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
 
 import mne
 import numpy as np
+from joblib import Parallel, delayed
 from mne_bids import get_entities_from_fname
 from tqdm import tqdm
 
 from eeg_adhd_epilepsy.io import bids as bids_io
 from eeg_adhd_epilepsy.io.report_paths import default_reports_root
 from eeg_adhd_epilepsy.utils import events as events_utils
-from eeg_adhd_epilepsy.utils.logs import setup_logging
+from eeg_adhd_epilepsy.utils.logs import setup_logging, tqdm_joblib
 
 LOGGER = logging.getLogger(__name__)
+# The epochs left after rejection by annotation are written as <input desc>rejected
+# (desc-base -> desc-baserejected), so each variant's name keeps what it was cut from.
+REJECTED_SUFFIX = "rejected"
 
 
 def build_block_events_by_condition(
@@ -62,9 +68,8 @@ def make_epochs_from_preproc_raw(
     raw: mne.io.BaseRaw,
     segment_duration: float,
     overlap: float = 0.0,
-    ignore_annotations: bool = True,
+    reject_by_annotation: bool = False,
     save_path: Path | None = None,
-    overwrite: bool = False,
 ) -> mne.Epochs:
     """Create fixed-length epochs from all annotated blocks in a preprocessed raw."""
     events_by_condition = build_block_events_by_condition(
@@ -98,11 +103,11 @@ def make_epochs_from_preproc_raw(
         verbose="ERROR",
         preload=True,
         proj=False,
-        reject_by_annotation=not ignore_annotations,
+        reject_by_annotation=reject_by_annotation,
         event_repeated="drop",
     )
     if save_path is not None:
-        epochs.save(save_path, overwrite=overwrite)
+        epochs.save(save_path, overwrite=True)
     return epochs
 
 
@@ -111,28 +116,71 @@ def _write_epoch_provenance(
     epochs: mne.Epochs,
     *,
     source_path: Path,
-    desc: str,
     segment_duration: float,
     overlap: float,
-    ignore_annotations: bool,
+    reject_by_annotation: bool,
 ) -> Path:
-    """Write a JSON sidecar describing how an epochs file was constructed."""
+    """Write a JSON sidecar describing how an epochs file was constructed.
+
+    ``dropped`` counts the dropped epochs by MNE's reason: an epoch shared by two
+    overlapping blocks ("DROP DUPLICATE") or, with rejection, the first ``BAD_``
+    annotation it overlaps (an epoch AutoReject rejected inside a manual mark is
+    counted under the manual mark).
+    """
     condition_counts = {
         name: int((epochs.events[:, 2] == code).sum()) for name, code in epochs.event_id.items()
     }
+    dropped = Counter(reason for log in epochs.drop_log for reason in log if reason != "IGNORED")
     provenance = {
         "source_file": source_path.name,
-        "desc": desc,
         "segment_duration": segment_duration,
         "overlap": overlap,
-        "ignore_annotations": ignore_annotations,
+        "reject_by_annotation": reject_by_annotation,
         "n_epochs": len(epochs),
         "condition_counts": condition_counts,
+        "dropped": dict(dropped),
         "generated_at": datetime.now(UTC).isoformat(),
     }
     sidecar_path = output_path.with_name(output_path.name.replace("_epo.fif", "_epo.json"))
     sidecar_path.write_text(json.dumps(provenance, indent=2))
     return sidecar_path
+
+
+def _epoch_recording(
+    input_path: Path,
+    output_path: Path,
+    segment_duration: float,
+    overlap: float,
+    reject_by_annotation: bool,
+) -> str | None:
+    """Epoch one recording; returns the error, or None.
+
+    On an error the recording's outputs are removed, so no earlier run's epochs are left.
+    """
+    try:
+        raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
+        epochs = make_epochs_from_preproc_raw(
+            raw,
+            segment_duration=segment_duration,
+            overlap=overlap,
+            reject_by_annotation=reject_by_annotation,
+            save_path=output_path,
+        )
+        _write_epoch_provenance(
+            output_path,
+            epochs,
+            source_path=input_path,
+            segment_duration=segment_duration,
+            overlap=overlap,
+            reject_by_annotation=reject_by_annotation,
+        )
+    except Exception as exc:  # noqa: BLE001 - reported per recording, the job fails at the end
+        output_path.unlink(missing_ok=True)
+        output_path.with_name(output_path.name.replace("_epo.fif", "_epo.json")).unlink(
+            missing_ok=True
+        )
+        return f"{type(exc).__name__}: {exc}"
+    return None
 
 
 def main() -> None:
@@ -147,12 +195,14 @@ def main() -> None:
     parser.add_argument("--overlap", type=float, default=0.0, help="Epoch overlap in seconds")
     parser.add_argument("--subjects", nargs="+", default=None, help="Specific subjects to process")
     parser.add_argument(
-        "--ignore_annotations",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Ignore BAD_ annotations during epoching",
+        "--reject_by_annotation",
+        action="store_true",
+        help=(
+            "Drop the epochs overlapping a BAD_ annotation and write them as "
+            f"desc-<desc>{REJECTED_SUFFIX}; without it every epoch is written under --desc."
+        ),
     )
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing epoch files")
+    parser.add_argument("--n_jobs", type=int, default=1, help="Recordings epoched in parallel")
     parser.add_argument(
         "--reports_root",
         type=str,
@@ -164,61 +214,42 @@ def main() -> None:
     bids_root = Path(args.bids_root)
     preproc_root = bids_io.get_derivative_root(bids_root, bids_io.DerivativeStage.PREPROC)
     reports_root = Path(args.reports_root) if args.reports_root else default_reports_root(bids_root)
-    log_file = reports_root / "logs" / "epochs.log"
-    log_file.parent.mkdir(parents=True, exist_ok=True)
-    setup_logging(log_file, "INFO")
+    setup_logging(reports_root / "logs" / "epochs.log", "INFO")
 
     bids_io.write_preproc_dataset_description(preproc_root)
-    LOGGER.info("Discovering preprocessed files in %s", preproc_root)
-    found_files = list(preproc_root.rglob(f"*desc-{args.desc}_eeg.fif"))
-
+    files = list(preproc_root.rglob(f"*desc-{args.desc}_eeg.fif"))
     if args.subjects:
-        valid_sids = set()
-        for s in args.subjects:
-            if s.startswith("sub-"):
-                valid_sids.add(bids_io.bids_subject(s))
-            else:
-                valid_sids.add(bids_io.bids_subject(int(s)))
-        files_to_process = [
-            f for f in found_files if get_entities_from_fname(f)["subject"] in valid_sids
-        ]
-    else:
-        files_to_process = found_files
+        subjects = {bids_io.bids_subject(s) for s in args.subjects}
+        files = [f for f in files if get_entities_from_fname(f)["subject"] in subjects]
+    if not files:
+        LOGGER.error("No desc-%s recordings under %s.", args.desc, preproc_root)
+        sys.exit(1)
+    # Largest first: the long recordings start early and the short ones fill the tail.
+    files.sort(key=lambda path: path.stat().st_size, reverse=True)
+    out_desc = f"{args.desc}{REJECTED_SUFFIX}" if args.reject_by_annotation else args.desc
+    LOGGER.info(
+        "Epoching %d recordings into desc-%s on %d workers.", len(files), out_desc, args.n_jobs
+    )
 
-    LOGGER.info("Found %d matching _eeg.fif files to epoch.", len(files_to_process))
-
-    for input_path in tqdm(files_to_process, desc="Saving Epochs"):
-        output_path = input_path.with_name(input_path.name.replace("_eeg.fif", "_epo.fif"))
-
-        if not args.overwrite and output_path.exists():
-            LOGGER.info(
-                "Skipping %s: epoch file already exists. Use --overwrite to overwrite.",
-                input_path.name,
+    # Every output is rewritten: an epoch file left from an earlier stage 03 run is stale.
+    outputs = [
+        f.with_name(f.name.replace(f"desc-{args.desc}_eeg.fif", f"desc-{out_desc}_epo.fif"))
+        for f in files
+    ]
+    with tqdm_joblib(tqdm(total=len(files), desc="Saving epochs")):
+        errors = Parallel(n_jobs=args.n_jobs, backend="loky")(
+            delayed(_epoch_recording)(
+                f, out, args.segment_duration, args.overlap, args.reject_by_annotation
             )
-            continue
+            for f, out in zip(files, outputs, strict=True)
+        )
 
-        try:
-            raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
-            epochs = make_epochs_from_preproc_raw(
-                raw,
-                segment_duration=args.segment_duration,
-                overlap=args.overlap,
-                ignore_annotations=args.ignore_annotations,
-                save_path=output_path,
-                overwrite=args.overwrite,
-            )
-            _write_epoch_provenance(
-                output_path,
-                epochs,
-                source_path=input_path,
-                desc=args.desc,
-                segment_duration=args.segment_duration,
-                overlap=args.overlap,
-                ignore_annotations=args.ignore_annotations,
-            )
-            LOGGER.info("Saved %d epochs to %s", len(epochs), output_path.name)
-        except Exception as exc:
-            LOGGER.error("Failed to epoch %s: %s", input_path.name, exc, exc_info=True)
+    failed = {f.name: error for f, error in zip(files, errors, strict=True) if error}
+    LOGGER.info("Epoched %d recordings; %d failed.", len(files) - len(failed), len(failed))
+    for name, error in failed.items():
+        LOGGER.error("Failed to epoch %s: %s", name, error)
+    if failed:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
