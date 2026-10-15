@@ -11,41 +11,17 @@ set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
 
-OVERWRITE=${OVERWRITE:-0}
+# One recording per core; peak memory was ~3.4 GB per worker on 2026-10-14.
 THREADS=${SLURM_CPUS_PER_TASK:-32}
-
-# Memory-aware concurrency: cap simultaneous subjects to the RAM budget, keeping
-# ~15% headroom for the main process, report writing, and the OS. Tune
-# MEM_PER_SUBJECT_GB from data with: python -m eeg_adhd_epilepsy.preproc.base
-# ... --measure-peak-rss --max-mem-gb <budget>
-MEM_PER_SUBJECT_GB=${MEM_PER_SUBJECT_GB:-4}
-SLURM_MEM_MB=${SLURM_MEM_PER_NODE:-196608}
-MAX_MEM_GB=$(( SLURM_MEM_MB / 1024 * 85 / 100 ))
 
 require_dir "$BIDS_ROOT"
 require_dir "$VENV_PATH"
 
-VHDR_COUNT=$(find "$BIDS_ROOT" -path '*/eeg/*_eeg.vhdr' -type f | wc -l)
-[ "$VHDR_COUNT" -gt 0 ] || { echo "No BIDS .vhdr EEG files found under: $BIDS_ROOT"; exit 1; }
-echo "Found $VHDR_COUNT BIDS EEG recordings for base cleaning."
-
 dra_activate
 dra_pin_threads 1
 
-echo "Memory budget: ${MAX_MEM_GB} GB usable (~${MEM_PER_SUBJECT_GB} GB/subject) across ${THREADS} cores."
-
-cmd=(
-  python -m eeg_adhd_epilepsy.preproc.base
-  --bids_root "$BIDS_ROOT"
-  --reports_root "$SCRATCH_ROOT/reports"
+python -m eeg_adhd_epilepsy.preproc.base \
+  --bids_root "$BIDS_ROOT" \
+  --reports_root "$SCRATCH_ROOT/reports" \
   --n_jobs "$THREADS"
-  --max-mem-gb "$MAX_MEM_GB"
-  --mem-per-subject-gb "$MEM_PER_SUBJECT_GB"
-)
-
-if [ "$OVERWRITE" = "1" ]; then
-  cmd+=(--overwrite)
-fi
-
-"${cmd[@]}"
 validate_bids "$BIDS_ROOT/derivatives/preproc"
