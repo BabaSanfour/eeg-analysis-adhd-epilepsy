@@ -7,7 +7,7 @@ import tempfile
 import warnings
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import mne
@@ -20,6 +20,7 @@ import eeg_adhd_epilepsy.signal_quality.metrics as signal_quality
 import eeg_adhd_epilepsy.viz.preproc_qc as viz_preproc_qc
 from eeg_adhd_epilepsy.qc.utils import (
     _BASE_WEIGHTED_METRICS,
+    DEFAULT_SIGNAL_THRESHOLDS,
     MAX_METRICS,
     SignalQCThresholds,
     _build_channel_diagnostics,
@@ -30,6 +31,12 @@ from eeg_adhd_epilepsy.qc.utils import (
     evaluate_signal_qc_flag,
 )
 from eeg_adhd_epilepsy.utils import events
+
+# No amplitude limit after stage 03: AutoReject has rejected the epochs over the thresholds
+# it fits per recording and condition. In the epochs it kept (2026-10-15, all 1,237
+# recordings) the worst channel's 10 s peak-to-peak has a median of 236 µV, blinks and
+# slow drift; the 800 µV whole-run limit made 992 recordings unusable whatever they kept.
+PREPROC_SIGNAL_THRESHOLDS = replace(DEFAULT_SIGNAL_THRESHOLDS, amplitude_max_uv=None)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -295,6 +302,7 @@ def build_preproc_qc_run_record(
     thresholds: SignalQCThresholds | None = None,
     provenance: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
+    thresholds = thresholds or PREPROC_SIGNAL_THRESHOLDS
     ids = report_paths.build_bids_report_ids(current_filepath)
     prepared_raw, picks = _prepare_signal(current_raw)
     # Metrics on the data outside global BAD spans: the annotated stretches are what the

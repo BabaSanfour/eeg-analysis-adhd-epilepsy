@@ -36,7 +36,8 @@ class SignalQCThresholds:
     n_bad_borderline:
         Number of bad channels that triggers ``borderline``.
     amplitude_max_uv:
-        Peak-to-peak amplitude (µV) above which the record is ``unusable``.
+        Peak-to-peak amplitude (µV) above which the record is ``unusable``; ``None``
+        skips the check.
     line_noise_ratio:
         Line noise ratio above which the record is flagged.
     hf_lf_ratio:
@@ -51,7 +52,7 @@ class SignalQCThresholds:
 
     n_bad_unusable: int = 7
     n_bad_borderline: int = 4
-    amplitude_max_uv: float = 800.0
+    amplitude_max_uv: float | None = 800.0
     line_noise_ratio: float = 5.0
     hf_lf_ratio: float = 0.5
     duration_retention_pct: float = 50.0
@@ -360,7 +361,7 @@ def compute_qc_score(
     components.append(min(n_bad / max(t.n_bad_unusable, 1), 1.0))
 
     amp = pd.to_numeric(metrics_row.get("amplitude_max_uv"), errors="coerce")
-    if np.isfinite(amp):
+    if t.amplitude_max_uv is not None and np.isfinite(amp):
         components.append(min(float(amp) / (t.amplitude_max_uv * 2.0), 1.0))
 
     ln = pd.to_numeric(metrics_row.get("line_noise_ratio"), errors="coerce")
@@ -421,7 +422,7 @@ def evaluate_signal_qc_flag(
         reasons.append("many_bad_channels")
 
     amp_max = pd.to_numeric(metrics_row.get("amplitude_max_uv"), errors="coerce")
-    if np.isfinite(amp_max) and float(amp_max) > t.amplitude_max_uv:
+    if t.amplitude_max_uv is not None and np.isfinite(amp_max) and amp_max > t.amplitude_max_uv:
         reasons.append("amplitude_above_threshold")
 
     line_noise = pd.to_numeric(metrics_row.get("line_noise_ratio"), errors="coerce")
