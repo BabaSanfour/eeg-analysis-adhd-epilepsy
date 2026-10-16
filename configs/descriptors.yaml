@@ -92,18 +92,6 @@ families:
       dispersion_entropy: {delay: 1, dimension: 3, c: 6, symbolize: NCDF}
       kurtosis: {fisher: true, bias: false}
 
-pooling:
-  channel_groups:
-    front_left: [F7, F3]
-    front_midline: [Fz]
-    front_right: [F8, F4]
-    central_left: [T3, C3]
-    central_midline: [Cz]
-    central_right: [T4, C4]
-    posterior_left: [T5, P3, O1]
-    posterior_midline: [Pz]
-    posterior_right: [T6, P4, O2]
-
 runtime:
   execution_backend: joblib
   n_jobs: 16

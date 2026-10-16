@@ -45,7 +45,6 @@ def _nunique_or_none(df: pd.DataFrame, column: str) -> int | None:
 
 def _check_shard_feature_columns(
     shard_root: Path,
-    include_pooled: bool,
     feature_cols: dict[str, list[str] | None],
 ) -> list[str]:
     """Check *shard_root*'s feature-column sidecars against the accumulated reference.
@@ -53,11 +52,8 @@ def _check_shard_feature_columns(
     Returns a list of human-readable mismatch descriptions (empty if the
     shard is consistent with previously-seen shards).
     """
-    keys = ["sensor_epoch", "sensor_recording"]
-    if include_pooled:
-        keys += ["pooled_epoch", "pooled_recording"]
     mismatches: list[str] = []
-    for key in keys:
+    for key in ("sensor_epoch", "sensor_recording"):
         try:
             check_feature_column_consistency(
                 shard_root, FEATURE_COLUMN_FILES[key], feature_cols, key
@@ -112,7 +108,6 @@ def main() -> None:
     config_bytes = config_path.read_bytes()
     config_hash = hashlib.sha256(config_bytes).hexdigest()
     config_used = load_yaml_config(config_path)
-    include_pooled = bool((config_used.get("pooling") or {}).get("channel_groups"))
 
     # Discover completed shards across sessions
     LOGGER.info("Searching for descriptor shards in %s", derivative_root)
@@ -122,9 +117,7 @@ def main() -> None:
     n_shards_discovered = len(success_paths)
     for success_path in success_paths:
         shard_root = success_path.parent
-        missing = [
-            f for f in required_descriptor_files(include_pooled) if not (shard_root / f).exists()
-        ]
+        missing = [f for f in required_descriptor_files() if not (shard_root / f).exists()]
         if missing:
             excluded_shards.append(
                 {
@@ -147,13 +140,11 @@ def main() -> None:
     feature_cols: dict[str, list[str] | None] = {
         "sensor_epoch": None,
         "sensor_recording": None,
-        "pooled_epoch": None,
-        "pooled_recording": None,
     }
 
     shard_roots: list[Path] = []
     for shard_root in candidate_roots:
-        mismatches = _check_shard_feature_columns(shard_root, include_pooled, feature_cols)
+        mismatches = _check_shard_feature_columns(shard_root, feature_cols)
         if mismatches:
             if args.skip_inconsistent:
                 excluded_shards.append(
@@ -265,16 +256,6 @@ def main() -> None:
     combined_sensor_subject_df = _write_subject_table(
         combined_sensor_recording_df, sensor_feature_columns, "sensor_subject_features"
     )
-
-    if include_pooled:
-        LOGGER.info("Combining pooled families...")
-        _merge_family("pooled_epoch_features")
-        combined_pooled_recording_df, pooled_feature_columns = _merge_family(
-            "pooled_recording_features"
-        )
-        _write_subject_table(
-            combined_pooled_recording_df, pooled_feature_columns, "pooled_subject_features"
-        )
 
     # Some shards may have zero-row failures.csv; concatenating only the
     # non-empty frames avoids dtype-mismatch warnings from pd.concat while

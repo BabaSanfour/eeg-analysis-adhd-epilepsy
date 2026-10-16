@@ -54,7 +54,6 @@ from eeg_adhd_epilepsy.io.report_paths import (
     descriptor_qc_report_name,
     subject_report_dir,
 )
-from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
 
@@ -77,14 +76,13 @@ def _parse_rows(spec: str) -> list[int]:
 def collect_shard_records(
     derivative_root: Path,
     reports_root: Path | None,
-    include_pooled: bool,
 ) -> pd.DataFrame:
     """Audit every shard directory under *derivative_root*.
 
     Returns one row per ``sub-*/ses-*/eeg/<condition>/`` directory with its
     completion state, missing files, QC status, and failure count.
     """
-    required = required_descriptor_files(include_pooled, include_qc=True)
+    required = required_descriptor_files(include_qc=True)
     records: list[dict[str, object]] = []
     shard_dirs = sorted(path for path in derivative_root.glob("sub-*/ses-*/eeg/*") if path.is_dir())
     for shard_dir in shard_dirs:
@@ -296,10 +294,7 @@ def main() -> None:
     config_path = derivative_root / "config_used.yaml"
     if not config_path.exists():
         parser.error(f"config_used.yaml not found under {derivative_root}; extraction never ran?")
-    config_used = load_yaml_config(config_path)
-    include_pooled = bool((config_used.get("pooling") or {}).get("channel_groups"))
-
-    shard_df = collect_shard_records(derivative_root, reports_root, include_pooled)
+    shard_df = collect_shard_records(derivative_root, reports_root)
 
     out_path = (
         Path(args.out).expanduser() if args.out else derivative_root / "verification_report.csv"
@@ -318,7 +313,6 @@ def main() -> None:
 
     print("=" * 72)
     print(f"Descriptor extraction verification — {derivative_root}")
-    print(f"config_used.yaml: pooling={'on' if include_pooled else 'off'}")
     print("-" * 72)
     print(f"Shards found        : {n_shards}")
     print(f"Complete            : {n_complete}")

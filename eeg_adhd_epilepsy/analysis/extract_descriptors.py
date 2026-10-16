@@ -12,7 +12,6 @@ For each processed subject-condition pair, the script writes a shard under
 - a sensor descriptor bundle (`.npz`)
 - a sensor epoch-level feature table (`.parquet` and `.csv`)
 - a sensor subject-level aggregated feature table (`.parquet` and `.csv`)
-- optionally, pooled epoch-level and pooled subject-level feature tables
 - a failures table (`.csv`)
 - a `_SUCCESS` marker for resume-safe checkpointing
 
@@ -77,15 +76,13 @@ DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
 
 def _shard_complete(
     shard_root: Path,
-    include_pooled: bool,
     reports_root: Path,
     subject: str,
     session: str,
     condition: str,
 ) -> bool:
     required_paths = [
-        shard_root / relative_path
-        for relative_path in required_descriptor_files(include_pooled, include_qc=True)
+        shard_root / relative_path for relative_path in required_descriptor_files(include_qc=True)
     ]
     required_paths.append(
         subject_report_dir(
@@ -212,7 +209,6 @@ def _save_descriptor_shard(
     shard_root: Path,
     sensor_container: DataContainer,
     sensor_outputs: dict[str, Any],
-    pooled_outputs: dict[str, Any] | None,
     failure_df: pd.DataFrame,
 ) -> None:
     shard_root.mkdir(parents=True, exist_ok=True)
@@ -234,19 +230,6 @@ def _save_descriptor_shard(
         feature_columns=sensor_outputs["subject_feature_columns"],
         formats=("parquet", "csv"),
     )
-    if pooled_outputs is not None:
-        save_descriptor_table(
-            pooled_outputs["epoch_df"],
-            shard_root / "pooled_epoch_features",
-            feature_columns=pooled_outputs["epoch_feature_columns"],
-            formats=("parquet", "csv"),
-        )
-        save_descriptor_table(
-            pooled_outputs["subject_df"],
-            shard_root / "pooled_recording_features",
-            feature_columns=pooled_outputs["subject_feature_columns"],
-            formats=("parquet", "csv"),
-        )
     failure_df.to_csv(shard_root / "failures.csv", index=False)
 
 
@@ -349,17 +332,12 @@ def main() -> None:
 
     raw_config = load_yaml_config(config_path)
     aggregation_config = raw_config.pop("aggregation", None) or {}
-    pooling_config = raw_config.pop("pooling", None) or {}
     qc_config = raw_config.pop("qc", None) or {}
     aggregation_descriptors = require_config(aggregation_config, "descriptors", expected_type=list)
-    channel_groups = pooling_config.get("channel_groups")
-    include_pooled = bool(channel_groups)
     config_snapshot = deepcopy(raw_config)
     config_snapshot["aggregation"] = deepcopy(aggregation_config)
     # The epoch variant: a root made from one variant refuses the other.
     config_snapshot["desc"] = args.desc
-    if pooling_config:
-        config_snapshot["pooling"] = deepcopy(pooling_config)
     if qc_config:
         config_snapshot["qc"] = deepcopy(qc_config)
     freeze_config_used(
@@ -442,9 +420,7 @@ def main() -> None:
                 / "eeg"
                 / condition
             )
-            if _shard_complete(
-                shard_root, include_pooled, reports_root, subject, session, condition
-            ):
+            if _shard_complete(shard_root, reports_root, subject, session, condition):
                 LOGGER.info(
                     "Skipping %s / %s (ses %s): already complete.", condition, subject, session
                 )
@@ -539,20 +515,6 @@ def main() -> None:
                 ratio_floor=aggregated_ratio_floor,
                 on_insufficient="warn",
             )
-            pooled_outputs = None
-            if include_pooled:
-                pooled_result = pipeline.pool_channels(sensor_result, channel_groups)
-                pooled_outputs = build_descriptor_tables(
-                    pooled_result,
-                    metadata_df,
-                    group_by="recording_id",
-                    id_col="obs_id",
-                    target_col=args.target_col,
-                    aggregation_groups=aggregation_descriptors,
-                    ratio_pairs=aggregated_ratio_pairs,
-                    ratio_floor=aggregated_ratio_floor,
-                    on_insufficient="warn",
-                )
             failure_df = _build_failure_df(
                 sensor_result.meta.get("failures", []),
                 failure_metadata_df,
@@ -562,7 +524,6 @@ def main() -> None:
                 shard_root,
                 sensor_result,
                 sensor_outputs,
-                pooled_outputs,
                 failure_df,
             )
             qc_summary = run_descriptor_subject_qc(
@@ -577,8 +538,6 @@ def main() -> None:
                 / "sensor_epoch_features_feature_columns.json",
                 sensor_subject_feature_columns_path=shard_root
                 / "sensor_recording_features_feature_columns.json",
-                pooled_epoch_df=None if pooled_outputs is None else pooled_outputs["epoch_df"],
-                pooled_subject_df=None if pooled_outputs is None else pooled_outputs["subject_df"],
                 failure_df=failure_df,
                 config_snapshot=config_snapshot,
             )

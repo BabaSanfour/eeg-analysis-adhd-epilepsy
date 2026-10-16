@@ -204,8 +204,10 @@ recording fails.
 
 [analysis/extract_descriptors.py](eeg_adhd_epilepsy/analysis/extract_descriptors.py)
 computes feature banks with `coco-pipe.descriptors` from `configs/descriptors.yaml`:
-spectral bands (Welch PSD), parametric modeling (SpecParam), and complexity/entropy
-measures, with region-based channel pooling, then joins clinical targets.
+spectral bands (Welch PSD), parametric modeling (specparam) and complexity/entropy
+measures, per channel, then joins clinical targets. `--desc` picks the epoch variant
+(`base` or `baserejected`); on the cluster every stage from 05 runs once per variant
+(`EPOCHS_DESC`, `cluster/README.md`).
 
 ```bash
 # All subjects (sequential). For the cluster array form see cluster/05.
@@ -213,15 +215,17 @@ eeg-descriptors \
   --bids_root /path/to/BIDS \
   --metadata /path/to/BIDS/participants.tsv \
   --config configs/descriptors.yaml \
+  --desc baserejected \
+  --derivative_root /path/to/shards \
   --conditions all
 
 # Merge the per-subject shards into combined tables.
-eeg-merge-descriptors --bids_root /path/to/BIDS
+eeg-merge-descriptors --derivative_root /path/to/shards --output_root /path/to/merged \
+  --reports_root /path/to/reports
 ```
 
-Per-subject shards land under
-`BIDS/derivatives/signal_features/descriptors/sub-*/...`; merge writes
-`descriptors/combined/{sensor,pooled}_{epoch,recording,subject}_features` tables.
+Per-subject shards land under `<shards>/sub-*/...`; merge writes
+`<merged>/combined/sensor_{epoch,recording,subject}_features` tables.
 
 ## Dimensionality reduction
 

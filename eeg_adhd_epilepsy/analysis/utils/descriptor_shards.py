@@ -19,7 +19,6 @@ _TABLE_FORMATS = ("parquet", "csv")
 _FEATURE_COLUMNS_SUFFIX = "_feature_columns.json"
 
 SENSOR_TABLE_STEMS: tuple[str, ...] = ("sensor_epoch_features", "sensor_recording_features")
-POOLED_TABLE_STEMS: tuple[str, ...] = ("pooled_epoch_features", "pooled_recording_features")
 
 # Non-table artifacts the producer writes directly (no save_descriptor_table).
 SENSOR_MARKER_FILES: tuple[str, ...] = (
@@ -50,30 +49,19 @@ def _table_files(stems: tuple[str, ...]) -> tuple[str, ...]:
 SENSOR_TABLE_FILES: tuple[str, ...] = SENSOR_MARKER_FILES + _table_files(SENSOR_TABLE_STEMS)
 """Sensor-level descriptor files written for every shard."""
 
-# Pooled (channel-group) table files, written when channel-group pooling is on.
-POOLED_TABLE_FILES: tuple[str, ...] = _table_files(POOLED_TABLE_STEMS)
-"""Pooled (channel-group) descriptor table files."""
-
 # Feature-column sidecars consulted when merging shards, keyed by table tier.
 FEATURE_COLUMN_FILES: dict[str, str] = {
     stem.removesuffix("_features"): f"{stem}{_FEATURE_COLUMNS_SUFFIX}"
-    for stem in SENSOR_TABLE_STEMS + POOLED_TABLE_STEMS
+    for stem in SENSOR_TABLE_STEMS
 }
 
 
-def required_descriptor_files(include_pooled: bool, *, include_qc: bool = False) -> tuple[str, ...]:
+def required_descriptor_files(*, include_qc: bool = False) -> tuple[str, ...]:
     """Return the tuple of relative paths a complete shard must contain.
 
     Parameters
     ----------
-    include_pooled
-        Whether channel-group pooling is enabled for this run.
     include_qc
         Whether to additionally require the per-shard QC artifacts.
     """
-    files = SENSOR_TABLE_FILES
-    if include_pooled:
-        files = files + POOLED_TABLE_FILES
-    if include_qc:
-        files = files + QC_FILES
-    return files
+    return SENSOR_TABLE_FILES + QC_FILES if include_qc else SENSOR_TABLE_FILES

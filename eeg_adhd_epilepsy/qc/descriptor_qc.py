@@ -230,8 +230,6 @@ def run_descriptor_subject_qc(
     sensor_subject_df: pd.DataFrame,
     sensor_epoch_feature_columns_path: Path,
     sensor_subject_feature_columns_path: Path,
-    pooled_epoch_df: pd.DataFrame | None,
-    pooled_subject_df: pd.DataFrame | None,
     failure_df: pd.DataFrame,
     config_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
@@ -288,10 +286,6 @@ def run_descriptor_subject_qc(
         "n_sensor_epoch_features": int(len(feature_cols)),
         "n_sensor_subject_rows": int(len(sensor_subject_df)),
         "n_sensor_subject_features": int(len(subject_feature_cols)),
-        "n_pooled_epoch_rows": int(len(pooled_epoch_df)) if pooled_epoch_df is not None else 0,
-        "n_pooled_subject_rows": int(len(pooled_subject_df))
-        if pooled_subject_df is not None
-        else 0,
         "n_failures_total": int(len(failure_df)),
         "nan_rate_sensor_epoch": float(feature_missingness_df["missing_rate"].mean())
         if not feature_missingness_df.empty
@@ -430,9 +424,6 @@ def run_descriptor_subject_qc(
                 "Epochs": metrics["n_epochs"],
                 "Sensor Features": metrics["n_sensor_epoch_features"],
                 "Sensor Subject Features": metrics["n_sensor_subject_features"],
-                "Pooled Outputs Present": bool(
-                    pooled_epoch_df is not None and pooled_subject_df is not None
-                ),
                 "Failures": metrics["n_failures_total"],
                 "QC Status": qc_status,
             }

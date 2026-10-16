@@ -277,9 +277,6 @@ families:
     enabled: false
   complexity:
     enabled: false
-pooling:
-  channel_groups:
-    midline: [Fz, Cz]
 runtime:
   execution_backend: sequential
   n_jobs: 1
@@ -347,12 +344,6 @@ aggregation:
         assert (shard_root / "sensor_recording_features.csv").exists()
         assert (shard_root / "sensor_recording_features.parquet").exists()
         assert (shard_root / "sensor_recording_features_feature_columns.json").exists()
-        assert (shard_root / "pooled_epoch_features.csv").exists()
-        assert (shard_root / "pooled_epoch_features.parquet").exists()
-        assert (shard_root / "pooled_epoch_features_feature_columns.json").exists()
-        assert (shard_root / "pooled_recording_features.csv").exists()
-        assert (shard_root / "pooled_recording_features.parquet").exists()
-        assert (shard_root / "pooled_recording_features_feature_columns.json").exists()
         assert (shard_root / "failures.csv").exists()
         assert (shard_root / "qc" / "summary_row.csv").exists()
         assert (shard_root / "qc" / "summary_metrics.csv").exists()
@@ -379,23 +370,15 @@ aggregation:
 
     sensor_epoch_df = pd.read_csv(subject_one_root / "sensor_epoch_features.csv")
     sensor_agg_df = pd.read_csv(subject_one_root / "sensor_recording_features.csv")
-    pooled_epoch_df = pd.read_csv(subject_one_root / "pooled_epoch_features.csv")
-    pooled_agg_df = pd.read_csv(subject_one_root / "pooled_recording_features.csv")
     # The fixture has 10 epochs/subject; MAD rejection may drop ~1, so at least 5 survive.
     assert len(sensor_epoch_df) >= 5
     # Subject 0001 alternates between run-01 and run-02 → always 2 recording rows.
     assert len(sensor_agg_df) == 2
-    assert len(pooled_epoch_df) >= 5
-    assert len(pooled_agg_df) == 2
     assert "band_abs_delta_ch-Fz" in sensor_epoch_df.columns
-    assert not any("chgrp-" in column for column in sensor_epoch_df.columns)
-    assert "band_abs_delta_chgrp-midline" in pooled_epoch_df.columns
-    assert not any(column.endswith("_ch-Fz") for column in pooled_epoch_df.columns)
     assert "epoch_count" in sensor_agg_df.columns
     assert "run" in sensor_agg_df.columns
     assert "recording_id" in sensor_agg_df.columns
     assert (sensor_agg_df["epoch_count"] >= 1).all()
-    assert (pooled_agg_df["epoch_count"] >= 1).all()
     assert any(column.startswith("mean_") for column in sensor_agg_df.columns)
     assert any(column.startswith("mean_band_log_abs_") for column in sensor_agg_df.columns)
     assert not any(column.startswith("mean_band_abs_") for column in sensor_agg_df.columns)
@@ -403,15 +386,12 @@ aggregation:
     assert any(column.startswith("iqr_band_") for column in sensor_agg_df.columns)
     assert any(column.startswith("agg_band_ratio_") for column in sensor_agg_df.columns)
     assert not any(column.startswith("agg_band_corr_ratio_") for column in sensor_agg_df.columns)
-    assert any(column.startswith("agg_band_ratio_") for column in pooled_agg_df.columns)
-    assert not any(column.startswith("agg_band_corr_ratio_") for column in pooled_agg_df.columns)
     assert not any(column.startswith("band_ratio_") for column in sensor_epoch_df.columns)
-    pooled_log_col = "band_log_abs_alpha_chgrp-midline"
-    assert pooled_log_col in pooled_epoch_df.columns
-    first_recording_id = pooled_agg_df.loc[0, "recording_id"]
-    first_recording_epochs = pooled_epoch_df[pooled_epoch_df["recording_id"] == first_recording_id]
-    assert pooled_agg_df.loc[0, f"median_{pooled_log_col}"] == pytest.approx(
-        first_recording_epochs[pooled_log_col].median()
+    log_col = "band_log_abs_alpha_ch-Fz"
+    first_recording_id = sensor_agg_df.loc[0, "recording_id"]
+    first_recording_epochs = sensor_epoch_df[sensor_epoch_df["recording_id"] == first_recording_id]
+    assert sensor_agg_df.loc[0, f"median_{log_col}"] == pytest.approx(
+        first_recording_epochs[log_col].median()
     )
     assert not (derivative_root / "combined").exists()
 
@@ -433,9 +413,6 @@ families:
     enabled: false
   complexity:
     enabled: false
-pooling:
-  channel_groups:
-    midline: [Fz, Cz]
 runtime:
   execution_backend: sequential
   n_jobs: 1
@@ -504,35 +481,20 @@ aggregation:
     combined_sensor_epoch_df = pd.read_csv(combined_root / "sensor_epoch_features.csv")
     combined_sensor_recording_df = pd.read_csv(combined_root / "sensor_recording_features.csv")
     combined_sensor_subject_df = pd.read_csv(combined_root / "sensor_subject_features.csv")
-    combined_pooled_epoch_df = pd.read_csv(combined_root / "pooled_epoch_features.csv")
-    combined_pooled_recording_df = pd.read_csv(combined_root / "pooled_recording_features.csv")
-    combined_pooled_subject_df = pd.read_csv(combined_root / "pooled_subject_features.csv")
 
     # 2 subjects × ≥5 surviving epochs each → at least 10 combined epoch rows.
     assert len(combined_sensor_epoch_df) >= 10
     # 0001 has 2 runs, 0002 has 1 run → 3 recording-level rows, 2 subject-level rows.
     assert len(combined_sensor_recording_df) == 3
     assert len(combined_sensor_subject_df) == 2
-    assert len(combined_pooled_epoch_df) >= 10
-    assert len(combined_pooled_recording_df) == 3
-    assert len(combined_pooled_subject_df) == 2
     # Aggregated stat columns are present at recording level and inherited by subject.
     for frame in (combined_sensor_recording_df, combined_sensor_subject_df):
         assert any(column.startswith("agg_band_ratio_") for column in frame.columns)
         assert not any(column.startswith("agg_band_corr_ratio_") for column in frame.columns)
-    assert any(
-        column.startswith("agg_band_ratio_") for column in combined_pooled_recording_df.columns
-    )
-    assert not any(
-        column.startswith("agg_band_corr_ratio_") for column in combined_pooled_recording_df.columns
-    )
     assert (combined_root / "failures.csv").exists()
     assert (combined_root / "sensor_epoch_features_feature_columns.json").exists()
     assert (combined_root / "sensor_recording_features_feature_columns.json").exists()
     assert (combined_root / "sensor_subject_features_feature_columns.json").exists()
-    assert (combined_root / "pooled_epoch_features_feature_columns.json").exists()
-    assert (combined_root / "pooled_recording_features_feature_columns.json").exists()
-    assert (combined_root / "pooled_subject_features_feature_columns.json").exists()
     assert (combined_root / "qc" / "dataset_summary_metrics.csv").exists()
     assert (combined_root / "qc" / "dataset_flags.csv").exists()
     assert (combined_root / "qc" / "shard_qc_summary.csv").exists()
@@ -637,9 +599,6 @@ families:
     enabled: false
   complexity:
     enabled: false
-pooling:
-  channel_groups:
-    midline: [Fz, Cz]
 runtime:
   execution_backend: sequential
   n_jobs: 1
@@ -695,7 +654,7 @@ aggregation:
         / "eeg"
         / "EO_baseline"
     )
-    (incomplete_shard / "pooled_recording_features.csv").unlink()
+    (incomplete_shard / "sensor_recording_features.csv").unlink()
 
     rerun_calls: list[tuple[str, ...]] = []
     monkeypatch.setattr(
@@ -711,93 +670,6 @@ aggregation:
 
     combined_root = bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
     assert not combined_root.exists()
-
-
-def test_merge_descriptors_cli_writes_sensor_only_outputs_without_pooling(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
-    config_path = tmp_path / "descriptors.yaml"
-    config_path.write_text(
-        """
-precision: float32
-families:
-  bands:
-    enabled: true
-    outputs: [absolute_power]
-  parametric:
-    enabled: false
-  complexity:
-    enabled: false
-runtime:
-  execution_backend: sequential
-  n_jobs: 1
-  obs_chunk: 8
-  on_error: collect
-aggregation:
-  descriptors:
-    - name: mean_export
-      stats: mean
-""".strip(),
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(
-        extract_descriptors,
-        "read_participants",
-        lambda metadata_path: _demo_raw_metadata(),
-    )
-
-    monkeypatch.setattr(
-        extract_descriptors,
-        "build_container",
-        lambda **kwargs: _demo_container_for_subjects(kwargs.get("subjects")),
-    )
-
-    bids_root = tmp_path / "BIDS"
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "eeg-descriptors",
-            "--bids_root",
-            str(bids_root),
-            "--metadata",
-            str(tmp_path / "patients.csv"),
-            "--config",
-            str(config_path),
-            "--conditions",
-            "EO_baseline",
-        ],
-    )
-    extract_descriptors.main()
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "eeg-merge-descriptors",
-            "--derivative_root",
-            str(bids_root / "derivatives" / "signal_features" / "descriptors"),
-            "--output_root",
-            str(tmp_path / "merged"),
-            "--reports_root",
-            str(tmp_path / "reports"),
-        ],
-    )
-    merge_descriptors.main()
-
-    combined_root = tmp_path / "merged" / "combined"
-    reports_root = tmp_path / "reports"
-    assert (combined_root / "sensor_epoch_features.csv").exists()
-    assert (combined_root / "sensor_recording_features.csv").exists()
-    assert (combined_root / "sensor_subject_features.csv").exists()
-    assert not (combined_root / "pooled_epoch_features.csv").exists()
-    assert not (combined_root / "pooled_recording_features.csv").exists()
-    assert not (combined_root / "pooled_subject_features.csv").exists()
-    assert (
-        reports_root / "summary" / "descriptor_qc" / "descriptor_qc_dataset_summary.html"
-    ).exists()
 
 
 def test_extract_descriptors_cli_raises_when_requested_subjects_are_unavailable(
