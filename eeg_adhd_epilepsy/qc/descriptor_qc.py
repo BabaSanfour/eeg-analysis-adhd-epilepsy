@@ -44,6 +44,21 @@ _FAMILY_CONFIG_KEYS: tuple[tuple[str, str], ...] = (
 )
 
 
+def _is_alpha_peak(column: object) -> bool:
+    """An alpha peak feature: NaN where specparam found no alpha peak, a result, not
+    missing data, so it is left out of the missingness, all-NaN and constant checks
+    (one epoch with a peak leaves a single value)."""
+    return "_alpha_peak_" in str(column)
+
+
+def _split_failures(failure_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Extraction failures, and the number of epochs dropped by outlier rejection."""
+    if failure_df.empty or "family" not in failure_df.columns:
+        return failure_df, 0
+    rejection = failure_df["family"].astype(str).str.startswith("MAD_Rejection")
+    return failure_df[~rejection], int(failure_df.loc[rejection, "obs_id"].nunique())
+
+
 def _expected_families(config_snapshot: dict[str, Any]) -> list[str]:
     """Family tokens enabled in *config_snapshot* (``band``/``param``/``complexity``)."""
     families_config = (
@@ -276,23 +291,41 @@ def run_descriptor_shard_qc(
         feature_df,
     )
     failure_summaries = summarize_failures(failure_df)
+    extraction_failures, n_epochs_rejected = _split_failures(failure_df)
+    checked_missingness = feature_missingness_df[
+        ~feature_missingness_df["column"].map(_is_alpha_peak)
+    ]
+    alpha_peak_missingness = feature_missingness_df.loc[
+        feature_missingness_df["column"].map(_is_alpha_peak), "missing_rate"
+    ]
 
     metrics = {
         "n_epochs": int(len(sensor_epoch_df)),
+        "n_epochs_rejected": n_epochs_rejected,
         "n_sensor_epoch_features": int(len(feature_cols)),
         "n_sensor_subject_rows": int(len(sensor_subject_df)),
         "n_sensor_subject_features": int(len(subject_feature_cols)),
-        "n_failures_total": int(len(failure_df)),
-        "nan_rate_sensor_epoch": float(feature_missingness_df["missing_rate"].mean())
-        if not feature_missingness_df.empty
+        "n_failures_total": int(len(extraction_failures)),
+        "nan_rate_sensor_epoch": float(checked_missingness["missing_rate"].mean())
+        if not checked_missingness.empty
         else 0.0,
-        "max_feature_missingness": float(feature_missingness_df["missing_rate"].max())
-        if not feature_missingness_df.empty
+        "max_feature_missingness": float(checked_missingness["missing_rate"].max())
+        if not checked_missingness.empty
         else 0.0,
-        "n_all_nan_features": int(constant_df["is_all_nan"].sum()) if not constant_df.empty else 0,
-        "n_constant_features": int(constant_df["is_constant"].sum())
+        "n_all_nan_features": int(
+            constant_df.loc[~constant_df["column"].map(_is_alpha_peak), "is_all_nan"].sum()
+        )
         if not constant_df.empty
         else 0,
+        "n_constant_features": int(
+            constant_df.loc[~constant_df["column"].map(_is_alpha_peak), "is_constant"].sum()
+        )
+        if not constant_df.empty
+        else 0,
+        # Share of channel-epochs where specparam found an alpha peak.
+        "alpha_peak_rate": float(1 - alpha_peak_missingness.mean())
+        if not alpha_peak_missingness.empty
+        else np.nan,
     }
     for row in family_summary_df.to_dict("records"):
         family = str(row["family"])
@@ -459,6 +492,8 @@ def write_descriptor_subject_report(
                 "Session": session,
                 "Condition": qc["summary"]["condition"],
                 "Epochs": qc["summary"]["n_epochs"],
+                "Rejected Epochs": qc["summary"]["n_epochs_rejected"],
+                "Alpha Peak Found": round(qc["summary"]["alpha_peak_rate"], 3),
                 "Sensor Features": qc["summary"]["n_sensor_epoch_features"],
                 "Sensor Subject Features": qc["summary"]["n_sensor_subject_features"],
                 "Failures": qc["summary"]["n_failures_total"],
@@ -505,7 +540,7 @@ def write_descriptor_subject_report(
 def run_descriptor_dataset_qc(
     *,
     reports_root: Path,
-    merged_sensor_epoch_df: pd.DataFrame | None,
+    merged_sensor_epoch_df: pd.DataFrame,
     merged_sensor_subject_df: pd.DataFrame,
     merged_sensor_epoch_feature_columns: Sequence[str],
     merged_sensor_subject_feature_columns: Sequence[str],
@@ -527,12 +562,15 @@ def run_descriptor_dataset_qc(
     epoch_feature_cols = _select_family_feature_cols(
         merged_sensor_epoch_feature_columns,
         expected_families,
-        merged_sensor_epoch_df.columns if merged_sensor_epoch_df is not None else [],
+        merged_sensor_epoch_df.columns,
     )
     feature_missingness_df = compute_family_missingness(
         merged_sensor_subject_df,
         subject_feature_cols,
     )
+    checked_missingness = feature_missingness_df[
+        ~feature_missingness_df["column"].map(_is_alpha_peak)
+    ]
     constant_df = compute_family_constant_summary(
         merged_sensor_subject_df,
         subject_feature_cols,
@@ -541,11 +579,12 @@ def run_descriptor_dataset_qc(
     low_variance_df = constant_df[
         constant_df["is_constant"]
         | (
-            constant_df["std"].fillna(np.inf)
+            constant_df["relative_std"].fillna(np.inf)
             <= DEFAULT_DESCRIPTOR_THRESHOLDS.near_constant_std_tol * 10
         )
     ].copy()
     failure_df = merged_failures_df if merged_failures_df is not None else pd.DataFrame()
+    extraction_failures, n_epochs_rejected = _split_failures(failure_df)
     failure_summaries = summarize_failures(failure_df)
     subject_feature_df = (
         merged_sensor_subject_df.loc[:, subject_feature_cols].replace([np.inf, -np.inf], np.nan)
@@ -562,6 +601,13 @@ def run_descriptor_dataset_qc(
             "missing_rate_mean": "missing_rate",
             "nonfinite_rate_mean": "nonfinite_rate",
         }
+    )
+    # Failures are per channel-epoch, so their rate is taken on the epoch table.
+    epoch_failures = aggregate_family_qc(
+        merged_sensor_epoch_df, epoch_feature_cols, failures_df=failure_df
+    )[["family", "failure_count", "failure_rate"]]
+    family_summary_df = family_summary_df.drop(columns=["failure_count", "failure_rate"]).merge(
+        epoch_failures, on="family", how="left"
     )
     family_summary_df = add_family_diagnostics(
         family_summary_df,
@@ -624,7 +670,8 @@ def run_descriptor_dataset_qc(
         "n_shards_pass": int((shard_status == "pass").sum()) if not shard_summary_df.empty else 0,
         "n_shards_warn": int((shard_status == "warn").sum()) if not shard_summary_df.empty else 0,
         "n_shards_fail": int((shard_status == "fail").sum()) if not shard_summary_df.empty else 0,
-        "n_failures_total": int(len(failure_df)),
+        "n_failures_total": int(len(extraction_failures)),
+        "n_epochs_rejected": n_epochs_rejected,
         "n_subjects": int(merged_sensor_subject_df["subject"].nunique())
         if "subject" in merged_sensor_subject_df.columns
         else int(len(merged_sensor_subject_df)),
@@ -633,16 +680,22 @@ def run_descriptor_dataset_qc(
         else 0,
         "n_sensor_epoch_features": int(len(epoch_feature_cols)),
         "n_sensor_subject_features": int(len(subject_feature_cols)),
-        "n_all_nan_features": int(constant_df["is_all_nan"].sum()) if not constant_df.empty else 0,
-        "n_zero_variance_features": int(constant_df["is_constant"].sum())
+        "n_all_nan_features": int(
+            constant_df.loc[~constant_df["column"].map(_is_alpha_peak), "is_all_nan"].sum()
+        )
+        if not constant_df.empty
+        else 0,
+        "n_zero_variance_features": int(
+            constant_df.loc[~constant_df["column"].map(_is_alpha_peak), "is_constant"].sum()
+        )
         if not constant_df.empty
         else 0,
         "n_near_zero_variance_features": int(len(low_variance_df)),
-        "max_feature_missingness": float(feature_missingness_df["missing_rate"].max())
-        if not feature_missingness_df.empty
+        "max_feature_missingness": float(checked_missingness["missing_rate"].max())
+        if not checked_missingness.empty
         else 0.0,
-        "median_feature_missingness": float(feature_missingness_df["missing_rate"].median())
-        if not feature_missingness_df.empty
+        "median_feature_missingness": float(checked_missingness["missing_rate"].median())
+        if not checked_missingness.empty
         else 0.0,
         "n_subjects_high_outlier_burden": int(
             (
