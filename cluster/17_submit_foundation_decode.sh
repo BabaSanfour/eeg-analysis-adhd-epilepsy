@@ -8,6 +8,7 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 # Each task trains one foundation model in all configured modes. Keeping model
 # jobs separate bounds runtime and GPU memory; stage 18 writes shared reports.
@@ -49,6 +50,7 @@ python -m eeg_adhd_epilepsy.analysis.foundation_decoding \
     --cohort_config "$COHORT_CONFIG" \
     --analysis_config "$ANALYSIS_CONFIG" \
     --bids_root "$BIDS_ROOT" \
+    --desc "$EPOCHS_DESC" \
     --derivative_root "$DECODING_ROOT" \
     --metadata "$METADATA_PATH" \
     --reports_root "$REPORTS_ROOT" \

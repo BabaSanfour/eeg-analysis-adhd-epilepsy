@@ -489,13 +489,17 @@ aggregation:
         "argv",
         [
             "eeg-merge-descriptors",
-            "--bids_root",
-            str(bids_root),
+            "--derivative_root",
+            str(bids_root / "derivatives" / "signal_features" / "descriptors"),
+            "--output_root",
+            str(tmp_path / "merged"),
+            "--reports_root",
+            str(tmp_path / "reports"),
         ],
     )
     merge_descriptors.main()
 
-    combined_root = bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
+    combined_root = tmp_path / "merged" / "combined"
     reports_root = tmp_path / "reports"
     combined_sensor_epoch_df = pd.read_csv(combined_root / "sensor_epoch_features.csv")
     combined_sensor_recording_df = pd.read_csv(combined_root / "sensor_recording_features.csv")
@@ -773,13 +777,17 @@ aggregation:
         "argv",
         [
             "eeg-merge-descriptors",
-            "--bids_root",
-            str(bids_root),
+            "--derivative_root",
+            str(bids_root / "derivatives" / "signal_features" / "descriptors"),
+            "--output_root",
+            str(tmp_path / "merged"),
+            "--reports_root",
+            str(tmp_path / "reports"),
         ],
     )
     merge_descriptors.main()
 
-    combined_root = bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
+    combined_root = tmp_path / "merged" / "combined"
     reports_root = tmp_path / "reports"
     assert (combined_root / "sensor_epoch_features.csv").exists()
     assert (combined_root / "sensor_recording_features.csv").exists()

@@ -9,10 +9,10 @@ set -euo pipefail
 
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 FOUNDATION_CONFIG=${FOUNDATION_CONFIG:-$PROJECT_ROOT/configs/foundation_extraction.yaml}
 METADATA=${METADATA:-$METADATA_PATH}
-DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.foundation_array_state}
 EXTRACTION_SCRIPT=${EXTRACTION_SCRIPT:-$PROJECT_ROOT/cluster/08_submit_foundation_embeddings.sh}
 AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-1}
@@ -42,8 +42,9 @@ cmd=(
   python -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings
   --config "$FOUNDATION_CONFIG"
   --bids_root "$BIDS_ROOT"
+  --desc "$EPOCHS_DESC"
   --metadata "$METADATA"
-  --derivative_root "$DERIVATIVE_ROOT"
+  --derivative_root "$EMBEDDING_ROOT"
   --metadata_row "$METADATA_ROW"
 )
 if [[ "$OVERWRITE" == "1" ]]; then
@@ -61,7 +62,7 @@ if [[ "$AUTO_SUBMIT_NEXT" == "1" && "$ROW_OFFSET" == "0" ]]; then
     if mkdir "$batch_state_dir/submit_second.lock" 2>/dev/null; then
       second_job_id=$(sbatch --parsable \
         --array=1-"$SECOND_BATCH_SIZE" \
-        --export="ALL,PROJECT_ROOT=$PROJECT_ROOT,BIDS_ROOT=$BIDS_ROOT,FOUNDATION_CONFIG=$FOUNDATION_CONFIG,METADATA=$METADATA,DERIVATIVE_ROOT=$DERIVATIVE_ROOT,SUBMIT_STATE_DIR=$SUBMIT_STATE_DIR,ROW_OFFSET=$FIRST_BATCH_SIZE,AUTO_SUBMIT_NEXT=0,OVERWRITE=$OVERWRITE" \
+        --export="ALL,PROJECT_ROOT=$PROJECT_ROOT,BIDS_ROOT=$BIDS_ROOT,FOUNDATION_CONFIG=$FOUNDATION_CONFIG,METADATA=$METADATA,EMBEDDING_ROOT=$EMBEDDING_ROOT,SUBMIT_STATE_DIR=$SUBMIT_STATE_DIR,ROW_OFFSET=$FIRST_BATCH_SIZE,AUTO_SUBMIT_NEXT=0,OVERWRITE=$OVERWRITE" \
         "$EXTRACTION_SCRIPT")
       second_job_id=${second_job_id%%;*}
       echo "Submitted second foundation-extraction array: $second_job_id"

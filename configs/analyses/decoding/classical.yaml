@@ -133,7 +133,6 @@ metrics:
 session_col: session
 subject_col: subject
 task: clinical
-desc: base
 representation: recording
 run_pooled: true
 random_state: 42

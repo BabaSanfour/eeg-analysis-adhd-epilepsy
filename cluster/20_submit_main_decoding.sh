@@ -20,13 +20,13 @@ PIPELINE_TYPE=$1
 
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 # The exact cohort config
 CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 CLASSICAL_ANALYSIS_CONFIG=${CLASSICAL_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/classical.yaml}
 SAVED_FOUNDATION_ANALYSIS_CONFIG=${SAVED_FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation_embeddings.yaml}
 FOUNDATION_ANALYSIS_CONFIG=${FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation.yaml}
-EMBEDDING_ROOT=${EMBEDDING_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 OVERWRITE=${OVERWRITE:-0}
 
 require_dir "$BIDS_ROOT"
@@ -49,7 +49,7 @@ run_descriptor_classical() {
 
     dra_pin_threads 1
 
-    DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
+    DESC_ROOT="$DESCRIPTORS_ROOT/combined"
     CLASSICAL_REPRESENTATIONS=(${CLASSICAL_REPRESENTATIONS:-epoch recording})
     table_override="${TABLE_PATH:-}"
     columns_override="${COLUMNS_PATH:-}"
@@ -89,6 +89,7 @@ run_descriptor_classical() {
             --cohort_config "$CONFIG"
             --analysis_config "$CLASSICAL_ANALYSIS_CONFIG"
             --bids_root "$BIDS_ROOT"
+            --desc "$EPOCHS_DESC"
             --derivative_root "$DECODING_ROOT"
             --reports_root "$REPORTS_ROOT"
             --metadata "$METADATA_PATH"
@@ -129,6 +130,7 @@ run_saved_embedding_classical() {
                 --cohort_config "$CONFIG"
                 --analysis_config "$SAVED_FOUNDATION_ANALYSIS_CONFIG"
                 --bids_root "$BIDS_ROOT"
+                --desc "$EPOCHS_DESC"
                 --derivative_root "$DECODING_ROOT"
                 --reports_root "$REPORTS_ROOT"
                 --metadata "$METADATA_PATH"
@@ -153,6 +155,7 @@ run_saved_embedding_classical() {
         --cohort_config "$CONFIG" \
         --analysis_config "$SAVED_FOUNDATION_ANALYSIS_CONFIG" \
         --bids_root "$BIDS_ROOT" \
+        --desc "$EPOCHS_DESC" \
         --derivative_root "$DECODING_ROOT" \
         --reports_root "$REPORTS_ROOT" \
         --metadata "$METADATA_PATH"
@@ -184,6 +187,7 @@ run_foundation() {
             --cohort_config "$CONFIG"
             --analysis_config "$FOUNDATION_ANALYSIS_CONFIG"
             --bids_root "$BIDS_ROOT"
+            --desc "$EPOCHS_DESC"
             --derivative_root "$DECODING_ROOT"
             --reports_root "$REPORTS_ROOT"
             --metadata "$METADATA_PATH"
@@ -203,6 +207,7 @@ run_foundation() {
         --cohort_config "$CONFIG" \
         --analysis_config "$FOUNDATION_ANALYSIS_CONFIG" \
         --bids_root "$BIDS_ROOT" \
+        --desc "$EPOCHS_DESC" \
         --derivative_root "$DECODING_ROOT" \
         --reports_root "$REPORTS_ROOT" \
         --metadata "$METADATA_PATH"

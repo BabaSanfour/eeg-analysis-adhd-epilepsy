@@ -11,6 +11,7 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 # Task 1 decodes the descriptor baseline. Remaining tasks decode one saved
 # foundation model and representation, including every transform declared by
@@ -18,13 +19,12 @@ source "$PROJECT_ROOT/cluster/env.sh"
 COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 CLASSICAL_ANALYSIS_CONFIG=${CLASSICAL_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/classical.yaml}
 FOUNDATION_ANALYSIS_CONFIG=${FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation_embeddings.yaml}
-EMBEDDING_ROOT=${EMBEDDING_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 
 read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
 REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording})
 
 # Descriptor tables (dataset paths -> supplied here, not in the analysis config).
-DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
+DESC_ROOT="$DESCRIPTORS_ROOT/combined"
 
 require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"

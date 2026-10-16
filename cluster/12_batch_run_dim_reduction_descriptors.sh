@@ -10,6 +10,7 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 # One array task = one cohort config. The analysis config sweeps every descriptor
 # analysis mode in-process (loading each condition once), so --array equals the
@@ -21,7 +22,7 @@ OVERWRITE=${OVERWRITE:-0}
 # Descriptor runs use the two canonical granularities. Passing both the matching
 # table and an explicit representation keeps this launcher hash-identical to the
 # one-cohort integration launcher.
-DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
+DESC_ROOT="$DESCRIPTORS_ROOT/combined"
 REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording})
 
 require_dir "$BIDS_ROOT"
@@ -63,6 +64,7 @@ for rep in "${REPRESENTATIONS[@]}"; do
     cmd=(
         python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction
         --bids_root "$BIDS_ROOT"
+        --desc "$EPOCHS_DESC"
         --derivative_root "$DIM_REDUCTION_ROOT"
         --reports_root "$REPORTS_ROOT"
         --metadata "$METADATA_PATH"

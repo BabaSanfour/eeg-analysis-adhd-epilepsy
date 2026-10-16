@@ -10,6 +10,7 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 CONFIG_PATH=${CONFIG_PATH:-$PROJECT_ROOT/configs/descriptors.yaml}
 SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.descriptor_array_state}
@@ -33,8 +34,9 @@ dra_pin_threads "$THREADS"
 
 python -m eeg_adhd_epilepsy.analysis.extract_descriptors \
   --bids_root "$BIDS_ROOT" \
-  --derivative_root "$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors" \
-  --reports_root "$SCRATCH_ROOT/reports" \
+  --desc "$EPOCHS_DESC" \
+  --derivative_root "$DESCRIPTOR_SHARDS_ROOT" \
+  --reports_root "$REPORTS_ROOT" \
   --metadata "$METADATA_PATH" \
   --config "$CONFIG_PATH" \
   --metadata_row "$METADATA_ROW" \

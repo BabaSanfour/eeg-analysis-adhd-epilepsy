@@ -13,6 +13,7 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 FOUNDATION_ANALYSIS_CONFIG=${FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation_embeddings.yaml}
@@ -32,6 +33,7 @@ python -m eeg_adhd_epilepsy.analysis.classical_decoding \
     --cohort_config "$COHORT_CONFIG" \
     --analysis_config "$FOUNDATION_ANALYSIS_CONFIG" \
     --bids_root "$BIDS_ROOT" \
+    --desc "$EPOCHS_DESC" \
     --derivative_root "$DECODING_ROOT" \
     --metadata "$METADATA_PATH" \
     --reports_root "$REPORTS_ROOT"

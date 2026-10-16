@@ -840,6 +840,14 @@ def main() -> None:
         ),
     )
     parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
+    parser.add_argument(
+        "--desc",
+        default="base",
+        help=(
+            "Epoch variant written by stage 04: base (every epoch) or baserejected "
+            "(epochs overlapping a BAD_ annotation dropped)."
+        ),
+    )
     parser.add_argument("--metadata", default=None, help="Override the participants.tsv path.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
     parser.add_argument(
@@ -910,6 +918,7 @@ def main() -> None:
         cohort_config=args.cohort_config,
         analysis_config=args.analysis_config,
         bids_root=args.bids_root,
+        desc=args.desc,
         metadata=args.metadata,
         n_jobs=args.n_jobs,
         inner_n_jobs=args.inner_n_jobs,

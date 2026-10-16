@@ -1,5 +1,4 @@
 task: clinical
-desc: base
 dataset_name: foundation_embeddings
 conditions: [EO_baseline, EC_baseline]
 batch_size: 64

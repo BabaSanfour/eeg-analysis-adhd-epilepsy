@@ -352,6 +352,8 @@ def main() -> None:
     include_pooled = bool(channel_groups)
     config_snapshot = deepcopy(raw_config)
     config_snapshot["aggregation"] = deepcopy(aggregation_config)
+    # The epoch variant: a root made from one variant refuses the other.
+    config_snapshot["desc"] = args.desc
     if pooling_config:
         config_snapshot["pooling"] = deepcopy(pooling_config)
     if qc_config:

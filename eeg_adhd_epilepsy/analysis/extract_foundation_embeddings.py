@@ -398,6 +398,14 @@ def main() -> None:
     )
     parser.add_argument("--config", required=True)
     parser.add_argument("--bids_root", required=True, help="Path to BIDS dataset")
+    parser.add_argument(
+        "--desc",
+        default="base",
+        help=(
+            "Epoch variant written by stage 04: base (every epoch) or baserejected "
+            "(epochs overlapping a BAD_ annotation dropped)."
+        ),
+    )
     parser.add_argument("--metadata", default=None, help="Path to the BIDS participants.tsv")
     parser.add_argument(
         "--derivative_root",
@@ -422,6 +430,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     config = load_yaml_config(args.config)
     config["bids_root"] = args.bids_root
+    config["desc"] = args.desc
     if args.metadata:
         config["metadata"] = args.metadata
     if args.overwrite:

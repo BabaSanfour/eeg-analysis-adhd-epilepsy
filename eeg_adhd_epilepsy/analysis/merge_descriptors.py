@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import logging
+import shutil
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -31,8 +32,6 @@ from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import (
     FEATURE_COLUMN_FILES,
     required_descriptor_files,
 )
-from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
-from eeg_adhd_epilepsy.io.report_paths import default_reports_root
 from eeg_adhd_epilepsy.qc.descriptor_qc import run_descriptor_dataset_qc
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
@@ -73,9 +72,17 @@ def main() -> None:
         description="Merge checkpointed descriptor shards into combined tables."
     )
     parser.add_argument(
-        "--bids_root",
+        "--derivative_root",
         required=True,
-        help="Path to the BIDS dataset root.",
+        help="Descriptor derivative with the per-subject shards (stage 05, on scratch).",
+    )
+    parser.add_argument(
+        "--output_root",
+        required=True,
+        help=(
+            "Derivative to write the merged tables to (combined/), with the shards' "
+            "dataset_description.json, .bidsignore and config_used.yaml."
+        ),
     )
     parser.add_argument(
         "--skip_inconsistent",
@@ -86,12 +93,7 @@ def main() -> None:
             "the whole merge."
         ),
     )
-    parser.add_argument(
-        "--reports_root",
-        type=str,
-        default=None,
-        help="Custom root directory for reports (defaults to sibling of bids_root).",
-    )
+    parser.add_argument("--reports_root", required=True, help="Root directory for reports.")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -99,9 +101,9 @@ def main() -> None:
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    bids_root = Path(args.bids_root)
-    reports_root = Path(args.reports_root) if args.reports_root else default_reports_root(bids_root)
-    derivative_root = get_derivative_root(bids_root, DerivativeStage.DESCRIPTORS)
+    derivative_root = Path(args.derivative_root)
+    output_root = Path(args.output_root)
+    reports_root = Path(args.reports_root)
 
     config_path = derivative_root / "config_used.yaml"
     if not config_path.exists():
@@ -211,8 +213,10 @@ def main() -> None:
             }
         )
 
-    combined_root = derivative_root / "combined"
+    combined_root = output_root / "combined"
     combined_root.mkdir(parents=True, exist_ok=True)
+    for name in ("dataset_description.json", ".bidsignore", "config_used.yaml"):
+        shutil.copy2(derivative_root / name, output_root / name)
 
     def _merge_family(name: str) -> tuple[pd.DataFrame, list[str] | None]:
         """Concatenate one shard table-kind across shards into a combined table."""
@@ -284,8 +288,8 @@ def main() -> None:
 
     manifest = {
         "generated_at": datetime.now(UTC).isoformat(),
-        "bids_root": str(bids_root),
         "derivative_root": str(derivative_root),
+        "output_root": str(output_root),
         "config_used_path": str(config_path),
         "config_used_sha256": config_hash,
         "n_shards_discovered": n_shards_discovered,

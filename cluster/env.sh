@@ -36,8 +36,6 @@ done
 : "${RAW_ROOT:=$DATA_ROOT/raw_data}"
 : "${SCRATCH_ROOT:=$SCRATCH/eeg-epilepsy-adhd}"
 : "${REPORTS_ROOT:=$SCRATCH_ROOT/reports}"
-: "${DECODING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/decoding}"
-: "${DIM_REDUCTION_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/dim_reduction}"
 # A script that submits a follow-up job reuses the account it runs under.
 if [ -n "${SLURM_JOB_ACCOUNT:-}" ]; then
     export SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-$SLURM_JOB_ACCOUNT}"
@@ -49,6 +47,30 @@ export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
 # Report scripts (plotly, ...) are cached like the weights: home is read-only on
 # some compute nodes.
 export COCO_PIPE_REPORT_ASSET_CACHE="${COCO_PIPE_REPORT_ASSET_CACHE:-$SCRATCH_ROOT/coco_pipe_report_assets}"
+
+# --- Epoch variant -----------------------------------------------------------
+# Every stage from 05 on runs once per epoch variant written by stage 04:
+# EPOCHS_DESC=base (every epoch) or baserejected (the epochs overlapping a BAD_
+# annotation dropped), e.g. `cluv submit fir cluster/05_... -- EPOCHS_DESC=base`.
+# Each variant has its own outputs and reports, so the two never mix. Descriptor
+# shards are per subject on scratch; the merged tables and the shard archive go to
+# the project (07, 07b).
+dra_epochs_variant() {
+    case "${EPOCHS_DESC:-}" in
+        base|baserejected) ;;
+        *) echo "Set EPOCHS_DESC=base or EPOCHS_DESC=baserejected (after --)." >&2; exit 1 ;;
+    esac
+    export EPOCHS_DESC
+    : "${DESCRIPTOR_SHARDS_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC}"
+    : "${DESCRIPTORS_ROOT:=$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC}"
+    : "${EMBEDDING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings_$EPOCHS_DESC}"
+    : "${DIM_REDUCTION_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/dim_reduction_$EPOCHS_DESC}"
+    : "${DECODING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/decoding_$EPOCHS_DESC}"
+    case "$REPORTS_ROOT" in
+        */"$EPOCHS_DESC") ;;
+        *) REPORTS_ROOT="$REPORTS_ROOT/$EPOCHS_DESC" ;;
+    esac
+}
 
 # --- venv + interpreter env + scratch caches -------------------------------
 # cd into the project, activate the venv, and point numba/MNE/matplotlib caches

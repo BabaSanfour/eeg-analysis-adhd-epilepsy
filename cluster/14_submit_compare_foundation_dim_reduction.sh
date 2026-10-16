@@ -18,6 +18,7 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 # Optional: a single cohort dataset_name. Empty compares every cohort found.
 DATASET_NAME=${DATASET_NAME:-}
@@ -32,6 +33,7 @@ cmd=(
     python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction
     --compare_only
     --bids_root "$BIDS_ROOT"
+    --desc "$EPOCHS_DESC"
     --derivative_root "$DIM_REDUCTION_ROOT"
     --reports_root "$REPORTS_ROOT"
 )

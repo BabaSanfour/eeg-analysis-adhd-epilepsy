@@ -27,7 +27,6 @@ overwrite: false
 task: clinical
 segment_duration: 60.0
 overlap: 0.0
-desc: base
 window_source: auto
 
 # Two orthogonal axes for raw EEG:

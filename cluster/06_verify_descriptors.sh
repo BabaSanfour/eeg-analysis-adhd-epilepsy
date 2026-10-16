@@ -12,12 +12,12 @@ set -euo pipefail
 
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
-DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors}
 ROWS=${ROWS:-}
 STRICT=${STRICT:-0}
 
-require_dir "$DERIVATIVE_ROOT"
+require_dir "$DESCRIPTOR_SHARDS_ROOT"
 require_dir "$VENV_PATH"
 
 # CPU-light verification; no BLAS pinning.
@@ -25,7 +25,7 @@ dra_activate
 
 cmd=(
   python -m eeg_adhd_epilepsy.analysis.verify_descriptors
-  --derivative_root "$DERIVATIVE_ROOT"
+  --derivative_root "$DESCRIPTOR_SHARDS_ROOT"
   --reports_root "$REPORTS_ROOT"
 )
 if [[ -n "$ROWS" ]]; then

@@ -8,20 +8,21 @@
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
-# Archive the complete descriptor derivative, including per-subject shards and
-# combined tables. The source directory is intentionally retained because
-# downstream dimensionality-reduction and decoding jobs may still be using it.
+# Move the per-subject descriptor shards of one epoch variant from scratch into a
+# single archive next to the merged tables on the project (07), so the project
+# holds two files per variant instead of one per shard. The scratch shards are
+# deleted once the archive lists every one of their files and folders.
 
 set -euo pipefail
 
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
-DESCRIPTORS_DIR=${DESCRIPTORS_DIR:-$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors}
-ARCHIVE_PATH=${ARCHIVE_PATH:-${DESCRIPTORS_DIR}.tar.zst}
-OVERWRITE=${OVERWRITE:-0}
+ARCHIVE_PATH="$DESCRIPTORS_ROOT/shards.tar.zst"
 
-require_dir "$DESCRIPTORS_DIR"
+require_dir "$DESCRIPTOR_SHARDS_ROOT"
+require_dir "$DESCRIPTORS_ROOT"
 command -v tar >/dev/null 2>&1 || {
     echo "Required command not found: tar" >&2
     exit 1
@@ -31,41 +32,27 @@ command -v zstd >/dev/null 2>&1 || {
     exit 1
 }
 
-if [[ "$ARCHIVE_PATH" != *.tar.zst ]]; then
-    echo "ARCHIVE_PATH must end in .tar.zst: $ARCHIVE_PATH" >&2
-    exit 1
-fi
-if [[ -e "$ARCHIVE_PATH" && "$OVERWRITE" != "1" ]]; then
-    echo "Archive already exists: $ARCHIVE_PATH" >&2
-    echo "Set OVERWRITE=1 to replace it." >&2
-    exit 1
-fi
-
-archive_parent=$(dirname "$ARCHIVE_PATH")
-archive_name=$(basename "$ARCHIVE_PATH" .tar.zst)
-source_parent=$(dirname "$DESCRIPTORS_DIR")
-source_name=$(basename "$DESCRIPTORS_DIR")
-temporary_archive="$archive_parent/.${archive_name}.partial.${SLURM_JOB_ID:-$$}.tar.zst"
-
-mkdir -p "$archive_parent"
+source_parent=$(dirname "$DESCRIPTOR_SHARDS_ROOT")
+source_name=$(basename "$DESCRIPTOR_SHARDS_ROOT")
+temporary_archive="$DESCRIPTORS_ROOT/.shards.partial.${SLURM_JOB_ID:-$$}.tar.zst"
 trap 'rm -f "$temporary_archive"' EXIT
 
-file_count=$(find "$DESCRIPTORS_DIR" -type f | wc -l)
-directory_count=$(find "$DESCRIPTORS_DIR" -type d | wc -l)
-source_size=$(du -sh "$DESCRIPTORS_DIR" | awk '{print $1}')
+file_count=$(find "$DESCRIPTOR_SHARDS_ROOT" -type f | wc -l)
+directory_count=$(find "$DESCRIPTOR_SHARDS_ROOT" -type d | wc -l)
+source_size=$(du -sh "$DESCRIPTOR_SHARDS_ROOT" | awk '{print $1}')
 
 echo "================================================================================"
-echo "DESCRIPTOR ARCHIVE"
-echo "Source:      $DESCRIPTORS_DIR"
+echo "DESCRIPTOR SHARD ARCHIVE ($EPOCHS_DESC)"
+echo "Source:      $DESCRIPTOR_SHARDS_ROOT"
 echo "Archive:     $ARCHIVE_PATH"
 echo "Files:       $file_count"
 echo "Directories: $directory_count"
 echo "Source size: $source_size"
 echo "================================================================================"
 
-# Stream tar directly into fast, multithreaded Zstandard compression. Parquet
-# and many model artifacts are already compressed, so level 1 avoids wasting
-# CPU while consolidating the large number of small files.
+# Stream tar directly into fast, multithreaded Zstandard compression. Parquet is
+# already compressed, so level 1 avoids wasting CPU while consolidating the many
+# small files.
 (
     cd "$source_parent"
     tar -cf - "$source_name" |
@@ -74,15 +61,20 @@ echo "==========================================================================
 
 echo "Validating archive integrity..."
 archive_entries=$(zstd -q -dc "$temporary_archive" | tar -tf - | wc -l)
+if [ "$archive_entries" -ne $((file_count + directory_count)) ]; then
+    echo "Archive lists $archive_entries entries, expected $((file_count + directory_count))." >&2
+    exit 1
+fi
 archive_size=$(du -h "$temporary_archive" | awk '{print $1}')
 
 mv -f "$temporary_archive" "$ARCHIVE_PATH"
 trap - EXIT
+rm -rf "$DESCRIPTOR_SHARDS_ROOT"
 
 echo "================================================================================"
 echo "ARCHIVE COMPLETE"
 echo "Archive: $ARCHIVE_PATH"
 echo "Size:    $archive_size"
 echo "Entries: $archive_entries"
-echo "Source directory retained; nothing was deleted."
+echo "Scratch shards deleted: $DESCRIPTOR_SHARDS_ROOT"
 echo "================================================================================"
