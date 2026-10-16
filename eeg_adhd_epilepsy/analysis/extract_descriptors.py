@@ -108,19 +108,23 @@ def _apply_mad_rejection(
     fraction_thresh: float = 0.05,
     min_epochs: int = 5,
     group_by: str | None = None,
+    exclude_prefixes: tuple[str, ...] = (),
 ) -> tuple[DataContainer, pd.DataFrame]:
     """Drop epochs where too large a fraction of features are MAD outliers.
 
     Delegates MAD scoring/masking to
     :func:`coco_pipe.io.quality.drop_epoch_outliers` and records the dropped
     epochs via :func:`coco_pipe.descriptors.mad_failures_from_qc`. A
-    ``RuntimeError`` is raised if fewer than ``min_epochs`` would survive.
+    ``RuntimeError`` is raised if fewer than ``min_epochs`` would survive. Features
+    whose names start with ``exclude_prefixes`` are not scored.
     """
     if container.X.shape[0] == 0:
         return container, metadata_df
 
+    features = [str(name) for name in np.asarray(container.coords["feature"])]
     clean_or_masks, qc_result = drop_epoch_outliers(
         container,
+        feature_cols=[name for name in features if not name.startswith(exclude_prefixes)],
         z_threshold=mad_threshold,
         outlier_fraction_threshold=fraction_thresh,
         group_by=group_by,
@@ -503,16 +507,23 @@ def main() -> None:
             group_by = outlier_config.get("group_by", "family")
             failure_metadata_df = metadata_df.copy()
             try:
-                sensor_result, metadata_df = _apply_mad_rejection(
-                    sensor_result,
-                    metadata_df,
-                    condition,
-                    subject,
-                    mad_threshold=mad_threshold,
-                    fraction_thresh=fraction_threshold,
-                    min_epochs=min_epochs,
-                    group_by=group_by,
-                )
+                if outlier_config.get("enabled", True):
+                    sensor_result, metadata_df = _apply_mad_rejection(
+                        sensor_result,
+                        metadata_df,
+                        condition,
+                        subject,
+                        mad_threshold=mad_threshold,
+                        fraction_thresh=fraction_threshold,
+                        min_epochs=min_epochs,
+                        group_by=group_by,
+                        exclude_prefixes=tuple(outlier_config.get("exclude_prefixes", ())),
+                    )
+                elif sensor_result.X.shape[0] < min_epochs:
+                    raise RuntimeError(
+                        f"Only {sensor_result.X.shape[0]} epoch(s) "
+                        f"(minimum required: {min_epochs})."
+                    )
             except RuntimeError as error:
                 LOGGER.warning("Skipping %s / %s: %s", condition, subject, str(error))
                 continue

@@ -49,6 +49,12 @@ families:
   complexity:
     enabled: true
     backend: auto
+    # Each epoch is centred, then band-passed to the 1-45 Hz of the spectral families, so
+    # drift below and muscle activity above do not enter the measures. Filtering each
+    # 10 s epoch matched filtering the continuous recording: Spearman >= 0.97 on all
+    # 86,998 EO/EC epochs (2026-10-15). Fuzzy entropy is left out: it matched sample
+    # entropy (Spearman 0.98-0.99) at 70 % of the extraction time.
+    bandpass: [1.0, 45.0]
     measures:
       - sample_entropy
       - perm_entropy
@@ -59,11 +65,21 @@ families:
       - higuchi_fd
       - petrosian_fd
       - svd_entropy
-      - fuzzy_entropy
       - hurst_exponent
       - dispersion_entropy
       - kurtosis
       - zero_crossings
+    # Every parameter written out; tolerance null is 0.2 x the epoch's standard deviation.
+    measure_kwargs:
+      sample_entropy: {order: 2, tolerance: null, metric: chebyshev}
+      perm_entropy: {order: 3, delay: 1, normalize: true}
+      spectral_entropy: {method: fft, normalize: true}
+      lziv_complexity: {normalize: true}
+      higuchi_fd: {kmax: 10}
+      svd_entropy: {order: 3, delay: 1, normalize: true}
+      hurst_exponent: {scale: default, corrected: true}
+      dispersion_entropy: {delay: 1, dimension: 3, c: 6, symbolize: NCDF}
+      kurtosis: {fisher: true, bias: false}
 
 pooling:
   channel_groups:
@@ -101,8 +117,12 @@ aggregation:
 
 qc:
   outlier:
+    # Epochs with more than epoch_outlier_fraction of one family's features beyond
+    # z_threshold robust z-scores are dropped. Power is scored on its log only: the
+    # linear forms are skewed and dropped high-power epochs one-sidedly.
+    enabled: true
     z_threshold: 5.0
     group_by: family
     epoch_outlier_fraction: 0.30
-    subject_outlier_fraction: 0.20
+    exclude_prefixes: [band_abs_, band_corr_abs_]
   min_obs: 5
