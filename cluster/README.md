@@ -9,8 +9,9 @@ the project root on your own machine.
 uv tool install cluster-uv      # once
 cluv login fir trillium-gpu     # opens the SSH connections (asks for MFA)
 
-# CPU stage, on fir
-cluv submit fir cluster/07_submit_merge_descriptors.sh
+# CPU stage, on fir; every stage from 05 runs once per epoch variant
+cluv submit fir cluster/07_submit_merge_descriptors.sh -- EPOCHS_DESC=base
+cluv submit fir cluster/07_submit_merge_descriptors.sh -- EPOCHS_DESC=baserejected
 
 # GPU stage, on fir: the rrg allocation there is CPU only, so def-kjerbi, plus
 # the GPU slice, CPUs and memory
@@ -61,10 +62,10 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 02 | `02_tar_raw_data.sh` | archive raw data | single |
 | 03 | `03_submit_base_cleaning.sh` | BIDS → `desc-base` derivatives + QC | single (all subjects) |
 | 04 | `04_submit_epochs.sh` | `desc-base` → condition epochs | single |
-| 05 | `05_submit_extract_descriptors_array.sh` | epochs → descriptor shards | array (per metadata row) |
+| 05 | `05_submit_extract_descriptors_array.sh` | epochs → descriptor shards (scratch) | array (per metadata row) |
 | 06 | `06_verify_descriptors.sh` | audit shard completeness + QC before merge | single |
-| 07 | `07_submit_merge_descriptors.sh` | shards → combined tables | single |
-| 07b | `07b_submit_archive_descriptors.sh` | complete descriptor derivative → validated `.tar.zst` archive | single |
+| 07 | `07_submit_merge_descriptors.sh` | shards → combined tables (project) | single |
+| 07b | `07b_submit_archive_descriptors.sh` | shards → one validated `shards.tar.zst` on the project; scratch shards deleted | single |
 | 08 | `08_submit_foundation_embeddings.sh` | epochs → embedding shards | array (per metadata row, GPU) |
 | 09 | `09_submit_align_subject_embeddings.sh` | pooled embeddings + native tokens → aligned variants | array (per model, CPU) |
 | 10 | `10_submit_merge_foundation_embeddings.sh` | raw/aligned shards → combined tables, manifest, and report | single |
@@ -99,9 +100,20 @@ derivative tree has a `.bidsignore` for the files BIDS does not define.
 | `SCRATCH_ROOT` | scratch root for outputs | `$SCRATCH/eeg-epilepsy-adhd` |
 | `HF_HOME` | model weights cache | `$SCRATCH_ROOT/hf_home` |
 | `REPORTS_ROOT` | generated reports | `$SCRATCH_ROOT/reports` |
-| `DECODING_ROOT` | decoding checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/decoding` |
-| `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/dim_reduction` |
+| `EPOCHS_DESC` | epoch variant of stages 05-20: `base` or `baserejected` (required) | — |
+| `DESCRIPTOR_SHARDS_ROOT` | per-subject descriptor shards (05, 06) | `$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
+| `DESCRIPTORS_ROOT` | merged descriptor tables and shard archive (07, 07b) | `$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
+| `EMBEDDING_ROOT` | foundation embeddings (08-10) | `$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings_$EPOCHS_DESC` |
+| `DECODING_ROOT` | decoding checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/decoding_$EPOCHS_DESC` |
+| `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/dim_reduction_$EPOCHS_DESC` |
 | `OVERWRITE` | `1` to force reprocessing | `0` |
+
+Stage 04 writes two epoch variants: `desc-base` (every epoch) and
+`desc-baserejected` (the epochs overlapping a `BAD_` annotation dropped). Every
+stage from 05 runs once per variant (`EPOCHS_DESC`), into its own roots and its
+own reports folder (`$REPORTS_ROOT/$EPOCHS_DESC`), so the two never mix. A model
+that re-epochs the continuous recording drops, with `baserejected`, the same
+epochs stage 04 does.
 
 `BIDS_ROOT` remains the input dataset on project storage. The decoding and
 dimensionality-reduction roots are independent output locations, so moving those
