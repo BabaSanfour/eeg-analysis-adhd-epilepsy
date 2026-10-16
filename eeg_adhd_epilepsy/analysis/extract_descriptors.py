@@ -359,8 +359,9 @@ def main() -> None:
     LOGGER.info("Using %d subjects from saved derivatives.", len(subjects))
 
     for subject in subjects:
-        epochs_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
-        files = list(epochs_root.rglob(f"{bids_subject_label(subject)}*_desc-{args.desc}_epo.fif"))
+        label = bids_subject_label(subject)
+        subject_root = get_derivative_root(bids_root, DerivativeStage.PREPROC) / label
+        files = list(subject_root.glob(f"**/{label}*_desc-{args.desc}_epo.fif"))
 
         # The session entity of each file; a file without one is labelled ses-01 in the
         # outputs and loaded without a session filter.
