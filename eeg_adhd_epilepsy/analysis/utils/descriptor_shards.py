@@ -15,7 +15,7 @@ directly are listed literally.
 from __future__ import annotations
 
 # Suffix convention written by coco-pipe's ``save_descriptor_table``.
-_TABLE_FORMATS = ("parquet", "csv")
+_TABLE_FORMATS = ("parquet",)
 _FEATURE_COLUMNS_SUFFIX = "_feature_columns.json"
 
 SENSOR_TABLE_STEMS: tuple[str, ...] = ("sensor_epoch_features", "sensor_recording_features")
@@ -23,17 +23,9 @@ SENSOR_TABLE_STEMS: tuple[str, ...] = ("sensor_epoch_features", "sensor_recordin
 # Non-table artifacts the producer writes directly (no save_descriptor_table).
 SENSOR_MARKER_FILES: tuple[str, ...] = (
     "_SUCCESS",
-    "sensor_descriptor_bundle.npz",
     "failures.csv",
 )
-QC_FILES: tuple[str, ...] = (
-    "qc/summary_row.csv",
-    "qc/summary_metrics.csv",
-    "qc/flags.csv",
-    "qc/failure_summary.csv",
-    "qc/feature_missingness.csv",
-    "qc/family_summary.csv",
-)
+QC_FILES: tuple[str, ...] = ("qc/summary_row.csv", "qc/flags.csv")
 """Per-shard QC artifacts written by :func:`run_descriptor_subject_qc`."""
 
 

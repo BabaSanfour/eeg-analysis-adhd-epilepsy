@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import tempfile
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
@@ -12,7 +13,6 @@ import pandas as pd
 from coco_pipe.descriptors.qc import (
     add_family_diagnostics,
     aggregate_family_qc,
-    classify_descriptor_columns,
     compute_family_constant_summary,
     compute_family_missingness,
     summarize_failures,
@@ -430,40 +430,34 @@ def run_descriptor_subject_qc(
         ]
     )
     flags_df = pd.DataFrame(flags)
-    figure_paths = viz_descriptor_qc.save_subject_descriptor_qc_figures(
-        figures_dir=report_dir / "figures",
-        family_summary_df=family_summary_df,
-        failure_summary_df=failure_summaries["combined"],
-        feature_missingness_df=feature_missingness_df,
-        epoch_feature_df=feature_df,
-    )
-
     qc_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame([summary_row]).to_csv(qc_dir / "summary_row.csv", index=False)
-    pd.DataFrame([{"metric": key, "value": value} for key, value in metrics.items()]).to_csv(
-        qc_dir / "summary_metrics.csv", index=False
-    )
     flags_df.to_csv(qc_dir / "flags.csv", index=False)
-    failure_summaries["combined"].to_csv(qc_dir / "failure_summary.csv", index=False)
-    feature_missingness_df.to_csv(qc_dir / "feature_missingness.csv", index=False)
-    family_summary_df.to_csv(qc_dir / "family_summary.csv", index=False)
-    generate_descriptor_subject_report(
-        output_path=report_path,
-        overview_df=overview_df,
-        flags_df=flags_df,
-        failure_summary_df=failure_summaries["combined"],
-        feature_missingness_df=feature_missingness_df,
-        family_summary_df=family_summary_df,
-        figure_paths=figure_paths,
-        asset_urls=_report_asset_urls(config_snapshot),
-    )
+    # The figures live only inside the HTML report, which embeds them.
+    with tempfile.TemporaryDirectory() as figures_dir:
+        figure_paths = viz_descriptor_qc.save_subject_descriptor_qc_figures(
+            figures_dir=Path(figures_dir),
+            family_summary_df=family_summary_df,
+            failure_summary_df=failure_summaries["combined"],
+            feature_missingness_df=feature_missingness_df,
+            epoch_feature_df=feature_df,
+        )
+        generate_descriptor_subject_report(
+            output_path=report_path,
+            overview_df=overview_df,
+            flags_df=flags_df,
+            failure_summary_df=failure_summaries["combined"],
+            feature_missingness_df=feature_missingness_df,
+            family_summary_df=family_summary_df,
+            figure_paths=figure_paths,
+            asset_urls=_report_asset_urls(config_snapshot),
+        )
     return summary_row
 
 
 def run_descriptor_dataset_qc(
     *,
     reports_root: Path,
-    qc_dir: Path,
     merged_sensor_epoch_df: pd.DataFrame | None,
     merged_sensor_subject_df: pd.DataFrame,
     merged_sensor_epoch_feature_columns_path: Path | None,
@@ -473,7 +467,6 @@ def run_descriptor_dataset_qc(
     config_snapshot: dict[str, Any],
     manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    qc_dir = Path(qc_dir)
     summary_dir = report_paths.summary_report_dir(
         reports_root, report_paths.ReportStage.DESCRIPTOR_QC, create=True
     )
@@ -534,23 +527,6 @@ def run_descriptor_dataset_qc(
         merged_sensor_subject_df,
         subject_feature_cols,
     )
-    distribution_rows: list[dict[str, Any]] = []
-    for row in classify_descriptor_columns(subject_feature_cols).to_dict("records"):
-        column = str(row["column"])
-        numeric = pd.to_numeric(merged_sensor_subject_df[column], errors="coerce")
-        distribution_rows.append(
-            {
-                "column": column,
-                "family": row["family"],
-                "mean": float(numeric.mean()) if numeric.notna().any() else np.nan,
-                "std": float(numeric.std()) if numeric.notna().any() else np.nan,
-                "min": float(numeric.min()) if numeric.notna().any() else np.nan,
-                "median": float(numeric.median()) if numeric.notna().any() else np.nan,
-                "max": float(numeric.max()) if numeric.notna().any() else np.nan,
-            }
-        )
-    distribution_df = pd.DataFrame(distribution_rows)
-
     condition_breakdown_rows: list[dict[str, Any]] = []
     if "condition" in merged_sensor_subject_df.columns:
         failure_has_condition = "condition" in failure_df.columns
@@ -719,36 +695,6 @@ def run_descriptor_dataset_qc(
         ]
     )
     flags_df = pd.DataFrame(flags)
-    figure_paths = viz_descriptor_qc.save_dataset_descriptor_qc_figures(
-        figures_dir=summary_dir / "figures",
-        shard_summary_df=shard_summary_df,
-        failure_family_df=failure_summaries["by_family"],
-        failure_channel_df=failure_summaries["by_channel"],
-        feature_missingness_df=feature_missingness_df,
-        low_variance_df=low_variance_df,
-    )
-
-    qc_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(
-        [
-            {"metric": key, "value": value}
-            for key, value in {
-                **metrics,
-                "qc_status": qc_status,
-                "report_path": str(report_path),
-            }.items()
-        ]
-    ).to_csv(qc_dir / "dataset_summary_metrics.csv", index=False)
-    flags_df.to_csv(qc_dir / "dataset_flags.csv", index=False)
-    shard_summary_df.to_csv(qc_dir / "shard_qc_summary.csv", index=False)
-    failure_summaries["by_family"].to_csv(qc_dir / "failure_summary_by_family.csv", index=False)
-    failure_summaries["by_channel"].to_csv(qc_dir / "failure_summary_by_channel.csv", index=False)
-    feature_missingness_df.to_csv(qc_dir / "feature_missingness.csv", index=False)
-    distribution_df.to_csv(qc_dir / "feature_distribution_summary.csv", index=False)
-    low_variance_df.to_csv(qc_dir / "low_variance_features.csv", index=False)
-    if not condition_breakdown_df.empty:
-        condition_breakdown_df.to_csv(qc_dir / "condition_breakdown.csv", index=False)
-
     manifest_df = None
     if manifest:
         manifest_df = pd.DataFrame(
@@ -759,21 +705,30 @@ def run_descriptor_dataset_qc(
             ]
         )
 
-    generate_descriptor_dataset_report(
-        output_path=report_path,
-        overview_df=overview_df,
-        shard_summary_df=shard_summary_df,
-        flags_df=flags_df,
-        failure_family_df=failure_summaries["by_family"],
-        failure_channel_df=failure_summaries["by_channel"],
-        feature_missingness_df=feature_missingness_df,
-        low_variance_df=low_variance_df,
-        family_summary_df=family_summary_df,
-        figure_paths=figure_paths,
-        manifest_df=manifest_df,
-        condition_breakdown_df=condition_breakdown_df,
-        asset_urls=_report_asset_urls(config_snapshot),
-    )
+    with tempfile.TemporaryDirectory() as figures_dir:
+        figure_paths = viz_descriptor_qc.save_dataset_descriptor_qc_figures(
+            figures_dir=Path(figures_dir),
+            shard_summary_df=shard_summary_df,
+            failure_family_df=failure_summaries["by_family"],
+            failure_channel_df=failure_summaries["by_channel"],
+            feature_missingness_df=feature_missingness_df,
+            low_variance_df=low_variance_df,
+        )
+        generate_descriptor_dataset_report(
+            output_path=report_path,
+            overview_df=overview_df,
+            shard_summary_df=shard_summary_df,
+            flags_df=flags_df,
+            failure_family_df=failure_summaries["by_family"],
+            failure_channel_df=failure_summaries["by_channel"],
+            feature_missingness_df=feature_missingness_df,
+            low_variance_df=low_variance_df,
+            family_summary_df=family_summary_df,
+            figure_paths=figure_paths,
+            manifest_df=manifest_df,
+            condition_breakdown_df=condition_breakdown_df,
+            asset_urls=_report_asset_urls(config_snapshot),
+        )
 
     return {
         "qc_status": qc_status,

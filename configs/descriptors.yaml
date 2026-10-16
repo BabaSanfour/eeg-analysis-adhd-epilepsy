@@ -98,6 +98,8 @@ runtime:
   obs_chunk: 16
   on_error: collect
 
+# Per recording: the mean (the analyses' location_statistic) and a spread per family.
+# No median: the analyses read the mean, and the loader drops median_* columns.
 aggregation:
   descriptors:
     - name: mean_export
@@ -106,13 +108,13 @@ aggregation:
     - name: band_summaries
       prefixes: [band_]
       exclude_prefixes: [band_abs_]
-      stats: [median, iqr]
+      stats: [iqr]
     - name: complexity_summaries
       prefixes: [complexity_]
-      stats: [median, mad]
+      stats: [mad]
     - name: param_summaries
       prefixes: [param_]
-      stats: [median, iqr]
+      stats: [iqr]
 
 qc:
   outlier:

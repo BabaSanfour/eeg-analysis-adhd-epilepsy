@@ -53,6 +53,7 @@ from eeg_adhd_epilepsy.io.report_paths import (
     default_reports_root,
     descriptor_qc_report_name,
     subject_report_dir,
+    summary_report_dir,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -261,7 +262,7 @@ def main() -> None:
     parser.add_argument(
         "--out",
         default=None,
-        help="Per-shard CSV destination (default <derivative_root>/verification_report.csv).",
+        help="Per-shard CSV destination (default: the descriptor QC summary reports folder).",
     )
     parser.add_argument(
         "--strict",
@@ -296,9 +297,13 @@ def main() -> None:
         parser.error(f"config_used.yaml not found under {derivative_root}; extraction never ran?")
     shard_df = collect_shard_records(derivative_root, reports_root)
 
-    out_path = (
-        Path(args.out).expanduser() if args.out else derivative_root / "verification_report.csv"
+    # Next to the descriptor QC reports, not inside the derivative it checks.
+    default_dir = (
+        summary_report_dir(reports_root, ReportStage.DESCRIPTOR_QC, create=True)
+        if reports_root is not None
+        else derivative_root
     )
+    out_path = Path(args.out).expanduser() if args.out else default_dir / "verification_report.csv"
     shard_df.to_csv(out_path, index=False)
 
     n_shards = len(shard_df)

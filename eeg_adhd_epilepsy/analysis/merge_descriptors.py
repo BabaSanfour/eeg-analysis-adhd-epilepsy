@@ -1,14 +1,11 @@
 """Merge checkpointed descriptor shards into combined tables.
 
-Produces one combined table per :data:`~coco_pipe.io.AGGREGATION_LEVELS` granularity:
+Concatenates the shards' tables into:
 
-- ``combined/sensor_epoch_features``     — 1 row / epoch (concatenated shards)
-- ``combined/sensor_recording_features`` — 1 row / recording (concatenated shards)
-- ``combined/sensor_subject_features``   — 1 row / subject (mean-pooled here from
-  the recording table)
+- ``combined/sensor_epoch_features``     — 1 row / epoch
+- ``combined/sensor_recording_features`` — 1 row / recording
 
-The per-shard tables are written at epoch and recording granularity; the subject
-level is derived at merge time.
+each a parquet file with its ``_feature_columns.json`` sidecar.
 """
 
 from __future__ import annotations
@@ -24,7 +21,6 @@ import pandas as pd
 from coco_pipe.descriptors import (
     check_feature_column_consistency,
     merge_descriptor_tables,
-    save_descriptor_table,
 )
 from coco_pipe.io import read_table, write_json
 
@@ -215,46 +211,14 @@ def main() -> None:
             [shard_root / f"{name}.parquet" for shard_root in shard_roots],
             [shard_root / f"{name}_feature_columns.json" for shard_root in shard_roots],
             out_base_path=combined_root / name,
-            formats=("parquet", "csv"),
+            formats=("parquet",),
         )
         return combined, feature_columns
 
-    def _write_subject_table(
-        recording_df: pd.DataFrame, feature_columns: list[str] | None, out_name: str
-    ) -> pd.DataFrame:
-        """Mean-pool the recording-level table to one row per (subject, condition).
-
-        Subjects are pooled by averaging their recordings' feature values (the
-        merge analog of the descriptor recording aggregation, one level up).
-        Recording-specific id columns (session/run/recording_id/obs_id) are
-        dropped; everything else constant within a subject is carried through.
-        """
-        keys = [k for k in ("subject", "condition") if k in recording_df.columns]
-        feature_cols = [c for c in (feature_columns or []) if c in recording_df.columns]
-        if recording_df.empty or not keys or not feature_cols:
-            return pd.DataFrame()
-        subject_df = recording_df.groupby(keys, as_index=False)[feature_cols].mean()
-        drop = set(feature_cols) | set(keys) | {"session", "run", "recording_id", "obs_id"}
-        carry = [c for c in recording_df.columns if c not in drop]
-        if carry:
-            firsts = recording_df.groupby(keys, as_index=False)[carry].first()
-            subject_df = subject_df.merge(firsts, on=keys)
-        save_descriptor_table(
-            subject_df,
-            combined_root / out_name,
-            feature_columns=feature_cols,
-            formats=("parquet", "csv"),
-        )
-        return subject_df
-
-    # epoch + recording come straight from the shards; subject is mean-pooled here.
     LOGGER.info("Combining sensor families...")
     combined_sensor_epoch_df, _ = _merge_family("sensor_epoch_features")
     combined_sensor_recording_df, sensor_feature_columns = _merge_family(
         "sensor_recording_features"
-    )
-    combined_sensor_subject_df = _write_subject_table(
-        combined_sensor_recording_df, sensor_feature_columns, "sensor_subject_features"
     )
 
     # Some shards may have zero-row failures.csv; concatenating only the
@@ -282,7 +246,6 @@ def main() -> None:
         "n_conditions": _nunique_or_none(combined_sensor_recording_df, "condition"),
         "n_sensor_epoch_rows": int(len(combined_sensor_epoch_df)),
         "n_sensor_recording_rows": int(len(combined_sensor_recording_df)),
-        "n_sensor_subject_rows": int(len(combined_sensor_subject_df)),
         "n_failures_total": int(len(combined_failures_df)),
         "excluded_shards": excluded_shards,
         "merged_shards": shard_manifest_rows,
@@ -292,7 +255,6 @@ def main() -> None:
     # actually consume (the keyword args keep their historical `_subject` names).
     dataset_qc = run_descriptor_dataset_qc(
         reports_root=reports_root,
-        qc_dir=combined_root / "qc",
         merged_sensor_epoch_df=combined_sensor_epoch_df,
         merged_sensor_subject_df=combined_sensor_recording_df,
         merged_sensor_epoch_feature_columns_path=combined_root

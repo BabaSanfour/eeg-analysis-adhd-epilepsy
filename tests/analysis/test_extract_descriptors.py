@@ -336,21 +336,19 @@ aggregation:
     subject_one_root = derivative_root / "sub-0001" / "ses-01" / "eeg" / "EO_baseline"
     subject_two_root = derivative_root / "sub-0002" / "ses-01" / "eeg" / "EO_baseline"
     for shard_root in (subject_one_root, subject_two_root):
-        assert (shard_root / "_SUCCESS").exists()
-        assert (shard_root / "sensor_descriptor_bundle.npz").exists()
-        assert (shard_root / "sensor_epoch_features.csv").exists()
-        assert (shard_root / "sensor_epoch_features.parquet").exists()
-        assert (shard_root / "sensor_epoch_features_feature_columns.json").exists()
-        assert (shard_root / "sensor_recording_features.csv").exists()
-        assert (shard_root / "sensor_recording_features.parquet").exists()
-        assert (shard_root / "sensor_recording_features_feature_columns.json").exists()
-        assert (shard_root / "failures.csv").exists()
-        assert (shard_root / "qc" / "summary_row.csv").exists()
-        assert (shard_root / "qc" / "summary_metrics.csv").exists()
-        assert (shard_root / "qc" / "flags.csv").exists()
-        assert (shard_root / "qc" / "failure_summary.csv").exists()
-        assert (shard_root / "qc" / "feature_missingness.csv").exists()
-        assert (shard_root / "qc" / "family_summary.csv").exists()
+        written = {
+            str(path.relative_to(shard_root)) for path in shard_root.rglob("*") if path.is_file()
+        }
+        assert written == {
+            "_SUCCESS",
+            "failures.csv",
+            "sensor_epoch_features.parquet",
+            "sensor_epoch_features_feature_columns.json",
+            "sensor_recording_features.parquet",
+            "sensor_recording_features_feature_columns.json",
+            "qc/summary_row.csv",
+            "qc/flags.csv",
+        }
     assert (
         reports_root
         / "subjects"
@@ -368,8 +366,8 @@ aggregation:
         / "sub-0002_ses-01_EO_baseline_descriptor_qc_report.html"
     ).exists()
 
-    sensor_epoch_df = pd.read_csv(subject_one_root / "sensor_epoch_features.csv")
-    sensor_agg_df = pd.read_csv(subject_one_root / "sensor_recording_features.csv")
+    sensor_epoch_df = pd.read_parquet(subject_one_root / "sensor_epoch_features.parquet")
+    sensor_agg_df = pd.read_parquet(subject_one_root / "sensor_recording_features.parquet")
     # The fixture has 10 epochs/subject; MAD rejection may drop ~1, so at least 5 survive.
     assert len(sensor_epoch_df) >= 5
     # Subject 0001 alternates between run-01 and run-02 → always 2 recording rows.
@@ -478,31 +476,21 @@ aggregation:
 
     combined_root = tmp_path / "merged" / "combined"
     reports_root = tmp_path / "reports"
-    combined_sensor_epoch_df = pd.read_csv(combined_root / "sensor_epoch_features.csv")
-    combined_sensor_recording_df = pd.read_csv(combined_root / "sensor_recording_features.csv")
-    combined_sensor_subject_df = pd.read_csv(combined_root / "sensor_subject_features.csv")
+    combined_sensor_epoch_df = pd.read_parquet(combined_root / "sensor_epoch_features.parquet")
+    combined_sensor_recording_df = pd.read_parquet(
+        combined_root / "sensor_recording_features.parquet"
+    )
 
     # 2 subjects × ≥5 surviving epochs each → at least 10 combined epoch rows.
     assert len(combined_sensor_epoch_df) >= 10
     # 0001 has 2 runs, 0002 has 1 run → 3 recording-level rows, 2 subject-level rows.
     assert len(combined_sensor_recording_df) == 3
-    assert len(combined_sensor_subject_df) == 2
     # Aggregated stat columns are present at recording level and inherited by subject.
-    for frame in (combined_sensor_recording_df, combined_sensor_subject_df):
-        assert any(column.startswith("agg_band_ratio_") for column in frame.columns)
-        assert not any(column.startswith("agg_band_corr_ratio_") for column in frame.columns)
+    assert any(column.startswith("agg_band_ratio_") for column in combined_sensor_recording_df)
     assert (combined_root / "failures.csv").exists()
     assert (combined_root / "sensor_epoch_features_feature_columns.json").exists()
     assert (combined_root / "sensor_recording_features_feature_columns.json").exists()
-    assert (combined_root / "sensor_subject_features_feature_columns.json").exists()
-    assert (combined_root / "qc" / "dataset_summary_metrics.csv").exists()
-    assert (combined_root / "qc" / "dataset_flags.csv").exists()
-    assert (combined_root / "qc" / "shard_qc_summary.csv").exists()
-    assert (combined_root / "qc" / "failure_summary_by_family.csv").exists()
-    assert (combined_root / "qc" / "failure_summary_by_channel.csv").exists()
-    assert (combined_root / "qc" / "feature_missingness.csv").exists()
-    assert (combined_root / "qc" / "feature_distribution_summary.csv").exists()
-    assert (combined_root / "qc" / "low_variance_features.csv").exists()
+    assert not (combined_root / "qc").exists()
     assert (
         reports_root / "summary" / "descriptor_qc" / "descriptor_qc_dataset_summary.html"
     ).exists()
@@ -583,7 +571,7 @@ aggregation:
     assert not (derivative_root / "sub-0001" / "ses-01" / "eeg" / "HV_EO").exists()
 
 
-def test_extract_descriptors_cli_resumes_completed_shards(
+def test_extract_descriptors_cli_recomputes_every_shard(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -654,7 +642,7 @@ aggregation:
         / "eeg"
         / "EO_baseline"
     )
-    (incomplete_shard / "sensor_recording_features.csv").unlink()
+    (incomplete_shard / "left_from_an_earlier_run.csv").write_text("stale\n")
 
     rerun_calls: list[tuple[str, ...]] = []
     monkeypatch.setattr(
@@ -666,7 +654,9 @@ aggregation:
         ),
     )
     extract_descriptors.main()
-    assert rerun_calls == [("0001",)]
+    assert rerun_calls == [("0001",), ("0002",)]
+    assert not (incomplete_shard / "left_from_an_earlier_run.csv").exists()
+    assert (incomplete_shard / "_SUCCESS").exists()
 
     combined_root = bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
     assert not combined_root.exists()

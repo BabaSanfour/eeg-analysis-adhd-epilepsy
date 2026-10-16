@@ -9,11 +9,10 @@ Outputs
 For each processed subject-condition pair, the script writes a shard under
 ``<derivative_root>/sub-<subject>/ses-<session>/eeg/<condition>/`` containing:
 
-- a sensor descriptor bundle (`.npz`)
-- a sensor epoch-level feature table (`.parquet` and `.csv`)
-- a sensor subject-level aggregated feature table (`.parquet` and `.csv`)
-- a failures table (`.csv`)
-- a `_SUCCESS` marker for resume-safe checkpointing
+- a sensor epoch-level and a recording-level feature table (`.parquet`, each with
+  its `_feature_columns.json`)
+- a failures table (`.csv`) and the shard's QC summary and flags (`qc/`)
+- a `_SUCCESS` marker, written last, so a crashed shard is never merged
 
 Combined outputs are built separately by ``merge_descriptors.py``.
 """
@@ -24,6 +23,7 @@ import argparse
 import itertools
 import json
 import logging
+import shutil
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -38,13 +38,12 @@ from coco_pipe.descriptors import (
     mad_failures_from_qc,
     save_descriptor_table,
 )
-from coco_pipe.io import DataContainer, save_npz
+from coco_pipe.io import DataContainer
 from coco_pipe.io.quality import drop_epoch_outliers
 from mne_bids import get_entities_from_fname
 
 from eeg_adhd_epilepsy.analysis.dataset import build_container
 from eeg_adhd_epilepsy.analysis.utils.common import require_config
-from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import required_descriptor_files
 from eeg_adhd_epilepsy.analysis.utils.subject_resolution import (
     resolve_cohort_subjects,
     resolve_metadata_row,
@@ -72,28 +71,6 @@ from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_CONDITIONS = list(DEFAULT_ANALYSIS_CONDITIONS)
-
-
-def _shard_complete(
-    shard_root: Path,
-    reports_root: Path,
-    subject: str,
-    session: str,
-    condition: str,
-) -> bool:
-    required_paths = [
-        shard_root / relative_path for relative_path in required_descriptor_files(include_qc=True)
-    ]
-    required_paths.append(
-        subject_report_dir(
-            reports_root=reports_root,
-            subject=subject,
-            session=session,
-            stage=ReportStage.DESCRIPTOR_QC,
-        )
-        / descriptor_qc_report_name(subject, session, condition)
-    )
-    return all(path.exists() for path in required_paths)
 
 
 def _apply_mad_rejection(
@@ -202,23 +179,17 @@ def _save_descriptor_shard(
     failure_df: pd.DataFrame,
 ) -> None:
     shard_root.mkdir(parents=True, exist_ok=True)
-    save_npz(
-        shard_root / "sensor_descriptor_bundle.npz",
-        X=sensor_container.X,
-        descriptor_names=np.asarray(sensor_container.coords["feature"], dtype=object),
-        failures=np.asarray(sensor_container.meta.get("failures", []), dtype=object),
-    )
     save_descriptor_table(
         sensor_outputs["epoch_df"],
         shard_root / "sensor_epoch_features",
         feature_columns=sensor_outputs["epoch_feature_columns"],
-        formats=("parquet", "csv"),
+        formats=("parquet",),
     )
     save_descriptor_table(
         sensor_outputs["subject_df"],
         shard_root / "sensor_recording_features",
         feature_columns=sensor_outputs["subject_feature_columns"],
-        formats=("parquet", "csv"),
+        formats=("parquet",),
     )
     failure_df.to_csv(shard_root / "failures.csv", index=False)
 
@@ -410,11 +381,18 @@ def main() -> None:
                 / "eeg"
                 / condition
             )
-            if _shard_complete(shard_root, reports_root, subject, session, condition):
-                LOGGER.info(
-                    "Skipping %s / %s (ses %s): already complete.", condition, subject, session
+            # Every run recomputes: a shard or report left from an earlier run (an earlier
+            # stage 03/04, another config, a crash halfway) never survives it.
+            shutil.rmtree(shard_root, ignore_errors=True)
+            (
+                subject_report_dir(
+                    reports_root=reports_root,
+                    subject=subject,
+                    session=session,
+                    stage=ReportStage.DESCRIPTOR_QC,
                 )
-                continue
+                / descriptor_qc_report_name(subject, session, condition)
+            ).unlink(missing_ok=True)
 
             LOGGER.info("Loading %s for %s (ses %s)", condition, subject, session)
             try:
