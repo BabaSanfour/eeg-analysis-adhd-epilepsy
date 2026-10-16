@@ -254,21 +254,6 @@ def main() -> None:
         ),
     )
     parser.add_argument(
-        "--subject_col",
-        default="subject",
-        help="Subject identifier column in cleaned metadata.",
-    )
-    parser.add_argument(
-        "--target_col",
-        default=None,
-        help="Optional canonical metadata column to also expose as container y during aggregation.",
-    )
-    parser.add_argument(
-        "--units",
-        default="V",
-        help="Units to load the EEG data in (e.g. 'V' or 'uV').",
-    )
-    parser.add_argument(
         "--derivative_root",
         default=None,
         help=(
@@ -349,13 +334,13 @@ def main() -> None:
     meta_df = read_participants(metadata_path)
     requested: list[Any] | None = list(args.subjects) if args.subjects else None
     if args.metadata_row is not None:
-        subject = resolve_metadata_row(meta_df, args.metadata_row, args.subject_col)
+        subject = resolve_metadata_row(meta_df, args.metadata_row, "subject")
         if subject is None:
             return
         requested = [subject]
         LOGGER.info("Resolved metadata row %d to %s.", args.metadata_row, subject)
 
-    subjects = resolve_cohort_subjects(meta_df, args.subject_col, requested)
+    subjects = resolve_cohort_subjects(meta_df, "subject", requested)
     LOGGER.info("Using %d subjects from saved derivatives.", len(subjects))
 
     for subject in subjects:
@@ -411,11 +396,9 @@ def main() -> None:
                         bids_root=bids_root,
                         use_derivatives=True,
                         subjects=[subject],
-                        target_col=args.target_col,
                         desc=args.desc,
                         condition=condition,
                         session=session_entity,
-                        units=args.units,
                     )
                 except RuntimeError as error:
                     # Skipped only when no recording has this condition; the loader's
@@ -451,11 +434,7 @@ def main() -> None:
                 if ids.size == 0:
                     raise ValueError("Loaded EEG container did not include any epochs.")
 
-                metadata_df = dc_loaded.obs_table(
-                    include_ids=True,
-                    include_y=bool(args.target_col),
-                    y_col=args.target_col or "y",
-                )
+                metadata_df = dc_loaded.obs_table(include_ids=True)
                 metadata_df["obs_id"] = metadata_df["obs_id"].astype(str)
                 metadata_df["condition"] = condition
                 metadata_df["subject"] = subject
@@ -517,9 +496,7 @@ def main() -> None:
                     )
                     continue
 
-                sensor_outputs = recording_tables(
-                    metadata_df, sensor_result, config_snapshot, target_col=args.target_col
-                )
+                sensor_outputs = recording_tables(metadata_df, sensor_result, config_snapshot)
                 failure_df = _build_failure_df(
                     sensor_result.meta.get("failures", []),
                     failure_metadata_df,

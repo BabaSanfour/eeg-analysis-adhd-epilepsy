@@ -39,8 +39,6 @@ def recording_tables(
     metadata_df: pd.DataFrame,
     container: DataContainer,
     config_used: dict[str, Any],
-    *,
-    target_col: str | None = None,
 ) -> dict[str, Any]:
     """Epoch and recording tables from one condition's epochs, as configured.
 
@@ -59,7 +57,6 @@ def recording_tables(
         metadata_df,
         group_by="recording_id",
         id_col="obs_id",
-        target_col=target_col,
         aggregation_groups=list(config_used["aggregation"]["descriptors"]),
         ratio_pairs=list(bands.ratio_pairs) if bands.enabled else [],
         ratio_floor=float(bands.min_denominator_power) if bands.enabled else 0.0,
