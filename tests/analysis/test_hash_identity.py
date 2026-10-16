@@ -37,7 +37,6 @@ def _descriptor_dim_args(bids_root: Path, representation: str) -> SimpleNamespac
         representation=representation,
         descriptor_families=None,
         descriptor_table_path=str(combined / f"{stem}.parquet"),
-        descriptor_feature_columns_path=str(combined / f"{stem}_feature_columns.json"),
         descriptor_max_abs_value=None,
         location_statistic="mean",
         embedding_derivative_root=None,
@@ -54,7 +53,6 @@ def test_decoding_scientific_paths_are_portable_across_mounts(tmp_path):
     first_root = tmp_path / "mount_a" / "BIDS"
     second_root = tmp_path / "mount_b" / "BIDS"
     relative_table = Path("derivatives/signal_features/descriptors/combined/features.parquet")
-    relative_columns = relative_table.with_name("features_feature_columns.json")
     common = {
         "dataset_name": "cohort",
         "input_mode": "descriptors",
@@ -65,14 +63,12 @@ def test_decoding_scientific_paths_are_portable_across_mounts(tmp_path):
         "bids_root": str(first_root),
         "metadata": str(tmp_path / "mount_a" / "metadata.csv"),
         "descriptor_table_path": str(first_root / relative_table),
-        "descriptor_feature_columns_path": str(first_root / relative_columns),
     }
     second = {
         **common,
         "bids_root": str(second_root),
         "metadata": str(tmp_path / "mount_b" / "metadata.csv"),
         "descriptor_table_path": str(second_root / relative_table),
-        "descriptor_feature_columns_path": str(second_root / relative_columns),
     }
 
     assert scientific_config(first) == scientific_config(second)

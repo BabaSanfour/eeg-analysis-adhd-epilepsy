@@ -28,7 +28,6 @@ PYTHON                 ?= python
 
 DESCRIPTOR_ROOT = $(BIDS_ROOT)/derivatives/signal_features/descriptors/combined
 DESCRIPTOR_TABLE = $(DESCRIPTOR_ROOT)/sensor_recording_features.parquet
-DESCRIPTOR_COLUMNS = $(DESCRIPTOR_ROOT)/sensor_recording_features_feature_columns.json
 
 # Inputs for additional standalone targets.
 ADHD_CSV                    ?=
@@ -124,8 +123,7 @@ dim-reduce: ## Combined descriptors -> dimensionality reduction
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
 	  --cohort_config $(COHORT) --analysis_config $(DIM_ANALYSIS) \
 	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --n_jobs $(N_JOBS) \
-	  --descriptor_table_path $(DESCRIPTOR_TABLE) \
-	  --descriptor_feature_columns_path $(DESCRIPTOR_COLUMNS)
+	  --descriptor_table_path $(DESCRIPTOR_TABLE)
 
 classical-decode: ## Combined descriptors -> classical decoding
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
@@ -135,8 +133,7 @@ classical-decode: ## Combined descriptors -> classical decoding
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.classical_decoding \
 	  --cohort_config $(COHORT) --analysis_config $(DECODE_ANALYSIS) \
 	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --n_jobs $(N_JOBS) \
-	  --descriptor_table_path $(DESCRIPTOR_TABLE) \
-	  --descriptor_feature_columns_path $(DESCRIPTOR_COLUMNS)
+	  --descriptor_table_path $(DESCRIPTOR_TABLE)
 
 # --- Additional standalone stages -------------------------------------------
 foundation-embeddings: ## Extract foundation-model embeddings

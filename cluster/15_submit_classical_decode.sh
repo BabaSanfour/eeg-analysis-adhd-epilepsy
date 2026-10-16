@@ -11,6 +11,7 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 # Task 1 decodes the descriptor baseline. Remaining tasks decode one saved
 # foundation model and representation, including every transform declared by
@@ -18,13 +19,12 @@ source "$PROJECT_ROOT/cluster/env.sh"
 COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 CLASSICAL_ANALYSIS_CONFIG=${CLASSICAL_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/classical.yaml}
 FOUNDATION_ANALYSIS_CONFIG=${FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation_embeddings.yaml}
-EMBEDDING_ROOT=${EMBEDDING_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 
 read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
 REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording})
 
 # Descriptor tables (dataset paths -> supplied here, not in the analysis config).
-DESC_ROOT="$BIDS_ROOT/derivatives/signal_features/descriptors/combined"
+DESC_ROOT="$DESCRIPTORS_ROOT/combined"
 
 require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"
@@ -64,9 +64,7 @@ if (( TASK_ID == 1 )); then
     echo "Analysis: $CLASSICAL_ANALYSIS_CONFIG"
     for representation in "${REPRESENTATIONS[@]}"; do
         table_path="$DESC_ROOT/sensor_${representation}_features.parquet"
-        columns_path="$DESC_ROOT/sensor_${representation}_features_feature_columns.json"
         require_file "$table_path"
-        require_file "$columns_path"
         echo "Representation: $representation"
         echo "Table:          $table_path"
 
@@ -74,7 +72,6 @@ if (( TASK_ID == 1 )); then
             "${common_args[@]}" \
             --analysis_config "$CLASSICAL_ANALYSIS_CONFIG" \
             --descriptor_table_path "$table_path" \
-            --descriptor_feature_columns_path "$columns_path" \
             --representation "$representation"
     done
     exit 0

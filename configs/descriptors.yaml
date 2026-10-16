@@ -16,13 +16,15 @@ families:
       alpha: [8.0, 13.0]
       beta: [13.0, 30.0]
       gamma: [30.0, 45.0]
+    # No corrected (aperiodic-removed) band power: on all 86,998 EO/EC epochs corrected log
+    # alpha matched plain log alpha (Spearman 0.98 per epoch, 0.96 per recording) with no
+    # larger group difference, and in a band without a fitted peak it is NaN, so most
+    # recording values rested on a few epochs (delta: 65 % on 0-4). The parametric family
+    # keeps what specparam adds: aperiodic exponent and offset, peak frequency and power.
     outputs:
       - absolute_power
       - log_absolute_power
       - relative_power
-      - corrected_absolute_power
-      - corrected_log_absolute_power
-      - corrected_relative_power
     ratio_pairs:
       - [delta, theta]
       - [delta, alpha]
@@ -37,10 +39,19 @@ families:
   parametric:
     enabled: true
     backend: specparam
+    # Fitted per 10 s epoch. Measured on all 86,998 EO/EC epochs (2026-10-16): with 2 s Welch
+    # segments, 1-45 Hz and no minimum height, 62 % of fits filled the 6-peak cap with noise.
+    # 1 s segments (1 Hz bins, peak width >= 2 bins as specparam recommends), 3-40 Hz (the
+    # spectra bend at a median 3.3 Hz, so a fixed fit should not start below it; Ostlund et
+    # al. 2022) and a 0.10 minimum peak height: 5.5 % at the cap, split-half reliability of
+    # the exponent 0.93, offset 0.95, alpha frequency 0.79.
     psd_method: welch
-    freq_range: [1.0, 45.0]
-    peak_width_limits: [1.0, 12.0]
+    welch_segment_length: 1.0
+    welch_overlap: 0.5
+    freq_range: [3.0, 40.0]
+    peak_width_limits: [2.0, 8.0]
     max_n_peaks: 6
+    min_peak_height: 0.10
     aperiodic_mode: fixed
     outputs:
       - aperiodic
@@ -49,6 +60,12 @@ families:
   complexity:
     enabled: true
     backend: auto
+    # Each epoch is centred, then band-passed to the 1-45 Hz of the spectral families, so
+    # drift below and muscle activity above do not enter the measures. Filtering each
+    # 10 s epoch matched filtering the continuous recording: Spearman >= 0.97 on all
+    # 86,998 EO/EC epochs (2026-10-15). Fuzzy entropy is left out: it matched sample
+    # entropy (Spearman 0.98-0.99) at 70 % of the extraction time.
+    bandpass: [1.0, 45.0]
     measures:
       - sample_entropy
       - perm_entropy
@@ -59,50 +76,73 @@ families:
       - higuchi_fd
       - petrosian_fd
       - svd_entropy
-      - fuzzy_entropy
       - hurst_exponent
       - dispersion_entropy
       - kurtosis
       - zero_crossings
+    # Every parameter written out; tolerance null is 0.2 x the epoch's standard deviation.
+    measure_kwargs:
+      sample_entropy: {order: 2, tolerance: null, metric: chebyshev}
+      perm_entropy: {order: 3, delay: 1, normalize: true}
+      spectral_entropy: {method: fft, normalize: true}
+      lziv_complexity: {normalize: true}
+      higuchi_fd: {kmax: 10}
+      svd_entropy: {order: 3, delay: 1, normalize: true}
+      hurst_exponent: {scale: default, corrected: true}
+      dispersion_entropy: {delay: 1, dimension: 3, c: 6, symbolize: NCDF}
+      kurtosis: {fisher: true, bias: false}
 
-pooling:
-  channel_groups:
-    front_left: [F7, F3]
-    front_midline: [Fz]
-    front_right: [F8, F4]
-    central_left: [T3, C3]
-    central_midline: [Cz]
-    central_right: [T4, C4]
-    posterior_left: [T5, P3, O1]
-    posterior_midline: [Pz]
-    posterior_right: [T6, P4, O2]
-
+# One CPU per recording, no worker threads: on fir this ran each recording faster than
+# 16 threads did, at 1/16 of the cores (stage 05 is one array task per subject).
 runtime:
-  execution_backend: joblib
-  n_jobs: 16
+  execution_backend: sequential
+  n_jobs: 1
   obs_chunk: 16
   on_error: collect
 
+# Per recording: the mean (the analyses' location_statistic) and a spread per family.
+# No median: the analyses read the mean, and the loader drops median_* columns.
 aggregation:
   descriptors:
     - name: mean_export
       stats: mean
-      exclude_prefixes: [band_abs_, band_corr_abs_]
+      exclude_prefixes: [band_abs_]
     - name: band_summaries
       prefixes: [band_]
-      exclude_prefixes: [band_abs_, band_corr_abs_]
-      stats: [median, iqr]
+      exclude_prefixes: [band_abs_]
+      stats: [iqr]
     - name: complexity_summaries
       prefixes: [complexity_]
-      stats: [median, mad]
+      stats: [mad]
     - name: param_summaries
       prefixes: [param_]
-      stats: [median, iqr]
+      stats: [iqr]
 
 qc:
   outlier:
+    # Epochs with more than epoch_outlier_fraction of one family's features beyond
+    # z_threshold robust z-scores are dropped. Power is scored on its log only: the
+    # linear forms are skewed and dropped high-power epochs one-sidedly.
+    enabled: true
     z_threshold: 5.0
     group_by: family
     epoch_outlier_fraction: 0.30
-    subject_outlier_fraction: 0.20
-  min_obs: 5
+    exclude_prefixes: [band_abs_]
+  # Fewest epochs a recording value may rest on (30 s); recordings with fewer are left out.
+  min_obs: 3
+  # Shard (stage 05) and dataset (stage 07) QC verdicts; fields of
+  # eeg_adhd_epilepsy.qc.utils.DescriptorQCThresholds. Rates are fractions.
+  thresholds:
+    warn_nan_rate: 0.01  # mean missing rate of a shard's features
+    fail_nan_rate: 0.20
+    warn_feature_missingness: 0.20  # missing rate of a single feature
+    fail_feature_missingness: 0.50
+    warn_family_failure_rate: 0.05  # share of a family's channel-epochs that failed
+    fail_family_failure_rate: 0.25
+    near_constant_std_tol: 1.0e-12  # std / mean |x| at or below which a feature is constant
+    warn_zero_variance_fraction: 0.01  # share of features that are constant
+    fail_zero_variance_fraction: 0.05
+    warn_subject_outlier_fraction: 0.10  # stage 07: share of a recording's features that are outliers
+    fail_subject_outlier_fraction: 0.25
+    warn_param_r_squared_p05: 0.5  # 5th percentile of the specparam fit R²
+    fail_param_r_squared_p05: 0.2

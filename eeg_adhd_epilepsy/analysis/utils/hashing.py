@@ -9,7 +9,6 @@ from typing import Any
 _SCIENTIFIC_PATH_KEYS = (
     "metadata",
     "descriptor_table_path",
-    "descriptor_feature_columns_path",
     "embedding_derivative_root",
 )
 

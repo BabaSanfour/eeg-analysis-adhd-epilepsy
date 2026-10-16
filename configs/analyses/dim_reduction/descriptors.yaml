@@ -1,6 +1,6 @@
 # Analysis/method config — dimensionality reduction over extracted descriptors.
-# Pair with a cohort config via --cohort_config. The descriptor table paths are
-# supplied on the CLI (--descriptor_table_path / --descriptor_feature_columns_path).
+# Pair with a cohort config via --cohort_config. The descriptor table path is
+# supplied on the CLI (--descriptor_table_path).
 #
 # The whole descriptor analysis plan runs in-process from this one config:
 # the analysis command sweeps `analysis_modes` and loads each condition once.
@@ -30,7 +30,7 @@ qc:
     # A unit drops an observation flagged in more than this fraction of the QC
     # groups it spans (0.0 = flagged in any group, which empties wide units).
     unit_outlier_group_fraction: 0.2
-  min_obs: 5
+  min_obs: 3
 
 # Descriptors mix scales (uV^2/Hz power next to 0-1 ratios and entropies), so
 # each feature is scaled before reduction: median and interquartile range, then

@@ -11,11 +11,11 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 CONFIGS_DIR=${CONFIGS_DIR:-$PROJECT_ROOT/configs/cohorts}
 ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/dim_reduction/foundation.yaml}
 # Merged per-model embeddings written by 10_submit_merge_foundation_embeddings.sh.
-EMBEDDING_ROOT=${EMBEDDING_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 OVERWRITE=${OVERWRITE:-0}
 
 # Each base model contributes its raw space plus every materialized alignment.
@@ -104,6 +104,7 @@ echo "==========================================================================
 cmd=(
     python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction
     --bids_root "$BIDS_ROOT"
+    --desc "$EPOCHS_DESC"
     --derivative_root "$DIM_REDUCTION_ROOT"
     --reports_root "$REPORTS_ROOT"
     --metadata "$METADATA_PATH"

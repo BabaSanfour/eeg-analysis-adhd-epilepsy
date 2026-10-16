@@ -40,8 +40,7 @@ from coco_pipe.decoding import (
     redact_sensitive,
     safe_group_n_splits,
 )
-from coco_pipe.descriptors import build_descriptor_feature_metadata
-from coco_pipe.io import DataContainer, read_json
+from coco_pipe.io import DataContainer
 from coco_pipe.transforms.subject_alignment import VECTOR_TRANSFORMS, make_subject_transform
 from coco_pipe.utils import slug
 
@@ -62,6 +61,7 @@ from eeg_adhd_epilepsy.analysis.utils.decoding import (
     scientific_config,
 )
 from eeg_adhd_epilepsy.reports.decoding import (
+    descriptor_feature_metadata,
     generate_decoding_summary_report,
     generate_head_to_head_report,
 )
@@ -777,13 +777,9 @@ def run(config: dict[str, Any]) -> Path:
             )
 
         if config.get("detailed_unit_reports", False):
-            feature_metadata = None
-            if plan.input_mode == "descriptors":
-                descriptor_columns_path = config.get("descriptor_feature_columns_path")
-                if descriptor_columns_path:
-                    path = Path(str(descriptor_columns_path)).expanduser()
-                    if path.exists():
-                        feature_metadata = build_descriptor_feature_metadata(read_json(path))
+            feature_metadata = (
+                descriptor_feature_metadata(config) if plan.input_mode == "descriptors" else None
+            )
             coco_pipe.report.render_unit_reports(
                 records,
                 modes=config.get("detailed_unit_report_modes", ["flat"]),
@@ -840,6 +836,14 @@ def main() -> None:
         ),
     )
     parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
+    parser.add_argument(
+        "--desc",
+        default="base",
+        help=(
+            "Epoch variant written by stage 04: base (every epoch) or baserejected "
+            "(epochs overlapping a BAD_ annotation dropped)."
+        ),
+    )
     parser.add_argument("--metadata", default=None, help="Override the participants.tsv path.")
     parser.add_argument("--n_jobs", type=int, default=None, help="Override worker count.")
     parser.add_argument(
@@ -858,11 +862,6 @@ def main() -> None:
         "--descriptor_table_path",
         default=None,
         help="Descriptor table path (dataset path; supply here rather than in the config).",
-    )
-    parser.add_argument(
-        "--descriptor_feature_columns_path",
-        default=None,
-        help="Descriptor feature-columns JSON path (dataset path; supply here, not in config).",
     )
     parser.add_argument(
         "--embedding_derivative_root",
@@ -910,13 +909,13 @@ def main() -> None:
         cohort_config=args.cohort_config,
         analysis_config=args.analysis_config,
         bids_root=args.bids_root,
+        desc=args.desc,
         metadata=args.metadata,
         n_jobs=args.n_jobs,
         inner_n_jobs=args.inner_n_jobs,
         reports_root=args.reports_root,
         derivative_root=args.derivative_root,
         descriptor_table_path=args.descriptor_table_path,
-        descriptor_feature_columns_path=args.descriptor_feature_columns_path,
         embedding_derivative_root=args.embedding_derivative_root,
         embedding_model_key=args.embedding_model_key,
         overwrite=args.overwrite,

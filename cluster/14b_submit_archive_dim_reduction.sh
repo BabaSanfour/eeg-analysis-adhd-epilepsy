@@ -20,6 +20,7 @@ set -euo pipefail
 
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 BASE=${BASE:-$DIM_REDUCTION_ROOT/pooled_01_all_subjects_total}
 DIRS_FILE=${DIRS_FILE:?Set DIRS_FILE to a file listing folder names, one per line}

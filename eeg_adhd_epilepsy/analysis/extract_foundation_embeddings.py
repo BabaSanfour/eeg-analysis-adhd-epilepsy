@@ -398,6 +398,14 @@ def main() -> None:
     )
     parser.add_argument("--config", required=True)
     parser.add_argument("--bids_root", required=True, help="Path to BIDS dataset")
+    parser.add_argument(
+        "--desc",
+        default="base",
+        help=(
+            "Epoch variant written by stage 04: base (every epoch) or baserejected "
+            "(epochs overlapping a BAD_ annotation dropped)."
+        ),
+    )
     parser.add_argument("--metadata", default=None, help="Path to the BIDS participants.tsv")
     parser.add_argument(
         "--derivative_root",
@@ -406,10 +414,11 @@ def main() -> None:
         help="Explicit path to write output derivatives",
     )
     parser.add_argument(
-        "--metadata_row",
+        "--metadata_rows",
         type=int,
+        nargs="+",
         default=None,
-        help=("One-based metadata-CSV row to process a single subject (SLURM_ARRAY_TASK_ID)."),
+        help="One-based participants.tsv rows to process together (one Slurm array task).",
     )
     parser.add_argument(
         "--subjects",
@@ -422,6 +431,7 @@ def main() -> None:
     logging.basicConfig(level=logging.INFO)
     config = load_yaml_config(args.config)
     config["bids_root"] = args.bids_root
+    config["desc"] = args.desc
     if args.metadata:
         config["metadata"] = args.metadata
     if args.overwrite:
@@ -434,22 +444,27 @@ def main() -> None:
             Path(config["bids_root"]).expanduser(), DerivativeStage.FOUNDATION_EMBEDDINGS
         )
 
-    if args.metadata_row is not None and args.subjects:
-        raise ValueError("--metadata_row and --subjects are mutually exclusive.")
-    if args.metadata_row is not None and args.metadata_row < 1:
-        raise ValueError("--metadata_row is one-based and must be >= 1.")
+    if args.metadata_rows is not None and args.subjects:
+        raise ValueError("--metadata_rows and --subjects are mutually exclusive.")
+    if args.metadata_rows is not None and min(args.metadata_rows) < 1:
+        raise ValueError("--metadata_rows are one-based and must be >= 1.")
 
-    if args.metadata_row is not None:
+    if args.metadata_rows is not None:
         if not config.get("metadata"):
-            raise ValueError("--metadata_row requires config['metadata'].")
+            raise ValueError("--metadata_rows requires config['metadata'].")
         meta_df = read_participants(Path(config["metadata"]).expanduser())
-        subject = resolve_metadata_row(
-            meta_df, args.metadata_row, config.get("subject_col", "subject")
-        )
-        if subject is None:
+        # Rows past the end of the table (the last task's surplus) have no subject.
+        subjects = [
+            subject
+            for row in args.metadata_rows
+            if (subject := resolve_metadata_row(meta_df, row, config.get("subject_col", "subject")))
+            is not None
+        ]
+        if not subjects:
             return
-        config["subjects"] = [subject]
-        run(config, derivative_root, shard_token=f"row-{args.metadata_row:04d}")
+        config["subjects"] = subjects
+        first, last = min(args.metadata_rows), max(args.metadata_rows)
+        run(config, derivative_root, shard_token=f"rows-{first:04d}-{last:04d}")
     elif args.subjects:
         config["subjects"] = args.subjects
         token = stable_hash(sorted(str(value) for value in args.subjects), length=12)

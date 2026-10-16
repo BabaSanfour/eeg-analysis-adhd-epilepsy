@@ -16,8 +16,8 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
-DERIVATIVE_ROOT=${DERIVATIVE_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 
 require_dir "$VENV_PATH"
 
@@ -27,6 +27,6 @@ dra_pin_threads "${SLURM_CPUS_PER_TASK:-1}"
 
 python -m eeg_adhd_epilepsy.analysis.merge_foundation_embeddings \
   --bids_root "$BIDS_ROOT" \
-  --derivative_root "$DERIVATIVE_ROOT" \
+  --derivative_root "$EMBEDDING_ROOT" \
   --reports_root "$REPORTS_ROOT"
-validate_bids "$DERIVATIVE_ROOT"
+validate_bids "$EMBEDDING_ROOT"

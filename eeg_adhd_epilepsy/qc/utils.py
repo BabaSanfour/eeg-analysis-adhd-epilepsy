@@ -63,6 +63,9 @@ class SignalQCThresholds:
 class DescriptorQCThresholds:
     """Thresholds for descriptor-extraction QC flagging.
 
+    Stage 05 reads them from ``qc.thresholds`` of ``configs/descriptors.yaml`` (any
+    field left out keeps its default) and records them in ``config_used.yaml``.
+
     Parameters
     ----------
     warn_nan_rate:
@@ -78,7 +81,8 @@ class DescriptorQCThresholds:
     fail_family_failure_rate:
         Per-family extractor failure rate that triggers ``fail``.
     near_constant_std_tol:
-        Standard deviation at or below which a feature is constant.
+        Relative spread (standard deviation over mean absolute value) at or below
+        which a feature is constant.
     warn_zero_variance_fraction:
         Fraction of constant features that triggers ``warn``.
     fail_zero_variance_fraction:
@@ -87,8 +91,10 @@ class DescriptorQCThresholds:
         Per-subject outlier feature fraction that triggers ``warn``.
     fail_subject_outlier_fraction:
         Per-subject outlier feature fraction that triggers ``fail``.
-    outlier_z_threshold:
-        MAD-based robust z-score threshold for outlier detection.
+    warn_param_r_squared_p05:
+        5th percentile of the specparam fit R² below which ``warn`` is raised.
+    fail_param_r_squared_p05:
+        5th percentile of the specparam fit R² below which ``fail`` is raised.
     """
 
     warn_nan_rate: float = 0.01
@@ -102,13 +108,13 @@ class DescriptorQCThresholds:
     fail_zero_variance_fraction: float = 0.05
     warn_subject_outlier_fraction: float = 0.10
     fail_subject_outlier_fraction: float = 0.25
-    outlier_z_threshold: float = 5.0
+    warn_param_r_squared_p05: float = 0.5
+    fail_param_r_squared_p05: float = 0.2
 
 
 # Module-level default instances — used by all QC functions when no explicit
 # thresholds are passed.
 DEFAULT_SIGNAL_THRESHOLDS = SignalQCThresholds()
-DEFAULT_DESCRIPTOR_THRESHOLDS = DescriptorQCThresholds()
 
 
 # ---------------------------------------------------------------------------

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import inspect
-import json
 from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pytest
-from coco_pipe.descriptors import load_descriptor_table
+from coco_pipe.descriptors import load_descriptor_table, save_descriptor_table
 from coco_pipe.dim_reduction import run_eval
 from coco_pipe.io import ANALYSIS_MODES, DataContainer, iter_analysis_units
 from coco_pipe.io.embeddings import save_embedding_derivative
@@ -29,8 +28,7 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import scale_features
 
 def test_descriptor_loader_filters_subjects(tmp_path):
     feature_column = "mean_band_log_abs_alpha_chgrp-midline"
-    table_path = tmp_path / "features.csv"
-    feature_columns_path = tmp_path / "feature_columns.json"
+    table_path = tmp_path / "features.parquet"
     pd.DataFrame(
         {
             "study_id": [1, 2],
@@ -38,12 +36,10 @@ def test_descriptor_loader_filters_subjects(tmp_path):
             "recording_id": ["0001_ses-01_run-01", "0002_ses-01_run-01"],
             feature_column: [0.1, 0.2],
         }
-    ).to_csv(table_path, index=False)
-    feature_columns_path.write_text(json.dumps([feature_column]), encoding="utf-8")
+    ).pipe(save_descriptor_table, table_path.with_suffix(""), feature_columns=[feature_column])
 
     container = load_descriptor_table(
         table_path=table_path,
-        feature_columns_path=feature_columns_path,
         condition="EO_baseline",
         subjects=["sub-0002"],
         subject_col="study_id",
@@ -56,8 +52,7 @@ def test_descriptor_loader_filters_subjects(tmp_path):
 
 def test_descriptor_analysis_attaches_family_qc(tmp_path):
     feature_column = "mean_band_log_abs_alpha_chgrp-midline"
-    table_path = tmp_path / "features.csv"
-    feature_columns_path = tmp_path / "feature_columns.json"
+    table_path = tmp_path / "features.parquet"
     pd.DataFrame(
         {
             "study_id": ["0001", "0002", "0003", "0004"],
@@ -65,13 +60,11 @@ def test_descriptor_analysis_attaches_family_qc(tmp_path):
             "recording_id": [f"{subject}_ses-01_run-01" for subject in range(1, 5)],
             feature_column: [0.9, 1.0, 1.1, 1.05],
         }
-    ).to_csv(table_path, index=False)
-    feature_columns_path.write_text(json.dumps([feature_column]), encoding="utf-8")
+    ).pipe(save_descriptor_table, table_path.with_suffix(""), feature_columns=[feature_column])
     args = SimpleNamespace(
         input_mode="descriptors",
         analysis_mode="flat",
         descriptor_table_path=str(table_path),
-        descriptor_feature_columns_path=str(feature_columns_path),
         descriptor_families=None,
         descriptor_max_abs_value=None,
         subject_col="study_id",
@@ -102,8 +95,7 @@ def test_flat_descriptor_analysis_attaches_family_qc(tmp_path):
         "band_log_abs_alpha_ch-Cz",
         "complexity_sample_entropy_ch-Cz",
     ]
-    table_path = tmp_path / "features.csv"
-    feature_columns_path = tmp_path / "feature_columns.json"
+    table_path = tmp_path / "features.parquet"
     table = {
         "study_id": [f"{subject:04d}" for subject in range(1, 5)],
         "condition": ["EO_baseline"] * 4,
@@ -111,13 +103,13 @@ def test_flat_descriptor_analysis_attaches_family_qc(tmp_path):
     }
     for offset, column in enumerate(feature_columns):
         table[column] = [offset + value for value in (0.9, 1.0, 1.1, 1.05)]
-    pd.DataFrame(table).to_csv(table_path, index=False)
-    feature_columns_path.write_text(json.dumps(feature_columns), encoding="utf-8")
+    pd.DataFrame(table).pipe(
+        save_descriptor_table, table_path.with_suffix(""), feature_columns=feature_columns
+    )
     args = SimpleNamespace(
         input_mode="descriptors",
         analysis_mode="flat",
         descriptor_table_path=str(table_path),
-        descriptor_feature_columns_path=str(feature_columns_path),
         descriptor_families=None,
         descriptor_max_abs_value=None,
         subject_col="study_id",
@@ -146,23 +138,20 @@ def test_family_scoped_qc_keeps_band_outlier_for_complexity(tmp_path):
         "band_log_abs_alpha_ch-Fz",
         "complexity_sample_entropy_ch-Fz",
     ]
-    table_path = tmp_path / "features.csv"
-    feature_columns_path = tmp_path / "feature_columns.json"
+    table_path = tmp_path / "features.parquet"
     pd.DataFrame(
         {
             "study_id": [f"{subject:04d}" for subject in range(1, 7)],
             "condition": ["EO_baseline"] * 6,
             "recording_id": [f"{subject:04d}_ses-01_run-01" for subject in range(1, 7)],
-            feature_columns[0]: [0.0, 0.0, 0.0, 0.0, 0.0, 100.0],
+            feature_columns[0]: [1.0, 1.1, 0.9, 1.05, 0.95, 100.0],
             feature_columns[1]: [1.0, 1.1, 0.9, 1.05, 0.95, 1.0],
         }
-    ).to_csv(table_path, index=False)
-    feature_columns_path.write_text(json.dumps(feature_columns), encoding="utf-8")
+    ).pipe(save_descriptor_table, table_path.with_suffix(""), feature_columns=feature_columns)
     args = SimpleNamespace(
         input_mode="descriptors",
         analysis_mode="sensor",
         descriptor_table_path=str(table_path),
-        descriptor_feature_columns_path=str(feature_columns_path),
         descriptor_families=None,
         descriptor_max_abs_value=None,
         subject_col="study_id",
@@ -193,7 +182,7 @@ def test_family_scoped_qc_keeps_band_outlier_for_complexity(tmp_path):
     assert qc_result.n_obs_out == qc_result.n_obs_in == 6
     assert qc_result.subjects_dropped == []
     band_dropped = {str(record.subject_id) for record in qc_result.per_family_dropped["band"]}
-    assert band_dropped == {"6"}  # study_id of the alpha-outlier subject
+    assert band_dropped == {"0006"}  # study_id of the alpha-outlier subject
     assert qc_result.per_family_dropped["complexity"] == []
     units = iter_analysis_units(container, "family", "descriptors")
     retained = {}
@@ -213,23 +202,20 @@ def test_measure_grouping_keeps_alpha_outlier_for_beta(tmp_path):
         "band_log_abs_alpha_ch-Fz",
         "band_log_abs_beta_ch-Fz",
     ]
-    table_path = tmp_path / "features.csv"
-    feature_columns_path = tmp_path / "feature_columns.json"
+    table_path = tmp_path / "features.parquet"
     pd.DataFrame(
         {
             "study_id": [f"{subject:04d}" for subject in range(1, 7)],
             "condition": ["EO_baseline"] * 6,
             "recording_id": [f"{subject:04d}_ses-01_run-01" for subject in range(1, 7)],
-            feature_columns[0]: [0.0, 0.0, 0.0, 0.0, 0.0, 100.0],
+            feature_columns[0]: [1.0, 1.1, 0.9, 1.05, 0.95, 100.0],
             feature_columns[1]: [1.0, 1.1, 0.9, 1.05, 0.95, 1.0],
         }
-    ).to_csv(table_path, index=False)
-    feature_columns_path.write_text(json.dumps(feature_columns), encoding="utf-8")
+    ).pipe(save_descriptor_table, table_path.with_suffix(""), feature_columns=feature_columns)
     args = SimpleNamespace(
         input_mode="descriptors",
         analysis_mode="feature",
         descriptor_table_path=str(table_path),
-        descriptor_feature_columns_path=str(feature_columns_path),
         descriptor_families=None,
         descriptor_max_abs_value=None,
         subject_col="study_id",
@@ -271,23 +257,20 @@ def test_subfamily_grouping_keeps_logabs_outlier_for_relative(tmp_path):
         "band_log_abs_alpha_ch-Fz",
         "band_rel_alpha_ch-Fz",
     ]
-    table_path = tmp_path / "features.csv"
-    feature_columns_path = tmp_path / "feature_columns.json"
+    table_path = tmp_path / "features.parquet"
     pd.DataFrame(
         {
             "study_id": [f"{subject:04d}" for subject in range(1, 7)],
             "condition": ["EO_baseline"] * 6,
             "recording_id": [f"{subject:04d}_ses-01_run-01" for subject in range(1, 7)],
-            feature_columns[0]: [0.0, 0.0, 0.0, 0.0, 0.0, 100.0],
+            feature_columns[0]: [1.0, 1.1, 0.9, 1.05, 0.95, 100.0],
             feature_columns[1]: [1.0, 1.1, 0.9, 1.05, 0.95, 1.0],
         }
-    ).to_csv(table_path, index=False)
-    feature_columns_path.write_text(json.dumps(feature_columns), encoding="utf-8")
+    ).pipe(save_descriptor_table, table_path.with_suffix(""), feature_columns=feature_columns)
     args = SimpleNamespace(
         input_mode="descriptors",
         analysis_mode="feature",
         descriptor_table_path=str(table_path),
-        descriptor_feature_columns_path=str(feature_columns_path),
         descriptor_families=None,
         descriptor_max_abs_value=None,
         subject_col="study_id",
@@ -357,7 +340,6 @@ def test_column_prune_removes_all_nan_feature_without_row_drop(tmp_path):
         "complexity_sample_entropy_ch-Fz",
     ]
     table_path = tmp_path / "features.parquet"
-    feature_columns_path = tmp_path / "feature_columns.json"
     pd.DataFrame(
         {
             "study_id": ["0001", "0002", "0003"],
@@ -370,13 +352,11 @@ def test_column_prune_removes_all_nan_feature_without_row_drop(tmp_path):
             feature_columns[0]: [1.0, 2.0, 3.0],
             feature_columns[1]: [np.nan, np.nan, np.nan],
         }
-    ).to_parquet(table_path, index=False)
-    feature_columns_path.write_text(json.dumps(feature_columns), encoding="utf-8")
+    ).pipe(save_descriptor_table, table_path.with_suffix(""), feature_columns=feature_columns)
     args = SimpleNamespace(
         input_mode="descriptors",
         analysis_mode="flat",
         descriptor_table_path=str(table_path),
-        descriptor_feature_columns_path=str(feature_columns_path),
         descriptor_families=None,
         descriptor_max_abs_value=None,
         subject_col="study_id",
@@ -765,8 +745,7 @@ def test_fit_identity_changes_with_matrix_content_and_qc(tmp_path):
         group_filters=None,
         balance_target=None,
         balance_strategy="undersample",
-        descriptor_table_path=str(tmp_path / "features.csv"),
-        descriptor_feature_columns_path=str(tmp_path / "columns.json"),
+        descriptor_table_path=str(tmp_path / "features.parquet"),
         descriptor_max_abs_value=None,
         location_statistic=None,
         run_label="test",
@@ -823,8 +802,7 @@ def test_descriptor_sensor_units_have_distinct_fit_ids(tmp_path):
         group_filters=None,
         balance_target=None,
         balance_strategy="undersample",
-        descriptor_table_path=str(tmp_path / "features.csv"),
-        descriptor_feature_columns_path=str(tmp_path / "columns.json"),
+        descriptor_table_path=str(tmp_path / "features.parquet"),
         descriptor_max_abs_value=None,
         location_statistic=None,
         run_label="test",

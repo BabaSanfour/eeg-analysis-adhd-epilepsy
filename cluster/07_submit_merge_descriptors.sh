@@ -11,16 +11,18 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
-# Point BIDS_ROOT to your scratch BIDS because that's where the descriptors are saved!
-SCRATCH_BIDS_ROOT=${SCRATCH_BIDS_ROOT:-$SCRATCH_ROOT/BIDS}
+# The per-subject shards are on scratch; the merged tables go to the project.
+require_dir "$DESCRIPTOR_SHARDS_ROOT"
 
 dra_activate
 # Single-process merge that wants threaded BLAS.
 dra_pin_threads "${SLURM_CPUS_PER_TASK:-1}"
 
 python -m eeg_adhd_epilepsy.analysis.merge_descriptors \
-  --bids_root "$SCRATCH_BIDS_ROOT" \
-  --reports_root "$SCRATCH_ROOT/reports" \
+  --derivative_root "$DESCRIPTOR_SHARDS_ROOT" \
+  --output_root "$DESCRIPTORS_ROOT" \
+  --reports_root "$REPORTS_ROOT" \
   --skip_inconsistent
-validate_bids "$SCRATCH_BIDS_ROOT/derivatives/signal_features/descriptors"
+validate_bids "$DESCRIPTORS_ROOT"

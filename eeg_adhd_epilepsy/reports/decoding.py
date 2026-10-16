@@ -7,8 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-from coco_pipe.descriptors import build_descriptor_feature_metadata
-from coco_pipe.io import read_json
+from coco_pipe.descriptors import build_descriptor_feature_metadata, feature_columns_of
 from coco_pipe.io.quality import QCResult
 from coco_pipe.report import (
     CLASSICAL_MODE_TITLES,
@@ -39,6 +38,18 @@ from eeg_adhd_epilepsy.reports._common import (
 _CLASSICAL_ANALYSIS_PLAN = tuple(((mode,), title) for mode, title in CLASSICAL_MODE_TITLES.items())
 
 
+def descriptor_feature_metadata(config: Mapping[str, Any]) -> pd.DataFrame | None:
+    """Feature metadata of the configured descriptor table; ``None`` without one."""
+    table_path = config.get("descriptor_table_path")
+    if not table_path or not Path(str(table_path)).expanduser().exists():
+        return None
+    path = Path(str(table_path)).expanduser()
+    # Reading no column still restores the table's metadata, the feature columns with it.
+    return build_descriptor_feature_metadata(
+        feature_columns_of(pd.read_parquet(path, columns=[]), path)
+    )
+
+
 def generate_decoding_summary_report(
     output_path: str | Path,
     records: Sequence[Mapping[str, Any]],
@@ -53,12 +64,7 @@ def generate_decoding_summary_report(
     _ = figures_dir  # Retained for API compatibility; coco-pipe embeds figures.
     frame = prepare_sweep_frame(records, scope_from=None, default_scope="all")
 
-    feature_metadata = None
-    descriptor_columns_path = config.get("descriptor_feature_columns_path")
-    if descriptor_columns_path:
-        path = Path(str(descriptor_columns_path)).expanduser()
-        if path.exists():
-            feature_metadata = build_descriptor_feature_metadata(read_json(path))
+    feature_metadata = descriptor_feature_metadata(config)
 
     metric_label = (
         str(frame["primary_metric_name"].iloc[0])

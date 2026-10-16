@@ -14,10 +14,10 @@ set -euo pipefail
 
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/align_subject_embeddings.yaml}
-SOURCE_EMBEDDING_ROOT=${SOURCE_EMBEDDING_ROOT:-$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings}
 OVERWRITE=${OVERWRITE:-0}
 read -r -a MODELS <<< "${MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
 
@@ -25,7 +25,7 @@ require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"
 require_file "$COHORT_CONFIG"
 require_file "$ANALYSIS_CONFIG"
-require_dir "$SOURCE_EMBEDDING_ROOT"
+require_dir "$EMBEDDING_ROOT"
 require_dir "$VENV_PATH"
 
 MODEL_COUNT=${#MODELS[@]}
@@ -44,7 +44,7 @@ echo "==========================================================================
 echo "SUBJECT ALIGNMENT ARRAY TASK $TASK_ID / $MODEL_COUNT"
 echo "Model:       $model"
 echo "Cohort:      $COHORT_CONFIG"
-echo "Source root: $SOURCE_EMBEDDING_ROOT"
+echo "Source root: $EMBEDDING_ROOT"
 echo "================================================================================"
 
 cmd=(
@@ -53,7 +53,7 @@ cmd=(
   --analysis_config "$ANALYSIS_CONFIG"
   --bids_root "$BIDS_ROOT"
   --metadata "$METADATA_PATH"
-  --source_embedding_root "$SOURCE_EMBEDDING_ROOT"
+  --source_embedding_root "$EMBEDDING_ROOT"
   --embedding_model_key "$model"
   --n_jobs "${SLURM_CPUS_PER_TASK:-1}"
 )

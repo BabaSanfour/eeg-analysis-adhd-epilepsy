@@ -10,6 +10,7 @@
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
+dra_epochs_variant
 
 # One array task = one cohort config. The analysis config drives the raw
 # (analysis_mode, representation) plan in-process via `analysis_modes` (each raw
@@ -48,6 +49,7 @@ echo "==========================================================================
 
 python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
     --bids_root "$BIDS_ROOT" \
+    --desc "$EPOCHS_DESC" \
     --derivative_root "$DIM_REDUCTION_ROOT" \
     --reports_root "$REPORTS_ROOT" \
     --metadata "$METADATA_PATH" \

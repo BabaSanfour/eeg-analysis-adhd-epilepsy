@@ -6,25 +6,23 @@ Audits the per-subject descriptor shards produced by ``extract_descriptors``
 Three independent checks are performed:
 
 1. **Per-shard completeness** — every ``sub-*/ses-*/eeg/<condition>/`` directory
-   is checked against the canonical "complete shard" contract
-   (:func:`required_descriptor_files`, including QC artifacts) plus the
-   per-subject QC report HTML. ``_SUCCESS`` is written last by the producer, so
-   a directory missing it (or missing required files) is a crashed/partial run.
-2. **QC status rollup** — each shard's ``qc/summary_row.csv`` is read and the
+   must hold its epoch table and ``shard.json``, and the subject must have its QC
+   report. ``shard.json`` is written last by the producer, so a directory missing it
+   is a crashed/partial run.
+2. **QC status rollup** — the QC summary in each ``shard.json`` is read and the
    ``pass`` / ``warn`` / ``fail`` verdicts are tallied.
-3. **Coverage** — when ``--metadata`` and ``--rows`` are supplied (the metadata
-   rows the array was supposed to process), subjects that produced *no* shard
-   are listed. These are candidate failures, though some are legitimate skips
-   (no epochs / fewer than ``min_obs`` epochs survived MAD rejection for every
-   condition) — cross-check the SLURM ``.err`` logs for those.
+3. **Coverage** — when ``--metadata`` is supplied, subjects of its rows (all of
+   them, or those in ``--rows``) that produced *no* shard are listed. These are
+   candidate failures, though some are legitimate skips (no epochs / fewer than
+   ``min_obs`` epochs survived MAD rejection for every condition) — cross-check
+   the SLURM ``.err`` logs for those.
 
 Run on the machine that holds the descriptor derivatives, e.g.::
 
     python -m eeg_adhd_epilepsy.analysis.verify_descriptors \\
         --derivative_root $SCRATCH/BIDS/derivatives/signal_features/descriptors \\
         --reports_root $SCRATCH/reports \\
-        --metadata patients_metadata_clean.csv \\
-        --rows 1-1000
+        --metadata participants.tsv
 
 Exits non-zero when any shard is incomplete or any expected subject is missing
 (use ``--strict`` to also fail when any shard's QC status is ``fail``).
@@ -38,10 +36,15 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import mne
 import pandas as pd
-from coco_pipe.io import read_table
 
-from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import required_descriptor_files
+from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import (
+    SHARD_FILES,
+    SHARD_RECORD,
+    find_shards,
+    read_shard_record,
+)
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
     bids_subject,
@@ -53,6 +56,7 @@ from eeg_adhd_epilepsy.io.report_paths import (
     default_reports_root,
     descriptor_qc_report_name,
     subject_report_dir,
+    summary_report_dir,
 )
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
@@ -77,24 +81,21 @@ def _parse_rows(spec: str) -> list[int]:
 def collect_shard_records(
     derivative_root: Path,
     reports_root: Path | None,
-    include_pooled: bool,
 ) -> pd.DataFrame:
     """Audit every shard directory under *derivative_root*.
 
     Returns one row per ``sub-*/ses-*/eeg/<condition>/`` directory with its
     completion state, missing files, QC status, and failure count.
     """
-    required = required_descriptor_files(include_pooled, include_qc=True)
     records: list[dict[str, object]] = []
-    shard_dirs = sorted(path for path in derivative_root.glob("sub-*/ses-*/eeg/*") if path.is_dir())
-    for shard_dir in shard_dirs:
+    for shard_dir in find_shards(derivative_root):
         rel = shard_dir.relative_to(derivative_root)
         subject = rel.parts[0].removeprefix("sub-")
         session = rel.parts[1].removeprefix("ses-")
         condition = rel.parts[3]
 
-        has_success = (shard_dir / "_SUCCESS").exists()
-        missing_files = [name for name in required if not (shard_dir / name).exists()]
+        has_record = (shard_dir / SHARD_RECORD).exists()
+        missing_files = [name for name in SHARD_FILES if not (shard_dir / name).exists()]
 
         report_missing: bool | None = None
         if reports_root is not None:
@@ -103,31 +104,24 @@ def collect_shard_records(
                 subject=subject,
                 session=session,
                 stage=ReportStage.DESCRIPTOR_QC,
-            ) / descriptor_qc_report_name(subject, session, condition)
+            ) / descriptor_qc_report_name(subject, session)
             report_missing = not report_path.exists()
 
         qc_status = ""
         n_failures: int | None = None
-        summary_row_path = shard_dir / "qc" / "summary_row.csv"
-        if summary_row_path.exists():
-            try:
-                summary = read_table(summary_row_path)
-            except Exception as exc:  # pragma: no cover - corrupt CSV is rare
-                LOGGER.warning("Could not read %s: %s", summary_row_path, exc)
-            else:
-                if not summary.empty:
-                    first = summary.iloc[0]
-                    qc_status = str(first.get("qc_status", "") or "")
-                    n_failures = int(first.get("n_failures_total", 0) or 0)
+        if has_record:
+            summary = read_shard_record(shard_dir)["qc_summary"]
+            qc_status = str(summary["qc_status"])
+            n_failures = int(summary["n_failures_total"])
 
-        complete = has_success and not missing_files and not bool(report_missing)
+        complete = not missing_files and not bool(report_missing)
         records.append(
             {
                 "subject": subject,
                 "session": session,
                 "condition": condition,
                 "complete": complete,
-                "has_success": has_success,
+                "has_record": has_record,
                 "n_missing_files": len(missing_files),
                 "missing_files": ";".join(missing_files),
                 "report_missing": bool(report_missing) if report_missing is not None else "",
@@ -141,7 +135,7 @@ def collect_shard_records(
         "session",
         "condition",
         "complete",
-        "has_success",
+        "has_record",
         "n_missing_files",
         "missing_files",
         "report_missing",
@@ -155,9 +149,9 @@ def collect_shard_records(
 def summarize_reasons(derivative_root: Path, shard_df: pd.DataFrame) -> dict[str, Counter]:
     """Roll up *why* shards fail: QC flag codes and extractor-failure breakdown.
 
-    Reads each shard's ``qc/flags.csv`` and ``failures.csv`` and accumulates:
+    Reads the QC flags and failures in each shard's ``shard.json`` and accumulates:
 
-    - ``flags``       : ``(severity, code)`` -> occurrences across shards
+    - ``flags``       : ``(level, code)`` -> occurrences across shards
     - ``flag_scope``  : ``(code, scope)`` -> occurrences (scope = family, etc.)
     - ``fail_family`` : extractor-failure ``family`` -> occurrences
     - ``fail_exc``    : extractor-failure ``exception_type`` -> occurrences
@@ -169,35 +163,16 @@ def summarize_reasons(derivative_root: Path, shard_df: pd.DataFrame) -> dict[str
     fail_exc: Counter = Counter()
     fail_msg: Counter = Counter()
 
-    def _read(path: Path) -> pd.DataFrame | None:
-        if not path.exists():
-            return None
-        try:
-            df = read_table(path)
-        except Exception:  # empty/corrupt CSV
-            return None
-        return df if not df.empty else None
-
-    for rel in shard_df["shard"]:
-        shard_dir = derivative_root / rel
-
-        flags_df = _read(shard_dir / "qc" / "flags.csv")
-        if flags_df is not None and "code" in flags_df.columns:
-            severity = flags_df.get("severity", pd.Series([""] * len(flags_df))).astype(str)
-            code = flags_df["code"].astype(str)
-            flags.update(zip(severity, code))
-            if "scope" in flags_df.columns:
-                scope = flags_df["scope"].astype(str)
-                flag_scope.update((c, s) for c, s in zip(code, scope) if s and s.lower() != "nan")
-
-        fail_df = _read(shard_dir / "failures.csv")
-        if fail_df is not None:
-            if "family" in fail_df.columns:
-                fail_family.update(fail_df["family"].astype(str))
-            if "exception_type" in fail_df.columns:
-                fail_exc.update(fail_df["exception_type"].astype(str))
-            if "message" in fail_df.columns:
-                fail_msg.update(fail_df["message"].astype(str).str.slice(0, 80))
+    for rel in shard_df["shard"][shard_df["has_record"].astype(bool)]:
+        record = read_shard_record(derivative_root / rel)
+        for flag in record["qc_flags"]:
+            flags[(flag["level"], flag["code"])] += 1
+            if flag["scope"]:
+                flag_scope[(flag["code"], flag["scope"])] += 1
+        for failure in record["failures"]:
+            fail_family[str(failure["family"])] += 1
+            fail_exc[str(failure["exception_type"])] += 1
+            fail_msg[str(failure["message"])[:80]] += 1
 
     return {
         "flags": flags,
@@ -218,9 +193,30 @@ def _print_counter(title: str, counter: Counter, top_n: int = 15) -> None:
         print(f"  {count:>9,}  {label}")
 
 
-def expected_subjects(metadata_path: Path, subject_col: str, rows: list[int]) -> list[str]:
-    """Bare BIDS subject labels for the given one-based *rows* of ``participants.tsv``."""
+def has_extractable_epochs(
+    bids_root: Path, subject: str, desc: str, conditions: list[str], min_obs: int
+) -> bool:
+    """Whether a saved recording of *subject* has *min_obs* epochs of one of *conditions*.
+
+    Reads the epoch files' headers only. A subject without such a recording has no
+    shard by design (stage 05 skips it), so it is not a failure.
+    """
+    preproc_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
+    for path in sorted(preproc_root.glob(f"sub-{subject}/*/eeg/*_desc-{desc}_epo.fif")):
+        epochs = mne.read_epochs(path, preload=False, verbose="ERROR")
+        if any(len(epochs[c]) >= min_obs for c in conditions if c in epochs.event_id):
+            return True
+    return False
+
+
+def expected_subjects(
+    metadata_path: Path, subject_col: str, rows: list[int] | None = None
+) -> list[str]:
+    """Bare BIDS subject labels for the one-based *rows* of ``participants.tsv`` (all rows
+    by default)."""
     meta_df = read_participants(metadata_path)
+    if rows is None:
+        rows = list(range(1, len(meta_df) + 1))
     labels: list[str] = []
     for row in rows:
         position = row - 1
@@ -252,18 +248,27 @@ def main() -> None:
     parser.add_argument(
         "--metadata",
         default=None,
-        help="participants.tsv; with --rows enables the expected-subject coverage check.",
+        help="participants.tsv: every subject in it (or in --rows) must have a shard.",
     )
     parser.add_argument("--subject_col", default="subject", help="Subject id column in metadata.")
     parser.add_argument(
         "--rows",
         default=None,
-        help="One-based metadata rows that were processed, e.g. '1-1000' or '1-1000,1200-1241'.",
+        help="One-based metadata rows to expect, e.g. '1-10' or '1-10,1200-1218' (default: all).",
+    )
+    parser.add_argument(
+        "--conditions",
+        nargs="+",
+        default=None,
+        help=(
+            "Conditions stage 05 extracted. With --bids_root, a subject without a shard is "
+            "a failure only if a saved recording has min_obs epochs of one of them."
+        ),
     )
     parser.add_argument(
         "--out",
         default=None,
-        help="Per-shard CSV destination (default <derivative_root>/verification_report.csv).",
+        help="Per-shard CSV destination (default: the descriptor QC summary reports folder).",
     )
     parser.add_argument(
         "--strict",
@@ -296,14 +301,15 @@ def main() -> None:
     config_path = derivative_root / "config_used.yaml"
     if not config_path.exists():
         parser.error(f"config_used.yaml not found under {derivative_root}; extraction never ran?")
-    config_used = load_yaml_config(config_path)
-    include_pooled = bool((config_used.get("pooling") or {}).get("channel_groups"))
+    shard_df = collect_shard_records(derivative_root, reports_root)
 
-    shard_df = collect_shard_records(derivative_root, reports_root, include_pooled)
-
-    out_path = (
-        Path(args.out).expanduser() if args.out else derivative_root / "verification_report.csv"
+    # Next to the descriptor QC reports, not inside the derivative it checks.
+    default_dir = (
+        summary_report_dir(reports_root, ReportStage.DESCRIPTOR_QC, create=True)
+        if reports_root is not None
+        else derivative_root
     )
+    out_path = Path(args.out).expanduser() if args.out else default_dir / "verification_report.csv"
     shard_df.to_csv(out_path, index=False)
 
     n_shards = len(shard_df)
@@ -318,7 +324,6 @@ def main() -> None:
 
     print("=" * 72)
     print(f"Descriptor extraction verification — {derivative_root}")
-    print(f"config_used.yaml: pooling={'on' if include_pooled else 'off'}")
     print("-" * 72)
     print(f"Shards found        : {n_shards}")
     print(f"Complete            : {n_complete}")
@@ -332,7 +337,7 @@ def main() -> None:
     # are systematic rather than a handful of bad subjects.
     reasons = summarize_reasons(derivative_root, shard_df)
     print("-" * 72)
-    _print_counter("QC flags raised  [severity / code]", reasons["flags"])
+    _print_counter("QC flags raised  [level / code]", reasons["flags"])
     if reasons["flag_scope"]:
         print()
         _print_counter("QC flags by  [code / scope]", reasons["flag_scope"])
@@ -345,11 +350,9 @@ def main() -> None:
 
     if not incomplete_df.empty:
         print("-" * 72)
-        print("INCOMPLETE shards (no _SUCCESS or missing required files/report):")
+        print("INCOMPLETE shards (missing files or report):")
         for _, row in incomplete_df.iterrows():
             reason = []
-            if not row["has_success"]:
-                reason.append("no _SUCCESS")
             if row["n_missing_files"]:
                 reason.append(f"missing {row['n_missing_files']} file(s): {row['missing_files']}")
             if row["report_missing"] is True:
@@ -366,20 +369,42 @@ def main() -> None:
             print(f"  … and {len(failed) - 20} more")
 
     missing_subjects: list[str] = []
-    if args.metadata and args.rows:
-        rows = _parse_rows(args.rows)
+    if args.metadata:
+        rows = _parse_rows(args.rows) if args.rows else None
         wanted = expected_subjects(Path(args.metadata).expanduser(), args.subject_col, rows)
         missing_subjects = [s for s in wanted if s not in subjects_with_complete]
+        without_epochs: list[str] = []
+        if missing_subjects and args.bids_root and args.conditions:
+            config_used = load_yaml_config(config_path)
+            min_obs = int((config_used.get("qc") or {}).get("min_obs", 3))
+            without_epochs = [
+                s
+                for s in missing_subjects
+                if not has_extractable_epochs(
+                    Path(args.bids_root).expanduser(),
+                    s,
+                    config_used["desc"],
+                    args.conditions,
+                    min_obs,
+                )
+            ]
+            missing_subjects = [s for s in missing_subjects if s not in without_epochs]
         print("-" * 72)
-        print(f"Coverage: {len(wanted)} expected subjects from rows {args.rows}")
-        print(f"  with ≥1 complete shard : {len(wanted) - len(missing_subjects)}")
+        print(f"Coverage: {len(wanted)} expected subjects from rows {args.rows or 'all'}")
+        n_covered = len(wanted) - len(missing_subjects) - len(without_epochs)
+        print(f"  with ≥1 complete shard : {n_covered}")
+        if without_epochs:
+            print(
+                f"  no recording with {', '.join(args.conditions)} epochs (skipped by "
+                f"stage 05): {len(without_epochs)}"
+            )
         print(f"  with NO complete shard : {len(missing_subjects)}")
         if missing_subjects:
-            print("  (candidate failures — also check SLURM .err logs; some may be")
-            print("   legitimate skips: no epochs / too few survived MAD rejection)")
+            print("  (candidate failures — check the SLURM logs; a subject is also skipped")
+            print("   when outlier rejection leaves no recording with min_obs epochs)")
             print("   " + ", ".join(f"sub-{s}" for s in missing_subjects))
-    elif bool(args.metadata) ^ bool(args.rows):
-        LOGGER.warning("Both --metadata and --rows are required for the coverage check; skipping.")
+    elif args.rows:
+        LOGGER.warning("--rows needs --metadata for the coverage check; skipping.")
 
     print("-" * 72)
     print(f"Per-shard CSV written to: {out_path}")

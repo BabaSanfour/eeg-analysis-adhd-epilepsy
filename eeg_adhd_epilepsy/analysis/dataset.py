@@ -28,7 +28,7 @@ from eeg_adhd_epilepsy.io.bids import (
     get_derivative_root,
 )
 from eeg_adhd_epilepsy.io.readers import read_preproc_stage
-from eeg_adhd_epilepsy.preproc.epochs import make_epochs_from_preproc_raw
+from eeg_adhd_epilepsy.preproc.epochs import REJECTED_SUFFIX, make_epochs_from_preproc_raw
 from eeg_adhd_epilepsy.qc.feature_qc import compute_grouped_qc_masks
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,7 @@ def build_container(
         config = BIDSConfig(
             path=epochs_root,
             task=task,
+            session=session,
             description=desc,
             datatype="eeg",
             suffix="epo",
@@ -125,12 +126,18 @@ def reepoch_eeg(
 ) -> DataContainer:
     """Re-epoch the cleaned continuous ``desc`` derivative at ``segment_duration``.
 
+    ``desc`` names the epoch variant, as for saved epochs: ``base`` re-epochs the
+    ``desc-base`` recording, ``baserejected`` re-epochs the same recording and drops
+    the epochs overlapping a ``BAD_`` annotation, as stage 04 does.
+
     When ``bandpass`` is given, the continuous recording is band-pass filtered to
     ``(l_freq, h_freq)`` *before* epoching -- the correct place for it, since a
     sub-Hz high-pass needs a multi-second FIR that would clip a short epoch. Used
     to match a foundation model's pretraining band (e.g. SignalJEPA: 0.5-40 Hz).
     """
     preproc_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
+    reject_by_annotation = desc.endswith(REJECTED_SUFFIX)
+    desc = desc.removesuffix(REJECTED_SUFFIX)
     meta_lookup: pd.DataFrame | None = None
     if metadata_df is not None:
         meta_lookup = metadata_df.set_index(subject_col)
@@ -176,7 +183,10 @@ def reepoch_eeg(
                 raw.filter(l_freq=bandpass[0], h_freq=bandpass[1], verbose="ERROR")
             try:
                 epochs = make_epochs_from_preproc_raw(
-                    raw, segment_duration=segment_duration, overlap=overlap
+                    raw,
+                    segment_duration=segment_duration,
+                    overlap=overlap,
+                    reject_by_annotation=reject_by_annotation,
                 )
             except ValueError as exc:
                 issues.append(f"no_epochs:{subject_label}_run-{current_run}:{exc}")
@@ -382,7 +392,6 @@ def build_dataset(
         column_prune = qc_config.get("column_prune", {})
         container = load_descriptor_table(
             table_path=Path(args.descriptor_table_path),
-            feature_columns_path=Path(args.descriptor_feature_columns_path),
             known_families=KNOWN_FAMILY_TOKENS,
             condition=condition,
             target_col=target_col,
