@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import tempfile
 from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
@@ -44,11 +45,14 @@ _FAMILY_CONFIG_KEYS: tuple[tuple[str, str], ...] = (
 )
 
 
-def _is_alpha_peak(column: object) -> bool:
-    """An alpha peak feature: NaN where specparam found no alpha peak, a result, not
-    missing data, so it is left out of the missingness, all-NaN and constant checks
-    (one epoch with a peak leaves a single value)."""
-    return "_alpha_peak_" in str(column)
+_PEAK_FEATURE = re.compile(r"_alpha_peak_|_peak_[a-z]+_dom")
+
+
+def _is_peak_feature(column: object) -> bool:
+    """A peak feature (alpha peak, dominant peak): NaN where specparam found no such
+    peak, a result, not missing data, so it is left out of the missingness, all-NaN
+    and constant checks (one epoch with a peak leaves a single value)."""
+    return bool(_PEAK_FEATURE.search(str(column)))
 
 
 def _split_failures(failure_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -293,11 +297,15 @@ def run_descriptor_shard_qc(
     failure_summaries = summarize_failures(failure_df)
     extraction_failures, n_epochs_rejected = _split_failures(failure_df)
     checked_missingness = feature_missingness_df[
-        ~feature_missingness_df["column"].map(_is_alpha_peak)
+        ~feature_missingness_df["column"].map(_is_peak_feature)
     ]
-    alpha_peak_missingness = feature_missingness_df.loc[
-        feature_missingness_df["column"].map(_is_alpha_peak), "missing_rate"
-    ]
+
+    def peak_rate(token: str) -> float:
+        """Share of channel-epochs where specparam found the peak behind *token*."""
+        rates = feature_missingness_df.loc[
+            feature_missingness_df["column"].str.contains(token, regex=False), "missing_rate"
+        ]
+        return float(1 - rates.mean()) if not rates.empty else np.nan
 
     metrics = {
         "n_epochs": int(len(sensor_epoch_df)),
@@ -313,19 +321,17 @@ def run_descriptor_shard_qc(
         if not checked_missingness.empty
         else 0.0,
         "n_all_nan_features": int(
-            constant_df.loc[~constant_df["column"].map(_is_alpha_peak), "is_all_nan"].sum()
+            constant_df.loc[~constant_df["column"].map(_is_peak_feature), "is_all_nan"].sum()
         )
         if not constant_df.empty
         else 0,
         "n_constant_features": int(
-            constant_df.loc[~constant_df["column"].map(_is_alpha_peak), "is_constant"].sum()
+            constant_df.loc[~constant_df["column"].map(_is_peak_feature), "is_constant"].sum()
         )
         if not constant_df.empty
         else 0,
-        # Share of channel-epochs where specparam found an alpha peak.
-        "alpha_peak_rate": float(1 - alpha_peak_missingness.mean())
-        if not alpha_peak_missingness.empty
-        else np.nan,
+        "peak_rate": peak_rate("_peak_freq_dom"),
+        "alpha_peak_rate": peak_rate("_alpha_peak_freq"),
     }
     for row in family_summary_df.to_dict("records"):
         family = str(row["family"])
@@ -493,6 +499,7 @@ def write_descriptor_subject_report(
                 "Condition": qc["summary"]["condition"],
                 "Epochs": qc["summary"]["n_epochs"],
                 "Rejected Epochs": qc["summary"]["n_epochs_rejected"],
+                "Peak Found": round(qc["summary"]["peak_rate"], 3),
                 "Alpha Peak Found": round(qc["summary"]["alpha_peak_rate"], 3),
                 "Sensor Features": qc["summary"]["n_sensor_epoch_features"],
                 "Sensor Subject Features": qc["summary"]["n_sensor_subject_features"],
@@ -569,7 +576,7 @@ def run_descriptor_dataset_qc(
         subject_feature_cols,
     )
     checked_missingness = feature_missingness_df[
-        ~feature_missingness_df["column"].map(_is_alpha_peak)
+        ~feature_missingness_df["column"].map(_is_peak_feature)
     ]
     constant_df = compute_family_constant_summary(
         merged_sensor_subject_df,
@@ -681,12 +688,12 @@ def run_descriptor_dataset_qc(
         "n_sensor_epoch_features": int(len(epoch_feature_cols)),
         "n_sensor_subject_features": int(len(subject_feature_cols)),
         "n_all_nan_features": int(
-            constant_df.loc[~constant_df["column"].map(_is_alpha_peak), "is_all_nan"].sum()
+            constant_df.loc[~constant_df["column"].map(_is_peak_feature), "is_all_nan"].sum()
         )
         if not constant_df.empty
         else 0,
         "n_zero_variance_features": int(
-            constant_df.loc[~constant_df["column"].map(_is_alpha_peak), "is_constant"].sum()
+            constant_df.loc[~constant_df["column"].map(_is_peak_feature), "is_constant"].sum()
         )
         if not constant_df.empty
         else 0,
