@@ -362,9 +362,11 @@ def main() -> None:
         epochs_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
         files = list(epochs_root.rglob(f"{bids_subject_label(subject)}*_desc-{args.desc}_epo.fif"))
 
-        sessions = sorted(list({(get_entities_from_fname(f)["session"] or "01") for f in files}))
-        if not sessions:
-            sessions = ["01"]
+        # The session entity of each file; a file without one is labelled ses-01 in the
+        # outputs and loaded without a session filter.
+        session_entities = sorted(
+            {get_entities_from_fname(f)["session"] for f in files}, key=lambda s: s or ""
+        ) or [None]
 
         if args.conditions == ["all"]:
             # A file that cannot be read stops the task, as in the loading below.
@@ -378,7 +380,8 @@ def main() -> None:
         else:
             subject_conditions = args.conditions
 
-        for session in sessions:
+        for session_entity in session_entities:
+            session = session_entity or "01"
             # Every run recomputes: a shard or report left from an earlier run (an earlier
             # stage 03/04, another config, a crash halfway) never survives it.
             (
@@ -410,7 +413,7 @@ def main() -> None:
                         target_col=args.target_col,
                         desc=args.desc,
                         condition=condition,
-                        session=session,
+                        session=session_entity,
                         units=args.units,
                     )
                 except RuntimeError as error:

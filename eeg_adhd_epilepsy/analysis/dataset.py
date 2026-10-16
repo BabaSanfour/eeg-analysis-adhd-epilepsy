@@ -79,6 +79,7 @@ def build_container(
         config = BIDSConfig(
             path=epochs_root,
             task=task,
+            session=session,
             description=desc,
             datatype="eeg",
             suffix="epo",
