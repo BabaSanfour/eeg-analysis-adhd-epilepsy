@@ -123,9 +123,9 @@ resume.
 Foundation extraction honors `OVERWRITE=0` and resumes complete embedding/token
 pairs. Use `OVERWRITE=1` once when migrating an existing token-free derivative
 root to a configuration with `store_tokens: true`; subsequent submissions should
-return to the default. Script 08 automatically submits only its second extraction
-array because both arrays belong to the same stage. Submit stage 09 alignment
-and stage 10 merge manually, in that order, after extraction completes.
+return to the default. Script 08 is one array of every `participants.tsv` row.
+Submit stage 09 alignment and stage 10 merge manually, in that order, after
+extraction completes.
 
 ## Two-config analysis stages (09, 11–13, 15–18)
 
