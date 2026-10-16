@@ -16,13 +16,15 @@ families:
       alpha: [8.0, 13.0]
       beta: [13.0, 30.0]
       gamma: [30.0, 45.0]
+    # No corrected (aperiodic-removed) band power: on all 86,998 EO/EC epochs corrected log
+    # alpha matched plain log alpha (Spearman 0.98 per epoch, 0.96 per recording) with no
+    # larger group difference, and in a band without a fitted peak it is NaN, so most
+    # recording values rested on a few epochs (delta: 65 % on 0-4). The parametric family
+    # keeps what specparam adds: aperiodic exponent and offset, peak frequency and power.
     outputs:
       - absolute_power
       - log_absolute_power
       - relative_power
-      - corrected_absolute_power
-      - corrected_log_absolute_power
-      - corrected_relative_power
     ratio_pairs:
       - [delta, theta]
       - [delta, alpha]
@@ -103,10 +105,10 @@ aggregation:
   descriptors:
     - name: mean_export
       stats: mean
-      exclude_prefixes: [band_abs_, band_corr_abs_]
+      exclude_prefixes: [band_abs_]
     - name: band_summaries
       prefixes: [band_]
-      exclude_prefixes: [band_abs_, band_corr_abs_]
+      exclude_prefixes: [band_abs_]
       stats: [median, iqr]
     - name: complexity_summaries
       prefixes: [complexity_]
@@ -124,5 +126,5 @@ qc:
     z_threshold: 5.0
     group_by: family
     epoch_outlier_fraction: 0.30
-    exclude_prefixes: [band_abs_, band_corr_abs_]
+    exclude_prefixes: [band_abs_]
   min_obs: 5
