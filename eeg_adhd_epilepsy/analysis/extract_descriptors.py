@@ -25,6 +25,7 @@ import json
 import logging
 import shutil
 from copy import deepcopy
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +69,7 @@ from eeg_adhd_epilepsy.io.report_paths import (
     subject_report_dir,
 )
 from eeg_adhd_epilepsy.qc.descriptor_qc import (
+    descriptor_qc_thresholds,
     run_descriptor_shard_qc,
     write_descriptor_subject_report,
 )
@@ -298,8 +300,11 @@ def main() -> None:
     config_snapshot["aggregation"] = deepcopy(aggregation_config)
     # The epoch variant: a root made from one variant refuses the other.
     config_snapshot["desc"] = args.desc
-    if qc_config:
-        config_snapshot["qc"] = deepcopy(qc_config)
+    # The thresholds the shard QC uses, defaults included, so a run records them.
+    config_snapshot["qc"] = {
+        **deepcopy(qc_config),
+        "thresholds": asdict(descriptor_qc_thresholds({"qc": qc_config})),
+    }
     freeze_config_used(
         config_snapshot,
         derivative_root,

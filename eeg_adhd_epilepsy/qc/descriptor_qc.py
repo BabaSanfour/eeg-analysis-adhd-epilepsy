@@ -32,7 +32,7 @@ from coco_pipe.report.descriptor_qc import (
 
 import eeg_adhd_epilepsy.io.report_paths as report_paths
 import eeg_adhd_epilepsy.viz.descriptor_qc as viz_descriptor_qc
-from eeg_adhd_epilepsy.qc.utils import DEFAULT_DESCRIPTOR_THRESHOLDS, DescriptorQCThresholds
+from eeg_adhd_epilepsy.qc.utils import DescriptorQCThresholds
 from eeg_adhd_epilepsy.utils.formatting import reorder_columns_front
 
 LOGGER = logging.getLogger(__name__)
@@ -53,6 +53,11 @@ def _is_peak_feature(column: object) -> bool:
     peak, a result, not missing data, so it is left out of the missingness, all-NaN
     and constant checks (one epoch with a peak leaves a single value)."""
     return bool(_PEAK_FEATURE.search(str(column)))
+
+
+def descriptor_qc_thresholds(config_snapshot: dict[str, Any]) -> DescriptorQCThresholds:
+    """The QC thresholds of ``qc.thresholds`` in *config_snapshot*, defaults for the rest."""
+    return DescriptorQCThresholds(**((config_snapshot.get("qc") or {}).get("thresholds") or {}))
 
 
 def _split_failures(failure_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
@@ -256,6 +261,7 @@ def run_descriptor_shard_qc(
     and puts every condition of a subject in one report
     (:func:`write_descriptor_subject_report`).
     """
+    thresh = descriptor_qc_thresholds(config_snapshot)
     expected_families = _expected_families(config_snapshot)
     feature_cols = _select_family_feature_cols(
         sensor_epoch_feature_columns,
@@ -276,16 +282,22 @@ def run_descriptor_shard_qc(
     constant_df = compute_family_constant_summary(
         sensor_epoch_df,
         feature_cols,
-        tol=DEFAULT_DESCRIPTOR_THRESHOLDS.near_constant_std_tol,
+        tol=thresh.near_constant_std_tol,
     )
     extraction_failures, n_epochs_rejected = _split_failures(failure_df)
+    # Failures of epochs left out afterwards (rejected, or in a too-short recording)
+    # do not count.
+    if "obs_id" in extraction_failures.columns and "obs_id" in sensor_epoch_df.columns:
+        extraction_failures = extraction_failures[
+            extraction_failures["obs_id"].astype(str).isin(sensor_epoch_df["obs_id"].astype(str))
+        ]
     # The family table, its missingness chart and the failure counts follow the checks:
     # no peak features, and rejected epochs are not failures.
     family_summary_df = aggregate_family_qc(
         sensor_epoch_df,
         [column for column in feature_cols if not _is_peak_feature(column)],
         failures_df=extraction_failures,
-        tol=DEFAULT_DESCRIPTOR_THRESHOLDS.near_constant_std_tol,
+        tol=thresh.near_constant_std_tol,
     ).rename(
         columns={
             "missing_rate_mean": "missing_rate",
@@ -353,7 +365,7 @@ def run_descriptor_shard_qc(
     flags.extend(
         _missingness_flags(
             metrics["max_feature_missingness"],
-            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            thresh=thresh,
             fail_code="high_missingness",
             warn_code="elevated_missingness",
             fail_msg="Feature missingness is too high.",
@@ -375,7 +387,7 @@ def run_descriptor_shard_qc(
     flags.extend(
         _zero_variance_flags(
             constant_fraction,
-            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            thresh=thresh,
             fail_code="many_constant_features",
             warn_code="constant_features_present",
             fail_msg="Too many descriptor features are constant.",
@@ -385,7 +397,7 @@ def run_descriptor_shard_qc(
     flags.extend(
         _family_failure_flags(
             family_summary_df,
-            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            thresh=thresh,
             fail_code=lambda family: f"{family}_family_failure_high",
             warn_code=lambda family: f"{family}_family_failure_warn",
             fail_msg="Family failure rate is high.",
@@ -407,25 +419,25 @@ def run_descriptor_shard_qc(
             )
         if family == "param":
             r2_p05 = row.get("param_r_squared_p05")
-            if pd.notna(r2_p05) and float(r2_p05) < 0.2:
+            if pd.notna(r2_p05) and float(r2_p05) < thresh.fail_param_r_squared_p05:
                 flags.append(
                     make_qc_flag(
                         "fail",
                         "param_low_r_squared",
                         "Parametric fits show very low r-squared.",
                         value=r2_p05,
-                        threshold=0.2,
+                        threshold=thresh.fail_param_r_squared_p05,
                         scope=family,
                     )
                 )
-            elif pd.notna(r2_p05) and float(r2_p05) < 0.5:
+            elif pd.notna(r2_p05) and float(r2_p05) < thresh.warn_param_r_squared_p05:
                 flags.append(
                     make_qc_flag(
                         "warn",
                         "param_low_r_squared",
                         "Parametric fits show low r-squared.",
                         value=r2_p05,
-                        threshold=0.5,
+                        threshold=thresh.warn_param_r_squared_p05,
                         scope=family,
                     )
                 )
@@ -503,8 +515,8 @@ def write_descriptor_subject_report(
                 "Rejected Epochs": qc["summary"]["n_epochs_rejected"],
                 "Peak Found": round(qc["summary"]["peak_rate"], 3),
                 "Alpha Peak Found": round(qc["summary"]["alpha_peak_rate"], 3),
-                "Sensor Features": qc["summary"]["n_sensor_epoch_features"],
-                "Sensor Subject Features": qc["summary"]["n_sensor_subject_features"],
+                "Epoch Features": qc["summary"]["n_sensor_epoch_features"],
+                "Recording Features": qc["summary"]["n_sensor_subject_features"],
                 "Failures": qc["summary"]["n_failures_total"],
                 "QC Status": qc["summary"]["qc_status"],
             }
@@ -561,6 +573,7 @@ def run_descriptor_dataset_qc(
     summary_dir = report_paths.summary_report_dir(
         reports_root, report_paths.ReportStage.DESCRIPTOR_QC, create=True
     )
+    thresh = descriptor_qc_thresholds(config_snapshot)
 
     expected_families = _expected_families(config_snapshot)
     subject_feature_cols = _select_family_feature_cols(
@@ -583,14 +596,11 @@ def run_descriptor_dataset_qc(
     constant_df = compute_family_constant_summary(
         merged_sensor_subject_df,
         subject_feature_cols,
-        tol=DEFAULT_DESCRIPTOR_THRESHOLDS.near_constant_std_tol,
+        tol=thresh.near_constant_std_tol,
     )
     low_variance_df = constant_df[
         constant_df["is_constant"]
-        | (
-            constant_df["relative_std"].fillna(np.inf)
-            <= DEFAULT_DESCRIPTOR_THRESHOLDS.near_constant_std_tol * 10
-        )
+        | (constant_df["relative_std"].fillna(np.inf) <= thresh.near_constant_std_tol * 10)
     ].copy()
     failure_df = merged_failures_df if merged_failures_df is not None else pd.DataFrame()
     extraction_failures, n_epochs_rejected = _split_failures(failure_df)
@@ -604,7 +614,7 @@ def run_descriptor_dataset_qc(
         merged_sensor_subject_df,
         subject_feature_cols,
         failures_df=failure_df,
-        tol=DEFAULT_DESCRIPTOR_THRESHOLDS.near_constant_std_tol,
+        tol=thresh.near_constant_std_tol,
     ).rename(
         columns={
             "missing_rate_mean": "missing_rate",
@@ -707,10 +717,7 @@ def run_descriptor_dataset_qc(
         if not checked_missingness.empty
         else 0.0,
         "n_subjects_high_outlier_burden": int(
-            (
-                outlier_df["outlier_fraction"]
-                >= DEFAULT_DESCRIPTOR_THRESHOLDS.warn_subject_outlier_fraction
-            ).sum()
+            (outlier_df["outlier_fraction"] >= thresh.warn_subject_outlier_fraction).sum()
         )
         if not outlier_df.empty
         else 0,
@@ -731,7 +738,7 @@ def run_descriptor_dataset_qc(
     flags.extend(
         _missingness_flags(
             metrics["max_feature_missingness"],
-            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            thresh=thresh,
             fail_code="high_global_missingness",
             warn_code="global_missingness_warn",
             fail_msg="Global descriptor missingness is too high.",
@@ -742,7 +749,7 @@ def run_descriptor_dataset_qc(
     flags.extend(
         _zero_variance_flags(
             zero_variance_fraction,
-            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            thresh=thresh,
             fail_code="many_zero_variance_features",
             warn_code="near_zero_variance_features",
             fail_msg="Too many merged features are zero-variance.",
@@ -751,30 +758,30 @@ def run_descriptor_dataset_qc(
     )
     if not outlier_df.empty:
         max_outlier_fraction = float(outlier_df["outlier_fraction"].max())
-        if max_outlier_fraction >= DEFAULT_DESCRIPTOR_THRESHOLDS.fail_subject_outlier_fraction:
+        if max_outlier_fraction >= thresh.fail_subject_outlier_fraction:
             flags.append(
                 make_qc_flag(
                     "fail",
                     "subject_outlier_burden_high",
                     "A subject has high descriptor outlier burden.",
                     value=max_outlier_fraction,
-                    threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.fail_subject_outlier_fraction,
+                    threshold=thresh.fail_subject_outlier_fraction,
                 )
             )
-        elif max_outlier_fraction >= DEFAULT_DESCRIPTOR_THRESHOLDS.warn_subject_outlier_fraction:
+        elif max_outlier_fraction >= thresh.warn_subject_outlier_fraction:
             flags.append(
                 make_qc_flag(
                     "warn",
                     "subject_outlier_burden_warn",
                     "A subject has elevated descriptor outlier burden.",
                     value=max_outlier_fraction,
-                    threshold=DEFAULT_DESCRIPTOR_THRESHOLDS.warn_subject_outlier_fraction,
+                    threshold=thresh.warn_subject_outlier_fraction,
                 )
             )
     flags.extend(
         _family_failure_flags(
             family_summary_df,
-            thresh=DEFAULT_DESCRIPTOR_THRESHOLDS,
+            thresh=thresh,
             fail_code=lambda _family: "family_failure_concentration",
             warn_code=lambda _family: "family_failure_concentration",
             fail_msg="Family failure concentration is high.",
