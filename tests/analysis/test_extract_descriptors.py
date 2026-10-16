@@ -4,6 +4,7 @@ import json
 import sys
 from pathlib import Path
 
+import mne
 import numpy as np
 import pandas as pd
 import pytest
@@ -561,6 +562,75 @@ aggregation:
     derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
     assert (derivative_root / "sub-0001" / "ses-01" / "eeg" / "EO_baseline" / "shard.json").exists()
     assert not (derivative_root / "sub-0001" / "ses-01" / "eeg" / "HV_EO").exists()
+
+
+@pytest.mark.parametrize("corrupt_runs", [("02",), ("01", "02")])
+def test_extract_descriptors_cli_fails_on_a_recording_that_cannot_be_loaded(
+    monkeypatch,
+    tmp_path: Path,
+    corrupt_runs: tuple[str, ...],
+) -> None:
+    """A saved epoch file that cannot be read stops stage 05, whether or not the subject's
+    other recordings load: it is not a subject without epochs."""
+    config_path = tmp_path / "descriptors.yaml"
+    config_path.write_text(
+        """
+families:
+  bands:
+    enabled: true
+    outputs: [absolute_power]
+  parametric:
+    enabled: false
+  complexity:
+    enabled: false
+aggregation:
+  descriptors:
+    - name: mean_export
+      stats: mean
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        extract_descriptors, "read_participants", lambda metadata_path: _demo_raw_metadata()
+    )
+    bids_root = tmp_path / "BIDS"
+    eeg_dir = bids_root / "derivatives" / "preproc" / "sub-0001" / "ses-01" / "eeg"
+    eeg_dir.mkdir(parents=True)
+    info = mne.create_info(["Fz", "Cz"], 64.0, "eeg")
+    for run in ("01", "02"):
+        path = eeg_dir / f"sub-0001_ses-01_task-clinical_run-{run}_desc-base_epo.fif"
+        if run in corrupt_runs:
+            path.write_bytes(b"not a fif file")
+            continue
+        events = np.column_stack([np.arange(5) * 64, np.zeros(5, int), np.ones(5, int)])
+        epochs = mne.EpochsArray(
+            np.random.default_rng(0).normal(size=(5, 2, 64)) * 1e-5,
+            info,
+            events=events,
+            event_id={"EO_baseline": 1},
+            verbose="ERROR",
+        )
+        epochs.save(path, verbose="ERROR")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "eeg-descriptors",
+            "--bids_root",
+            str(bids_root),
+            "--metadata",
+            str(tmp_path / "patients.csv"),
+            "--config",
+            str(config_path),
+            "--subjects",
+            "0001",
+            "--conditions",
+            "EO_baseline",
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="could not be loaded"):
+        extract_descriptors.main()
 
 
 def test_extract_descriptors_cli_recomputes_every_shard(

@@ -367,12 +367,10 @@ def main() -> None:
             sessions = ["01"]
 
         if args.conditions == ["all"]:
+            # A file that cannot be read stops the task, as in the loading below.
             subject_conditions = set()
             for f in files:
-                try:
-                    subject_conditions.update(mne.read_epochs(f, verbose="ERROR").event_id.keys())
-                except Exception as e:
-                    LOGGER.debug("Failed to read conditions from %s: %s", f.name, e)
+                subject_conditions.update(mne.read_epochs(f, verbose="ERROR").event_id.keys())
             subject_conditions = sorted(list(subject_conditions))
             if not subject_conditions:
                 LOGGER.warning("No saved conditions found for subject %s", subject)
@@ -416,7 +414,12 @@ def main() -> None:
                         units=args.units,
                     )
                 except RuntimeError as error:
-                    if str(error).startswith("No valid data found in "):
+                    # Skipped only when no recording has this condition; the loader's
+                    # message then names no recording that could not be loaded.
+                    message = str(error)
+                    if message.startswith("No valid data found in ") and (
+                        "could not be loaded" not in message
+                    ):
                         LOGGER.info(
                             "Skipping %s / %s: no saved epochs found for this condition.",
                             condition,
@@ -424,6 +427,14 @@ def main() -> None:
                         )
                         continue
                     raise
+                # A recording that could not be loaded stops the task: the shard would
+                # silently lack it.
+                load_failures = dc_loaded.meta.get("load_failures", [])
+                if load_failures:
+                    raise RuntimeError(
+                        f"{condition} / {subject}: {len(load_failures)} recording(s) could "
+                        f"not be loaded: {load_failures}"
+                    )
                 channel_names = [
                     str(name) for name in np.asarray(dc_loaded.coords["channel"], dtype=object)
                 ]
