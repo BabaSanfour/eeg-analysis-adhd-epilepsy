@@ -3,7 +3,7 @@
 #SBATCH --time=01:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=32G
-#SBATCH --array=1-1000
+#SBATCH --array=1-1218
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -13,18 +13,13 @@ source "$PROJECT_ROOT/cluster/env.sh"
 dra_epochs_variant
 
 CONFIG_PATH=${CONFIG_PATH:-$PROJECT_ROOT/configs/descriptors.yaml}
-SUBMIT_STATE_DIR=${SUBMIT_STATE_DIR:-$PROJECT_ROOT/cluster/.descriptor_array_state}
-AUTO_SUBMIT_NEXT=${AUTO_SUBMIT_NEXT:-1}
-FIRST_BATCH_SIZE=${FIRST_BATCH_SIZE:-1000}
-
 THREADS=${SLURM_CPUS_PER_TASK:-16}
-ROW_OFFSET=${ROW_OFFSET:-0}
-METADATA_ROW=$((SLURM_ARRAY_TASK_ID + ROW_OFFSET))
+# One task per participants.tsv row (1,218), all in one array: fir takes indices up to
+# 9,999. Stage 06 lists every row left without a shard.
+METADATA_ROW=$SLURM_ARRAY_TASK_ID
 
 require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"
-# One task per participants.tsv row: the second batch takes the rows past the first.
-SECOND_BATCH_SIZE=${SECOND_BATCH_SIZE:-$(($(tail -n +2 "$METADATA_PATH" | wc -l) - FIRST_BATCH_SIZE))}
 require_file "$CONFIG_PATH"
 require_dir "$VENV_PATH"
 
@@ -41,19 +36,3 @@ python -m eeg_adhd_epilepsy.analysis.extract_descriptors \
   --config "$CONFIG_PATH" \
   --metadata_row "$METADATA_ROW" \
   --conditions all
-
-if [[ "$AUTO_SUBMIT_NEXT" == "1" && "$ROW_OFFSET" == "0" ]]; then
-  batch_state_dir="$SUBMIT_STATE_DIR/${SLURM_ARRAY_JOB_ID:-manual}"
-  mkdir -p "$batch_state_dir"
-  touch "$batch_state_dir/${SLURM_ARRAY_TASK_ID}.done"
-
-  done_count=$(find "$batch_state_dir" -maxdepth 1 -name '*.done' | wc -l | tr -d ' ')
-  if [[ "$done_count" -ge "$FIRST_BATCH_SIZE" ]]; then
-    if mkdir "$batch_state_dir/submit_second.lock" 2>/dev/null; then
-      sbatch \
-        --array=1-"$SECOND_BATCH_SIZE" \
-        --export=ALL,ROW_OFFSET="$FIRST_BATCH_SIZE",AUTO_SUBMIT_NEXT=0 \
-        "$0"
-    fi
-  fi
-fi

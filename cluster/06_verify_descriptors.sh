@@ -23,13 +23,15 @@ require_dir "$VENV_PATH"
 # CPU-light verification; no BLAS pinning.
 dra_activate
 
+# Every participants.tsv row is expected to have a shard, unless ROWS narrows it.
 cmd=(
   python -m eeg_adhd_epilepsy.analysis.verify_descriptors
   --derivative_root "$DESCRIPTOR_SHARDS_ROOT"
   --reports_root "$REPORTS_ROOT"
+  --metadata "$METADATA_PATH"
 )
 if [[ -n "$ROWS" ]]; then
-  cmd+=(--metadata "$METADATA_PATH" --rows "$ROWS")
+  cmd+=(--rows "$ROWS")
 fi
 if [[ "$STRICT" == "1" ]]; then
   cmd+=(--strict)

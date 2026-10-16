@@ -11,19 +11,18 @@ Three independent checks are performed:
    is a crashed/partial run.
 2. **QC status rollup** — the QC summary in each ``shard.json`` is read and the
    ``pass`` / ``warn`` / ``fail`` verdicts are tallied.
-3. **Coverage** — when ``--metadata`` and ``--rows`` are supplied (the metadata
-   rows the array was supposed to process), subjects that produced *no* shard
-   are listed. These are candidate failures, though some are legitimate skips
-   (no epochs / fewer than ``min_obs`` epochs survived MAD rejection for every
-   condition) — cross-check the SLURM ``.err`` logs for those.
+3. **Coverage** — when ``--metadata`` is supplied, subjects of its rows (all of
+   them, or those in ``--rows``) that produced *no* shard are listed. These are
+   candidate failures, though some are legitimate skips (no epochs / fewer than
+   ``min_obs`` epochs survived MAD rejection for every condition) — cross-check
+   the SLURM ``.err`` logs for those.
 
 Run on the machine that holds the descriptor derivatives, e.g.::
 
     python -m eeg_adhd_epilepsy.analysis.verify_descriptors \\
         --derivative_root $SCRATCH/BIDS/derivatives/signal_features/descriptors \\
         --reports_root $SCRATCH/reports \\
-        --metadata patients_metadata_clean.csv \\
-        --rows 1-1000
+        --metadata participants.tsv
 
 Exits non-zero when any shard is incomplete or any expected subject is missing
 (use ``--strict`` to also fail when any shard's QC status is ``fail``).
@@ -192,9 +191,14 @@ def _print_counter(title: str, counter: Counter, top_n: int = 15) -> None:
         print(f"  {count:>9,}  {label}")
 
 
-def expected_subjects(metadata_path: Path, subject_col: str, rows: list[int]) -> list[str]:
-    """Bare BIDS subject labels for the given one-based *rows* of ``participants.tsv``."""
+def expected_subjects(
+    metadata_path: Path, subject_col: str, rows: list[int] | None = None
+) -> list[str]:
+    """Bare BIDS subject labels for the one-based *rows* of ``participants.tsv`` (all rows
+    by default)."""
     meta_df = read_participants(metadata_path)
+    if rows is None:
+        rows = list(range(1, len(meta_df) + 1))
     labels: list[str] = []
     for row in rows:
         position = row - 1
@@ -226,13 +230,13 @@ def main() -> None:
     parser.add_argument(
         "--metadata",
         default=None,
-        help="participants.tsv; with --rows enables the expected-subject coverage check.",
+        help="participants.tsv: every subject in it (or in --rows) must have a shard.",
     )
     parser.add_argument("--subject_col", default="subject", help="Subject id column in metadata.")
     parser.add_argument(
         "--rows",
         default=None,
-        help="One-based metadata rows that were processed, e.g. '1-1000' or '1-1000,1200-1241'.",
+        help="One-based metadata rows to expect, e.g. '1-10' or '1-10,1200-1218' (default: all).",
     )
     parser.add_argument(
         "--out",
@@ -338,20 +342,20 @@ def main() -> None:
             print(f"  … and {len(failed) - 20} more")
 
     missing_subjects: list[str] = []
-    if args.metadata and args.rows:
-        rows = _parse_rows(args.rows)
+    if args.metadata:
+        rows = _parse_rows(args.rows) if args.rows else None
         wanted = expected_subjects(Path(args.metadata).expanduser(), args.subject_col, rows)
         missing_subjects = [s for s in wanted if s not in subjects_with_complete]
         print("-" * 72)
-        print(f"Coverage: {len(wanted)} expected subjects from rows {args.rows}")
+        print(f"Coverage: {len(wanted)} expected subjects from rows {args.rows or 'all'}")
         print(f"  with ≥1 complete shard : {len(wanted) - len(missing_subjects)}")
         print(f"  with NO complete shard : {len(missing_subjects)}")
         if missing_subjects:
             print("  (candidate failures — also check SLURM .err logs; some may be")
             print("   legitimate skips: no epochs / too few survived MAD rejection)")
             print("   " + ", ".join(f"sub-{s}" for s in missing_subjects))
-    elif bool(args.metadata) ^ bool(args.rows):
-        LOGGER.warning("Both --metadata and --rows are required for the coverage check; skipping.")
+    elif args.rows:
+        LOGGER.warning("--rows needs --metadata for the coverage check; skipping.")
 
     print("-" * 72)
     print(f"Per-shard CSV written to: {out_path}")
