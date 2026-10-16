@@ -124,4 +124,5 @@ qc:
     group_by: family
     epoch_outlier_fraction: 0.30
     exclude_prefixes: [band_abs_]
-  min_obs: 5
+  # Fewest epochs a recording value may rest on (30 s); recordings with fewer are left out.
+  min_obs: 3

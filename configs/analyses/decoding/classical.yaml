@@ -21,7 +21,7 @@ qc:
     # A unit drops an observation flagged in more than this fraction of the QC
     # groups it spans (0.0 = flagged in any group, which empties wide units).
     unit_outlier_group_fraction: 0.2
-  min_obs: 5
+  min_obs: 3
 
 analysis_modes:
   - flat

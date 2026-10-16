@@ -103,7 +103,6 @@ def _apply_mad_rejection(
     subject: str,
     mad_threshold: float = 10.0,
     fraction_thresh: float = 0.05,
-    min_epochs: int = 5,
     group_by: str | None = None,
     exclude_prefixes: tuple[str, ...] = (),
 ) -> tuple[DataContainer, pd.DataFrame]:
@@ -111,9 +110,8 @@ def _apply_mad_rejection(
 
     Delegates MAD scoring/masking to
     :func:`coco_pipe.io.quality.drop_epoch_outliers` and records the dropped
-    epochs via :func:`coco_pipe.descriptors.mad_failures_from_qc`. A
-    ``RuntimeError`` is raised if fewer than ``min_epochs`` would survive. Features
-    whose names start with ``exclude_prefixes`` are not scored.
+    epochs via :func:`coco_pipe.descriptors.mad_failures_from_qc`. Features whose
+    names start with ``exclude_prefixes`` are not scored.
     """
     if container.X.shape[0] == 0:
         return container, metadata_df
@@ -125,7 +123,6 @@ def _apply_mad_rejection(
         z_threshold=mad_threshold,
         outlier_fraction_threshold=fraction_thresh,
         group_by=group_by,
-        min_obs=min_epochs,
     )
     if isinstance(clean_or_masks, dict):
         keep_mask = np.logical_and.reduce(list(clean_or_masks.values()))
@@ -137,13 +134,6 @@ def _apply_mad_rejection(
             metadata_df["obs_id"].astype(str).to_numpy(),
             list(clean_ids),
         )
-    remaining_count = int(keep_mask.sum())
-    if remaining_count < min_epochs:
-        raise RuntimeError(
-            f"Only {remaining_count} epoch(s) remain after MAD rejection "
-            f"(minimum required: {min_epochs})."
-        )
-
     bad_count = int((~keep_mask).sum())
     if bad_count > 0:
         clean.meta["failures"] = list(clean.meta.get("failures", [])) + (
@@ -479,29 +469,40 @@ def main() -> None:
             outlier_config = qc_config.get("outlier", {})
             mad_threshold = float(outlier_config.get("z_threshold", 5.0))
             fraction_threshold = float(outlier_config.get("epoch_outlier_fraction", 0.30))
-            min_epochs = int(qc_config.get("min_obs", 5))
+            min_epochs = int(qc_config.get("min_obs", 3))
             group_by = outlier_config.get("group_by", "family")
             failure_metadata_df = metadata_df.copy()
-            try:
-                if outlier_config.get("enabled", True):
-                    sensor_result, metadata_df = _apply_mad_rejection(
-                        sensor_result,
-                        metadata_df,
-                        condition,
-                        subject,
-                        mad_threshold=mad_threshold,
-                        fraction_thresh=fraction_threshold,
-                        min_epochs=min_epochs,
-                        group_by=group_by,
-                        exclude_prefixes=tuple(outlier_config.get("exclude_prefixes", ())),
-                    )
-                elif sensor_result.X.shape[0] < min_epochs:
-                    raise RuntimeError(
-                        f"Only {sensor_result.X.shape[0]} epoch(s) "
-                        f"(minimum required: {min_epochs})."
-                    )
-            except RuntimeError as error:
-                LOGGER.warning("Skipping %s / %s: %s", condition, subject, str(error))
+            if outlier_config.get("enabled", True):
+                sensor_result, metadata_df = _apply_mad_rejection(
+                    sensor_result,
+                    metadata_df,
+                    condition,
+                    subject,
+                    mad_threshold=mad_threshold,
+                    fraction_thresh=fraction_threshold,
+                    group_by=group_by,
+                    exclude_prefixes=tuple(outlier_config.get("exclude_prefixes", ())),
+                )
+            # Every recording value rests on at least min_epochs epochs: a short recording
+            # is left out even when the subject's other recordings fill the shard.
+            n_per_recording = metadata_df["recording_id"].value_counts()
+            short = n_per_recording.index[n_per_recording < min_epochs]
+            if len(short):
+                LOGGER.warning(
+                    "%s / %s: leaving out %d recording(s) with fewer than %d epochs: %s",
+                    condition,
+                    subject,
+                    len(short),
+                    min_epochs,
+                    {str(k): int(v) for k, v in n_per_recording[short].items()},
+                )
+                keep = ~metadata_df["recording_id"].isin(short).to_numpy()
+                sensor_result = sensor_result.isel(obs=np.flatnonzero(keep).tolist())
+                metadata_df = metadata_df[keep].reset_index(drop=True)
+            if sensor_result.X.shape[0] == 0:
+                LOGGER.warning(
+                    "Skipping %s / %s: no recording with %d epochs.", condition, subject, min_epochs
+                )
                 continue
 
             sensor_outputs = build_descriptor_tables(

@@ -893,26 +893,11 @@ def test_apply_mad_rejection_delegates_and_logs_drop():
         "0001",
         mad_threshold=3.0,
         fraction_thresh=0.4,
-        min_epochs=5,
     )
 
     assert clean.X.shape[0] == 5
     assert clean_metadata["obs_id"].tolist() == [f"obs-{index}" for index in range(5)]
     assert clean.meta["failures"][0]["exception_type"] == "MADOutlierError"
-
-
-def test_apply_mad_rejection_raises_when_too_few_remain():
-    metadata = pd.DataFrame({"obs_id": [f"obs-{index}" for index in range(6)]})
-    with pytest.raises(RuntimeError, match="minimum required: 6"):
-        extract_descriptors._apply_mad_rejection(
-            _mad_container(),
-            metadata,
-            "EO_baseline",
-            "0001",
-            mad_threshold=3.0,
-            fraction_thresh=0.4,
-            min_epochs=6,
-        )
 
 
 def test_write_text_atomic_is_concurrency_safe(tmp_path: Path) -> None:
@@ -960,7 +945,6 @@ def test_apply_mad_rejection_per_family_tags_failures():
         "0001",
         mad_threshold=3.0,
         fraction_thresh=0.4,
-        min_epochs=5,
         group_by="family",
     )
 
