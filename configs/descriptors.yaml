@@ -39,10 +39,19 @@ families:
   parametric:
     enabled: true
     backend: specparam
+    # Fitted per 10 s epoch. Measured on all 86,998 EO/EC epochs (2026-10-16): with 2 s Welch
+    # segments, 1-45 Hz and no minimum height, 62 % of fits filled the 6-peak cap with noise.
+    # 1 s segments (1 Hz bins, peak width >= 2 bins as specparam recommends), 3-40 Hz (the
+    # spectra bend at a median 3.3 Hz, so a fixed fit should not start below it; Ostlund et
+    # al. 2022) and a 0.10 minimum peak height: 5.5 % at the cap, split-half reliability of
+    # the exponent 0.93, offset 0.95, alpha frequency 0.79.
     psd_method: welch
-    freq_range: [1.0, 45.0]
-    peak_width_limits: [1.0, 12.0]
+    welch_segment_length: 1.0
+    welch_overlap: 0.5
+    freq_range: [3.0, 40.0]
+    peak_width_limits: [2.0, 8.0]
     max_n_peaks: 6
+    min_peak_height: 0.10
     aperiodic_mode: fixed
     outputs:
       - aperiodic
