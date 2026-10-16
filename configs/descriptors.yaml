@@ -92,9 +92,11 @@ families:
       dispersion_entropy: {delay: 1, dimension: 3, c: 6, symbolize: NCDF}
       kurtosis: {fisher: true, bias: false}
 
+# One CPU per recording, no worker threads: on fir this ran each recording faster than
+# 16 threads did, at 1/16 of the cores (stage 05 is one array task per subject).
 runtime:
-  execution_backend: joblib
-  n_jobs: 16
+  execution_backend: sequential
+  n_jobs: 1
   obs_chunk: 16
   on_error: collect
 
