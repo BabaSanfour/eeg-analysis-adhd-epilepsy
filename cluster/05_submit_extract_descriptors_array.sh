@@ -35,4 +35,4 @@ python -m eeg_adhd_epilepsy.analysis.extract_descriptors \
   --metadata "$METADATA_PATH" \
   --config "$CONFIG_PATH" \
   --metadata_row "$METADATA_ROW" \
-  --conditions all
+  --conditions $DESCRIPTOR_CONDITIONS

@@ -61,6 +61,8 @@ dra_epochs_variant() {
         *) echo "Set EPOCHS_DESC=base or EPOCHS_DESC=baserejected (after --)." >&2; exit 1 ;;
     esac
     export EPOCHS_DESC
+    # The conditions stage 05 extracts and stage 06 expects: the ones the analyses use.
+    : "${DESCRIPTOR_CONDITIONS:=EO_baseline EC_baseline}"
     : "${DESCRIPTOR_SHARDS_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC}"
     : "${DESCRIPTORS_ROOT:=$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC}"
     : "${EMBEDDING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings_$EPOCHS_DESC}"

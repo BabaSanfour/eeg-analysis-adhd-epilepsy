@@ -36,6 +36,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import mne
 import pandas as pd
 
 from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import (
@@ -57,6 +58,7 @@ from eeg_adhd_epilepsy.io.report_paths import (
     subject_report_dir,
     summary_report_dir,
 )
+from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
 
@@ -191,6 +193,22 @@ def _print_counter(title: str, counter: Counter, top_n: int = 15) -> None:
         print(f"  {count:>9,}  {label}")
 
 
+def has_extractable_epochs(
+    bids_root: Path, subject: str, desc: str, conditions: list[str], min_obs: int
+) -> bool:
+    """Whether a saved recording of *subject* has *min_obs* epochs of one of *conditions*.
+
+    Reads the epoch files' headers only. A subject without such a recording has no
+    shard by design (stage 05 skips it), so it is not a failure.
+    """
+    preproc_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
+    for path in sorted(preproc_root.glob(f"sub-{subject}/*/eeg/*_desc-{desc}_epo.fif")):
+        epochs = mne.read_epochs(path, preload=False, verbose="ERROR")
+        if any(len(epochs[c]) >= min_obs for c in conditions if c in epochs.event_id):
+            return True
+    return False
+
+
 def expected_subjects(
     metadata_path: Path, subject_col: str, rows: list[int] | None = None
 ) -> list[str]:
@@ -237,6 +255,15 @@ def main() -> None:
         "--rows",
         default=None,
         help="One-based metadata rows to expect, e.g. '1-10' or '1-10,1200-1218' (default: all).",
+    )
+    parser.add_argument(
+        "--conditions",
+        nargs="+",
+        default=None,
+        help=(
+            "Conditions stage 05 extracted. With --bids_root, a subject without a shard is "
+            "a failure only if a saved recording has min_obs epochs of one of them."
+        ),
     )
     parser.add_argument(
         "--out",
@@ -346,13 +373,35 @@ def main() -> None:
         rows = _parse_rows(args.rows) if args.rows else None
         wanted = expected_subjects(Path(args.metadata).expanduser(), args.subject_col, rows)
         missing_subjects = [s for s in wanted if s not in subjects_with_complete]
+        without_epochs: list[str] = []
+        if missing_subjects and args.bids_root and args.conditions:
+            config_used = load_yaml_config(config_path)
+            min_obs = int((config_used.get("qc") or {}).get("min_obs", 3))
+            without_epochs = [
+                s
+                for s in missing_subjects
+                if not has_extractable_epochs(
+                    Path(args.bids_root).expanduser(),
+                    s,
+                    config_used["desc"],
+                    args.conditions,
+                    min_obs,
+                )
+            ]
+            missing_subjects = [s for s in missing_subjects if s not in without_epochs]
         print("-" * 72)
         print(f"Coverage: {len(wanted)} expected subjects from rows {args.rows or 'all'}")
-        print(f"  with ≥1 complete shard : {len(wanted) - len(missing_subjects)}")
+        n_covered = len(wanted) - len(missing_subjects) - len(without_epochs)
+        print(f"  with ≥1 complete shard : {n_covered}")
+        if without_epochs:
+            print(
+                f"  no recording with {', '.join(args.conditions)} epochs (skipped by "
+                f"stage 05): {len(without_epochs)}"
+            )
         print(f"  with NO complete shard : {len(missing_subjects)}")
         if missing_subjects:
-            print("  (candidate failures — also check SLURM .err logs; some may be")
-            print("   legitimate skips: no epochs / too few survived MAD rejection)")
+            print("  (candidate failures — check the SLURM logs; a subject is also skipped")
+            print("   when outlier rejection leaves no recording with min_obs epochs)")
             print("   " + ", ".join(f"sub-{s}" for s in missing_subjects))
     elif args.rows:
         LOGGER.warning("--rows needs --metadata for the coverage check; skipping.")

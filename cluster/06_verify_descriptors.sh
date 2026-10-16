@@ -29,6 +29,8 @@ cmd=(
   --derivative_root "$DESCRIPTOR_SHARDS_ROOT"
   --reports_root "$REPORTS_ROOT"
   --metadata "$METADATA_PATH"
+  --bids_root "$BIDS_ROOT"
+  --conditions $DESCRIPTOR_CONDITIONS
 )
 if [[ -n "$ROWS" ]]; then
   cmd+=(--rows "$ROWS")
