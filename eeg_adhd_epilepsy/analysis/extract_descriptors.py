@@ -516,12 +516,14 @@ def main() -> None:
                 _save_descriptor_shard(shard_root, sensor_outputs, failure_df, shard_qc)
                 shard_qcs.append(shard_qc)
                 LOGGER.info(
-                    "%s / %s: saved %d epoch rows (%d recordings), %d failures, qc=%s",
+                    "%s / %s: saved %d epoch rows (%d recordings), %d failures, "
+                    "%d rejected epochs, qc=%s",
                     condition,
                     subject,
                     len(sensor_outputs["epoch_df"]),
                     len(sensor_outputs["subject_df"]),
-                    len(failure_df),
+                    shard_qc["summary"]["n_failures_total"],
+                    shard_qc["summary"]["n_epochs_rejected"],
                     shard_qc["summary"]["qc_status"],
                 )
             if shard_qcs:

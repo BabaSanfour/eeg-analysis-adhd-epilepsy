@@ -30,7 +30,7 @@ def _bar_plot(
     series = pd.to_numeric(df[y], errors="coerce")
     series.index = df[x].astype(str)
     series = series.dropna()
-    if series.empty:
+    if not series.any():
         return None
     fig, _ax = plot_bar(
         series,

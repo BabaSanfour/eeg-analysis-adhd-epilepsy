@@ -278,10 +278,13 @@ def run_descriptor_shard_qc(
         feature_cols,
         tol=DEFAULT_DESCRIPTOR_THRESHOLDS.near_constant_std_tol,
     )
+    extraction_failures, n_epochs_rejected = _split_failures(failure_df)
+    # The family table, its missingness chart and the failure counts follow the checks:
+    # no peak features, and rejected epochs are not failures.
     family_summary_df = aggregate_family_qc(
         sensor_epoch_df,
-        feature_cols,
-        failures_df=failure_df,
+        [column for column in feature_cols if not _is_peak_feature(column)],
+        failures_df=extraction_failures,
         tol=DEFAULT_DESCRIPTOR_THRESHOLDS.near_constant_std_tol,
     ).rename(
         columns={
@@ -294,8 +297,7 @@ def run_descriptor_shard_qc(
         feature_missingness_df,
         feature_df,
     )
-    failure_summaries = summarize_failures(failure_df)
-    extraction_failures, n_epochs_rejected = _split_failures(failure_df)
+    failure_summaries = summarize_failures(extraction_failures)
     checked_missingness = feature_missingness_df[
         ~feature_missingness_df["column"].map(_is_peak_feature)
     ]
@@ -456,7 +458,7 @@ def run_descriptor_shard_qc(
         "flags": flags,
         "family_summary": family_summary_df,
         "failure_summary": failure_summaries["combined"],
-        "feature_missingness": feature_missingness_df,
+        "feature_missingness": checked_missingness[checked_missingness["missing_rate"] > 0],
         "param_fits": feature_df[param_fit_cols],
     }
 
