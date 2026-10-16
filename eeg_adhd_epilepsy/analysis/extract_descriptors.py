@@ -9,18 +9,18 @@ Outputs
 For each processed subject-condition pair, the script writes a shard under
 ``<derivative_root>/sub-<subject>/ses-<session>/eeg/<condition>/`` containing:
 
-- a sensor epoch-level and a recording-level feature table (`.parquet`, each with
-  its `_feature_columns.json`)
-- a failures table (`.csv`) and the shard's QC summary and flags (`qc/`)
-- a `_SUCCESS` marker, written last, so a crashed shard is never merged
+- ``sensor_epoch_features.parquet``: one row per epoch, the feature columns in the
+  table's metadata
+- ``shard.json``: the shard's QC summary, QC flags and extraction failures, written
+  last, so a crashed shard is never merged
 
-Combined outputs are built separately by ``merge_descriptors.py``.
+and one QC report per subject and session, with every condition. The recording table
+is built by ``merge_descriptors.py`` from the merged epoch table.
 """
 
 from __future__ import annotations
 
 import argparse
-import itertools
 import json
 import logging
 import shutil
@@ -34,7 +34,6 @@ import pandas as pd
 from coco_pipe.descriptors import (
     DescriptorConfig,
     DescriptorPipeline,
-    build_descriptor_tables,
     mad_failures_from_qc,
     save_descriptor_table,
 )
@@ -44,6 +43,11 @@ from mne_bids import get_entities_from_fname
 
 from eeg_adhd_epilepsy.analysis.dataset import build_container
 from eeg_adhd_epilepsy.analysis.utils.common import require_config
+from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import (
+    EPOCH_TABLE,
+    SHARD_RECORD,
+    recording_tables,
+)
 from eeg_adhd_epilepsy.analysis.utils.subject_resolution import (
     resolve_cohort_subjects,
     resolve_metadata_row,
@@ -63,7 +67,10 @@ from eeg_adhd_epilepsy.io.report_paths import (
     descriptor_qc_report_name,
     subject_report_dir,
 )
-from eeg_adhd_epilepsy.qc.descriptor_qc import run_descriptor_subject_qc
+from eeg_adhd_epilepsy.qc.descriptor_qc import (
+    run_descriptor_shard_qc,
+    write_descriptor_subject_report,
+)
 from eeg_adhd_epilepsy.utils.artifacts import freeze_config_used, write_text_atomic
 from eeg_adhd_epilepsy.utils.constants import DEFAULT_ANALYSIS_CONDITIONS
 from eeg_adhd_epilepsy.utils.formatting import reorder_columns_front
@@ -172,26 +179,33 @@ def _build_failure_df(
     return reorder_columns_front(failure_df, failure_front)
 
 
+def _json_scalar(value: Any) -> Any:
+    if isinstance(value, np.generic):
+        return value.item()
+    raise TypeError(f"{type(value).__name__} is not JSON serializable")
+
+
 def _save_descriptor_shard(
     shard_root: Path,
-    sensor_container: DataContainer,
     sensor_outputs: dict[str, Any],
     failure_df: pd.DataFrame,
+    shard_qc: dict[str, Any],
 ) -> None:
+    """Write the epoch table, then ``shard.json``, which marks the shard complete."""
     shard_root.mkdir(parents=True, exist_ok=True)
     save_descriptor_table(
         sensor_outputs["epoch_df"],
-        shard_root / "sensor_epoch_features",
+        shard_root / EPOCH_TABLE,
         feature_columns=sensor_outputs["epoch_feature_columns"],
-        formats=("parquet",),
     )
-    save_descriptor_table(
-        sensor_outputs["subject_df"],
-        shard_root / "sensor_recording_features",
-        feature_columns=sensor_outputs["subject_feature_columns"],
-        formats=("parquet",),
+    record = {
+        "qc_summary": shard_qc["summary"],
+        "qc_flags": shard_qc["flags"],
+        "failures": failure_df.astype(object).where(failure_df.notna(), None).to_dict("records"),
+    }
+    write_text_atomic(
+        shard_root / SHARD_RECORD, json.dumps(record, indent=2, default=_json_scalar) + "\n"
     )
-    failure_df.to_csv(shard_root / "failures.csv", index=False)
 
 
 def main() -> None:
@@ -294,7 +308,7 @@ def main() -> None:
     raw_config = load_yaml_config(config_path)
     aggregation_config = raw_config.pop("aggregation", None) or {}
     qc_config = raw_config.pop("qc", None) or {}
-    aggregation_descriptors = require_config(aggregation_config, "descriptors", expected_type=list)
+    require_config(aggregation_config, "descriptors", expected_type=list)
     config_snapshot = deepcopy(raw_config)
     config_snapshot["aggregation"] = deepcopy(aggregation_config)
     # The epoch variant: a root made from one variant refuses the other.
@@ -330,14 +344,7 @@ def main() -> None:
         )
     write_bidsignore(derivative_root, DESCRIPTION_ONLY_BIDSIGNORE)
 
-    descriptor_config = DescriptorConfig.model_validate(raw_config)
-    pipeline = DescriptorPipeline(descriptor_config)
-    if descriptor_config.families.bands.enabled:
-        aggregated_ratio_pairs = list(descriptor_config.families.bands.ratio_pairs)
-        aggregated_ratio_floor = float(descriptor_config.families.bands.min_denominator_power)
-    else:
-        aggregated_ratio_pairs = []
-        aggregated_ratio_floor = 0.0
+    pipeline = DescriptorPipeline(DescriptorConfig.model_validate(raw_config))
 
     meta_df = read_participants(metadata_path)
     requested: list[Any] | None = list(args.subjects) if args.subjects else None
@@ -373,17 +380,9 @@ def main() -> None:
         else:
             subject_conditions = args.conditions
 
-        for session, condition in itertools.product(sessions, subject_conditions):
-            shard_root = (
-                derivative_root
-                / bids_subject_label(subject)
-                / bids_session_label(session)
-                / "eeg"
-                / condition
-            )
+        for session in sessions:
             # Every run recomputes: a shard or report left from an earlier run (an earlier
             # stage 03/04, another config, a crash halfway) never survives it.
-            shutil.rmtree(shard_root, ignore_errors=True)
             (
                 subject_report_dir(
                     reports_root=reports_root,
@@ -391,146 +390,153 @@ def main() -> None:
                     session=session,
                     stage=ReportStage.DESCRIPTOR_QC,
                 )
-                / descriptor_qc_report_name(subject, session, condition)
+                / descriptor_qc_report_name(subject, session)
             ).unlink(missing_ok=True)
-
-            LOGGER.info("Loading %s for %s (ses %s)", condition, subject, session)
-            try:
-                dc_loaded = build_container(
-                    bids_root=bids_root,
-                    use_derivatives=True,
-                    subjects=[subject],
-                    target_col=args.target_col,
-                    desc=args.desc,
-                    condition=condition,
-                    session=session,
-                    units=args.units,
+            shard_qcs: list[dict[str, Any]] = []
+            for condition in subject_conditions:
+                shard_root = (
+                    derivative_root
+                    / bids_subject_label(subject)
+                    / bids_session_label(session)
+                    / "eeg"
+                    / condition
                 )
-            except RuntimeError as error:
-                if str(error).startswith("No valid data found in "):
-                    LOGGER.info(
-                        "Skipping %s / %s: no saved epochs found for this condition.",
+                shutil.rmtree(shard_root, ignore_errors=True)
+
+                LOGGER.info("Loading %s for %s (ses %s)", condition, subject, session)
+                try:
+                    dc_loaded = build_container(
+                        bids_root=bids_root,
+                        use_derivatives=True,
+                        subjects=[subject],
+                        target_col=args.target_col,
+                        desc=args.desc,
+                        condition=condition,
+                        session=session,
+                        units=args.units,
+                    )
+                except RuntimeError as error:
+                    if str(error).startswith("No valid data found in "):
+                        LOGGER.info(
+                            "Skipping %s / %s: no saved epochs found for this condition.",
+                            condition,
+                            subject,
+                        )
+                        continue
+                    raise
+                channel_names = [
+                    str(name) for name in np.asarray(dc_loaded.coords["channel"], dtype=object)
+                ]
+                sfreq = float(dc_loaded.meta["sfreq"])
+                if dc_loaded.ids is None:
+                    raise ValueError(
+                        "Loaded EEG container must expose observation ids in `container.ids`."
+                    )
+                ids = np.asarray(dc_loaded.ids, dtype=object)
+                if ids.size == 0:
+                    raise ValueError("Loaded EEG container did not include any epochs.")
+
+                metadata_df = dc_loaded.obs_table(
+                    include_ids=True,
+                    include_y=bool(args.target_col),
+                    y_col=args.target_col or "y",
+                )
+                metadata_df["obs_id"] = metadata_df["obs_id"].astype(str)
+                metadata_df["condition"] = condition
+                metadata_df["subject"] = subject
+                metadata_front = [
+                    "obs_id",
+                    "subject",
+                    "session",
+                    "run",
+                    "recording_id",
+                    "condition",
+                ]
+                metadata_df = reorder_columns_front(metadata_df, metadata_front)
+                sensor_result = pipeline.extract(
+                    X=dc_loaded.X,
+                    ids=ids,
+                    sfreq=sfreq,
+                    channel_names=channel_names,
+                )
+
+                outlier_config = qc_config.get("outlier", {})
+                mad_threshold = float(outlier_config.get("z_threshold", 5.0))
+                fraction_threshold = float(outlier_config.get("epoch_outlier_fraction", 0.30))
+                min_epochs = int(qc_config.get("min_obs", 3))
+                group_by = outlier_config.get("group_by", "family")
+                failure_metadata_df = metadata_df.copy()
+                if outlier_config.get("enabled", True):
+                    sensor_result, metadata_df = _apply_mad_rejection(
+                        sensor_result,
+                        metadata_df,
                         condition,
                         subject,
+                        mad_threshold=mad_threshold,
+                        fraction_thresh=fraction_threshold,
+                        group_by=group_by,
+                        exclude_prefixes=tuple(outlier_config.get("exclude_prefixes", ())),
+                    )
+                # Every recording value rests on at least min_epochs epochs: a short recording
+                # is left out even when the subject's other recordings fill the shard.
+                n_per_recording = metadata_df["recording_id"].value_counts()
+                short = n_per_recording.index[n_per_recording < min_epochs]
+                if len(short):
+                    LOGGER.warning(
+                        "%s / %s: leaving out %d recording(s) with fewer than %d epochs: %s",
+                        condition,
+                        subject,
+                        len(short),
+                        min_epochs,
+                        {str(k): int(v) for k, v in n_per_recording[short].items()},
+                    )
+                    keep = ~metadata_df["recording_id"].isin(short).to_numpy()
+                    sensor_result = sensor_result.isel(obs=np.flatnonzero(keep).tolist())
+                    metadata_df = metadata_df[keep].reset_index(drop=True)
+                if sensor_result.X.shape[0] == 0:
+                    LOGGER.warning(
+                        "Skipping %s / %s: no recording with %d epochs.",
+                        condition,
+                        subject,
+                        min_epochs,
                     )
                     continue
-                raise
-            channel_names = [
-                str(name) for name in np.asarray(dc_loaded.coords["channel"], dtype=object)
-            ]
-            sfreq = float(dc_loaded.meta["sfreq"])
-            if dc_loaded.ids is None:
-                raise ValueError(
-                    "Loaded EEG container must expose observation ids in `container.ids`."
+
+                sensor_outputs = recording_tables(
+                    metadata_df, sensor_result, config_snapshot, target_col=args.target_col
                 )
-            ids = np.asarray(dc_loaded.ids, dtype=object)
-            if ids.size == 0:
-                raise ValueError("Loaded EEG container did not include any epochs.")
-
-            metadata_df = dc_loaded.obs_table(
-                include_ids=True,
-                include_y=bool(args.target_col),
-                y_col=args.target_col or "y",
-            )
-            metadata_df["obs_id"] = metadata_df["obs_id"].astype(str)
-            metadata_df["condition"] = condition
-            metadata_df["subject"] = subject
-            metadata_front = ["obs_id", "subject", "session", "run", "recording_id", "condition"]
-            metadata_df = reorder_columns_front(metadata_df, metadata_front)
-            sensor_result = pipeline.extract(
-                X=dc_loaded.X,
-                ids=ids,
-                sfreq=sfreq,
-                channel_names=channel_names,
-            )
-
-            outlier_config = qc_config.get("outlier", {})
-            mad_threshold = float(outlier_config.get("z_threshold", 5.0))
-            fraction_threshold = float(outlier_config.get("epoch_outlier_fraction", 0.30))
-            min_epochs = int(qc_config.get("min_obs", 3))
-            group_by = outlier_config.get("group_by", "family")
-            failure_metadata_df = metadata_df.copy()
-            if outlier_config.get("enabled", True):
-                sensor_result, metadata_df = _apply_mad_rejection(
-                    sensor_result,
-                    metadata_df,
+                failure_df = _build_failure_df(
+                    sensor_result.meta.get("failures", []),
+                    failure_metadata_df,
+                    condition,
+                )
+                shard_qc = run_descriptor_shard_qc(
+                    subject=subject,
+                    session=session,
+                    condition=condition,
+                    sensor_epoch_df=sensor_outputs["epoch_df"],
+                    sensor_subject_df=sensor_outputs["subject_df"],
+                    sensor_epoch_feature_columns=sensor_outputs["epoch_feature_columns"],
+                    sensor_subject_feature_columns=sensor_outputs["subject_feature_columns"],
+                    failure_df=failure_df,
+                    config_snapshot=config_snapshot,
+                )
+                _save_descriptor_shard(shard_root, sensor_outputs, failure_df, shard_qc)
+                shard_qcs.append(shard_qc)
+                LOGGER.info(
+                    "%s / %s: saved %d epoch rows (%d recordings), %d failures, qc=%s",
                     condition,
                     subject,
-                    mad_threshold=mad_threshold,
-                    fraction_thresh=fraction_threshold,
-                    group_by=group_by,
-                    exclude_prefixes=tuple(outlier_config.get("exclude_prefixes", ())),
+                    len(sensor_outputs["epoch_df"]),
+                    len(sensor_outputs["subject_df"]),
+                    len(failure_df),
+                    shard_qc["summary"]["qc_status"],
                 )
-            # Every recording value rests on at least min_epochs epochs: a short recording
-            # is left out even when the subject's other recordings fill the shard.
-            n_per_recording = metadata_df["recording_id"].value_counts()
-            short = n_per_recording.index[n_per_recording < min_epochs]
-            if len(short):
-                LOGGER.warning(
-                    "%s / %s: leaving out %d recording(s) with fewer than %d epochs: %s",
-                    condition,
-                    subject,
-                    len(short),
-                    min_epochs,
-                    {str(k): int(v) for k, v in n_per_recording[short].items()},
+            if shard_qcs:
+                report_path = write_descriptor_subject_report(
+                    reports_root, subject, session, shard_qcs, config_snapshot
                 )
-                keep = ~metadata_df["recording_id"].isin(short).to_numpy()
-                sensor_result = sensor_result.isel(obs=np.flatnonzero(keep).tolist())
-                metadata_df = metadata_df[keep].reset_index(drop=True)
-            if sensor_result.X.shape[0] == 0:
-                LOGGER.warning(
-                    "Skipping %s / %s: no recording with %d epochs.", condition, subject, min_epochs
-                )
-                continue
-
-            sensor_outputs = build_descriptor_tables(
-                sensor_result,
-                metadata_df,
-                group_by="recording_id",
-                id_col="obs_id",
-                target_col=args.target_col,
-                aggregation_groups=aggregation_descriptors,
-                ratio_pairs=aggregated_ratio_pairs,
-                ratio_floor=aggregated_ratio_floor,
-                on_insufficient="warn",
-            )
-            failure_df = _build_failure_df(
-                sensor_result.meta.get("failures", []),
-                failure_metadata_df,
-                condition,
-            )
-            _save_descriptor_shard(
-                shard_root,
-                sensor_result,
-                sensor_outputs,
-                failure_df,
-            )
-            qc_summary = run_descriptor_subject_qc(
-                shard_root=shard_root,
-                reports_root=reports_root,
-                subject=subject,
-                session=session,
-                condition=condition,
-                sensor_epoch_df=sensor_outputs["epoch_df"],
-                sensor_subject_df=sensor_outputs["subject_df"],
-                sensor_epoch_feature_columns_path=shard_root
-                / "sensor_epoch_features_feature_columns.json",
-                sensor_subject_feature_columns_path=shard_root
-                / "sensor_recording_features_feature_columns.json",
-                failure_df=failure_df,
-                config_snapshot=config_snapshot,
-            )
-            (shard_root / "_SUCCESS").write_text("ok\n", encoding="utf-8")
-            LOGGER.info(
-                "%s / %s: saved %d epoch rows, %d recording rows, %d failures, qc=%s, report=%s",
-                condition,
-                subject,
-                len(sensor_outputs["epoch_df"]),
-                len(sensor_outputs["subject_df"]),
-                len(failure_df),
-                qc_summary["qc_status"],
-                qc_summary["report_path"],
-            )
+                LOGGER.info("%s (ses %s): QC report %s", subject, session, report_path)
 
     LOGGER.info("Derivative feature root: %s", derivative_root)
 

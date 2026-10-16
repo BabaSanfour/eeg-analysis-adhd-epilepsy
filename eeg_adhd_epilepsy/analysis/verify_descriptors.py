@@ -6,11 +6,10 @@ Audits the per-subject descriptor shards produced by ``extract_descriptors``
 Three independent checks are performed:
 
 1. **Per-shard completeness** — every ``sub-*/ses-*/eeg/<condition>/`` directory
-   is checked against the canonical "complete shard" contract
-   (:func:`required_descriptor_files`, including QC artifacts) plus the
-   per-subject QC report HTML. ``_SUCCESS`` is written last by the producer, so
-   a directory missing it (or missing required files) is a crashed/partial run.
-2. **QC status rollup** — each shard's ``qc/summary_row.csv`` is read and the
+   must hold its epoch table and ``shard.json``, and the subject must have its QC
+   report. ``shard.json`` is written last by the producer, so a directory missing it
+   is a crashed/partial run.
+2. **QC status rollup** — the QC summary in each ``shard.json`` is read and the
    ``pass`` / ``warn`` / ``fail`` verdicts are tallied.
 3. **Coverage** — when ``--metadata`` and ``--rows`` are supplied (the metadata
    rows the array was supposed to process), subjects that produced *no* shard
@@ -39,9 +38,13 @@ from collections import Counter
 from pathlib import Path
 
 import pandas as pd
-from coco_pipe.io import read_table
 
-from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import required_descriptor_files
+from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import (
+    SHARD_FILES,
+    SHARD_RECORD,
+    find_shards,
+    read_shard_record,
+)
 from eeg_adhd_epilepsy.io.bids import (
     DerivativeStage,
     bids_subject,
@@ -83,17 +86,15 @@ def collect_shard_records(
     Returns one row per ``sub-*/ses-*/eeg/<condition>/`` directory with its
     completion state, missing files, QC status, and failure count.
     """
-    required = required_descriptor_files(include_qc=True)
     records: list[dict[str, object]] = []
-    shard_dirs = sorted(path for path in derivative_root.glob("sub-*/ses-*/eeg/*") if path.is_dir())
-    for shard_dir in shard_dirs:
+    for shard_dir in find_shards(derivative_root):
         rel = shard_dir.relative_to(derivative_root)
         subject = rel.parts[0].removeprefix("sub-")
         session = rel.parts[1].removeprefix("ses-")
         condition = rel.parts[3]
 
-        has_success = (shard_dir / "_SUCCESS").exists()
-        missing_files = [name for name in required if not (shard_dir / name).exists()]
+        has_record = (shard_dir / SHARD_RECORD).exists()
+        missing_files = [name for name in SHARD_FILES if not (shard_dir / name).exists()]
 
         report_missing: bool | None = None
         if reports_root is not None:
@@ -102,31 +103,24 @@ def collect_shard_records(
                 subject=subject,
                 session=session,
                 stage=ReportStage.DESCRIPTOR_QC,
-            ) / descriptor_qc_report_name(subject, session, condition)
+            ) / descriptor_qc_report_name(subject, session)
             report_missing = not report_path.exists()
 
         qc_status = ""
         n_failures: int | None = None
-        summary_row_path = shard_dir / "qc" / "summary_row.csv"
-        if summary_row_path.exists():
-            try:
-                summary = read_table(summary_row_path)
-            except Exception as exc:  # pragma: no cover - corrupt CSV is rare
-                LOGGER.warning("Could not read %s: %s", summary_row_path, exc)
-            else:
-                if not summary.empty:
-                    first = summary.iloc[0]
-                    qc_status = str(first.get("qc_status", "") or "")
-                    n_failures = int(first.get("n_failures_total", 0) or 0)
+        if has_record:
+            summary = read_shard_record(shard_dir)["qc_summary"]
+            qc_status = str(summary["qc_status"])
+            n_failures = int(summary["n_failures_total"])
 
-        complete = has_success and not missing_files and not bool(report_missing)
+        complete = not missing_files and not bool(report_missing)
         records.append(
             {
                 "subject": subject,
                 "session": session,
                 "condition": condition,
                 "complete": complete,
-                "has_success": has_success,
+                "has_record": has_record,
                 "n_missing_files": len(missing_files),
                 "missing_files": ";".join(missing_files),
                 "report_missing": bool(report_missing) if report_missing is not None else "",
@@ -140,7 +134,7 @@ def collect_shard_records(
         "session",
         "condition",
         "complete",
-        "has_success",
+        "has_record",
         "n_missing_files",
         "missing_files",
         "report_missing",
@@ -154,9 +148,9 @@ def collect_shard_records(
 def summarize_reasons(derivative_root: Path, shard_df: pd.DataFrame) -> dict[str, Counter]:
     """Roll up *why* shards fail: QC flag codes and extractor-failure breakdown.
 
-    Reads each shard's ``qc/flags.csv`` and ``failures.csv`` and accumulates:
+    Reads the QC flags and failures in each shard's ``shard.json`` and accumulates:
 
-    - ``flags``       : ``(severity, code)`` -> occurrences across shards
+    - ``flags``       : ``(level, code)`` -> occurrences across shards
     - ``flag_scope``  : ``(code, scope)`` -> occurrences (scope = family, etc.)
     - ``fail_family`` : extractor-failure ``family`` -> occurrences
     - ``fail_exc``    : extractor-failure ``exception_type`` -> occurrences
@@ -168,35 +162,16 @@ def summarize_reasons(derivative_root: Path, shard_df: pd.DataFrame) -> dict[str
     fail_exc: Counter = Counter()
     fail_msg: Counter = Counter()
 
-    def _read(path: Path) -> pd.DataFrame | None:
-        if not path.exists():
-            return None
-        try:
-            df = read_table(path)
-        except Exception:  # empty/corrupt CSV
-            return None
-        return df if not df.empty else None
-
-    for rel in shard_df["shard"]:
-        shard_dir = derivative_root / rel
-
-        flags_df = _read(shard_dir / "qc" / "flags.csv")
-        if flags_df is not None and "code" in flags_df.columns:
-            severity = flags_df.get("severity", pd.Series([""] * len(flags_df))).astype(str)
-            code = flags_df["code"].astype(str)
-            flags.update(zip(severity, code))
-            if "scope" in flags_df.columns:
-                scope = flags_df["scope"].astype(str)
-                flag_scope.update((c, s) for c, s in zip(code, scope) if s and s.lower() != "nan")
-
-        fail_df = _read(shard_dir / "failures.csv")
-        if fail_df is not None:
-            if "family" in fail_df.columns:
-                fail_family.update(fail_df["family"].astype(str))
-            if "exception_type" in fail_df.columns:
-                fail_exc.update(fail_df["exception_type"].astype(str))
-            if "message" in fail_df.columns:
-                fail_msg.update(fail_df["message"].astype(str).str.slice(0, 80))
+    for rel in shard_df["shard"][shard_df["has_record"].astype(bool)]:
+        record = read_shard_record(derivative_root / rel)
+        for flag in record["qc_flags"]:
+            flags[(flag["level"], flag["code"])] += 1
+            if flag["scope"]:
+                flag_scope[(flag["code"], flag["scope"])] += 1
+        for failure in record["failures"]:
+            fail_family[str(failure["family"])] += 1
+            fail_exc[str(failure["exception_type"])] += 1
+            fail_msg[str(failure["message"])[:80]] += 1
 
     return {
         "flags": flags,
@@ -331,7 +306,7 @@ def main() -> None:
     # are systematic rather than a handful of bad subjects.
     reasons = summarize_reasons(derivative_root, shard_df)
     print("-" * 72)
-    _print_counter("QC flags raised  [severity / code]", reasons["flags"])
+    _print_counter("QC flags raised  [level / code]", reasons["flags"])
     if reasons["flag_scope"]:
         print()
         _print_counter("QC flags by  [code / scope]", reasons["flag_scope"])
@@ -344,11 +319,9 @@ def main() -> None:
 
     if not incomplete_df.empty:
         print("-" * 72)
-        print("INCOMPLETE shards (no _SUCCESS or missing required files/report):")
+        print("INCOMPLETE shards (missing files or report):")
         for _, row in incomplete_df.iterrows():
             reason = []
-            if not row["has_success"]:
-                reason.append("no _SUCCESS")
             if row["n_missing_files"]:
                 reason.append(f"missing {row['n_missing_files']} file(s): {row['missing_files']}")
             if row["report_missing"] is True:

@@ -657,7 +657,6 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         units=config.get("units"),
         # Descriptors
         descriptor_table_path=config.get("descriptor_table_path"),
-        descriptor_feature_columns_path=config.get("descriptor_feature_columns_path"),
         descriptor_families=config.get("descriptor_families"),
         descriptor_max_abs_value=config.get("descriptor_max_abs_value"),
         location_statistic=config.get("location_statistic"),
@@ -991,11 +990,6 @@ def main() -> None:
         help="Override descriptor table path.",
     )
     parser.add_argument(
-        "--descriptor_feature_columns_path",
-        default=None,
-        help="Override descriptor feature columns path.",
-    )
-    parser.add_argument(
         "--embedding_derivative_root",
         default=None,
         help="Override foundation embedding root.",
@@ -1038,7 +1032,6 @@ def main() -> None:
         representation=args.representation,
         compare_only=args.compare_only,
         descriptor_table_path=args.descriptor_table_path,
-        descriptor_feature_columns_path=args.descriptor_feature_columns_path,
         embedding_derivative_root=args.embedding_derivative_root,
         embedding_model_key=args.embedding_model_key,
     )

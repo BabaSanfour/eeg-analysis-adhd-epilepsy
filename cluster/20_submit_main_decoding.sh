@@ -52,14 +52,9 @@ run_descriptor_classical() {
     DESC_ROOT="$DESCRIPTORS_ROOT/combined"
     CLASSICAL_REPRESENTATIONS=(${CLASSICAL_REPRESENTATIONS:-epoch recording})
     table_override="${TABLE_PATH:-}"
-    columns_override="${COLUMNS_PATH:-}"
 
     if [ -n "$table_override" ] && [ "${#CLASSICAL_REPRESENTATIONS[@]}" -gt 1 ]; then
         echo "ERROR: TABLE_PATH can only be used when CLASSICAL_REPRESENTATIONS has one value." >&2
-        exit 1
-    fi
-    if [ -n "$columns_override" ] && [ "${#CLASSICAL_REPRESENTATIONS[@]}" -gt 1 ]; then
-        echo "ERROR: COLUMNS_PATH can only be used when CLASSICAL_REPRESENTATIONS has one value." >&2
         exit 1
     fi
 
@@ -76,10 +71,8 @@ run_descriptor_classical() {
         esac
 
         table_path="${table_override:-$DESC_ROOT/${stem}.parquet}"
-        columns_path="${columns_override:-$DESC_ROOT/${stem}_feature_columns.json}"
 
         require_file "$table_path"
-        require_file "$columns_path"
 
         echo " -> Representation: $rep"
         echo "    Table: $table_path"
@@ -94,7 +87,6 @@ run_descriptor_classical() {
             --reports_root "$REPORTS_ROOT"
             --metadata "$METADATA_PATH"
             --descriptor_table_path "$table_path"
-            --descriptor_feature_columns_path "$columns_path"
             --representation "$rep"
             --n_jobs "${CLASSICAL_OUTER_N_JOBS:-$THREADS}"
             --no-write-shared-comparison-report

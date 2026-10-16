@@ -59,7 +59,6 @@ elif [ "$PIPELINE_TYPE" == "descriptors" ]; then
     for rep in epoch recording; do
         echo " -> Representation: $rep"
         require_file "$DESC_ROOT/sensor_${rep}_features.parquet"
-        require_file "$DESC_ROOT/sensor_${rep}_features_feature_columns.json"
         python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
             --bids_root "$BIDS_ROOT" \
             --desc "$EPOCHS_DESC" \
@@ -69,7 +68,6 @@ elif [ "$PIPELINE_TYPE" == "descriptors" ]; then
             --cohort_config "$CONFIG" \
             --analysis_config "$PROJECT_ROOT/configs/analyses/dim_reduction/descriptors.yaml" \
             --descriptor_table_path "$DESC_ROOT/sensor_${rep}_features.parquet" \
-            --descriptor_feature_columns_path "$DESC_ROOT/sensor_${rep}_features_feature_columns.json" \
             --representation "$rep" \
             --n_jobs "$THREADS"
     done

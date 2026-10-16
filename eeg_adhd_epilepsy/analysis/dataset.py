@@ -391,7 +391,6 @@ def build_dataset(
         column_prune = qc_config.get("column_prune", {})
         container = load_descriptor_table(
             table_path=Path(args.descriptor_table_path),
-            feature_columns_path=Path(args.descriptor_feature_columns_path),
             known_families=KNOWN_FAMILY_TOKENS,
             condition=condition,
             target_col=target_col,

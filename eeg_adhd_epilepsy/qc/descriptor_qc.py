@@ -17,7 +17,6 @@ from coco_pipe.descriptors.qc import (
     compute_family_missingness,
     summarize_failures,
 )
-from coco_pipe.io import read_json
 from coco_pipe.io.quality import (
     compute_subject_outlier_burden as compute_shared_subject_outlier_burden,
 )
@@ -33,6 +32,7 @@ from coco_pipe.report.descriptor_qc import (
 import eeg_adhd_epilepsy.io.report_paths as report_paths
 import eeg_adhd_epilepsy.viz.descriptor_qc as viz_descriptor_qc
 from eeg_adhd_epilepsy.qc.utils import DEFAULT_DESCRIPTOR_THRESHOLDS, DescriptorQCThresholds
+from eeg_adhd_epilepsy.utils.formatting import reorder_columns_front
 
 LOGGER = logging.getLogger(__name__)
 
@@ -220,35 +220,31 @@ def _family_failure_flags(
     return flags
 
 
-def run_descriptor_subject_qc(
-    shard_root: Path,
-    reports_root: Path,
+def run_descriptor_shard_qc(
     subject: str,
     session: str,
     condition: str,
     sensor_epoch_df: pd.DataFrame,
     sensor_subject_df: pd.DataFrame,
-    sensor_epoch_feature_columns_path: Path,
-    sensor_subject_feature_columns_path: Path,
+    sensor_epoch_feature_columns: Sequence[str],
+    sensor_subject_feature_columns: Sequence[str],
     failure_df: pd.DataFrame,
     config_snapshot: dict[str, Any],
 ) -> dict[str, Any]:
-    qc_dir = shard_root / "qc"
-    report_dir = report_paths.subject_report_dir(
-        reports_root=reports_root,
-        subject=subject,
-        session=session,
-        stage=report_paths.ReportStage.DESCRIPTOR_QC,
-        create=True,
-    )
+    """QC of one shard: its summary row and flags, and the tables its report shows.
+
+    Writes nothing: stage 05 keeps the summary and flags in the shard's ``shard.json``
+    and puts every condition of a subject in one report
+    (:func:`write_descriptor_subject_report`).
+    """
     expected_families = _expected_families(config_snapshot)
     feature_cols = _select_family_feature_cols(
-        read_json(sensor_epoch_feature_columns_path),
+        sensor_epoch_feature_columns,
         expected_families,
         sensor_epoch_df.columns,
     )
     subject_feature_cols = _select_family_feature_cols(
-        read_json(sensor_subject_feature_columns_path),
+        sensor_subject_feature_columns,
         expected_families,
         sensor_subject_df.columns,
     )
@@ -404,55 +400,106 @@ def run_descriptor_subject_qc(
                 )
             )
 
-    qc_status = resolve_qc_status(flags)
-    report_path = report_dir / report_paths.descriptor_qc_report_name(subject, session, condition)
     summary_row = {
         "subject": subject,
         "session": session,
         "condition": condition,
-        "qc_status": qc_status,
+        "qc_status": resolve_qc_status(flags),
         **metrics,
-        "report_path": str(report_path),
     }
+    param_fit_cols = [
+        column
+        for column in feature_df.columns
+        if "param_r_squared_" in column or "param_fit_error_" in column
+    ]
+    return {
+        "summary": summary_row,
+        "flags": flags,
+        "family_summary": family_summary_df,
+        "failure_summary": failure_summaries["combined"],
+        "feature_missingness": feature_missingness_df,
+        "param_fits": feature_df[param_fit_cols],
+    }
+
+
+def write_descriptor_subject_report(
+    reports_root: Path,
+    subject: str,
+    session: str,
+    shard_qcs: Sequence[dict[str, Any]],
+    config_snapshot: dict[str, Any],
+) -> Path:
+    """One QC report for a subject's session, with every condition in *shard_qcs*.
+
+    *shard_qcs* are :func:`run_descriptor_shard_qc` results; their tables are stacked
+    with a ``condition`` column and their figures captioned with the condition.
+    """
+    report_path = report_paths.subject_report_dir(
+        reports_root=reports_root,
+        subject=subject,
+        session=session,
+        stage=report_paths.ReportStage.DESCRIPTOR_QC,
+        create=True,
+    ) / report_paths.descriptor_qc_report_name(subject, session)
+
+    def stacked(key: str) -> pd.DataFrame:
+        frames = [
+            qc[key].assign(condition=qc["summary"]["condition"])
+            for qc in shard_qcs
+            if not qc[key].empty
+        ]
+        if not frames:
+            return pd.DataFrame()
+        return reorder_columns_front(pd.concat(frames, ignore_index=True), ["condition"])
 
     overview_df = pd.DataFrame(
         [
             {
                 "Subject": subject,
                 "Session": session,
-                "Condition": condition,
-                "Epochs": metrics["n_epochs"],
-                "Sensor Features": metrics["n_sensor_epoch_features"],
-                "Sensor Subject Features": metrics["n_sensor_subject_features"],
-                "Failures": metrics["n_failures_total"],
-                "QC Status": qc_status,
+                "Condition": qc["summary"]["condition"],
+                "Epochs": qc["summary"]["n_epochs"],
+                "Sensor Features": qc["summary"]["n_sensor_epoch_features"],
+                "Sensor Subject Features": qc["summary"]["n_sensor_subject_features"],
+                "Failures": qc["summary"]["n_failures_total"],
+                "QC Status": qc["summary"]["qc_status"],
             }
+            for qc in shard_qcs
         ]
     )
-    flags_df = pd.DataFrame(flags)
-    qc_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame([summary_row]).to_csv(qc_dir / "summary_row.csv", index=False)
-    flags_df.to_csv(qc_dir / "flags.csv", index=False)
+    flags_df = pd.DataFrame(
+        [
+            {"condition": qc["summary"]["condition"], **flag}
+            for qc in shard_qcs
+            for flag in qc["flags"]
+        ]
+    )
     # The figures live only inside the HTML report, which embeds them.
     with tempfile.TemporaryDirectory() as figures_dir:
-        figure_paths = viz_descriptor_qc.save_subject_descriptor_qc_figures(
-            figures_dir=Path(figures_dir),
-            family_summary_df=family_summary_df,
-            failure_summary_df=failure_summaries["combined"],
-            feature_missingness_df=feature_missingness_df,
-            epoch_feature_df=feature_df,
-        )
+        figure_paths: dict[str, Path] = {}
+        for qc in shard_qcs:
+            condition = qc["summary"]["condition"]
+            figures = viz_descriptor_qc.save_subject_descriptor_qc_figures(
+                figures_dir=Path(figures_dir) / condition,
+                family_summary_df=qc["family_summary"],
+                failure_summary_df=qc["failure_summary"],
+                feature_missingness_df=qc["feature_missingness"],
+                epoch_feature_df=qc["param_fits"],
+            )
+            figure_paths.update(
+                {f"{condition}: {key.replace('_', ' ')}": path for key, path in figures.items()}
+            )
         generate_descriptor_subject_report(
             output_path=report_path,
             overview_df=overview_df,
             flags_df=flags_df,
-            failure_summary_df=failure_summaries["combined"],
-            feature_missingness_df=feature_missingness_df,
-            family_summary_df=family_summary_df,
+            failure_summary_df=stacked("failure_summary"),
+            feature_missingness_df=stacked("feature_missingness"),
+            family_summary_df=stacked("family_summary"),
             figure_paths=figure_paths,
             asset_urls=_report_asset_urls(config_snapshot),
         )
-    return summary_row
+    return report_path
 
 
 def run_descriptor_dataset_qc(
@@ -460,8 +507,8 @@ def run_descriptor_dataset_qc(
     reports_root: Path,
     merged_sensor_epoch_df: pd.DataFrame | None,
     merged_sensor_subject_df: pd.DataFrame,
-    merged_sensor_epoch_feature_columns_path: Path | None,
-    merged_sensor_subject_feature_columns_path: Path,
+    merged_sensor_epoch_feature_columns: Sequence[str],
+    merged_sensor_subject_feature_columns: Sequence[str],
     shard_qc_rows_df: pd.DataFrame | None,
     merged_failures_df: pd.DataFrame | None,
     config_snapshot: dict[str, Any],
@@ -473,14 +520,12 @@ def run_descriptor_dataset_qc(
 
     expected_families = _expected_families(config_snapshot)
     subject_feature_cols = _select_family_feature_cols(
-        read_json(merged_sensor_subject_feature_columns_path),
+        merged_sensor_subject_feature_columns,
         expected_families,
         merged_sensor_subject_df.columns,
     )
     epoch_feature_cols = _select_family_feature_cols(
-        read_json(merged_sensor_epoch_feature_columns_path)
-        if merged_sensor_epoch_feature_columns_path is not None
-        else [],
+        merged_sensor_epoch_feature_columns,
         expected_families,
         merged_sensor_epoch_df.columns if merged_sensor_epoch_df is not None else [],
     )

@@ -64,9 +64,7 @@ if (( TASK_ID == 1 )); then
     echo "Analysis: $CLASSICAL_ANALYSIS_CONFIG"
     for representation in "${REPRESENTATIONS[@]}"; do
         table_path="$DESC_ROOT/sensor_${representation}_features.parquet"
-        columns_path="$DESC_ROOT/sensor_${representation}_features_feature_columns.json"
         require_file "$table_path"
-        require_file "$columns_path"
         echo "Representation: $representation"
         echo "Table:          $table_path"
 
@@ -74,7 +72,6 @@ if (( TASK_ID == 1 )); then
             "${common_args[@]}" \
             --analysis_config "$CLASSICAL_ANALYSIS_CONFIG" \
             --descriptor_table_path "$table_path" \
-            --descriptor_feature_columns_path "$columns_path" \
             --representation "$representation"
     done
     exit 0

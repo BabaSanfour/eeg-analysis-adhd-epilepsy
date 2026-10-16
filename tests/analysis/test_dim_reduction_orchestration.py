@@ -607,7 +607,6 @@ def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch, c
         # Descriptor input paths are config-driven (not CLI flags); build_dataset
         # is stubbed below so these need only satisfy validation.
         f"descriptor_table_path: {tmp_path / 'features.parquet'}\n"
-        f"descriptor_feature_columns_path: {tmp_path / 'columns.json'}\n"
         "qc: {}\n",
         encoding="utf-8",
     )

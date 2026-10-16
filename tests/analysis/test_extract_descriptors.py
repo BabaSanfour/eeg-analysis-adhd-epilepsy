@@ -7,7 +7,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
-from coco_pipe.descriptors import build_descriptor_tables
+from coco_pipe.descriptors import build_descriptor_tables, feature_columns_of
 from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis import extract_descriptors, merge_descriptors
@@ -260,7 +260,7 @@ def test_feature_outputs_preserve_run_level_aggregation() -> None:
     assert subject_df["epoch_count"].tolist() == [1, 1]
 
 
-def test_extract_descriptors_cli_writes_epoch_and_subject_outputs(
+def test_extract_descriptors_cli_writes_epoch_table_shard_record_and_subject_report(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -324,6 +324,7 @@ aggregation:
         str(config_path),
         "--conditions",
         "EO_baseline",
+        "EC_baseline",
     ]
     monkeypatch.setattr(sys, "argv", argv)
     extract_descriptors.main()
@@ -333,64 +334,34 @@ aggregation:
     assert (derivative_root / "dataset_description.json").exists()
     assert (derivative_root / "config_used.yaml").exists()
 
-    subject_one_root = derivative_root / "sub-0001" / "ses-01" / "eeg" / "EO_baseline"
-    subject_two_root = derivative_root / "sub-0002" / "ses-01" / "eeg" / "EO_baseline"
-    for shard_root in (subject_one_root, subject_two_root):
-        written = {
-            str(path.relative_to(shard_root)) for path in shard_root.rglob("*") if path.is_file()
-        }
-        assert written == {
-            "_SUCCESS",
-            "failures.csv",
-            "sensor_epoch_features.parquet",
-            "sensor_epoch_features_feature_columns.json",
-            "sensor_recording_features.parquet",
-            "sensor_recording_features_feature_columns.json",
-            "qc/summary_row.csv",
-            "qc/flags.csv",
-        }
-    assert (
-        reports_root
-        / "subjects"
-        / "sub-0001"
-        / "ses-01"
-        / "descriptor_qc"
-        / "sub-0001_ses-01_EO_baseline_descriptor_qc_report.html"
-    ).exists()
-    assert (
-        reports_root
-        / "subjects"
-        / "sub-0002"
-        / "ses-01"
-        / "descriptor_qc"
-        / "sub-0002_ses-01_EO_baseline_descriptor_qc_report.html"
-    ).exists()
+    for subject in ("0001", "0002"):
+        for condition in ("EO_baseline", "EC_baseline"):
+            shard_root = derivative_root / f"sub-{subject}" / "ses-01" / "eeg" / condition
+            written = {
+                str(path.relative_to(shard_root))
+                for path in shard_root.rglob("*")
+                if path.is_file()
+            }
+            assert written == {"sensor_epoch_features.parquet", "shard.json"}
+            record = json.loads((shard_root / "shard.json").read_text(encoding="utf-8"))
+            assert record["qc_summary"]["condition"] == condition
+            assert record["qc_summary"]["qc_status"] in {"pass", "warn", "fail"}
+            assert isinstance(record["qc_flags"], list)
+            assert isinstance(record["failures"], list)
+        # One report per subject, with both conditions.
+        report_dir = reports_root / "subjects" / f"sub-{subject}" / "ses-01" / "descriptor_qc"
+        assert [path.name for path in report_dir.iterdir()] == [
+            f"sub-{subject}_ses-01_descriptor_qc_report.html"
+        ]
+        html = next(report_dir.iterdir()).read_text(encoding="utf-8")
+        assert f"Descriptor QC Report - {subject} 01 EO_baseline, EC_baseline" in html
 
-    sensor_epoch_df = pd.read_parquet(subject_one_root / "sensor_epoch_features.parquet")
-    sensor_agg_df = pd.read_parquet(subject_one_root / "sensor_recording_features.parquet")
+    shard_root = derivative_root / "sub-0001" / "ses-01" / "eeg" / "EO_baseline"
+    sensor_epoch_df = pd.read_parquet(shard_root / "sensor_epoch_features.parquet")
     # The fixture has 10 epochs/subject; MAD rejection may drop ~1, so at least 5 survive.
     assert len(sensor_epoch_df) >= 5
-    # Subject 0001 alternates between run-01 and run-02 → always 2 recording rows.
-    assert len(sensor_agg_df) == 2
-    assert "band_abs_delta_ch-Fz" in sensor_epoch_df.columns
-    assert "epoch_count" in sensor_agg_df.columns
-    assert "run" in sensor_agg_df.columns
-    assert "recording_id" in sensor_agg_df.columns
-    assert (sensor_agg_df["epoch_count"] >= 1).all()
-    assert any(column.startswith("mean_") for column in sensor_agg_df.columns)
-    assert any(column.startswith("mean_band_log_abs_") for column in sensor_agg_df.columns)
-    assert not any(column.startswith("mean_band_abs_") for column in sensor_agg_df.columns)
-    assert any(column.startswith("median_band_") for column in sensor_agg_df.columns)
-    assert any(column.startswith("iqr_band_") for column in sensor_agg_df.columns)
-    assert any(column.startswith("agg_band_ratio_") for column in sensor_agg_df.columns)
-    assert not any(column.startswith("agg_band_corr_ratio_") for column in sensor_agg_df.columns)
+    assert "band_abs_delta_ch-Fz" in feature_columns_of(sensor_epoch_df, shard_root)
     assert not any(column.startswith("band_ratio_") for column in sensor_epoch_df.columns)
-    log_col = "band_log_abs_alpha_ch-Fz"
-    first_recording_id = sensor_agg_df.loc[0, "recording_id"]
-    first_recording_epochs = sensor_epoch_df[sensor_epoch_df["recording_id"] == first_recording_id]
-    assert sensor_agg_df.loc[0, f"median_{log_col}"] == pytest.approx(
-        first_recording_epochs[log_col].median()
-    )
     assert not (derivative_root / "combined").exists()
 
 
@@ -455,6 +426,7 @@ aggregation:
             str(config_path),
             "--conditions",
             "EO_baseline",
+            "EC_baseline",
         ],
     )
     extract_descriptors.main()
@@ -481,16 +453,36 @@ aggregation:
         combined_root / "sensor_recording_features.parquet"
     )
 
-    # 2 subjects × ≥5 surviving epochs each → at least 10 combined epoch rows.
-    assert len(combined_sensor_epoch_df) >= 10
-    # 0001 has 2 runs, 0002 has 1 run → 3 recording-level rows, 2 subject-level rows.
-    assert len(combined_sensor_recording_df) == 3
-    # Aggregated stat columns are present at recording level and inherited by subject.
-    assert any(column.startswith("agg_band_ratio_") for column in combined_sensor_recording_df)
-    assert (combined_root / "failures.csv").exists()
-    assert (combined_root / "sensor_epoch_features_feature_columns.json").exists()
-    assert (combined_root / "sensor_recording_features_feature_columns.json").exists()
-    assert not (combined_root / "qc").exists()
+    # 2 subjects × 2 conditions × ≥5 surviving epochs each.
+    assert len(combined_sensor_epoch_df) >= 20
+    # 0001 has 2 runs, 0002 has 1 run, each in both conditions: a recording's conditions
+    # stay apart.
+    assert len(combined_sensor_recording_df) == 6
+    assert combined_sensor_recording_df.groupby("condition").size().to_dict() == {
+        "EC_baseline": 3,
+        "EO_baseline": 3,
+    }
+    recording_columns = feature_columns_of(combined_sensor_recording_df, combined_root)
+    assert "mean_band_log_abs_alpha_ch-Fz" in recording_columns
+    assert not any(column.startswith("mean_band_abs_") for column in recording_columns)
+    assert any(column.startswith("iqr_band_") for column in recording_columns)
+    assert any(column.startswith("agg_band_ratio_") for column in recording_columns)
+    assert not any(column.startswith("agg_band_corr_ratio_") for column in recording_columns)
+    assert (combined_sensor_recording_df["epoch_count"] >= 3).all()
+    log_col = "band_log_abs_alpha_ch-Fz"
+    first = combined_sensor_recording_df.iloc[0]
+    first_epochs = combined_sensor_epoch_df[
+        (combined_sensor_epoch_df["recording_id"] == first["recording_id"])
+        & (combined_sensor_epoch_df["condition"] == first["condition"])
+    ]
+    assert first["epoch_count"] == len(first_epochs)
+    assert first[f"median_{log_col}"] == pytest.approx(first_epochs[log_col].median())
+    assert sorted(path.name for path in combined_root.iterdir()) == [
+        "failures.csv",
+        "merge_manifest.json",
+        "sensor_epoch_features.parquet",
+        "sensor_recording_features.parquet",
+    ]
     assert (
         reports_root / "summary" / "descriptor_qc" / "descriptor_qc_dataset_summary.html"
     ).exists()
@@ -567,7 +559,7 @@ aggregation:
     extract_descriptors.main()
 
     derivative_root = bids_root / "derivatives" / "signal_features" / "descriptors"
-    assert (derivative_root / "sub-0001" / "ses-01" / "eeg" / "EO_baseline" / "_SUCCESS").exists()
+    assert (derivative_root / "sub-0001" / "ses-01" / "eeg" / "EO_baseline" / "shard.json").exists()
     assert not (derivative_root / "sub-0001" / "ses-01" / "eeg" / "HV_EO").exists()
 
 
@@ -656,7 +648,7 @@ aggregation:
     extract_descriptors.main()
     assert rerun_calls == [("0001",), ("0002",)]
     assert not (incomplete_shard / "left_from_an_earlier_run.csv").exists()
-    assert (incomplete_shard / "_SUCCESS").exists()
+    assert (incomplete_shard / "shard.json").exists()
 
     combined_root = bids_root / "derivatives" / "signal_features" / "descriptors" / "combined"
     assert not combined_root.exists()
@@ -787,7 +779,7 @@ aggregation:
 
     assert load_calls == [("0002",)]
     derivative_root = tmp_path / "BIDS" / "derivatives" / "signal_features" / "descriptors"
-    assert (derivative_root / "sub-0002" / "ses-01" / "eeg" / "EO_baseline" / "_SUCCESS").exists()
+    assert (derivative_root / "sub-0002" / "ses-01" / "eeg" / "EO_baseline" / "shard.json").exists()
     assert not (derivative_root / "sub-0001").exists()
 
 
@@ -857,11 +849,11 @@ def _mad_container():
     return DataContainer(
         X=np.asarray(
             [
-                [0.0, 1.0],
-                [0.0, 1.1],
-                [0.0, 0.9],
-                [0.0, 1.05],
-                [0.0, 0.95],
+                [1.0, 1.0],
+                [1.1, 1.1],
+                [0.9, 0.9],
+                [1.05, 1.05],
+                [0.95, 0.95],
                 [100.0, 1.0],
             ]
         ),

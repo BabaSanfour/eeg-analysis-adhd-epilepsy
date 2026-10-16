@@ -356,7 +356,6 @@ def build_loader_args(
         subject_col=config.get("subject_col", "subject"),
         desc=config.get("desc", "base"),
         descriptor_table_path=config.get("descriptor_table_path"),
-        descriptor_feature_columns_path=config.get("descriptor_feature_columns_path"),
         descriptor_families=config.get("descriptor_families"),
         descriptor_max_abs_value=config.get("descriptor_max_abs_value", 1e12),
         location_statistic=config.get("location_statistic"),

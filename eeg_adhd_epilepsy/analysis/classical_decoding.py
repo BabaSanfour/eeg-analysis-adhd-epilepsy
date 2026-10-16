@@ -40,8 +40,7 @@ from coco_pipe.decoding import (
     redact_sensitive,
     safe_group_n_splits,
 )
-from coco_pipe.descriptors import build_descriptor_feature_metadata
-from coco_pipe.io import DataContainer, read_json
+from coco_pipe.io import DataContainer
 from coco_pipe.transforms.subject_alignment import VECTOR_TRANSFORMS, make_subject_transform
 from coco_pipe.utils import slug
 
@@ -62,6 +61,7 @@ from eeg_adhd_epilepsy.analysis.utils.decoding import (
     scientific_config,
 )
 from eeg_adhd_epilepsy.reports.decoding import (
+    descriptor_feature_metadata,
     generate_decoding_summary_report,
     generate_head_to_head_report,
 )
@@ -777,13 +777,9 @@ def run(config: dict[str, Any]) -> Path:
             )
 
         if config.get("detailed_unit_reports", False):
-            feature_metadata = None
-            if plan.input_mode == "descriptors":
-                descriptor_columns_path = config.get("descriptor_feature_columns_path")
-                if descriptor_columns_path:
-                    path = Path(str(descriptor_columns_path)).expanduser()
-                    if path.exists():
-                        feature_metadata = build_descriptor_feature_metadata(read_json(path))
+            feature_metadata = (
+                descriptor_feature_metadata(config) if plan.input_mode == "descriptors" else None
+            )
             coco_pipe.report.render_unit_reports(
                 records,
                 modes=config.get("detailed_unit_report_modes", ["flat"]),
@@ -868,11 +864,6 @@ def main() -> None:
         help="Descriptor table path (dataset path; supply here rather than in the config).",
     )
     parser.add_argument(
-        "--descriptor_feature_columns_path",
-        default=None,
-        help="Descriptor feature-columns JSON path (dataset path; supply here, not in config).",
-    )
-    parser.add_argument(
         "--embedding_derivative_root",
         default=None,
         help="Foundation embedding root for saved-embedding decoding.",
@@ -925,7 +916,6 @@ def main() -> None:
         reports_root=args.reports_root,
         derivative_root=args.derivative_root,
         descriptor_table_path=args.descriptor_table_path,
-        descriptor_feature_columns_path=args.descriptor_feature_columns_path,
         embedding_derivative_root=args.embedding_derivative_root,
         embedding_model_key=args.embedding_model_key,
         overwrite=args.overwrite,

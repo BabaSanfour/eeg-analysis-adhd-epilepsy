@@ -55,9 +55,7 @@ echo "==========================================================================
 
 for rep in "${REPRESENTATIONS[@]}"; do
     table_path="$DESC_ROOT/sensor_${rep}_features.parquet"
-    columns_path="$DESC_ROOT/sensor_${rep}_features_feature_columns.json"
     require_file "$table_path"
-    require_file "$columns_path"
     echo "Representation: $rep"
     echo "Table:          $table_path"
 
@@ -71,7 +69,6 @@ for rep in "${REPRESENTATIONS[@]}"; do
         --cohort_config "$config"
         --analysis_config "$ANALYSIS_CONFIG"
         --descriptor_table_path "$table_path"
-        --descriptor_feature_columns_path "$columns_path"
         --representation "$rep"
         --n_jobs "$THREADS"
     )

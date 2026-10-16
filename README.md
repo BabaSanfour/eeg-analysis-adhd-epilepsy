@@ -224,8 +224,11 @@ eeg-merge-descriptors --derivative_root /path/to/shards --output_root /path/to/m
   --reports_root /path/to/reports
 ```
 
-Per-subject shards land under `<shards>/sub-*/...`; merge writes
-`<merged>/combined/sensor_{epoch,recording,subject}_features` tables.
+A shard, `<shards>/sub-*/ses-*/eeg/<condition>/`, holds the epoch table
+(`sensor_epoch_features.parquet`) and `shard.json` (QC summary, QC flags, failures); each
+subject gets one QC report with all its conditions. The merge writes
+`<merged>/combined/sensor_{epoch,recording}_features.parquet`, the recording table built
+from the merged epochs; each table carries its feature columns in its own metadata.
 
 ## Dimensionality reduction
 

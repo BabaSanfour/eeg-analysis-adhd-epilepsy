@@ -44,11 +44,8 @@ def validate_inputs(args: Any) -> None:
     if len(args.filter_col) != len(args.filter_val):
         raise ValueError("--filter_col and --filter_val must be provided in matching pairs.")
     if args.input_mode == "descriptors":
-        if not args.descriptor_table_path or not args.descriptor_feature_columns_path:
-            raise ValueError(
-                "--descriptor_table_path and --descriptor_feature_columns_path are required "
-                "when --input_mode descriptors."
-            )
+        if not args.descriptor_table_path:
+            raise ValueError("--descriptor_table_path is required when --input_mode descriptors.")
         if args.descriptor_max_abs_value is not None and args.descriptor_max_abs_value <= 0:
             raise ValueError("--descriptor_max_abs_value must be positive when provided.")
     if args.input_mode == "foundation_embeddings":
@@ -234,9 +231,6 @@ def build_input_signature(
                 "representation": args.representation or "",
                 "descriptor_table_path": str(Path(args.descriptor_table_path).expanduser()),
                 "descriptor_families": list(args.descriptor_families or []),
-                "descriptor_feature_columns_path": str(
-                    Path(args.descriptor_feature_columns_path).expanduser()
-                ),
                 "descriptor_max_abs_value": args.descriptor_max_abs_value,
                 "location_statistic": args.location_statistic,
                 "family": unit_spec.get("family"),
@@ -315,7 +309,6 @@ def build_run_config_payload(
                 "representation": args.representation or "",
                 "descriptor_families": list(args.descriptor_families or []),
                 "descriptor_table_path": args.descriptor_table_path,
-                "descriptor_feature_columns_path": args.descriptor_feature_columns_path,
                 "descriptor_max_abs_value": args.descriptor_max_abs_value,
                 "location_statistic": args.location_statistic,
             }

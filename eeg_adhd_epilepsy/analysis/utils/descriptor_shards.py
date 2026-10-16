@@ -1,59 +1,67 @@
-"""Shared file-layout contract for descriptor extraction shards.
+"""File layout of a descriptor shard, shared by stages 05 (writer), 06 and 07 (readers).
 
-Both ``analysis/extract_descriptors.py`` (producer) and
-``analysis/merge_descriptors.py`` (consumer) must agree on which files make up a
-"complete" descriptor shard. Centralizing it here means adding or renaming an
-output file is a one-place change.
+A shard is ``<derivative_root>/sub-<subject>/ses-<session>/eeg/<condition>/`` with two files:
 
-Per-table filenames are derived from each table *stem* plus the suffix
-convention of coco-pipe's ``save_descriptor_table`` (``{stem}.parquet`` /
-``{stem}.csv`` / ``{stem}_feature_columns.json``). Those suffixes are kept as
-local constants here; only the markers and QC artifacts the producer writes
-directly are listed literally.
+- ``sensor_epoch_features.parquet``: one row per epoch; the table carries its feature
+  columns in its own metadata (coco-pipe ``save_descriptor_table``).
+- ``shard.json``: the shard's QC summary, QC flags and extraction failures. It is written
+  last, so a shard without it is incomplete.
+
+The recording table is not kept per shard: stage 07 rebuilds it from the merged epoch
+table with the aggregation settings in ``config_used.yaml``.
 """
 
 from __future__ import annotations
 
-# Suffix convention written by coco-pipe's ``save_descriptor_table``.
-_TABLE_FORMATS = ("parquet",)
-_FEATURE_COLUMNS_SUFFIX = "_feature_columns.json"
+from pathlib import Path
+from typing import Any
 
-SENSOR_TABLE_STEMS: tuple[str, ...] = ("sensor_epoch_features", "sensor_recording_features")
+import pandas as pd
+from coco_pipe.descriptors import DescriptorConfig, build_descriptor_tables
+from coco_pipe.io import DataContainer, read_json
 
-# Non-table artifacts the producer writes directly (no save_descriptor_table).
-SENSOR_MARKER_FILES: tuple[str, ...] = (
-    "_SUCCESS",
-    "failures.csv",
-)
-QC_FILES: tuple[str, ...] = ("qc/summary_row.csv", "qc/flags.csv")
-"""Per-shard QC artifacts written by :func:`run_descriptor_subject_qc`."""
+EPOCH_TABLE = "sensor_epoch_features"
+SHARD_RECORD = "shard.json"
+SHARD_FILES: tuple[str, ...] = (f"{EPOCH_TABLE}.parquet", SHARD_RECORD)
 
 
-def _table_files(stems: tuple[str, ...]) -> tuple[str, ...]:
-    files: list[str] = []
-    for stem in stems:
-        files.extend(f"{stem}.{fmt}" for fmt in _TABLE_FORMATS)
-        files.append(f"{stem}{_FEATURE_COLUMNS_SUFFIX}")
-    return tuple(files)
+def find_shards(derivative_root: Path) -> list[Path]:
+    """Every shard folder under *derivative_root*, complete or not."""
+    return sorted(path for path in Path(derivative_root).glob("sub-*/ses-*/eeg/*") if path.is_dir())
 
 
-# Sensor-level files written for every shard (markers + derived table files).
-SENSOR_TABLE_FILES: tuple[str, ...] = SENSOR_MARKER_FILES + _table_files(SENSOR_TABLE_STEMS)
-"""Sensor-level descriptor files written for every shard."""
-
-# Feature-column sidecars consulted when merging shards, keyed by table tier.
-FEATURE_COLUMN_FILES: dict[str, str] = {
-    stem.removesuffix("_features"): f"{stem}{_FEATURE_COLUMNS_SUFFIX}"
-    for stem in SENSOR_TABLE_STEMS
-}
+def read_shard_record(shard_root: Path) -> dict[str, Any]:
+    """The shard's ``shard.json``: ``qc_summary``, ``qc_flags`` and ``failures``."""
+    return read_json(Path(shard_root) / SHARD_RECORD)
 
 
-def required_descriptor_files(*, include_qc: bool = False) -> tuple[str, ...]:
-    """Return the tuple of relative paths a complete shard must contain.
+def recording_tables(
+    metadata_df: pd.DataFrame,
+    container: DataContainer,
+    config_used: dict[str, Any],
+    *,
+    target_col: str | None = None,
+) -> dict[str, Any]:
+    """Epoch and recording tables from one condition's epochs, as configured.
 
-    Parameters
-    ----------
-    include_qc
-        Whether to additionally require the per-shard QC artifacts.
+    Stage 05 calls it on a shard's epochs for its QC, stage 07 on the merged epochs of
+    each condition: both get the recording values from the same settings.
     """
-    return SENSOR_TABLE_FILES + QC_FILES if include_qc else SENSOR_TABLE_FILES
+    bands = DescriptorConfig.model_validate(
+        {
+            key: value
+            for key, value in config_used.items()
+            if key not in {"aggregation", "qc", "desc"}
+        }
+    ).families.bands
+    return build_descriptor_tables(
+        container,
+        metadata_df,
+        group_by="recording_id",
+        id_col="obs_id",
+        target_col=target_col,
+        aggregation_groups=list(config_used["aggregation"]["descriptors"]),
+        ratio_pairs=list(bands.ratio_pairs) if bands.enabled else [],
+        ratio_floor=float(bands.min_denominator_power) if bands.enabled else 0.0,
+        on_insufficient="warn",
+    )
