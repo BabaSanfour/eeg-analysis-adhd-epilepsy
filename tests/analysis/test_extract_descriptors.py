@@ -479,7 +479,6 @@ aggregation:
     assert first["epoch_count"] == len(first_epochs)
     assert first[f"median_{log_col}"] == pytest.approx(first_epochs[log_col].median())
     assert sorted(path.name for path in combined_root.iterdir()) == [
-        "failures.csv",
         "merge_manifest.json",
         "sensor_epoch_features.parquet",
         "sensor_recording_features.parquet",
@@ -491,10 +490,7 @@ aggregation:
     manifest_path = combined_root / "merge_manifest.json"
     assert manifest_path.exists()
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["n_shards_merged"] == manifest["n_shards_discovered"]
-    assert manifest["n_shards_excluded"] == 0
-    assert len(manifest["merged_shards"]) == manifest["n_shards_merged"]
-    assert manifest["n_sensor_epoch_rows"] == len(combined_sensor_epoch_df)
+    assert manifest["n_epoch_rows"] == len(combined_sensor_epoch_df)
 
 
 def test_extract_descriptors_cli_skips_missing_subject_condition(

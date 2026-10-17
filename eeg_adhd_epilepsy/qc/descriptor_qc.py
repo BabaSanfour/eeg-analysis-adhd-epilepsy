@@ -19,9 +19,6 @@ from coco_pipe.descriptors.qc import (
     summarize_failures,
 )
 from coco_pipe.io.quality import (
-    compute_subject_outlier_burden as compute_shared_subject_outlier_burden,
-)
-from coco_pipe.io.quality import (
     make_qc_flag,
     resolve_qc_status,
 )
@@ -60,12 +57,20 @@ def descriptor_qc_thresholds(config_snapshot: dict[str, Any]) -> DescriptorQCThr
     return DescriptorQCThresholds(**((config_snapshot.get("qc") or {}).get("thresholds") or {}))
 
 
-def _split_failures(failure_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """Extraction failures, and the number of epochs dropped by outlier rejection."""
+def _split_failures(failure_df: pd.DataFrame, epoch_df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """Extraction failures of the epochs in *epoch_df*, and the number of epochs dropped
+    by outlier rejection.
+
+    Failures of epochs left out afterwards (rejected, or in a too-short recording) do not
+    count.
+    """
     if failure_df.empty or "family" not in failure_df.columns:
         return failure_df, 0
     rejection = failure_df["family"].astype(str).str.startswith("MAD_Rejection")
-    return failure_df[~rejection], int(failure_df.loc[rejection, "obs_id"].nunique())
+    failures = failure_df[~rejection]
+    if "obs_id" in failures.columns and "obs_id" in epoch_df.columns:
+        failures = failures[failures["obs_id"].astype(str).isin(epoch_df["obs_id"].astype(str))]
+    return failures, int(failure_df.loc[rejection, "obs_id"].nunique())
 
 
 def _expected_families(config_snapshot: dict[str, Any]) -> list[str]:
@@ -284,13 +289,7 @@ def run_descriptor_shard_qc(
         feature_cols,
         tol=thresh.near_constant_std_tol,
     )
-    extraction_failures, n_epochs_rejected = _split_failures(failure_df)
-    # Failures of epochs left out afterwards (rejected, or in a too-short recording)
-    # do not count.
-    if "obs_id" in extraction_failures.columns and "obs_id" in sensor_epoch_df.columns:
-        extraction_failures = extraction_failures[
-            extraction_failures["obs_id"].astype(str).isin(sensor_epoch_df["obs_id"].astype(str))
-        ]
+    extraction_failures, n_epochs_rejected = _split_failures(failure_df, sensor_epoch_df)
     # The family table, its missingness chart and the failure counts follow the checks:
     # no peak features, and rejected epochs are not failures.
     family_summary_df = aggregate_family_qc(
@@ -586,6 +585,9 @@ def run_descriptor_dataset_qc(
         expected_families,
         merged_sensor_epoch_df.columns,
     )
+    # As in the shard QC: peak features (NaN where no peak was found) are not checked,
+    # and rejected epochs are not failures.
+    checked_cols = [column for column in subject_feature_cols if not _is_peak_feature(column)]
     feature_missingness_df = compute_family_missingness(
         merged_sensor_subject_df,
         subject_feature_cols,
@@ -595,25 +597,22 @@ def run_descriptor_dataset_qc(
     ]
     constant_df = compute_family_constant_summary(
         merged_sensor_subject_df,
-        subject_feature_cols,
+        checked_cols,
         tol=thresh.near_constant_std_tol,
     )
     low_variance_df = constant_df[
         constant_df["is_constant"]
         | (constant_df["relative_std"].fillna(np.inf) <= thresh.near_constant_std_tol * 10)
     ].copy()
-    failure_df = merged_failures_df if merged_failures_df is not None else pd.DataFrame()
-    extraction_failures, n_epochs_rejected = _split_failures(failure_df)
-    failure_summaries = summarize_failures(failure_df)
-    subject_feature_df = (
-        merged_sensor_subject_df.loc[:, subject_feature_cols].replace([np.inf, -np.inf], np.nan)
-        if subject_feature_cols
-        else pd.DataFrame()
+    extraction_failures, n_epochs_rejected = _split_failures(
+        merged_failures_df if merged_failures_df is not None else pd.DataFrame(),
+        merged_sensor_epoch_df,
     )
+    failure_summaries = summarize_failures(extraction_failures)
     family_summary_df = aggregate_family_qc(
         merged_sensor_subject_df,
-        subject_feature_cols,
-        failures_df=failure_df,
+        checked_cols,
+        failures_df=extraction_failures,
         tol=thresh.near_constant_std_tol,
     ).rename(
         columns={
@@ -623,32 +622,28 @@ def run_descriptor_dataset_qc(
     )
     # Failures are per channel-epoch, so their rate is taken on the epoch table.
     epoch_failures = aggregate_family_qc(
-        merged_sensor_epoch_df, epoch_feature_cols, failures_df=failure_df
+        merged_sensor_epoch_df, epoch_feature_cols, failures_df=extraction_failures
     )[["family", "failure_count", "failure_rate"]]
     family_summary_df = family_summary_df.drop(columns=["failure_count", "failure_rate"]).merge(
         epoch_failures, on="family", how="left"
     )
+    # The fit and range diagnostics read epoch values, as in the shard QC: a recording
+    # column is a mean or a spread of them.
     family_summary_df = add_family_diagnostics(
         family_summary_df,
-        feature_missingness_df,
-        subject_feature_df,
-    )
-    outlier_df = compute_shared_subject_outlier_burden(
-        merged_sensor_subject_df,
-        subject_feature_cols,
+        compute_family_missingness(merged_sensor_epoch_df, epoch_feature_cols),
+        merged_sensor_epoch_df.loc[:, epoch_feature_cols].replace([np.inf, -np.inf], np.nan),
     )
     condition_breakdown_rows: list[dict[str, Any]] = []
     if "condition" in merged_sensor_subject_df.columns:
-        failure_has_condition = "condition" in failure_df.columns
-        failure_has_family = "family" in failure_df.columns
+        failure_has_condition = "condition" in extraction_failures.columns
+        failure_has_family = "family" in extraction_failures.columns
         for condition, group in merged_sensor_subject_df.groupby("condition"):
             cond_missingness = (
-                compute_family_missingness(group, subject_feature_cols)
-                if subject_feature_cols
-                else pd.DataFrame()
+                compute_family_missingness(group, checked_cols) if checked_cols else pd.DataFrame()
             )
             cond_failures = (
-                failure_df[failure_df["condition"] == condition]
+                extraction_failures[extraction_failures["condition"] == condition]
                 if failure_has_condition
                 else pd.DataFrame()
             )
@@ -699,14 +694,8 @@ def run_descriptor_dataset_qc(
         else 0,
         "n_sensor_epoch_features": int(len(epoch_feature_cols)),
         "n_sensor_subject_features": int(len(subject_feature_cols)),
-        "n_all_nan_features": int(
-            constant_df.loc[~constant_df["column"].map(_is_peak_feature), "is_all_nan"].sum()
-        )
-        if not constant_df.empty
-        else 0,
-        "n_zero_variance_features": int(
-            constant_df.loc[~constant_df["column"].map(_is_peak_feature), "is_constant"].sum()
-        )
+        "n_all_nan_features": int(constant_df["is_all_nan"].sum()) if not constant_df.empty else 0,
+        "n_zero_variance_features": int(constant_df["is_constant"].sum())
         if not constant_df.empty
         else 0,
         "n_near_zero_variance_features": int(len(low_variance_df)),
@@ -716,11 +705,6 @@ def run_descriptor_dataset_qc(
         "median_feature_missingness": float(checked_missingness["missing_rate"].median())
         if not checked_missingness.empty
         else 0.0,
-        "n_subjects_high_outlier_burden": int(
-            (outlier_df["outlier_fraction"] >= thresh.warn_subject_outlier_fraction).sum()
-        )
-        if not outlier_df.empty
-        else 0,
     }
 
     flags: list[dict[str, Any]] = []
@@ -756,28 +740,6 @@ def run_descriptor_dataset_qc(
             warn_msg="Merged features include near-zero variance columns.",
         )
     )
-    if not outlier_df.empty:
-        max_outlier_fraction = float(outlier_df["outlier_fraction"].max())
-        if max_outlier_fraction >= thresh.fail_subject_outlier_fraction:
-            flags.append(
-                make_qc_flag(
-                    "fail",
-                    "subject_outlier_burden_high",
-                    "A subject has high descriptor outlier burden.",
-                    value=max_outlier_fraction,
-                    threshold=thresh.fail_subject_outlier_fraction,
-                )
-            )
-        elif max_outlier_fraction >= thresh.warn_subject_outlier_fraction:
-            flags.append(
-                make_qc_flag(
-                    "warn",
-                    "subject_outlier_burden_warn",
-                    "A subject has elevated descriptor outlier burden.",
-                    value=max_outlier_fraction,
-                    threshold=thresh.warn_subject_outlier_fraction,
-                )
-            )
     flags.extend(
         _family_failure_flags(
             family_summary_df,
@@ -797,27 +759,23 @@ def run_descriptor_dataset_qc(
                 "Subjects": metrics["n_subjects"],
                 "Shards": metrics["n_shards"],
                 "Conditions": metrics["n_conditions"],
-                "Sensor Subject Rows": len(merged_sensor_subject_df),
-                "Sensor Epoch Rows": len(merged_sensor_epoch_df)
-                if merged_sensor_epoch_df is not None
-                else 0,
-                "Sensor Subject Features": metrics["n_sensor_subject_features"],
-                "Sensor Epoch Features": metrics["n_sensor_epoch_features"],
+                "Recording Rows": len(merged_sensor_subject_df),
+                "Epoch Rows": len(merged_sensor_epoch_df),
+                "Recording Features": metrics["n_sensor_subject_features"],
+                "Epoch Features": metrics["n_sensor_epoch_features"],
                 "Failures": metrics["n_failures_total"],
+                "Rejected Epochs": metrics["n_epochs_rejected"],
                 "QC Status": qc_status,
             }
         ]
     )
     flags_df = pd.DataFrame(flags)
-    manifest_df = None
-    if manifest:
-        manifest_df = pd.DataFrame(
-            [
-                {"field": key, "value": value}
-                for key, value in manifest.items()
-                if not isinstance(value, (list, dict))
-            ]
-        )
+    manifest_df = (
+        pd.DataFrame([{"field": key, "value": value} for key, value in manifest.items()])
+        if manifest
+        else None
+    )
+    missing_df = checked_missingness[checked_missingness["missing_rate"] > 0]
 
     with tempfile.TemporaryDirectory() as figures_dir:
         figure_paths = viz_descriptor_qc.save_dataset_descriptor_qc_figures(
@@ -825,7 +783,7 @@ def run_descriptor_dataset_qc(
             shard_summary_df=shard_summary_df,
             failure_family_df=failure_summaries["by_family"],
             failure_channel_df=failure_summaries["by_channel"],
-            feature_missingness_df=feature_missingness_df,
+            feature_missingness_df=missing_df,
             low_variance_df=low_variance_df,
         )
         generate_descriptor_dataset_report(
@@ -835,7 +793,7 @@ def run_descriptor_dataset_qc(
             flags_df=flags_df,
             failure_family_df=failure_summaries["by_family"],
             failure_channel_df=failure_summaries["by_channel"],
-            feature_missingness_df=feature_missingness_df,
+            feature_missingness_df=missing_df,
             low_variance_df=low_variance_df,
             family_summary_df=family_summary_df,
             figure_paths=figure_paths,

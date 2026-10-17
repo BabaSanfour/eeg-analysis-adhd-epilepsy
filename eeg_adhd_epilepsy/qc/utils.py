@@ -87,10 +87,6 @@ class DescriptorQCThresholds:
         Fraction of constant features that triggers ``warn``.
     fail_zero_variance_fraction:
         Fraction of constant features that triggers ``fail``.
-    warn_subject_outlier_fraction:
-        Per-subject outlier feature fraction that triggers ``warn``.
-    fail_subject_outlier_fraction:
-        Per-subject outlier feature fraction that triggers ``fail``.
     warn_param_r_squared_p05:
         5th percentile of the specparam fit R² below which ``warn`` is raised.
     fail_param_r_squared_p05:
@@ -106,8 +102,6 @@ class DescriptorQCThresholds:
     near_constant_std_tol: float = 1e-12
     warn_zero_variance_fraction: float = 0.01
     fail_zero_variance_fraction: float = 0.05
-    warn_subject_outlier_fraction: float = 0.10
-    fail_subject_outlier_fraction: float = 0.25
     warn_param_r_squared_p05: float = 0.5
     fail_param_r_squared_p05: float = 0.2
 
