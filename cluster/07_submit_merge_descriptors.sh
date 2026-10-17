@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_merge
-#SBATCH --time=04:00:00
+#SBATCH --time=00:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=8G
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -17,12 +17,12 @@ dra_epochs_variant
 require_dir "$DESCRIPTOR_SHARDS_ROOT"
 
 dra_activate
-# Single-process merge that wants threaded BLAS.
-dra_pin_threads "${SLURM_CPUS_PER_TASK:-1}"
+# One CPU: on full-size data (1,916 shards) the merge took 137 s and 3.4 GB on 1 CPU,
+# 203 s on 16 threads.
+dra_pin_threads 1
 
 python -m eeg_adhd_epilepsy.analysis.merge_descriptors \
   --derivative_root "$DESCRIPTOR_SHARDS_ROOT" \
   --output_root "$DESCRIPTORS_ROOT" \
-  --reports_root "$REPORTS_ROOT" \
-  --skip_inconsistent
+  --reports_root "$REPORTS_ROOT"
 validate_bids "$DESCRIPTORS_ROOT"

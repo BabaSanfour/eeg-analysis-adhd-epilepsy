@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_verify_desc
-#SBATCH --time=00:30:00
+#SBATCH --time=00:15:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=16G
+#SBATCH --cpus-per-task=1
+#SBATCH --mem=2G
 #SBATCH --mail-type=FAIL
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -20,7 +20,7 @@ STRICT=${STRICT:-0}
 require_dir "$DESCRIPTOR_SHARDS_ROOT"
 require_dir "$VENV_PATH"
 
-# CPU-light verification; no BLAS pinning.
+# Reads shard.json files and, for subjects without a shard, epoch headers: 1 CPU.
 dra_activate
 
 # Every participants.tsv row is expected to have a shard, unless ROWS narrows it.
