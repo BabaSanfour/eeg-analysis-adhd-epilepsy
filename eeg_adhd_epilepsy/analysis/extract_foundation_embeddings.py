@@ -203,7 +203,7 @@ def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "fu
                     }
                 )
                 continue
-            frame = container.observation_frame()
+            frame = container.obs_table()
             sfreq = float(container.meta["sfreq"])
             channels = [str(value) for value in container.coords["channel"]]
             extractor: FoundationEmbeddingExtractor | None = None

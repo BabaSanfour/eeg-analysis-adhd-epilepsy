@@ -252,7 +252,7 @@ def add_overview_cohort_summary(
         )
 
     for condition_name, container in containers.items():
-        frame = container.observation_frame()
+        frame = container.obs_table()
 
         if primary_spec["target_col"] not in frame.columns:
             raise ValueError(

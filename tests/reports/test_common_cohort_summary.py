@@ -9,12 +9,12 @@ from eeg_adhd_epilepsy.reports._common import add_overview_cohort_summary
 
 
 class _FakeContainer:
-    """Minimal container exposing the observation frame used by the summary."""
+    """Minimal container exposing the observation table used by the summary."""
 
     def __init__(self, frame: pd.DataFrame):
         self._frame = frame
 
-    def observation_frame(self) -> pd.DataFrame:
+    def obs_table(self) -> pd.DataFrame:
         return self._frame.copy()
 
 

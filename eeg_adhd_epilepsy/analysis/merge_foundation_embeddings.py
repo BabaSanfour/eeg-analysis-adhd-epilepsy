@@ -95,7 +95,7 @@ def _failure_records(derivative_root: Path) -> list[dict[str, Any]]:
 
 def _embedding_frame(container: Any) -> pd.DataFrame:
     """Flatten a loaded embedding container to id columns + ``embedding_*`` features."""
-    metadata = container.observation_frame().reset_index(drop=True)
+    metadata = container.obs_table()
     features = pd.DataFrame(
         np.asarray(container.X),
         columns=[str(name) for name in container.coords["feature"]],

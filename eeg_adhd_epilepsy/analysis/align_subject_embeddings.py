@@ -235,9 +235,7 @@ def _align_and_save_ra_by_subject(
         window_start = np.asarray(token_container.coords["window_start"])
         window_stop = np.asarray(token_container.coords["window_stop"])
         window_index = np.asarray(token_container.coords["window_index"])
-        for artifact_path, rows in token_container.observation_frame().groupby(
-            "artifact_path", sort=False
-        ):
+        for artifact_path, rows in token_container.obs_table().groupby("artifact_path", sort=False):
             artifact_path = str(artifact_path)
             positions = rows.index.to_numpy(dtype=int)
             output_paths.append(
@@ -639,7 +637,7 @@ def run(config: dict[str, Any]) -> Path:
         model_key=model_key,
     )
     pooled_embeddings = np.asarray(container.X, dtype=np.float32)
-    observations = container.observation_frame()
+    observations = container.obs_table()
     subjects = np.asarray(
         [normalize_subject_value(value) for value in container.coords["subject"]],
         dtype=object,
