@@ -1,12 +1,12 @@
-"""Merge the descriptor shards of stage 05 into combined tables.
+"""Merge the per-subject descriptor shards into combined tables.
 
 - ``combined/sensor_epoch_features.parquet``: the shards' epoch tables, 1 row / epoch
 - ``combined/sensor_recording_features.parquet``: 1 row / recording and condition, built
   from the merged epochs with the aggregation settings of ``config_used.yaml``
 
 Each table carries its feature columns in its own metadata. ``combined/merge_manifest.json``
-records the inputs and counts. Stage 06 runs first: a shard missing a file, or with other
-feature columns, stops the merge.
+records the inputs and counts. ``verify_descriptors`` runs first: a shard missing a file,
+or with other feature columns, stops the merge.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def _recording_table(
     """The recording table of the merged epochs, one condition at a time.
 
     A recording holds several conditions, so its epochs are grouped within each condition,
-    as stage 05 does within a shard.
+    as the extraction does within a shard.
     """
     metadata_columns = [column for column in epoch_df.columns if column not in set(feature_columns)]
     frames: list[pd.DataFrame] = []
@@ -77,7 +77,7 @@ def main() -> None:
     parser.add_argument(
         "--derivative_root",
         required=True,
-        help="Descriptor derivative with the per-subject shards (stage 05, on scratch).",
+        help="Descriptor derivative with the per-subject shards (on scratch).",
     )
     parser.add_argument(
         "--output_root",
@@ -108,7 +108,8 @@ def main() -> None:
     shard_roots = find_shards(derivative_root)
     if not shard_roots:
         raise ValueError(f"No descriptor shards found under {derivative_root}.")
-    # A shard without its shard.json (written last) crashed halfway; stage 06 lists it.
+    # A shard without its shard.json (written last) crashed halfway; verify_descriptors
+    # lists it.
     incomplete = [
         str(shard_root.relative_to(derivative_root))
         for shard_root in shard_roots
@@ -117,7 +118,7 @@ def main() -> None:
     if incomplete:
         raise ValueError(
             f"{len(incomplete)} incomplete shard(s) under {derivative_root}, e.g. "
-            f"{incomplete[:5]}; rerun stage 05 for them (stage 06 lists them)."
+            f"{incomplete[:5]}; extract them again (verify_descriptors lists them)."
         )
     LOGGER.info("Merging %d shards from %s", len(shard_roots), derivative_root)
 

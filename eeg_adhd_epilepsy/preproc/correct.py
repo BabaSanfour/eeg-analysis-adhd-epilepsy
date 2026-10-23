@@ -1,4 +1,4 @@
-"""Source Correction Module (Stage 1).
+"""Source Correction Module (artifact correction).
 
 Implements removal of specific physiological artifacts (EOG, ECG, EMG) using
 DSS (Denoising Source Separation), ICA (Independent Component Analysis), and
@@ -38,7 +38,7 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class ArtifactCorrectionConfig:
-    """Configuration for Stage 1 Artifact Correction."""
+    """Configuration for the artifact correction."""
 
     # Methods
     eog_method: str | None = "dss"  # 'dss', 'ica', 'blind-dss', None
@@ -80,7 +80,7 @@ def run_source_correction(
     subject_id: str = "unknown",
     artifact_profile: dict | None = None,
 ) -> tuple[mne.io.BaseRaw, dict]:
-    """Orchestrate Stage 1 artifact correction.
+    """Orchestrate the artifact correction.
 
     Args:
         raw: The raw data object. Corrected version is returned.
@@ -622,7 +622,7 @@ def _load_base_provenance(input_path: Path, preproc_root: Path) -> dict | None:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run Stage 1 Artifact Correction")
+    parser = argparse.ArgumentParser(description="Run the artifact correction")
     parser.add_argument("--bids_root", type=str, required=True, help="Path to BIDS dataset root")
     parser.add_argument(
         "--preproc_root",
@@ -752,7 +752,7 @@ def main():
 
     LOGGER.info("Running Correction with Config: %s", config)
 
-    # Discover files (Stage 0 Output) to find subjects
+    # Discover files (base cleaning outputs) to find subjects
     LOGGER.info("Scanning preproc directory for available subjects...")
     preproc_dir = preproc_root
 
@@ -760,12 +760,12 @@ def main():
         LOGGER.error("Preproc directory not found: %s", preproc_dir)
         sys.exit(1)
 
-    # Only use Stage 0 outputs as Stage 1 inputs.
+    # Only base cleaning outputs are correction inputs.
     files = sorted(preproc_dir.rglob("*_desc-base_eeg.fif"))
 
     if not files:
         LOGGER.error(
-            "No Stage 0 FIF files found in %s (pattern: *_desc-base_eeg.fif).", preproc_dir
+            "No base cleaning FIF files found in %s (pattern: *_desc-base_eeg.fif).", preproc_dir
         )
         sys.exit(1)
 

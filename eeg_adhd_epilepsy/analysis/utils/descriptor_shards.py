@@ -1,4 +1,5 @@
-"""File layout of a descriptor shard, shared by stages 05 (writer), 06 and 07 (readers).
+"""File layout of a descriptor shard: ``extract_descriptors`` writes it, ``verify_descriptors``
+and ``merge_descriptors`` read it.
 
 A shard is ``<derivative_root>/sub-<subject>/ses-<session>/eeg/<condition>/`` with two files:
 
@@ -7,7 +8,7 @@ A shard is ``<derivative_root>/sub-<subject>/ses-<session>/eeg/<condition>/`` wi
 - ``shard.json``: the shard's QC summary, QC flags and extraction failures. It is written
   last, so a shard without it is incomplete.
 
-The recording table is not kept per shard: stage 07 rebuilds it from the merged epoch
+The recording table is not kept per shard: the merge rebuilds it from the merged epoch
 table with the aggregation settings in ``config_used.yaml``.
 """
 
@@ -64,7 +65,7 @@ def recording_tables(
 ) -> dict[str, Any]:
     """Epoch and recording tables from one condition's epochs, as configured.
 
-    Stage 05 calls it on a shard's epochs for its QC, stage 07 on the merged epochs of
+    The extraction calls it on a shard's epochs for its QC, the merge on the merged epochs of
     each condition: both get the recording values from the same settings. A recording
     row's ``obs_id`` is ``<recording_id>_cond-<condition>``, as coco-pipe names the
     recording level of raw epochs and embeddings.

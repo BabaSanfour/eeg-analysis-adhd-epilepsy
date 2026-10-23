@@ -577,7 +577,7 @@ def test_extract_descriptors_cli_fails_on_a_recording_that_cannot_be_loaded(
     tmp_path: Path,
     corrupt_runs: tuple[str, ...],
 ) -> None:
-    """A saved epoch file that cannot be read stops stage 05, whether or not the subject's
+    """A saved epoch file that cannot be read stops the extraction, whether or not the subject's
     other recordings load: it is not a subject without epochs."""
     config_path = tmp_path / "descriptors.yaml"
     config_path.write_text(

@@ -13,7 +13,7 @@ Three checks are performed:
    are tallied; epochs dropped as outliers are counted apart from extraction failures.
 3. **Coverage** — every subject of ``participants.tsv`` (or of its ``--rows``) without
    a shard is listed, unless none of its saved recordings has ``min_obs`` epochs of
-   the extracted conditions (stage 05 skips those).
+   the extracted conditions (the extraction skips those).
 
 Exits non-zero when any shard is incomplete or any expected subject is missing
 (use ``--strict`` to also fail when any shard's QC status is ``fail``).
@@ -79,7 +79,7 @@ def has_extractable_epochs(
     """Whether a saved recording of *subject* has *min_obs* epochs of one of *conditions*.
 
     Reads the epoch files' headers only. A subject without such a recording has no
-    shard by design (stage 05 skips it), so it is not a failure.
+    shard by design (the extraction skips it), so it is not a failure.
     """
     preproc_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
     for path in sorted(preproc_root.glob(f"sub-{subject}/*/eeg/*_desc-{desc}_epo.fif")):
@@ -104,7 +104,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Verify completeness and QC status of extracted descriptor shards."
     )
-    parser.add_argument("--derivative_root", required=True, help="Stage 05 shard root.")
+    parser.add_argument("--derivative_root", required=True, help="Root of the descriptor shards.")
     parser.add_argument("--reports_root", required=True, help="Root of the subject QC reports.")
     parser.add_argument(
         "--metadata",
@@ -117,7 +117,7 @@ def main() -> None:
         nargs="+",
         required=True,
         help=(
-            "Conditions stage 05 extracted. A subject without a shard is a failure only if "
+            "Conditions the extraction ran on. A subject without a shard is a failure only if "
             "a saved recording has min_obs epochs of one of them."
         ),
     )
@@ -244,8 +244,8 @@ def main() -> None:
     print(f"  with ≥1 complete shard : {len(wanted) - len(missing_subjects) - len(without_epochs)}")
     if without_epochs:
         print(
-            f"  no recording with {', '.join(args.conditions)} epochs (skipped by "
-            f"stage 05): {len(without_epochs)}"
+            f"  no recording with {', '.join(args.conditions)} epochs (skipped by the "
+            f"extraction): {len(without_epochs)}"
         )
     print(f"  with NO complete shard : {len(missing_subjects)}")
     if missing_subjects:

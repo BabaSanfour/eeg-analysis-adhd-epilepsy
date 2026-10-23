@@ -232,7 +232,7 @@ def run_comparison(
                 else:
                     subject_issues.extend(issues)
 
-            elif compare_mode == "stage1":
+            elif compare_mode == "correct":
                 cfg = PIPELINE_CONFIGS[method_name][1]
                 t_start = time.time()
                 corr_result = run_correction_pipeline(
@@ -308,7 +308,7 @@ def run_comparison(
                 if raw_obj is not None:
                     method_raws[method_name] = raw_obj
                     method_provs[method_name] = prov_obj
-                    # For component counts in full mode, keep Stage 1 correction provenance.
+                    # For component counts in full mode, keep the correction provenance.
                     _, corr_prov, _ = read_preproc_stage(
                         subject_id=subject_id,
                         preproc_root=preproc_root,
@@ -450,7 +450,7 @@ def run_comparison(
         )
         subject_label = bids.bids_subject_label(subject_id)
         subject_report_path = report_dir / f"{subject_label}_compare_report.html"
-        if compare_mode != "stage1":
+        if compare_mode != "correct":
             subject_report_path = subject_report_path.with_name(
                 f"{subject_label}_compare_{compare_mode}_report.html"
             )
@@ -523,7 +523,7 @@ def run_comparison(
         "metrics_csv": compare_summary_dir / "compare_metrics.csv",
         "run_metadata_json": compare_summary_dir / "compare_run_metadata.json",
     }
-    if compare_mode == "stage1":
+    if compare_mode == "correct":
         summary_report_path = compare_paths["report_html"]
         metrics_csv_path = compare_paths["metrics_csv"]
         metadata_json_path = compare_paths["run_metadata_json"]
@@ -638,9 +638,12 @@ def main() -> None:
     parser.add_argument(
         "--compare-mode",
         type=str,
-        default="stage1",
-        choices=["stage1", "full", "reuse"],
-        help="Compare mode: rerun stage1, rerun full (stage1+stage2), or reuse existing outputs",
+        default="correct",
+        choices=["correct", "full", "reuse"],
+        help=(
+            "Compare mode: rerun the correction, rerun full (correction and denoising), "
+            "or reuse existing outputs"
+        ),
     )
     parser.add_argument(
         "--reuse-existing-correct",
@@ -671,13 +674,15 @@ def main() -> None:
     parser.add_argument("--all", action="store_true", help="Process all subjects")
 
     parser.add_argument("--condition", type=str, help="Process specific condition/task")
-    parser.add_argument("--train-condition", type=str, help="Training condition for Stage 1 reruns")
+    parser.add_argument(
+        "--train-condition", type=str, help="Training condition for correction reruns"
+    )
     parser.add_argument(
         "--transient-method",
         type=str,
         default="wiener",
         choices=["wiener", "asr", "dss", "none"],
-        help="Stage 2 transient method when --compare-mode full",
+        help="Denoising transient method when --compare-mode full",
     )
 
     args = parser.parse_args()

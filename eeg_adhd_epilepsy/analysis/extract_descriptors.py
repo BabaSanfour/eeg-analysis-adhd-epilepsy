@@ -363,8 +363,8 @@ def main() -> None:
 
         for session_entity in session_entities:
             session = session_entity or "01"
-            # Every run recomputes: a shard or report left from an earlier run (an earlier
-            # stage 03/04, another config, a crash halfway) never survives it.
+            # Every run recomputes: a shard or report left from an earlier run (earlier
+            # cleaning or epochs, another config, a crash halfway) never survives it.
             (
                 subject_report_dir(
                     reports_root=reports_root,

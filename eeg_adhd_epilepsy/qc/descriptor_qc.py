@@ -262,7 +262,7 @@ def run_descriptor_shard_qc(
 ) -> dict[str, Any]:
     """QC of one shard: its summary row and flags, and the tables its report shows.
 
-    Writes nothing: stage 05 keeps the summary and flags in the shard's ``shard.json``
+    Writes nothing: the extraction keeps the summary and flags in the shard's ``shard.json``
     and puts every condition of a subject in one report
     (:func:`write_descriptor_subject_report`).
     """

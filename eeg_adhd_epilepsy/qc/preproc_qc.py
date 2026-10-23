@@ -32,7 +32,7 @@ from eeg_adhd_epilepsy.qc.utils import (
 )
 from eeg_adhd_epilepsy.utils import events
 
-# No amplitude limit after stage 03: AutoReject has rejected the epochs over the thresholds
+# No amplitude limit after the base cleaning: AutoReject has rejected the epochs over the thresholds
 # it fits per recording and condition. In the epochs it kept (2026-10-15, all 1,237
 # recordings) the worst channel's 10 s peak-to-peak has a median of 236 µV, blinks and
 # slow drift; the 800 µV whole-run limit made 992 recordings unusable whatever they kept.

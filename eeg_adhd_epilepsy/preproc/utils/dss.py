@@ -1,4 +1,4 @@
-"""Shared DSS helpers for Stage 1 artifact correction."""
+"""Shared DSS helpers for the artifact correction."""
 
 from __future__ import annotations
 

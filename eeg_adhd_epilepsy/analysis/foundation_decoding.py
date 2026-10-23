@@ -535,7 +535,7 @@ def main() -> None:
         "--desc",
         default="base",
         help=(
-            "Epoch variant written by stage 04: base (every epoch) or baserejected "
+            "Epoch variant of the preproc derivative: base (every epoch) or baserejected "
             "(epochs overlapping a BAD_ annotation dropped)."
         ),
     )
