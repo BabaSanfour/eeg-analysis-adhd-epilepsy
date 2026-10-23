@@ -157,7 +157,6 @@ metrics:
 
 # --- Hardware / runtime -----------------------------------------------------
 device: auto
-precision: fp32
 on_unsupported: skip
 # The models expect microvolts; the loader default is volts.
 units: uV

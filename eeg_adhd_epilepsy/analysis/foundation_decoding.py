@@ -132,16 +132,9 @@ def _build_foundation_unit(
         model_key=model_key,
         backend=model_cfg["backend"],
         train_mode=train_mode,
-        input_kind="epoched",
         trainer=TrainerConfig(**trainer),
-        device=DeviceConfig(
-            device=model_cfg.get("device", config["device"]),
-            precision=model_cfg.get("precision", config["precision"]),
-        ),
-        checkpoints=CheckpointConfig(
-            save="best",
-            output_dir=output_dir / "checkpoints",
-        ),
+        device=DeviceConfig(device=model_cfg.get("device", config["device"])),
+        checkpoints=CheckpointConfig(output_dir=output_dir / "checkpoints"),
         lora=(LoRAConfig(**model_cfg["lora"]) if train_mode == "lora" else None),
         sfreq=sfreq,
         ch_names=channels,

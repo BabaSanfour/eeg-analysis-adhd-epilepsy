@@ -166,8 +166,7 @@ def pool_containers(containers: list[DataContainer]) -> DataContainer:
     """Concatenate conditions while preserving deferred family-QC semantics."""
     if not containers:
         raise ValueError("No containers to pool.")
-    common = _common_non_obs_coords(containers[0].dims, [c.coords for c in containers])
-    pooled = DataContainer.concat([_align_non_obs(c, common) for c in containers])
+    pooled = DataContainer.concat(containers, join="inner")
     pooled.meta = {**dict(pooled.meta), **_pooled_meta([c.meta for c in containers])}
     return pooled
 

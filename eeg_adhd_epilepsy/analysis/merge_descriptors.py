@@ -26,6 +26,7 @@ from coco_pipe.io import DataContainer, write_json
 from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import (
     EPOCH_TABLE,
     SHARD_FILES,
+    descriptor_dataset_description,
     find_shards,
     read_shard_record,
     recording_tables,
@@ -82,8 +83,8 @@ def main() -> None:
         "--output_root",
         required=True,
         help=(
-            "Derivative to write the merged tables to (combined/), with the shards' "
-            "dataset_description.json, .bidsignore and config_used.yaml."
+            "Derivative to write the merged tables to (combined/), with its "
+            "dataset_description.json and the shards' .bidsignore and config_used.yaml."
         ),
     )
     parser.add_argument("--reports_root", required=True, help="Root directory for reports.")
@@ -128,7 +129,10 @@ def main() -> None:
 
     combined_root = output_root / "combined"
     combined_root.mkdir(parents=True, exist_ok=True)
-    for name in ("dataset_description.json", ".bidsignore", "config_used.yaml"):
+    write_json(
+        output_root / "dataset_description.json", descriptor_dataset_description(output_root)
+    )
+    for name in (".bidsignore", "config_used.yaml"):
         shutil.copy2(derivative_root / name, output_root / name)
 
     # The merge refuses a shard whose feature columns differ from the first one's.

@@ -11,11 +11,6 @@ import pandas as pd
 from coco_pipe.descriptors import KNOWN_FAMILY_TOKENS, load_descriptor_table
 from coco_pipe.descriptors.qc import aggregate_family_qc
 from coco_pipe.io import AGGREGATION_LEVELS, BIDSConfig, DataContainer, load_data
-from coco_pipe.io.embeddings import (
-    combined_embedding_table_path,
-    load_combined_embedding_table,
-    load_embedding_derivatives,
-)
 from coco_pipe.io.quality import GROUP_BY_COLUMN, run_qc
 from mne_bids import BIDSPath, get_entities_from_fname
 
@@ -414,7 +409,8 @@ def build_dataset(
         outlier_config = qc_config.get("outlier", {})
         group_by = outlier_config.get("group_by")
         if group_by is not None and group_by not in GROUP_BY_COLUMN:
-            raise ValueError("qc.outlier.group_by must be 'family', 'measure', or 'feature'.")
+            choices = ", ".join(repr(choice) for choice in GROUP_BY_COLUMN)
+            raise ValueError(f"qc.outlier.group_by must be one of {choices}; got {group_by!r}.")
         if qc_config and group_by is not None:
             family_masks, qc_result = compute_grouped_qc_masks(
                 scoring_container, subject_col=args.subject_col, qc_config=qc_config
@@ -453,51 +449,10 @@ def build_dataset(
                 container = container.isel(obs=keep_indices)
         container.meta = {**dict(container.meta), "qc_result": qc_result}
     elif effective_input_mode == "foundation_embeddings":
-        embedding_root = Path(args.embedding_derivative_root)
-        combined_path = (
-            combined_embedding_table_path(
-                embedding_root,
-                args.embedding_model_key,
-                condition,
-                representation,
-            )
-            if condition
-            else None
+        raise NotImplementedError(
+            "Foundation embeddings are read from the coco-pipe-<model> datasets, which "
+            "this reader does not know yet."
         )
-        if combined_path is not None and combined_path.exists():
-            container = load_combined_embedding_table(
-                embedding_root,
-                args.embedding_model_key,
-                condition,
-                representation=representation,
-                aggregate_by=args.embedding_aggregate_by,
-            )
-        else:
-            requested_rep = representation
-            load_rep = "epoch" if requested_rep == "subject" else requested_rep
-            container = load_embedding_derivatives(
-                embedding_root,
-                representation=load_rep,
-                aggregate_by=args.embedding_aggregate_by,
-                model_key=args.embedding_model_key,
-            )
-            if condition and "condition" in container.coords:
-                values = np.asarray(container.coords["condition"]).astype(str)
-                container = container.isel(obs=np.flatnonzero(values == str(condition)))
-            if requested_rep == "subject":
-                subject_key = (
-                    args.subject_col if args.subject_col in container.coords else "subject"
-                )
-                if subject_key in container.coords:
-                    container = container.aggregate(by=subject_key, stats="mean")
-        if meta_df is not None:
-            container = attach_subject_metadata(container, meta_df, args.subject_col)
-        if subjects is not None:
-            subject_key = args.subject_col if args.subject_col in container.coords else "subject"
-            if subject_key in container.coords:
-                values = np.asarray(container.coords[subject_key]).astype(str)
-                wanted = {str(subject) for subject in subjects}
-                container = container.isel(obs=np.flatnonzero(np.isin(values, list(wanted))))
     else:
         raise ValueError(f"Unsupported input mode '{input_mode}'.")
     container = filter_cohort_container(
