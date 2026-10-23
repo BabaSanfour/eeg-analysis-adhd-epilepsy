@@ -37,10 +37,6 @@ model=${MODELS[$((TASK_ID - 1))]}
 # node-local scratch on top of the standard numba/MNE/matplotlib caches.
 dra_activate
 
-if [[ "$model" == "reve" && -z "${HF_TOKEN:-}" ]]; then
-  echo "WARN: HF_TOKEN is unset; REVE (gated) will be skipped." >&2
-fi
-
 echo "Cohort:   $COHORT_CONFIG"
 echo "Analysis: $ANALYSIS_CONFIG"
 echo "Model:    $model"

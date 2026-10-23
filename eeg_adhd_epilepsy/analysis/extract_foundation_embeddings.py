@@ -1,476 +1,309 @@
 #!/usr/bin/env python3
-"""Extract reusable recording-level EEG foundation-model embeddings."""
+"""Foundation-model embeddings of every recording, one BIDS dataset per model.
+
+One process runs one model with some of its weight sets (the pretrained weights, and
+random weights drawn from a seed) over the subjects: each weight set is loaded once,
+and each recording is read once for all of them. A recording gives one file per view
+and weight set in ``<derivatives_root>/coco-pipe-<model>/``, written and labelled by
+coco-pipe's ``write_recording_embeddings``: ``<variant>`` for the pretrained weights,
+``<variant>Random<seed>`` for random ones, and REVE's attention read-out as
+``<label>Attention``. Each label gets a manifest of the recordings that were written,
+already done, skipped or failed.
+"""
 
 from __future__ import annotations
 
 import argparse
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import numpy as np
-import pandas as pd
-from coco_pipe.decoding import (
-    SignalMetadata,
-    config_hash,
-    get_foundation_model_spec,
-    redact_sensitive,
-)
+import torch
+from coco_pipe.decoding import get_foundation_model_spec
 from coco_pipe.decoding.foundation_models import (
     FoundationEmbeddingExtractor,
-    check_capability,
     normalize_inclusive_endpoint,
 )
 from coco_pipe.io import (
-    read_json,
-    save_embedding_outputs,
+    DataContainer,
+    NoDataError,
+    embedding_label,
+    embeddings_up_to_date,
+    write_embedding_dataset,
+    write_embedding_manifest,
+    write_recording_embeddings,
 )
-from coco_pipe.utils import stable_hash
 from mne_bids import BIDSPath
 
 from eeg_adhd_epilepsy.analysis.dataset import build_container
-from eeg_adhd_epilepsy.analysis.utils.common import require_config
-from eeg_adhd_epilepsy.analysis.utils.decoding import (
-    foundation_provenance,
-)
-from eeg_adhd_epilepsy.analysis.utils.subject_resolution import (
-    resolve_cohort_subjects,
-    resolve_metadata_row,
-)
-from eeg_adhd_epilepsy.io.bids import (
-    DerivativeStage,
-    _sanitize_bids_token,
-    get_derivative_root,
-    read_participants,
-)
-from eeg_adhd_epilepsy.utils.artifacts import freeze_config_used
+from eeg_adhd_epilepsy.analysis.utils.subject_resolution import resolve_cohort_subjects
+from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root, read_participants
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
 
-_VOLATILE_CONFIG_KEYS = (
-    "subjects",
-    "bids_root",
-    "metadata",
-    "derivative_root",
-    "reports_root",
-)
-
-_NO_DATA = object()
-
-_NO_DATA_MESSAGES = (
-    "No valid data found in",
-    "No cleaned-continuous epochs for condition",
-)
+# What each epoch variant of the preproc derivative holds. Every job gives
+# descriptions.tsv all of them, so it comes out the same whichever job writes it last.
+VARIANTS = {
+    "base": "Epochs of the preprocessed recordings",
+    "baserejected": (
+        "Epochs of the preprocessed recordings, without those overlapping a BAD_ annotation"
+    ),
+}
 
 
-def run(config: dict[str, Any], derivative_root: Path, *, shard_token: str = "full") -> Path:
-    """Extract embeddings for the configured (sliced) subjects into one task shard.
+def parse_weights(tokens: Sequence[str], seeds: Sequence[int]) -> list[int | None]:
+    """The weight sets named on the command line: ``pretrained``, seeds, or ``all``."""
+    if list(tokens) == ["all"]:
+        return [None, *seeds]
+    weights: list[int | None] = []
+    for token in tokens:
+        seed = None if token == "pretrained" else int(token)
+        if seed is not None and seed not in seeds:
+            raise ValueError(f"Seed {seed} is not in the model's random_seeds {list(seeds)}.")
+        if seed in weights:
+            raise ValueError(f"Weight set {token!r} is named twice.")
+        weights.append(seed)
+    return weights
 
-    Writes artifacts + self-describing sidecars under the BIDS derivative tree, plus
-    a per-subject ``_failures/<shard_token>.csv`` for the rows that leave no artifact
-    (window-mismatch / unsupported / errored).
+
+def load_recordings(
+    config: dict[str, Any],
+    model_cfg: dict[str, Any],
+    subjects: list[str],
+    *,
+    n_jobs: int,
+) -> DataContainer | None:
+    """Every requested condition of ``subjects``, cut at the model's window length.
+
+    None when no recording of theirs has one. A recording that cannot be read
+    raises: it is not a recording without epochs (audit C4).
     """
-    bids_root = Path(config["bids_root"]).expanduser()
-    freeze_config_used(
-        config,
-        derivative_root,
-        volatile_keys=_VOLATILE_CONFIG_KEYS,
-        sanitize=redact_sensitive,
-        overwrite=bool(config.get("overwrite", False)),
-        mismatch_message=(
-            "Existing foundation-embedding derivative root was generated with a "
-            "different configuration. Clear the derivative root and re-run."
-        ),
-    )
-    metadata_df = (
-        read_participants(Path(config["metadata"]).expanduser()) if config.get("metadata") else None
-    )
-    subject_col = config.get("subject_col", "subject")
-    subjects = resolve_cohort_subjects(metadata_df, subject_col, config.get("subjects"))
-    conditions = require_config(config, "conditions", expected_type=list, cast_str=True)
-    models = require_config(config, "models", expected_type=list)
-    cfg_hash = config_hash(config)
-
-    records: list[dict[str, Any]] = []
-    container_cache: dict[tuple[Any, ...], Any] = {}
-
-    for condition in conditions:
-        for model_cfg in models:
-            model_key = str(model_cfg["model_key"])
-            pooling = str(model_cfg.get("pooling", "mean"))
-            pooled_model_key = model_key if pooling == "mean" else f"{model_key}_pool-{pooling}"
-            segment_duration = float(model_cfg["segment_duration"])
-            overlap = float(model_cfg["overlap"])
-            use_derivatives = bool(model_cfg["use_derivatives"])
-            # Only models needing a non-default window length (e.g. labram at 15s)
-            # re-epoch; the rest reuse the saved 10s epoch derivatives.
-            if "window_source" not in model_cfg:
-                raise ValueError(f"model '{model_key}' must explicitly define 'window_source'")
-            window_source = str(model_cfg["window_source"])
-            if window_source not in ("re_epoch", "derivative"):
-                raise ValueError(
-                    f"model '{model_key}' window_source must be 're_epoch' or 'derivative', "
-                    f"got: '{window_source}'"
-                )
-            # Optional continuous-domain band-pass to match a model's pretraining
-            # band (e.g. SignalJEPA 0.5-40 Hz). Filtering is done on the cleaned
-            # continuous derivative before re-epoching, so it requires re_epoch.
-            bandpass_cfg = model_cfg.get("bandpass")
-            bandpass = tuple(float(v) for v in bandpass_cfg) if bandpass_cfg else None
-            if bandpass is not None and window_source != "re_epoch":
-                raise ValueError(
-                    f"model '{model_key}' sets bandpass but window_source="
-                    f"'{window_source}'; bandpass requires window_source='re_epoch'."
-                )
-            spec = get_foundation_model_spec(model_key)
-            provenance = {
-                **foundation_provenance(model_cfg, spec, config_hash=cfg_hash),
-                "model_key": pooled_model_key,
-                "source_model_key": model_key,
-            }
-
-            LOGGER.info(
-                "Processing %s for %s (segment_duration: %gs, source: %s)",
-                model_key,
-                condition,
-                segment_duration,
-                window_source,
-            )
-            load_key = (
-                condition,
-                segment_duration,
-                overlap,
-                use_derivatives,
-                window_source,
-                bandpass,
-            )
-            raw = container_cache.get(load_key)
-            if raw is None:
-                try:
-                    raw = build_container(
-                        bids_root=bids_root,
-                        use_derivatives=use_derivatives,
-                        subjects=subjects,
-                        task=config["task"],
-                        segment_duration=segment_duration,
-                        overlap=overlap,
-                        metadata_df=metadata_df,
-                        subject_col=subject_col,
-                        desc=config.get("desc", "base"),
-                        condition=condition,
-                        window_source=window_source,
-                        units="uV",
-                        bandpass=bandpass,
-                    )
-                except RuntimeError as exc:
-                    if not any(token in str(exc) for token in _NO_DATA_MESSAGES):
-                        raise
-                    LOGGER.warning(
-                        "No usable %s data for this shard; skipping %s: %s",
-                        condition,
-                        model_key,
-                        exc,
-                    )
-                    raw = _NO_DATA
-                container_cache[load_key] = raw
-
-            if raw is _NO_DATA:
-                records.append(
-                    {
-                        **provenance,
-                        "condition": condition,
-                        "status": "skipped",
-                        "reason": "no_data_for_condition",
-                    }
-                )
-                continue
-
-            container, window_reason = normalize_inclusive_endpoint(
-                raw,
-                segment_duration=segment_duration,
-                expected_sfreq=float(spec.pretrained_sfreq),
-                model_key=model_key,
-                on_mismatch=str(model_cfg.get("window_mismatch_policy", "raise")),
-            )
-            if container is None:
-                records.append(
-                    {
-                        **provenance,
-                        "condition": condition,
-                        "status": "skipped",
-                        "reason": window_reason,
-                    }
-                )
-                continue
-            frame = container.obs_table()
-            sfreq = float(container.meta["sfreq"])
-            channels = [str(value) for value in container.coords["channel"]]
-            extractor: FoundationEmbeddingExtractor | None = None
-
-            for recording_id in pd.unique(frame["recording_id"].astype(str)):
-                indices = np.flatnonzero(frame["recording_id"].astype(str) == recording_id)
-                recording = container.isel(obs=indices)
-                row = frame.iloc[indices].reset_index(drop=True).iloc[0]
-                # Per-recording manifest row: shared provenance + recording identity.
-                base_metadata = {
-                    **provenance,
-                    "subject": row[subject_col],
-                    "session": row["session"],
-                    "run": row["run"],
-                    "task": config["task"],
-                    "condition": condition,
-                    "recording_id": recording_id,
-                    "input_data_type": "preprocessed_epoched_eeg",
-                    "preprocessing_description": config.get("desc", "base"),
-                    "preprocessing_provenance": {
-                        "sfreq": container.meta.get("sfreq"),
-                        "filter": container.meta.get("filter"),
-                        "reference": container.meta.get("reference"),
-                    },
-                    "window_mismatch_policy": str(model_cfg.get("window_mismatch_policy", "raise")),
-                }
-                artifact_bids_path = BIDSPath(
-                    subject=_sanitize_bids_token(row[subject_col], "subject"),
-                    session=_sanitize_bids_token(row["session"], "session"),
-                    task=_sanitize_bids_token(config["task"], "task"),
-                    run=_sanitize_bids_token(row["run"], "run"),
-                    description=_sanitize_bids_token(
-                        f"{model_key}{condition}{pooling.title()}", "desc"
-                    ),
-                    suffix="embedding",
-                    extension=".npz",
-                    datatype="eeg",
-                    root=derivative_root,
-                    check=False,
-                )
-                artifact = artifact_bids_path.fpath
-                token_artifact = (
-                    artifact_bids_path.copy()
-                    .update(
-                        description=_sanitize_bids_token(f"{model_key}{condition}Native", "desc"),
-                        suffix="tokens",
-                    )
-                    .fpath
-                )
-
-                sidecar = artifact.with_suffix(".json")
-                store_tokens = bool(model_cfg.get("store_tokens", False))
-                embedding_complete = artifact.exists() and sidecar.exists()
-                tokens_complete = not store_tokens or (
-                    token_artifact.exists() and token_artifact.with_suffix(".json").exists()
-                )
-                if embedding_complete and not config.get("overwrite", False):
-                    saved_model_key = str(read_json(sidecar).get("model_key", ""))
-                    if saved_model_key != pooled_model_key:
-                        raise ValueError(
-                            f"Existing pooled derivative uses model_key={saved_model_key!r}, "
-                            f"expected {pooled_model_key!r}: {artifact}. Rerun with overwrite "
-                            "enabled to migrate pooling-specific model identities."
-                        )
-                if embedding_complete and tokens_complete and not config.get("overwrite", False):
-                    records.append(
-                        {
-                            **base_metadata,
-                            "artifact_path": str(artifact),
-                            "status": "success",
-                            "reason": "resumed",
-                        }
-                    )
-                    LOGGER.info(
-                        "Skipping %s for %s: artifact already exists (resumed)",
-                        recording_id,
-                        model_key,
-                    )
-                    continue
-
-                capability = check_capability(
-                    model_key,
-                    train_mode="frozen",
-                    sfreq=sfreq,
-                    ch_names=channels,
-                    n_times=int(recording.X.shape[-1]),
-                    backend=model_cfg.get("backend", "auto"),
-                    backend_kwargs=model_cfg.get("backend_kwargs", {}),
-                )
-                if capability.status != "available":
-                    LOGGER.info(
-                        "Skipping %s for %s: unsupported configuration (%s)",
-                        recording_id,
-                        model_key,
-                        capability.reason,
-                    )
-                    records.append(
-                        {
-                            **base_metadata,
-                            **capability.to_dict(),
-                            "artifact_path": str(artifact),
-                            "status": "skipped",
-                        }
-                    )
-                    continue
-
-                try:
-                    if extractor is None:
-                        extractor = FoundationEmbeddingExtractor(
-                            model_key,
-                            backend=model_cfg.get("backend", "auto"),
-                            device=model_cfg.get("device", config.get("device", "auto")),
-                            pooling=pooling,
-                            recording_pooling=model_cfg.get("recording_pooling", "mean"),
-                            normalize_embeddings=bool(model_cfg.get("normalize_embeddings", True)),
-                            resample=bool(model_cfg.get("resample", True)),
-                            store_tokens=store_tokens,
-                            batch_size=model_cfg.get("batch_size", config.get("batch_size")),
-                            backend_kwargs=model_cfg.get("backend_kwargs", {}),
-                        )
-                    n_times = recording.X.shape[-1]
-                    epoch_numbers = np.asarray(recording.coords["epoch"], dtype=int)
-                    starts = epoch_numbers * n_times
-                    # Foundation models expect microvolts, and we natively loaded in uV.
-                    result = extractor.extract(
-                        np.asarray(recording.X, dtype=np.float32),
-                        signal_metadata=SignalMetadata(sfreq=sfreq, ch_names=channels),
-                        window_start=starts,
-                        window_stop=starts + n_times,
-                        window_index=epoch_numbers,
-                        metadata={**base_metadata, "input_units": recording.meta["units"]},
-                    )
-                    overwrite = bool(config.get("overwrite", False))
-                    save_embedding_outputs(
-                        result,
-                        artifact,
-                        token_path=token_artifact,
-                        pooled_metadata={
-                            "model_key": pooled_model_key,
-                            "source_model_key": model_key,
-                        },
-                        overwrite=overwrite,
-                    )
-                    LOGGER.info(
-                        "Successfully extracted %s for %s (shape: %s)",
-                        model_key,
-                        recording_id,
-                        result.window_embeddings.shape,
-                    )
-                    records.append(
-                        {
-                            **result.metadata,
-                            "model_key": pooled_model_key,
-                            "source_model_key": model_key,
-                            "artifact_path": str(artifact),
-                            "token_artifact_path": (
-                                str(token_artifact) if result.token_embeddings is not None else None
-                            ),
-                            "status": "success",
-                        }
-                    )
-                except (ValueError, TypeError, RuntimeError) as exc:
-                    if "OutOfMemory" in type(exc).__name__ or "CUDA out of memory" in str(exc):
-                        LOGGER.critical("GPU Out of Memory for model %s. Crashing job.", model_key)
-                        raise
-
-                    LOGGER.exception(
-                        "Embedding extraction failed for %s/%s", recording_id, model_key
-                    )
-                    records.append(
-                        {
-                            **base_metadata,
-                            "artifact_path": str(artifact),
-                            "status": "failed",
-                            "reason": f"{type(exc).__name__}: {exc}",
-                        }
-                    )
-
-    failures = [record for record in records if record.get("status") != "success"]
-    failures_path = derivative_root / "_failures" / f"{shard_token}.csv"
+    segment_duration = float(model_cfg["segment_duration"])
+    try:
+        container = build_container(
+            bids_root=Path(config["bids_root"]),
+            use_derivatives=True,
+            subjects=subjects,
+            task=config["task"],
+            segment_duration=segment_duration,
+            desc=config["desc"],
+            condition=list(config["conditions"]),
+            window_source=model_cfg["window_source"],
+            units="uV",
+            n_jobs=n_jobs,
+        )
+    except NoDataError:
+        return None
+    failures = container.meta.get("load_failures") or []
     if failures:
-        failures_path.parent.mkdir(parents=True, exist_ok=True)
-        pd.DataFrame(failures).to_csv(failures_path, index=False)
-    elif failures_path.exists():
-        failures_path.unlink()
-    return derivative_root
+        raise RuntimeError(f"{len(failures)} recording(s) could not be loaded: {failures}")
+    container, _ = normalize_inclusive_endpoint(
+        container,
+        segment_duration=segment_duration,
+        expected_sfreq=float(container.meta["sfreq"]),
+        on_mismatch="error",
+    )
+    return container
+
+
+def embed_recording(
+    recording: DataContainer,
+    extractor: FoundationEmbeddingExtractor,
+    *,
+    root: Path,
+    label: str,
+    written: dict[tuple[str, str], BIDSPath],
+    token_dtype: str,
+) -> dict[str, Any]:
+    """Write one recording's files for one weight set, unless they are done.
+
+    ``label`` is the epoch variant. ``written`` holds the files of the first recording
+    this process writes with the weight set, which it fills in: a recording whose
+    files hold its windows with their settings is done (audit E1). That first
+    recording is embedded again, but its files are kept when up to date, so a
+    resubmission rewrites nothing.
+    """
+    rows = recording.obs_table()
+    recording_id = str(rows["recording_id"].iloc[0])
+    record = {
+        "recording_id": recording_id,
+        "subject": str(rows["subject"].iloc[0]),
+        "conditions": sorted(set(rows["condition"].astype(str))),
+        "n_windows": len(rows),
+    }
+    if written and embeddings_up_to_date(recording, written):
+        return {**record, "status": "done"}
+    try:
+        paths = write_recording_embeddings(
+            extractor.extract_recording(recording),
+            root,
+            label=label,
+            source=rows["source"].iloc[0],
+            source_dataset="preproc",
+            bad_channels=rows["bad_channels"].iloc[0],
+            token_dtype=token_dtype,
+            skip_up_to_date=True,
+        )
+    except (ValueError, RuntimeError) as error:
+        if isinstance(error, torch.cuda.OutOfMemoryError):
+            raise
+        seed = None if extractor.pretrained else extractor.seed
+        LOGGER.exception("%s failed for %s", embedding_label(label, seed=seed), recording_id)
+        return {**record, "status": "failed", "reason": f"{type(error).__name__}: {error}"}
+    if not written:
+        written.update(paths)
+    return {**record, "status": "written"}
+
+
+def run(
+    config: dict[str, Any],
+    derivatives_root: Path,
+    *,
+    model_key: str,
+    weights: list[int | None],
+    subjects: list[str],
+    n_jobs: int = 1,
+) -> dict[str, list[dict[str, Any]]]:
+    """Embed every recording of ``subjects`` with each weight set of one model.
+
+    Returns each weight set's records by its label, which are also written as the
+    manifest of each label it writes.
+    """
+    model_cfg = config["models"][model_key]
+    desc = str(config["desc"])
+    device = str(config["device"])
+    root = Path(derivatives_root) / f"coco-pipe-{model_key}"
+    preproc_root = get_derivative_root(Path(config["bids_root"]), DerivativeStage.PREPROC)
+    spec = get_foundation_model_spec(model_key)
+    # The preproc link resolves from the scratch copy too: an absolute URI, not
+    # ../preproc, which on scratch has no dataset_description.json.
+    write_embedding_dataset(
+        root,
+        VARIANTS,
+        name=f"{spec.display_name or model_key} embeddings",
+        dataset_links={"preproc": preproc_root.absolute().as_uri()},
+    )
+    poolings = tuple(model_cfg.get("extra_poolings", ()))
+    # An extractor refuses a CUDA device without a GPU, before any data is read (audit D1).
+    extractors = {
+        seed: FoundationEmbeddingExtractor(
+            model_key,
+            device=device,
+            pretrained=seed is None,
+            seed=seed,
+            extra_poolings=poolings,
+            store_tokens=True,
+            batch_size=model_cfg.get("batch_size"),
+        )
+        for seed in weights
+    }
+    records: dict[int | None, list[dict[str, Any]]] = {seed: [] for seed in extractors}
+    written: dict[int | None, dict[tuple[str, str], BIDSPath]] = {seed: {} for seed in extractors}
+    chunk = int(config["chunk_subjects"])
+    for start in range(0, len(subjects), chunk):
+        batch = subjects[start : start + chunk]
+        LOGGER.info(
+            "%s: subjects %d-%d of %d", model_key, start + 1, start + len(batch), len(subjects)
+        )
+        container = load_recordings(config, model_cfg, batch, n_jobs=n_jobs)
+        rows = container.obs_table() if container is not None else None
+        found = set(rows["subject"].astype(str)) if rows is not None else set()
+        skips = [
+            {"subject": subject, "status": "skipped", "reason": "no recording with a condition"}
+            for subject in batch
+            if subject not in found
+        ]
+        if container is not None:
+            skips += [
+                {"recording_id": recording_id, "status": "skipped", "reason": "no condition"}
+                for recording_id in container.meta.get("skipped_no_matching_events", [])
+            ]
+        for seed_records in records.values():
+            seed_records.extend(skips)
+        if container is None:
+            continue
+        recording_ids = rows["recording_id"].astype(str)
+        for recording_id in recording_ids.unique():
+            recording = container.isel(obs=np.flatnonzero(recording_ids == recording_id))
+            for seed, extractor in extractors.items():
+                records[seed].append(
+                    embed_recording(
+                        recording,
+                        extractor,
+                        root=root,
+                        label=desc,
+                        written=written[seed],
+                        token_dtype=str(config["token_dtype"]),
+                    )
+                )
+    for seed, seed_records in records.items():
+        for pooling in ("mean", *poolings):
+            write_embedding_manifest(
+                root, embedding_label(desc, seed=seed, pooling=pooling), seed_records
+            )
+    return {
+        embedding_label(desc, seed=seed): seed_records for seed, seed_records in records.items()
+    }
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Extract BIDS-compatible EEG foundation-model embeddings."
+        description="Embed every recording with one foundation model, one file per view."
     )
     parser.add_argument("--config", required=True)
-    parser.add_argument("--bids_root", required=True, help="Path to BIDS dataset")
+    parser.add_argument("--bids_root", required=True, help="The raw BIDS dataset.")
     parser.add_argument(
         "--desc",
-        default="base",
-        help=(
-            "Epoch variant written by stage 04: base (every epoch) or baserejected "
-            "(epochs overlapping a BAD_ annotation dropped)."
-        ),
+        required=True,
+        choices=sorted(VARIANTS),
+        help="Epoch variant of the preproc derivative (its desc-<variant> epochs).",
     )
-    parser.add_argument("--metadata", default=None, help="Path to the BIDS participants.tsv")
+    parser.add_argument("--metadata", required=True, help="The BIDS participants.tsv.")
     parser.add_argument(
-        "--derivative_root",
-        type=str,
-        default=None,
-        help="Explicit path to write output derivatives",
+        "--derivatives_root",
+        required=True,
+        help="Folder of the coco-pipe-<model> datasets (on scratch).",
     )
+    parser.add_argument("--model", required=True, help="Model key, e.g. reve.")
     parser.add_argument(
-        "--metadata_rows",
-        type=int,
+        "--weights",
         nargs="+",
-        default=None,
-        help="One-based participants.tsv rows to process together (one Slurm array task).",
+        default=["all"],
+        help="Weight sets: pretrained and/or seeds of the model's random_seeds, or all.",
     )
     parser.add_argument(
-        "--subjects",
-        nargs="+",
-        default=None,
-        help="Explicit subjects to process, overriding config['subjects'].",
+        "--subjects", nargs="+", default=None, help="Only these subjects (default: all)."
     )
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing embeddings.")
+    parser.add_argument("--n_jobs", type=int, default=1, help="Threads reading recordings.")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
     config = load_yaml_config(args.config)
     config["bids_root"] = args.bids_root
     config["desc"] = args.desc
-    if args.metadata:
-        config["metadata"] = args.metadata
-    if args.overwrite:
-        config["overwrite"] = True
-
-    if args.derivative_root:
-        derivative_root = Path(args.derivative_root).expanduser()
-    else:
-        derivative_root = get_derivative_root(
-            Path(config["bids_root"]).expanduser(), DerivativeStage.FOUNDATION_EMBEDDINGS
-        )
-
-    if args.metadata_rows is not None and args.subjects:
-        raise ValueError("--metadata_rows and --subjects are mutually exclusive.")
-    if args.metadata_rows is not None and min(args.metadata_rows) < 1:
-        raise ValueError("--metadata_rows are one-based and must be >= 1.")
-
-    if args.metadata_rows is not None:
-        if not config.get("metadata"):
-            raise ValueError("--metadata_rows requires config['metadata'].")
-        meta_df = read_participants(Path(config["metadata"]).expanduser())
-        # Rows past the end of the table (the last task's surplus) have no subject.
-        subjects = [
-            subject
-            for row in args.metadata_rows
-            if (subject := resolve_metadata_row(meta_df, row, config.get("subject_col", "subject")))
-            is not None
-        ]
-        if not subjects:
-            return
-        config["subjects"] = subjects
-        first, last = min(args.metadata_rows), max(args.metadata_rows)
-        run(config, derivative_root, shard_token=f"rows-{first:04d}-{last:04d}")
-    elif args.subjects:
-        config["subjects"] = args.subjects
-        token = stable_hash(sorted(str(value) for value in args.subjects), length=12)
-        run(config, derivative_root, shard_token=f"subjects-{token}")
-    else:
-        run(config, derivative_root, shard_token="full")
+    model_cfg = config["models"][args.model]
+    subjects = resolve_cohort_subjects(
+        read_participants(Path(args.metadata)), "subject", args.subjects
+    )
+    if not subjects:
+        raise ValueError("No subject to embed.")
+    records = run(
+        config,
+        Path(args.derivatives_root),
+        model_key=args.model,
+        weights=parse_weights(args.weights, model_cfg["random_seeds"]),
+        subjects=subjects,
+        n_jobs=args.n_jobs,
+    )
+    failed = {
+        label: sum(record["status"] == "failed" for record in label_records)
+        for label, label_records in records.items()
+    }
+    if any(failed.values()):
+        raise SystemExit(f"Recordings failed (see the manifests): {failed}")
 
 
 if __name__ == "__main__":

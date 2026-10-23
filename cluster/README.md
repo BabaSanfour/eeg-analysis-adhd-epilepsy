@@ -66,7 +66,7 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 06 | `06_verify_descriptors.sh` | audit shard completeness + QC before merge | single |
 | 07 | `07_submit_merge_descriptors.sh` | shards → combined tables (project) | single |
 | 07b | `07b_submit_archive_descriptors.sh` | shards → one validated `shards.tar.zst` on the project; scratch shards deleted | single |
-| 08 | `08_submit_foundation_embeddings.sh` | epochs → embedding shards | array (per metadata row, GPU) |
+| 08 | `08_submit_foundation_embeddings.sh` | epochs → per-recording embedding files, one `coco-pipe-<model>` dataset per model (scratch) | single (per variant, one H100 shared by 8 model processes) |
 | 09 | `09_submit_align_subject_embeddings.sh` | pooled embeddings + native tokens → aligned variants | array (per model, CPU) |
 | 10 | `10_submit_merge_foundation_embeddings.sh` | raw/aligned shards → combined tables, manifest, and report | single |
 | 11 | `11_batch_run_dim_reduction.sh` | raw dim-reduction | array (per cohort) |
@@ -103,10 +103,11 @@ derivative tree has a `.bidsignore` for the files BIDS does not define.
 | `EPOCHS_DESC` | epoch variant of stages 05-20: `base` or `baserejected` (required) | — |
 | `DESCRIPTOR_SHARDS_ROOT` | per-subject descriptor shards (05, 06) | `$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
 | `DESCRIPTORS_ROOT` | merged descriptor tables and shard archive (07, 07b) | `$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
-| `EMBEDDING_ROOT` | foundation embeddings (08-10) | `$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings_$EPOCHS_DESC` |
+| `EMBEDDING_SCRATCH_ROOT` | per-recording embedding files (08), in `coco-pipe-<model>/` | `$SCRATCH_ROOT/BIDS/derivatives` |
+| `EMBEDDING_ROOT` | foundation embeddings (09-10, until their rewrite) | `$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings_$EPOCHS_DESC` |
 | `DECODING_ROOT` | decoding checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/decoding_$EPOCHS_DESC` |
 | `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/dim_reduction_$EPOCHS_DESC` |
-| `OVERWRITE` | `1` to force reprocessing | `0` |
+| `OVERWRITE` | `1` to force reprocessing (01, 09, 12, 13, 20) | `0` |
 
 Stage 04 writes two epoch variants: `desc-base` (every epoch) and
 `desc-baserejected` (the epochs overlapping a `BAD_` annotation dropped). Every
@@ -120,12 +121,13 @@ dimensionality-reduction roots are independent output locations, so moving those
 two derivative trees to scratch does not change run hashes or prevent checkpoint
 resume.
 
-Foundation extraction honors `OVERWRITE=0` and resumes complete embedding/token
-pairs. Use `OVERWRITE=1` once when migrating an existing token-free derivative
-root to a configuration with `store_tokens: true`; subsequent submissions should
-return to the default. Script 08 is one array of every `participants.tsv` row.
-Submit stage 09 alignment and stage 10 merge manually, in that order, after
-extraction completes.
+Stage 08 is one job per variant on trillium-gpu: eight processes share the H100,
+each running one model with some of its weight sets (`PROCESSES` in the script).
+A resubmission skips every recording whose files already hold its windows, made
+with the same settings (the files' `config_hash`), and rewrites any other. Each
+label's `desc-<label>_manifest.json` lists the recordings written, done, skipped
+(no EO or EC epochs) and failed; a failed recording fails the job. Submit stage 09
+alignment and stage 10 merge manually, in that order, after extraction completes.
 
 ## Two-config analysis stages (09, 11–13, 15–18)
 
@@ -237,10 +239,7 @@ Stages **08**, **17**, and the foundation branch of **20** need a GPU
 For **20**, pass `--gres`
 only when submitting `foundation` or `all`; use separate `descriptors`,
 `embeddings` and `foundation` submissions to avoid reserving a GPU for classical
-decoding. REVE
-is a gated Hugging Face model — run
-`hf auth login` or export `HF_TOKEN` before submitting, or REVE is skipped with
-`authentication_required`.
+decoding.
 
 Submit stage 15 and its comparison dependency explicitly:
 

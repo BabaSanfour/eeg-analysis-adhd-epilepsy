@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 from coco_pipe.descriptors import KNOWN_FAMILY_TOKENS, load_descriptor_table
 from coco_pipe.descriptors.qc import aggregate_family_qc
-from coco_pipe.io import AGGREGATION_LEVELS, BIDSConfig, DataContainer, load_data
+from coco_pipe.io import AGGREGATION_LEVELS, BIDSConfig, DataContainer, NoDataError, load_data
 from coco_pipe.io.quality import GROUP_BY_COLUMN, run_qc
 from mne_bids import BIDSPath, get_entities_from_fname
 
@@ -41,12 +41,16 @@ def build_container(
     subject_col: str = "subject",
     target_col: str | None = None,
     desc: str = "base",
-    condition: str | None = None,
+    condition: str | list[str] | None = None,
     window_source: str = "auto",
     units: str = "V",
     bandpass: tuple[float, float] | None = None,
+    n_jobs: int = 1,
 ) -> DataContainer:
-    """Load raw BIDS data or saved epoch derivatives into a DataContainer."""
+    """Load raw BIDS data or saved epoch derivatives into a DataContainer.
+
+    ``condition`` names one event or several; ``n_jobs`` threads read saved epochs.
+    """
     subjects = subjects or []
     if bandpass is not None and window_source != "re_epoch":
         raise ValueError(
@@ -83,6 +87,7 @@ def build_container(
             event_id=condition if condition else None,
             target_col=target_col,
             units=units,
+            n_jobs=n_jobs,
         )
         return load_data(config=config)
 
@@ -111,7 +116,7 @@ def reepoch_eeg(
     task: str,
     segment_duration: float,
     overlap: float,
-    condition: str | None,
+    condition: str | list[str] | None,
     metadata_df: pd.DataFrame | None = None,
     subject_col: str = "subject",
     desc: str = "base",
@@ -123,7 +128,12 @@ def reepoch_eeg(
 
     ``desc`` names the epoch variant, as for saved epochs: ``base`` re-epochs the
     ``desc-base`` recording, ``baserejected`` re-epochs the same recording and drops
-    the epochs overlapping a ``BAD_`` annotation, as stage 04 does.
+    the epochs overlapping a ``BAD_`` annotation. ``condition`` names one block
+    condition or several. As coco-pipe's BIDS loader, each row names the file read
+    (``source``), and ``meta`` lists the recordings with none of the conditions
+    (``skipped_no_matching_events``) and those that could not be read
+    (``load_failures``). It raises coco-pipe's ``NoDataError`` when no recording
+    has a condition and none failed to load.
 
     When ``bandpass`` is given, the continuous recording is band-pass filtered to
     ``(l_freq, h_freq)`` *before* epoching -- the correct place for it, since a
@@ -131,6 +141,7 @@ def reepoch_eeg(
     to match a foundation model's pretraining band (e.g. SignalJEPA: 0.5-40 Hz).
     """
     preproc_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
+    conditions = [condition] if isinstance(condition, str) else list(condition or [])
     reject_by_annotation = desc.endswith(REJECTED_SUFFIX)
     desc = desc.removesuffix(REJECTED_SUFFIX)
     meta_lookup: pd.DataFrame | None = None
@@ -144,6 +155,8 @@ def reepoch_eeg(
     sfreq: float | None = None
     times: np.ndarray | None = None
     issues: list[str] = []
+    skipped: list[str] = []
+    load_failures: list[dict[str, str]] = []
 
     for raw_sid in subjects or []:
         subject = bids_subject(raw_sid)
@@ -167,11 +180,17 @@ def reepoch_eeg(
             continue
 
         for current_run in sorted(set(runs_to_process)):
+            recording_id = BIDSPath(
+                subject=subject, session=session, task=task, run=current_run
+            ).basename
             raw, _prov, load_issues = read_preproc_stage(
                 subject, preproc_root, desc=desc, task=task, session=session, run=current_run
             )
             if raw is None:
                 issues.extend(load_issues)
+                load_failures.append(
+                    {"recording_id": recording_id, "error": "; ".join(load_issues)}
+                )
                 continue
             if bandpass is not None:
                 # Continuous-domain band-pass before epoching (raw is preloaded).
@@ -185,37 +204,38 @@ def reepoch_eeg(
                 )
             except ValueError as exc:
                 issues.append(f"no_epochs:{subject_label}_run-{current_run}:{exc}")
+                skipped.append(recording_id)
                 continue
-            if condition is None or condition not in epochs.event_id:
-                issues.append(f"missing_condition:{subject_label}_run-{current_run}:{condition}")
+            present = [name for name in conditions if name in epochs.event_id]
+            cond_epochs = epochs[present] if present else None
+            if cond_epochs is None or len(cond_epochs) == 0:
+                issues.append(f"missing_condition:{subject_label}_run-{current_run}:{conditions}")
+                skipped.append(recording_id)
                 continue
-            cond_epochs = epochs[condition]
+            names = {code: name for name, code in epochs.event_id.items()}
             # The position of each epoch among all those of the recording.
             epoch_numbers = np.flatnonzero(np.isin(epochs.selection, cond_epochs.selection))
             data = np.asarray(cond_epochs.get_data(units=units), dtype=np.float32)
-            if data.shape[0] == 0:
-                continue
             if ch_names is None:
                 ch_names = list(cond_epochs.ch_names)
                 sfreq = float(cond_epochs.info["sfreq"])
                 times = np.asarray(cond_epochs.times)
-            recording_id = BIDSPath(
-                subject=subject, session=session, task=task, run=current_run
-            ).basename
             meta_row: dict[str, Any] = {}
             if meta_lookup is not None and subject in meta_lookup.index:
                 meta_row = {
                     str(column): meta_lookup.loc[subject, column] for column in meta_lookup.columns
                 }
-            for epoch_number in epoch_numbers:
+            for epoch_number, code in zip(epoch_numbers, cond_epochs.events[:, 2], strict=True):
                 obs_rows.append(
                     {
                         "subject": subject,
                         "session": session,
                         "run": current_run,
-                        "condition": condition,
+                        "condition": names[code],
                         "recording_id": recording_id,
+                        "source": str(raw.filenames[0]),
                         "epoch": int(epoch_number),
+                        "bad_channels": ",".join(raw.info["bads"]),
                         **meta_row,
                     }
                 )
@@ -223,10 +243,13 @@ def reepoch_eeg(
             x_chunks.append(data)
 
     if not x_chunks:
-        raise RuntimeError(
+        message = (
             f"No cleaned-continuous epochs for condition {condition!r} at "
             f"{segment_duration:g}s. First issues: {issues[:5]}"
         )
+        if load_failures:
+            message += f"; {len(load_failures)} recording(s) could not be loaded"
+        raise (RuntimeError if load_failures else NoDataError)(message)
 
     X = np.concatenate(x_chunks, axis=0)
     obs_df = pd.DataFrame(obs_rows)
@@ -250,6 +273,8 @@ def reepoch_eeg(
             "segment_duration": float(segment_duration),
             "bandpass": list(bandpass) if bandpass is not None else None,
             "load_issues": issues,
+            "skipped_no_matching_events": skipped,
+            "load_failures": load_failures,
         },
     )
 

@@ -161,9 +161,6 @@ run_foundation() {
 
 
     read -r -a DIRECT_MODELS <<< "${DIRECT_MODELS:-cbramod}"
-    if [[ " ${DIRECT_MODELS[*]} " == *" reve "* && -z "${HF_TOKEN:-}" ]]; then
-        echo "WARN: HF_TOKEN is unset; REVE (gated) will be skipped." >&2
-    fi
 
     for model in "${DIRECT_MODELS[@]}"; do
         echo " -> Model: $model | epoch and recording scores"
