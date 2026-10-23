@@ -66,8 +66,8 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 06 | `06_verify_descriptors.sh` | audit shard completeness + QC before merge | single |
 | 07 | `07_submit_merge_descriptors.sh` | shards → combined tables (project) | single |
 | 07b | `07b_submit_archive_descriptors.sh` | shards → one validated `shards.tar.zst` on the project; scratch shards deleted | single |
-| 08 | `08_submit_foundation_embeddings.sh` | epochs → per-recording embedding files, one `coco-pipe-<model>` dataset per model (scratch) | single (per variant, one H100 shared by 8 model processes) |
-| 09 | `09_submit_align_subject_embeddings.sh` | pooled embeddings + native tokens → aligned variants | array (per model, CPU) |
+| 08 | `08_submit_foundation_embeddings.sh` | epochs → per-recording embedding files, one `coco-pipe-<model>` dataset per model (scratch) | single (per variant, one H100 shared by 12 processes, each a model and some of its weight sets) |
+| 09 | `09_submit_align_subject_embeddings.sh` | per-recording embeddings (scratch) → subject-aligned window, token and RA files of every recording (project) | array (per weight set of one model and variant, CPU) |
 | 10 | `10_submit_merge_foundation_embeddings.sh` | raw/aligned shards → combined tables, manifest, and report | single |
 | 11 | `11_batch_run_dim_reduction.sh` | raw dim-reduction | array (per cohort) |
 | 12 | `12_batch_run_dim_reduction_descriptors.sh` | descriptor dim-reduction | array (per cohort) |

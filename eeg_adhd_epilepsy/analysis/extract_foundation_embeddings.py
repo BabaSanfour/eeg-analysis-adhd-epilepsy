@@ -69,6 +69,22 @@ def parse_weights(tokens: Sequence[str], seeds: Sequence[int]) -> list[int | Non
     return weights
 
 
+def write_dataset(root: Path, model_key: str, bids_root: Path) -> None:
+    """Write the dataset files of a model's embedding dataset, scratch or project.
+
+    The preproc link is an absolute URI, so it resolves from the scratch copy too,
+    whose ``../preproc`` has no ``dataset_description.json``.
+    """
+    spec = get_foundation_model_spec(model_key)
+    preproc_root = get_derivative_root(Path(bids_root), DerivativeStage.PREPROC)
+    write_embedding_dataset(
+        root,
+        VARIANTS,
+        name=f"{spec.display_name or model_key} embeddings",
+        dataset_links={"preproc": preproc_root.absolute().as_uri()},
+    )
+
+
 def load_recordings(
     config: dict[str, Any],
     model_cfg: dict[str, Any],
@@ -176,16 +192,7 @@ def run(
     desc = str(config["desc"])
     device = str(config["device"])
     root = Path(derivatives_root) / f"coco-pipe-{model_key}"
-    preproc_root = get_derivative_root(Path(config["bids_root"]), DerivativeStage.PREPROC)
-    spec = get_foundation_model_spec(model_key)
-    # The preproc link resolves from the scratch copy too: an absolute URI, not
-    # ../preproc, which on scratch has no dataset_description.json.
-    write_embedding_dataset(
-        root,
-        VARIANTS,
-        name=f"{spec.display_name or model_key} embeddings",
-        dataset_links={"preproc": preproc_root.absolute().as_uri()},
-    )
+    write_dataset(root, model_key, Path(config["bids_root"]))
     poolings = tuple(model_cfg.get("extra_poolings", ()))
     # An extractor refuses a CUDA device without a GPU, before any data is read (audit D1).
     extractors = {

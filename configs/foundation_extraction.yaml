@@ -29,3 +29,15 @@ models:
     segment_duration: 10.0
     window_source: derivative
     random_seeds: *seeds
+
+# align_subject_embeddings: subject-aligned versions of each weight set's embeddings,
+# fitted on every window of the label, each subject with its own statistics. The files
+# hold every recording and go to the project.
+alignment:
+  # On the window vectors: EaMean, EaCoral, Leace (none when its projector is degenerate).
+  window: [ea_mean, ea_coral, leace]
+  # On the tokens: EaMean, EaCoral, and Ra's tangent vectors of the token covariances.
+  token: [ea_mean, ea_coral, ra]
+  # ea_* on the tokens also per channel (EaMeanCh, EaCoralCh), for models whose tokens
+  # have a channel axis (not LUNA's).
+  per_channel: true

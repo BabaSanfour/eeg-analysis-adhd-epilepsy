@@ -39,6 +39,9 @@ done
 # The per-recording embedding files (stage 08), one coco-pipe-<model> dataset per
 # model; the epoch variant is in their desc label.
 : "${EMBEDDING_SCRATCH_ROOT:=$SCRATCH_ROOT/BIDS/derivatives}"
+# The same datasets on the project, holding the files of every recording (aggregates)
+# and the archives of the per-recording files.
+: "${EMBEDDING_PROJECT_ROOT:=$BIDS_ROOT/derivatives}"
 # A script that submits a follow-up job reuses the account it runs under.
 if [ -n "${SLURM_JOB_ACCOUNT:-}" ]; then
     export SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-$SLURM_JOB_ACCOUNT}"
