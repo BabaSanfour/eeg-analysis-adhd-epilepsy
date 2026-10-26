@@ -50,6 +50,7 @@ common_args=(
     --bids_root "$BIDS_ROOT"
     --derivative_root "$DECODING_ROOT"
     --metadata "$METADATA_PATH"
+    --desc "$EPOCHS_DESC"
     --n_jobs "$THREADS"
     --no-write-shared-comparison-report
 )
@@ -78,7 +79,7 @@ if (( TASK_ID == 1 )); then
 fi
 
 require_file "$FOUNDATION_ANALYSIS_CONFIG"
-require_dir "$EMBEDDING_ROOT"
+require_dir "$EMBEDDING_PROJECT_ROOT"
 
 foundation_index=$((TASK_ID - 2))
 model_index=$((foundation_index % MODEL_COUNT))
@@ -91,11 +92,11 @@ echo "Analysis:       $FOUNDATION_ANALYSIS_CONFIG"
 echo "Model:          $model"
 echo "Representation: $representation"
 echo "Transforms:     none, fold-local leace"
-echo "Embedding root: $EMBEDDING_ROOT"
+echo "Embedding root: $EMBEDDING_PROJECT_ROOT"
 
 python -m eeg_adhd_epilepsy.analysis.classical_decoding \
     "${common_args[@]}" \
     --analysis_config "$FOUNDATION_ANALYSIS_CONFIG" \
-    --embedding_derivative_root "$EMBEDDING_ROOT" \
+    --embedding_derivative_root "$EMBEDDING_PROJECT_ROOT" \
     --embedding_model_key "$model" \
     --representation "$representation"

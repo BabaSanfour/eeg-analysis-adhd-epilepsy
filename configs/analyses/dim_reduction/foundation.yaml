@@ -17,7 +17,8 @@ overwrite: false
 scaling:
   method: standard
 
-# Foundation embeddings are a single dense space per model -> flat mode only, so
+# Foundation embeddings are a single dense space per model, its window vectors (the
+# all-recordings window file of each space) -> flat mode only, so
 # the whole plan is one mode running every reducer over its n_components sweep.
 # `representation` is one of the canonical levels epoch/recording/subject;
 # it defaults to 'recording' here for local runs, and the cluster overrides it per

@@ -6,95 +6,78 @@ from dataclasses import replace
 import numpy as np
 import pandas as pd
 import pytest
-from coco_pipe.decoding.foundation_models import FoundationEmbeddingResult
-from coco_pipe.io import DataContainer, save_embedding_derivative
+from coco_pipe.diagnostics import crossed_ss_fractions
+from coco_pipe.io import DataContainer
 
+from eeg_adhd_epilepsy.analysis import extract_foundation_embeddings as efe
+from eeg_adhd_epilepsy.analysis import merge_foundation_embeddings as mfe
 from eeg_adhd_epilepsy.analysis import variance_diagnostics as vd
 from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+from tests.analysis.test_extract_foundation_embeddings import _config
 
 
-def _make_raw_embeddings(source_root, seed=0):
-    rng = np.random.default_rng(seed)
-    metadata_rows = []
-    for subject in range(4):
-        metadata_rows.append(
-            {
-                "participant_id": f"sub-{subject + 1:04d}",
-                "patient_group_id": f"group-{subject + 1:04d}",
-                "diagnosis": subject % 2,
-            }
-        )
-        center = rng.standard_normal(6) * 4.0
-        for condition_index, condition in enumerate(("EO", "EC")):
-            windows = rng.standard_normal((5, 6)) + center
-            recording_id = f"sub-{subject + 1:04d}_ses-01_run-{condition_index + 1:02d}"
-            save_embedding_derivative(
-                FoundationEmbeddingResult(
-                    window_embeddings=windows,
-                    recording_embedding=windows.mean(0),
-                    window_start=np.arange(5),
-                    window_stop=np.arange(1, 6),
-                    window_index=np.arange(5),
-                    metadata={
-                        "model_key": "demo",
-                        "recording_id": recording_id,
-                        "subject": f"{subject + 1:04d}",
-                        "condition": condition,
-                    },
-                ),
-                source_root / f"{recording_id}_{condition}_embedding.npz",
-            )
-    return metadata_rows
-
-
-def test_standalone_run_scores_raw_embeddings_without_alignment(tmp_path):
-    source_root = tmp_path / "source"
-    metadata_rows = _make_raw_embeddings(source_root)
-    metadata_path = tmp_path / "participants.tsv"
-    pd.DataFrame(metadata_rows).to_csv(metadata_path, sep="\t", index=False)
-
+def test_run_scores_a_space_from_the_project_files_per_epoch_variant(bids_root, tmp_path):
+    extraction = _config(bids_root)
+    scratch, project = tmp_path / "scratch", tmp_path / "project"
+    efe.run(extraction, scratch, model_key="cbramod", weights=[None], subjects=["0001", "0003"])
+    mfe.run(extraction, scratch, project, model_key="cbramod", descs=["base"], weights=[None])
     config = {
         "dataset_name": "standalone_test",
-        "bids_root": str(tmp_path / "bids"),
-        "embedding_derivative_root": str(source_root),
-        "embedding_model_key": "demo",
+        "bids_root": str(bids_root),
+        "embedding_derivative_root": str(project),
+        "embedding_model_key": "cbramod",
+        "desc": "base",
         "diagnostic_transform": "none",
-        "metadata": str(metadata_path),
-        "subject_col": "subject",
+        "metadata": str(bids_root / "participants.tsv"),
         "diagnostic_populations": ["clinical_task_subset"],
         "evals": [
             {
                 "name": "condition_separation",
                 "target_col": "condition",
-                "positive_class": "EC",
-            },
-            {
-                "name": "diagnosis",
-                "target_col": "diagnosis",
-                "positive_class": "1",
-            },
+                "positive_class": "EC_baseline",
+                "group_col": "subject",
+            }
         ],
         "n_null_permutations": 2,
         "random_state": 3,
     }
 
     output_path = vd.run(config)
+
     assert output_path == (
-        get_derivative_root(tmp_path / "bids", DerivativeStage.VARIANCE_DIAGNOSTICS)
-        / "demo"
+        get_derivative_root(bids_root, DerivativeStage.VARIANCE_DIAGNOSTICS)
+        / "base"
+        / "cbramod"
         / "variance_diagnostics.csv"
     )
     diagnostics = pd.read_csv(output_path)
-
-    # Raw-only run: every row is the "none" baseline, no alignment materialized.
     assert set(diagnostics["transform"]) == {"none"}
-    assert set(diagnostics["eval_name"]) == {"condition_separation", "diagnosis"}
-    assert {"between_subject_eta2", "between_subject_excess_over_null"}.issubset(
-        set(diagnostics["metric"])
+    assert set(diagnostics["scope"]) == {"pooled"}
+    assert "between_subject_eta2" in set(diagnostics["metric"])
+
+
+def test_cross_fitted_leace_erases_each_subject_with_directions_learned_without_it():
+    rng = np.random.default_rng(0)
+    subject = np.repeat([f"{i:02d}" for i in range(10)], 40)
+    condition = np.where(rng.random(len(subject)) < 0.4, "EO", "EC")
+    x = rng.standard_normal((len(subject), 12))
+    x[:, :3] += rng.standard_normal((10, 3))[np.repeat(np.arange(10), 40)] * 4.0
+    x[:, 3] += 3.0 * (condition == "EO")
+    container = DataContainer(
+        X=x,
+        dims=("obs", "feature"),
+        coords={"subject": subject, "condition": condition},
+        ids=np.arange(len(subject)).astype(str),
     )
-    assert not list(
-        (tmp_path / "bids" / "derivatives" / "eeg_foundation_embeddings").glob("_alignment_*")
-    )
+
+    erased, ranks = vd.cross_fitted_leace(container, {"eta2": 0.5})
+
+    assert len(ranks) == 5 and set(ranks) == {3}
+    before = crossed_ss_fractions(x, subject, condition)["subject_frac"]
+    after = crossed_ss_fractions(erased, subject, condition)["subject_frac"]
+    assert before > 0.7 and after < 0.2
+    shift = erased[condition == "EO", 3].mean() - erased[condition == "EC", 3].mean()
+    assert shift == pytest.approx(3.0, abs=0.3)
 
 
 def test_write_variance_diagnostics_replaces_each_incoming_assessment(tmp_path):
@@ -202,6 +185,8 @@ def test_diagnostic_tasks_apply_cohort_filters_label_maps_and_age_groups():
         coords={
             **{column: frame[column].to_numpy() for column in frame if column != "sample_id"},
             "subject": subject,
+            "recording_id": subject,
+            "start": np.zeros(6),
         },
         ids=frame["sample_id"].to_numpy(),
     )
@@ -231,6 +216,8 @@ def test_diagnostic_class_order_limits_diagnostics_not_training_population():
             "patient_group_id": subjects,
             "condition": np.asarray(["EO"] * 4, dtype=object),
             "age_group": ages,
+            "recording_id": subjects,
+            "start": np.zeros(4),
         },
         ids=np.asarray([f"sample-{index}" for index in range(4)], dtype=object),
     )
@@ -269,23 +256,7 @@ def test_diagnostic_class_order_limits_diagnostics_not_training_population():
     }
 
 
-class _CountingFeatureBatches:
-    """Chunked feature-batch source that records how many times it is iterated."""
-
-    def __init__(self, rows: np.ndarray, features: np.ndarray, chunk_size: int) -> None:
-        self.rows = rows
-        self.features = features
-        self.chunk_size = chunk_size
-        self.iter_count = 0
-
-    def __iter__(self):
-        self.iter_count += 1
-        for start in range(0, len(self.rows), self.chunk_size):
-            stop = start + self.chunk_size
-            yield self.rows[start:stop], self.features[start:stop]
-
-
-def _streamed_diagnostics_probe_config(**overrides):
+def _diagnostics_config(**overrides):
     return {
         "n_null_permutations": 2,
         "random_state": 0,
@@ -298,7 +269,7 @@ def _streamed_diagnostics_probe_config(**overrides):
     }
 
 
-def _make_streamed_diagnostics_task(rng, n_subjects=4, per_subject=6, n_features=4):
+def _make_diagnostics_task(rng, n_subjects=4, per_subject=6, n_features=4):
     n_obs = n_subjects * per_subject
     subjects = np.repeat([f"sub-{i}" for i in range(n_subjects)], per_subject)
     labels = np.repeat(np.arange(n_subjects) % 2, per_subject)
@@ -313,70 +284,11 @@ def _make_streamed_diagnostics_task(rng, n_subjects=4, per_subject=6, n_features
         subjects=subjects,
         labels=labels,
         observation_ids=indices.astype(str),
+        blocks=np.tile(np.arange(per_subject) >= per_subject // 2, n_subjects),
         selection_fingerprint="fp",
         target_encoding="{}",
     )
     return task, indices, features
-
-
-def test_streamed_diagnostics_materializes_task_batches_once():
-    rng = np.random.default_rng(0)
-    task, indices, features = _make_streamed_diagnostics_task(rng)
-    source = _CountingFeatureBatches(indices, features, chunk_size=5)
-
-    rows = vd.score_streamed_variance_diagnostics(
-        source,
-        [task],
-        _streamed_diagnostics_probe_config(diagnostic_task_cache_max_bytes=10 * 1024**2),
-        transform="leace",
-        n_observations=len(indices),
-    )
-
-    assert rows
-    # One pass materializes the task's rows in memory; the ~80 internal passes
-    # streamed_variance_decomposition_report normally makes (null permutations,
-    # subject-probe folds/epochs, ...) then hit that in-memory copy instead of
-    # re-reading from the source.
-    assert source.iter_count == 1
-
-
-def test_streamed_diagnostics_falls_back_to_streaming_when_over_budget():
-    rng = np.random.default_rng(0)
-    task, indices, features = _make_streamed_diagnostics_task(rng)
-
-    materialized_source = _CountingFeatureBatches(indices, features, chunk_size=5)
-    materialized_rows = vd.score_streamed_variance_diagnostics(
-        materialized_source,
-        [task],
-        _streamed_diagnostics_probe_config(diagnostic_task_cache_max_bytes=10 * 1024**2),
-        transform="leace",
-        n_observations=len(indices),
-    )
-
-    streamed_source = _CountingFeatureBatches(indices, features, chunk_size=5)
-    streamed_rows = vd.score_streamed_variance_diagnostics(
-        streamed_source,
-        [task],
-        _streamed_diagnostics_probe_config(diagnostic_task_cache_max_bytes=1),
-        transform="leace",
-        n_observations=len(indices),
-    )
-
-    # A budget too small to cache the task falls back to the original
-    # disk-streaming behavior (many re-iterations), but must produce the same
-    # results as the materialized fast path modulo floating-point
-    # non-associativity from the different batch-summation order (single big
-    # batch vs. several small chunks).
-    assert streamed_source.iter_count > 1
-    assert len(materialized_rows) == len(streamed_rows)
-    for materialized_row, streamed_row in zip(materialized_rows, streamed_rows):
-        assert materialized_row.keys() == streamed_row.keys()
-        for key, materialized_value in materialized_row.items():
-            streamed_value = streamed_row[key]
-            if isinstance(materialized_value, float):
-                assert materialized_value == pytest.approx(streamed_value)
-            else:
-                assert materialized_value == streamed_value
 
 
 def _task_subset(task, eval_name, rows):
@@ -387,11 +299,12 @@ def _task_subset(task, eval_name, rows):
         subjects=task.subjects[rows],
         labels=task.labels[rows],
         observation_ids=task.observation_ids[rows],
+        blocks=task.blocks[rows],
     )
 
 
 def _make_parallel_diagnostics_tasks(rng):
-    task, indices, features = _make_streamed_diagnostics_task(rng, n_subjects=6)
+    task, indices, features = _make_diagnostics_task(rng, n_subjects=6)
     tasks = [
         task,
         _task_subset(task, "first_half", slice(None, 18)),
@@ -400,21 +313,12 @@ def _make_parallel_diagnostics_tasks(rng):
     return tasks, indices, features
 
 
-@pytest.mark.parametrize("streamed", [False, True])
-def test_parallel_diagnostics_match_sequential(streamed):
+def test_parallel_diagnostics_match_sequential():
     rng = np.random.default_rng(0)
-    tasks, indices, features = _make_parallel_diagnostics_tasks(rng)
+    tasks, _, features = _make_parallel_diagnostics_tasks(rng)
 
     def score(n_jobs):
-        config = _streamed_diagnostics_probe_config(n_jobs=n_jobs)
-        if streamed:
-            return vd.score_streamed_variance_diagnostics(
-                _CountingFeatureBatches(indices, features, chunk_size=5),
-                tasks,
-                config,
-                transform="leace",
-                n_observations=len(indices),
-            )
+        config = _diagnostics_config(n_jobs=n_jobs)
         return vd.score_variance_diagnostics(features, tasks, config, transform="none")
 
     sequential_rows = score(1)

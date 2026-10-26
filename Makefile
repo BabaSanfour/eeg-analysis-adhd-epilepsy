@@ -108,17 +108,16 @@ merge-embeddings: ## Per-recording embedding files -> one file per label and vie
 	  --source_root $(SOURCE_EMBEDDING_ROOT) --derivatives_root $(BIDS_ROOT)/derivatives \
 	  --model $(EMBEDDING_MODEL_KEY)
 
-dim-reduce-alignments: ## Reduce one explicit raw/aligned embedding variant
+dim-reduce-alignments: ## Reduce one embedding space, raw or with subject identity erased
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
 	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
 	$(if $(COHORT),,$(error Set COHORT to the cohort config))
-	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the embedding derivatives))
 	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the base model))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
 	  --cohort_config $(COHORT) --analysis_config $(ALIGN_DIM_ANALYSIS) \
-	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --n_jobs $(N_JOBS) \
+	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --n_jobs $(N_JOBS) --desc $(EPOCHS_DESC) \
 	  --alignment_transform $(ALIGNMENT_TRANSFORM) \
-	  --embedding_derivative_root $(SOURCE_EMBEDDING_ROOT) \
+	  --embedding_derivative_root $(BIDS_ROOT)/derivatives \
 	  --embedding_model_key $(EMBEDDING_MODEL_KEY)
 
 dim-reduce: ## Combined descriptors -> dimensionality reduction

@@ -10,7 +10,17 @@ import numpy as np
 import pandas as pd
 from coco_pipe.descriptors import KNOWN_FAMILY_TOKENS, load_descriptor_table
 from coco_pipe.descriptors.qc import aggregate_family_qc
-from coco_pipe.io import AGGREGATION_LEVELS, BIDSConfig, DataContainer, NoDataError, load_data
+from coco_pipe.io import (
+    AGGREGATION_LEVELS,
+    BIDSConfig,
+    DataContainer,
+    NoDataError,
+    aggregate_recordings,
+    embedding_label,
+    embedding_path,
+    load_data,
+    load_embeddings,
+)
 from coco_pipe.io.quality import GROUP_BY_COLUMN, run_qc
 from mne_bids import BIDSPath, get_entities_from_fname
 
@@ -279,6 +289,28 @@ def reepoch_eeg(
     )
 
 
+def foundation_embedding_file(
+    root: Path, space: str, desc: str, *, view: str = "window", task: str = "clinical"
+) -> Path:
+    """The all-recordings file of one embedding space, in its model's dataset under ``root``.
+
+    ``space`` names the space as the analyses do: the model key (``cbramod``), followed by
+    ``_pool-attention`` for REVE's attention read-out and ``_align-leace`` for the window
+    vectors with subject identity erased. ``desc`` is the epoch variant (``base`` or
+    ``baserejected``).
+    """
+    model, *parts = space.split("_")
+    unknown = set(parts) - {"pool-attention", "align-leace"}
+    if unknown:
+        raise ValueError(f"Unknown embedding space suffix {sorted(unknown)} in {space!r}.")
+    label = embedding_label(
+        desc,
+        pooling="attention" if "pool-attention" in parts else "mean",
+        transform="Leace" if "align-leace" in parts else None,
+    )
+    return embedding_path(Path(root) / f"coco-pipe-{model}", label, view, task=task).fpath
+
+
 def attach_subject_metadata(
     container: DataContainer,
     meta_df: pd.DataFrame,
@@ -474,9 +506,18 @@ def build_dataset(
                 container = container.isel(obs=keep_indices)
         container.meta = {**dict(container.meta), "qc_result": qc_result}
     elif effective_input_mode == "foundation_embeddings":
-        raise NotImplementedError(
-            "Foundation embeddings are read from the coco-pipe-<model> datasets, which "
-            "this reader does not know yet."
+        container = load_embeddings(
+            foundation_embedding_file(
+                Path(args.embedding_derivative_root),
+                args.embedding_model_key,
+                args.desc,
+                task=args.task,
+            ),
+            representation="recording" if representation == "recording" else "epoch",
+            conditions=condition,
+            subjects=subjects,
+            subject_metadata_df=meta_df,
+            subject_key=args.subject_col if meta_df is not None else None,
         )
     else:
         raise ValueError(f"Unsupported input mode '{input_mode}'.")
@@ -493,11 +534,13 @@ def build_dataset(
         )
 
     represented = container
+    if effective_input_mode == "foundation_embeddings" and representation == "subject":
+        container = represented = container.aggregate(by=args.subject_col, stats="mean")
     if effective_input_mode == "raw":
         if representation == "subject":
             container = container.aggregate(by=args.subject_col, stats="mean")
         elif representation == "recording":
-            container = container.aggregate(by="recording_id", stats="mean")
+            container = aggregate_recordings(container)
         elif representation != "epoch":
             raise ValueError(
                 f"Raw representation must be one of {list(AGGREGATION_LEVELS)}, "

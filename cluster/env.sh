@@ -71,7 +71,6 @@ dra_epochs_variant() {
     : "${DESCRIPTOR_CONDITIONS:=EO_baseline EC_baseline}"
     : "${DESCRIPTOR_SHARDS_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC}"
     : "${DESCRIPTORS_ROOT:=$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC}"
-    : "${EMBEDDING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings_$EPOCHS_DESC}"
     : "${DIM_REDUCTION_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/dim_reduction_$EPOCHS_DESC}"
     : "${DECODING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/decoding_$EPOCHS_DESC}"
     case "$REPORTS_ROOT" in

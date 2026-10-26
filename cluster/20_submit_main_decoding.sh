@@ -106,7 +106,7 @@ run_saved_embedding_classical() {
     echo " 2. SAVED FOUNDATION EMBEDDING DECODING"
     echo "================================================================="
     require_file "$SAVED_FOUNDATION_ANALYSIS_CONFIG"
-    require_dir "$EMBEDDING_ROOT"
+    require_dir "$EMBEDDING_PROJECT_ROOT"
 
     dra_pin_threads 1
 
@@ -126,7 +126,7 @@ run_saved_embedding_classical() {
                 --derivative_root "$DECODING_ROOT"
                 --reports_root "$REPORTS_ROOT"
                 --metadata "$METADATA_PATH"
-                --embedding_derivative_root "$EMBEDDING_ROOT"
+                --embedding_derivative_root "$EMBEDDING_PROJECT_ROOT"
                 --embedding_model_key "$model"
                 --representation "$rep"
                 --n_jobs "${CLASSICAL_OUTER_N_JOBS:-$THREADS}"

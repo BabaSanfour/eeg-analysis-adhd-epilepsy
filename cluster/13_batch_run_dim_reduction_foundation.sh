@@ -34,7 +34,7 @@ require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"
 require_dir "$CONFIGS_DIR"
 require_file "$ANALYSIS_CONFIG"
-require_dir "$EMBEDDING_ROOT"
+require_dir "$EMBEDDING_PROJECT_ROOT"
 
 dra_activate
 dra_pin_threads 1
@@ -98,7 +98,7 @@ echo "Base model:    $model"
 echo "Transform:     $transform"
 echo "Saved key:     $space_key"
 echo "Representation:$representation"
-echo "Embeddings:    $EMBEDDING_ROOT"
+echo "Embeddings:    $EMBEDDING_PROJECT_ROOT"
 echo "================================================================================"
 
 cmd=(
@@ -110,7 +110,7 @@ cmd=(
     --metadata "$METADATA_PATH"
     --cohort_config "$config"
     --analysis_config "$ANALYSIS_CONFIG"
-    --embedding_derivative_root "$EMBEDDING_ROOT"
+    --embedding_derivative_root "$EMBEDDING_PROJECT_ROOT"
     --embedding_model_key "$model"
     --alignment_transform "$transform"
     --representation "$representation"

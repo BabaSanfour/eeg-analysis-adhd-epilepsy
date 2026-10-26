@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-"""Model-free subject/label variance diagnostics over embedding derivatives.
+"""Model-free subject and label variance diagnostics of one embedding space.
 
-These diagnostics are independent of subject alignment: they characterise the
-subject/label variance structure of *any* embedding set. The compute here is
-shared two ways:
+A run reads one space's window vectors from the all-recordings file in its model's
+dataset (see :func:`~eeg_adhd_epilepsy.analysis.dataset.foundation_embedding_file`),
+builds the configured diagnostic tasks and scores each with coco-pipe's variance
+report. With ``diagnostic_transform: leace`` the vectors are first cross-fitted: the
+subjects are split in five, and each part is erased by a LEACE fitted on the others
+with their conditions, so no subject is scored on directions learned from it; each
+fold's number of erased directions is recorded. The subject probe trains on the first
+half of each recording's windows and tests on the second (and the reverse), so
+neighbouring windows are not split between the two.
 
-* the alignment producer builds one set of diagnostic tasks and scores the
-  before/after variance of every materialised variant in one pass, and
-* :func:`run` / :func:`main` provide a standalone entry point that scores a raw
-  (or already-aligned) embedding root without materialising anything.
-
-Both paths write a single ``variance_diagnostics.csv`` per base model under the
-``eeg_variance_diagnostics`` derivative stage. Rows carry the cohort,
-population, and exact target-selection fingerprint used for the assessment, so
-raw/transformed deltas are only formed from genuinely paired observations.
+Rows go to ``variance_diagnostics.csv`` under the ``eeg_variance_diagnostics``
+derivative, per epoch variant and space. They carry the cohort, population and exact
+target-selection fingerprint, so raw/transformed deltas are only formed from paired
+observations.
 """
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ import argparse
 import json
 import logging
 import os
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -30,21 +31,15 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from coco_pipe.decoding.targets import prepare_target
-from coco_pipe.diagnostics import streamed_variance_decomposition_report
 from coco_pipe.diagnostics.variance import variance_decomposition_report
-from coco_pipe.io import (
-    DataContainer,
-    load_embedding_derivatives,
-    normalize_subject_value,
-)
+from coco_pipe.io import DataContainer, load_embeddings, normalize_subject_value
+from coco_pipe.transforms import LeaceEraser
 from coco_pipe.utils import slug, stable_hash
 from joblib import Parallel, delayed, parallel_backend
+from sklearn.model_selection import GroupKFold
 from threadpoolctl import threadpool_info
 
-from eeg_adhd_epilepsy.analysis.dataset import (
-    attach_subject_metadata,
-    filter_cohort_container,
-)
+from eeg_adhd_epilepsy.analysis.dataset import filter_cohort_container, foundation_embedding_file
 from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root, read_participants
 from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 
@@ -72,6 +67,7 @@ class DiagnosticTask:
     subjects: np.ndarray
     labels: np.ndarray
     observation_ids: np.ndarray
+    blocks: np.ndarray
     selection_fingerprint: str
     target_encoding: str
 
@@ -101,6 +97,14 @@ def _selection_fingerprint(
     )
 
 
+def recording_halves(container: DataContainer) -> np.ndarray:
+    """Whether each window is in the second half of its recording and condition (by start)."""
+    rows = container.obs_table()
+    key = rows["recording_id"].astype(str) + "|" + rows["condition"].astype(str)
+    rank = rows.groupby(key)["start"].rank(method="first")
+    return (rank > key.map(key.value_counts()) / 2).to_numpy()
+
+
 def build_diagnostic_tasks(
     container: DataContainer,
     config: Mapping[str, Any],
@@ -110,6 +114,7 @@ def build_diagnostic_tasks(
         [normalize_subject_value(value) for value in container.coords["subject"]],
         dtype=object,
     )
+    halves = recording_halves(container)
     indexed = container.replace(
         coords={**container.coords, "_diagnostic_row": np.arange(container.X.shape[0])},
     )
@@ -172,6 +177,7 @@ def build_diagnostic_tasks(
                     subjects=subjects[selected_indices],
                     labels=np.asarray(y),
                     observation_ids=selected_frame["sample_id"].astype(str).to_numpy(),
+                    blocks=halves[selected_indices],
                     selection_fingerprint="",
                     target_encoding=json.dumps(
                         selected_frame.attrs.get("label_encoding", {}), sort_keys=True
@@ -187,9 +193,11 @@ def _task_result_rows(
     config: Mapping[str, Any],
     *,
     transform: str,
+    extra: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     return [
         {
+            **(extra or {}),
             "transform": transform,
             "cohort_name": str(config["dataset_name"]),
             "population": task.population,
@@ -237,6 +245,7 @@ def score_variance_diagnostics(
     config: Mapping[str, Any],
     *,
     transform: str,
+    extra: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Compute every configured diagnostic for one embedding variant."""
     features = np.asarray(features)
@@ -258,140 +267,30 @@ def score_variance_diagnostics(
             label="diagnostic_label",
             n_null_permutations=int(config["n_null_permutations"]),
             rng=np.random.default_rng(int(config["random_state"])),
+            probe_blocks=task.blocks,
+            probe_n_splits=2,
         )
-        return _task_result_rows(report, task, config, transform=transform)
+        return _task_result_rows(report, task, config, transform=transform, extra=extra)
 
     return _parallel_task_rows(tasks, score_one, n_jobs)
 
 
-class _TaskFeatureBatches:
-    """Adapt pooled row indices from a re-iterable source to one task."""
-
-    def __init__(
-        self,
-        source: Iterable[tuple[np.ndarray, np.ndarray]],
-        task_indices: np.ndarray,
-        *,
-        n_observations: int,
-    ) -> None:
-        self.source = source
-        self._task_row = np.full(n_observations, -1, dtype=np.int64)
-        indices = np.asarray(task_indices, dtype=int)
-        if len(np.unique(indices)) != len(indices):
-            raise ValueError("DiagnosticTask indices must not contain duplicates.")
-        if np.any(indices < 0) or np.any(indices >= n_observations):
-            raise ValueError("DiagnosticTask indices fall outside the pooled observations.")
-        self._task_row[indices] = np.arange(len(indices))
-
-    def __iter__(self) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-        for pooled_rows, features in self.source:
-            task_rows = self._task_row[np.asarray(pooled_rows, dtype=int)]
-            selected = task_rows >= 0
-            if selected.any():
-                yield task_rows[selected], np.asarray(features)[selected]
-
-
-class _MaterializedFeatureBatches:
-    """Re-iterable in-memory feature batches: no repeated disk reads."""
-
-    def __init__(self, rows: np.ndarray, features: np.ndarray) -> None:
-        self._rows = rows
-        self._features = features
-
-    def __iter__(self) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-        yield self._rows, self._features
-
-
-def _materialize_task_batches(
-    task_batches: Iterable[tuple[np.ndarray, np.ndarray]],
-    *,
-    max_bytes: int,
-) -> tuple[np.ndarray, np.ndarray] | None:
-    """Read one task's batches into memory, or None if that exceeds max_bytes.
-
-    streamed_variance_decomposition_report re-iterates its feature-batch source
-    ~80 times per task (initial stats, the participation-ratio Gram, one pass
-    per null permutation, and per-fold/per-epoch passes for the subject probe).
-    Handed a disk-backed source directly, that means re-reading every subject's
-    artifact from disk ~80 times per task. Reading once into memory here (a
-    task's own selected rows, not the full cohort) turns those into cheap
-    in-memory re-iterations. Returning None lets the caller fall back to
-    disk-streaming for the rare task whose subset doesn't fit the budget.
-    """
-    collected_rows: list[np.ndarray] = []
-    collected_features: list[np.ndarray] = []
-    total_bytes = 0
-    for rows, features in task_batches:
-        features = np.asarray(features)
-        total_bytes += features.nbytes
-        if total_bytes > max_bytes:
-            return None
-        collected_rows.append(np.asarray(rows))
-        collected_features.append(features)
-    if not collected_rows:
-        return np.empty(0, dtype=np.int64), np.empty((0, 0))
-    return np.concatenate(collected_rows), np.concatenate(collected_features)
-
-
-def score_streamed_variance_diagnostics(
-    feature_batches: Iterable[tuple[np.ndarray, np.ndarray]],
-    tasks: list[DiagnosticTask],
-    config: Mapping[str, Any],
-    *,
-    transform: str,
-    n_observations: int,
-) -> list[dict[str, Any]]:
-    """Compute configured diagnostics from re-iterable pooled feature batches.
-
-    ``feature_batches`` must support independent concurrent re-iteration (a
-    fresh, self-contained generator per ``iter()`` call, no shared mutable
-    state) when ``config["n_jobs"]`` > 1 -- every caller's batch source is
-    exactly that kind of re-iterable artifact reader, never a single-use
-    generator.
-    """
-    n_jobs = int(config.get("n_jobs", 1) or 1)
-    fixed_probe_settings = {
-        "subject_probe_optimizer": "sgd",
-        "subject_probe_device": "cpu",
-        "subject_probe_dtype": "float32",
-    }
-    for key, expected in fixed_probe_settings.items():
-        actual = str(config.get(key, expected)).lower()
-        if actual != expected:
-            raise ValueError(
-                f"{key} is fixed to {expected!r} for streamed diagnostics, got {actual!r}."
-            )
-    max_cache_bytes = int(config.get("diagnostic_task_cache_max_bytes", 2 * 1024**3))
-
-    def score_one(task: DiagnosticTask) -> list[dict[str, Any]]:
-        task_batches = _TaskFeatureBatches(
-            feature_batches,
-            task.indices,
-            n_observations=n_observations,
+def cross_fitted_leace(
+    container: DataContainer, params: Mapping[str, Any], *, n_splits: int = 5
+) -> tuple[np.ndarray, list[int]]:
+    """The window vectors with subject identity erased, each subject by a LEACE fitted
+    on the subjects of the other folds with their conditions; and each fold's rank."""
+    x = np.asarray(container.X, dtype=np.float64)
+    subjects = np.asarray(container.coords["subject"]).astype(str)
+    conditions = np.asarray(container.coords["condition"]).astype(str)
+    erased, ranks = np.empty_like(x), []
+    for train, test in GroupKFold(n_splits=n_splits).split(x, groups=subjects):
+        eraser = LeaceEraser(**params).fit(
+            x[train], groups=subjects[train], condition=conditions[train]
         )
-        materialized = _materialize_task_batches(task_batches, max_bytes=max_cache_bytes)
-        report_source = (
-            task_batches if materialized is None else _MaterializedFeatureBatches(*materialized)
-        )
-        report = streamed_variance_decomposition_report(
-            report_source,
-            task.subjects,
-            task.labels,
-            n_null_permutations=int(config["n_null_permutations"]),
-            rng=np.random.default_rng(int(config["random_state"])),
-            probe_cap=int(config.get("subject_probe_cap", 100)),
-            probe_n_splits=int(config.get("subject_probe_n_splits", 5)),
-            probe_seed=int(config.get("subject_probe_seed", 42)),
-            probe_epochs=int(config.get("subject_probe_epochs", 10)),
-            probe_learning_rate=float(config.get("subject_probe_learning_rate", 0.01)),
-            probe_weight_decay=float(config.get("subject_probe_weight_decay", 1e-4)),
-            participation_ratio_max_gram_bytes=int(
-                config.get("participation_ratio_max_gram_bytes", 4 * 1024**3)
-            ),
-        )
-        return _task_result_rows(report, task, config, transform=transform)
-
-    return _parallel_task_rows(tasks, score_one, n_jobs)
+        erased[test] = eraser.transform(x[test])
+        ranks.append(eraser.rank_)
+    return erased, ranks
 
 
 def skipped_variance_diagnostics(
@@ -453,38 +352,37 @@ def write_variance_diagnostics(
 
 
 def run(config: dict[str, Any]) -> Path:
-    """Score one explicitly configured embedding variant."""
-    embedding_root = Path(config["embedding_derivative_root"]).expanduser()
-    model_key = str(config["embedding_model_key"])
+    """Score one embedding space, raw or with subject identity erased."""
+    space = str(config["embedding_model_key"])
+    desc = str(config.get("desc", "base"))
     transform = str(config["diagnostic_transform"])
-
-    container = load_embedding_derivatives(
-        embedding_root,
-        representation="epoch",
-        model_key=model_key,
+    if transform not in ("none", "leace"):
+        raise ValueError(f"diagnostic_transform must be 'none' or 'leace', got {transform!r}.")
+    container = load_embeddings(
+        foundation_embedding_file(
+            Path(config["embedding_derivative_root"]).expanduser(),
+            space,
+            desc,
+            task=str(config.get("task", "clinical")),
+        ),
+        subject_metadata_df=read_participants(Path(config["metadata"]).expanduser()),
+        subject_key="subject",
     )
-    metadata = read_participants(Path(config["metadata"]).expanduser())
-    container = attach_subject_metadata(
-        container,
-        metadata,
-        str(config["subject_col"]),
-    )
-
     tasks = build_diagnostic_tasks(container, config)
-    rows = score_variance_diagnostics(
-        np.asarray(container.X),
-        tasks,
-        config,
-        transform=transform,
-    )
-
+    features, extra = np.asarray(container.X), None
+    if transform == "leace":
+        params = (config.get("transform_params") or {}).get("leace", {})
+        features, ranks = cross_fitted_leace(container, params)
+        extra = {"leace_rank": f"{min(ranks)}-{max(ranks)}"}
+    rows = score_variance_diagnostics(features, tasks, config, transform=transform, extra=extra)
     output_path = write_variance_diagnostics(
         rows,
         get_derivative_root(
             Path(config["bids_root"]).expanduser(),
             DerivativeStage.VARIANCE_DIAGNOSTICS,
         )
-        / slug(model_key),
+        / desc
+        / slug(space),
     )
     LOGGER.info("Wrote %d variance-diagnostic row(s) to %s.", len(rows), output_path)
     return output_path
@@ -496,12 +394,22 @@ def main() -> None:
     parser.add_argument("--analysis_config", required=True)
     parser.add_argument("--bids_root", required=True)
     parser.add_argument("--metadata", required=True)
-    parser.add_argument("--embedding_derivative_root", required=True)
-    parser.add_argument("--embedding_model_key", required=True)
+    parser.add_argument(
+        "--embedding_derivative_root",
+        required=True,
+        help="Folder of the coco-pipe-<model> datasets with the all-recordings files.",
+    )
+    parser.add_argument(
+        "--embedding_model_key",
+        required=True,
+        help="The space: a model key, with _pool-attention for REVE's attention vectors.",
+    )
+    parser.add_argument("--desc", default="base", help="Epoch variant: base or baserejected.")
     parser.add_argument(
         "--diagnostic_transform",
         required=True,
-        help="Exact transform label to write for this embedding variant.",
+        choices=["none", "leace"],
+        help="none, or leace cross-fitted over subjects.",
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
@@ -514,6 +422,7 @@ def main() -> None:
             metadata=args.metadata,
             embedding_derivative_root=args.embedding_derivative_root,
             embedding_model_key=args.embedding_model_key,
+            desc=args.desc,
             diagnostic_transform=args.diagnostic_transform,
         )
     )

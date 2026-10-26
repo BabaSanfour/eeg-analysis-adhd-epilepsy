@@ -76,7 +76,7 @@ elif [ "$PIPELINE_TYPE" == "foundation" ]; then
     echo "================================================================="
     echo " 3. FOUNDATION Dimensionality Reduction"
     echo "================================================================="
-    FOUND_ROOT="$EMBEDDING_ROOT"
+    FOUND_ROOT="$EMBEDDING_PROJECT_ROOT"
     read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod}"
     read -r -a ALIGNMENT_TRANSFORMS <<< "${ALIGNMENT_TRANSFORMS:-none leace}"
     read -r -a RAW_ONLY_MODELS <<< "${RAW_ONLY_MODELS:-reve_pool-attention}"

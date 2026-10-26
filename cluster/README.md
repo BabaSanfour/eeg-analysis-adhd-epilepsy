@@ -105,7 +105,7 @@ derivative tree has a `.bidsignore` for the files BIDS does not define.
 | `DESCRIPTOR_SHARDS_ROOT` | per-subject descriptor shards (05, 06) | `$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
 | `DESCRIPTORS_ROOT` | merged descriptor tables and shard archive (07, 07b) | `$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
 | `EMBEDDING_SCRATCH_ROOT` | per-recording embedding files (08), in `coco-pipe-<model>/` | `$SCRATCH_ROOT/BIDS/derivatives` |
-| `EMBEDDING_ROOT` | foundation embeddings (09-10, until their rewrite) | `$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings_$EPOCHS_DESC` |
+| `EMBEDDING_PROJECT_ROOT` | the all-recordings embedding files (09, 10) and their archives (10b), read by 13, 15, 19, 20 | `$BIDS_ROOT/derivatives` |
 | `DECODING_ROOT` | decoding checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/decoding_$EPOCHS_DESC` |
 | `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/dim_reduction_$EPOCHS_DESC` |
 | `OVERWRITE` | `1` to force reprocessing (01, 09, 12, 13, 20) | `0` |
