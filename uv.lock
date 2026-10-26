@@ -646,7 +646,7 @@ wheels = [
 [[package]]
 name = "coco-pipe"
 version = "0.0.3"
-source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=fix%2Fembedding-labels#a6e35fec754fcf999d9020958e0a955478e79335" }
+source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#20ad9dc6e4e7d724d136bc21ffd42df1605a3be8" }
 dependencies = [
     { name = "filelock" },
     { name = "h5netcdf", extra = ["h5py"] },
@@ -1033,7 +1033,7 @@ requires-dist = [
     { name = "asrpy" },
     { name = "autoreject" },
     { name = "bids-validator-deno" },
-    { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=fix%2Fembedding-labels" },
+    { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main" },
     { name = "filelock", specifier = ">=3.20.4" },
     { name = "mne", specifier = ">=1.13" },
     { name = "mne-bids", git = "https://github.com/BabaSanfour/mne-bids?rev=read-epochs-fif" },
