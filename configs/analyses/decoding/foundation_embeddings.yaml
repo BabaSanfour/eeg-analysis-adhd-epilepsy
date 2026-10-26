@@ -9,15 +9,13 @@ analysis_modes:
 transforms:
   - none
   - leace
-  - ea_coral
-  - ea_mean
-  - ra
 
 transform_params:
+  # Fold-local LEACE erases the directions whose subject eta^2 is at least eta2, fitted
+  # with the condition of each training window.
   leace:
-    shrinkage: true
-  ea_coral:
-    shrinkage: true
+    eta2: 0.5
+    condition_column: condition
 
 # When enabled, every transform is decoded both with all dimensions and with
 # fold-local PCA after erasure/scaling.

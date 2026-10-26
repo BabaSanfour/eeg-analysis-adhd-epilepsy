@@ -17,7 +17,7 @@ def test_scan_artifacts_keeps_pooling_and_alignment_model_keys_separate(tmp_path
     for path, model_key in (
         (raw_path, "demo"),
         (attention_path, "demo_pool-attention"),
-        (aligned_path, "demo_align-ra"),
+        (aligned_path, "demo_align-leace"),
     ):
         path.touch()
         path.with_suffix(".json").write_text(
@@ -27,7 +27,7 @@ def test_scan_artifacts_keeps_pooling_and_alignment_model_keys_separate(tmp_path
 
     by_model, records = mfe._scan_artifacts(tmp_path)
 
-    expected = {"demo", "demo_pool-attention", "demo_align-ra"}
+    expected = {"demo", "demo_pool-attention", "demo_align-leace"}
     assert set(by_model) == expected
     assert {record["model_key"] for record in records} == expected
 

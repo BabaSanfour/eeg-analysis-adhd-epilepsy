@@ -328,7 +328,7 @@ def test_streamed_diagnostics_materializes_task_batches_once():
         source,
         [task],
         _streamed_diagnostics_probe_config(diagnostic_task_cache_max_bytes=10 * 1024**2),
-        transform="ra",
+        transform="leace",
         n_observations=len(indices),
     )
 
@@ -349,7 +349,7 @@ def test_streamed_diagnostics_falls_back_to_streaming_when_over_budget():
         materialized_source,
         [task],
         _streamed_diagnostics_probe_config(diagnostic_task_cache_max_bytes=10 * 1024**2),
-        transform="ra",
+        transform="leace",
         n_observations=len(indices),
     )
 
@@ -358,7 +358,7 @@ def test_streamed_diagnostics_falls_back_to_streaming_when_over_budget():
         streamed_source,
         [task],
         _streamed_diagnostics_probe_config(diagnostic_task_cache_max_bytes=1),
-        transform="ra",
+        transform="leace",
         n_observations=len(indices),
     )
 
@@ -412,7 +412,7 @@ def test_parallel_diagnostics_match_sequential(streamed):
                 _CountingFeatureBatches(indices, features, chunk_size=5),
                 tasks,
                 config,
-                transform="ra",
+                transform="leace",
                 n_observations=len(indices),
             )
         return vd.score_variance_diagnostics(features, tasks, config, transform="none")

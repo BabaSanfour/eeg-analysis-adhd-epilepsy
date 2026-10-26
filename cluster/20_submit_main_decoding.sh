@@ -116,7 +116,7 @@ run_saved_embedding_classical() {
     for model in "${SAVED_MODELS[@]}"; do
         for rep in "${SAVED_REPRESENTATIONS[@]}"; do
             echo " -> Model: $model | Representation: $rep"
-            echo "    Transforms: none, fold-local leace, ea_coral, ea_mean, ra"
+            echo "    Transforms: none, fold-local leace"
             cmd=(
                 python -m eeg_adhd_epilepsy.analysis.classical_decoding
                 --cohort_config "$CONFIG"

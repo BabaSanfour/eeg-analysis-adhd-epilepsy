@@ -67,7 +67,7 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 07 | `07_submit_merge_descriptors.sh` | shards → combined tables (project) | single |
 | 07b | `07b_submit_archive_descriptors.sh` | shards → one validated `shards.tar.zst` on the project; scratch shards deleted | single |
 | 08 | `08_submit_foundation_embeddings.sh` | epochs → per-recording embedding files, one `coco-pipe-<model>` dataset per model (scratch) | single (per variant, one H100 shared by 12 processes, each a model and some of its weight sets) |
-| 09 | `09_submit_align_subject_embeddings.sh` | per-recording embeddings (scratch) → subject-aligned window, token and RA files of every recording (project) | array (per weight set of one model and variant, CPU) |
+| 09 | `09_submit_align_subject_embeddings.sh` | per-recording window vectors (scratch) → LEACE-erased window file of every recording (project) | array (per weight set of one model and variant, CPU) |
 | 10 | `10_submit_merge_foundation_embeddings.sh` | raw/aligned shards → combined tables, manifest, and report | single |
 | 11 | `11_batch_run_dim_reduction.sh` | raw dim-reduction | array (per cohort) |
 | 12 | `12_batch_run_dim_reduction_descriptors.sh` | descriptor dim-reduction | array (per cohort) |
@@ -135,14 +135,11 @@ Analysis stages take a **cohort** config (`configs/cohorts/...`, the dataset +
 clinical question) **and** an **analysis** config (`configs/analyses/<type>/...`,
 the method). See `../configs/README.md`.
 
-- **09 (subject alignment)** materializes LEACE, EA-CORAL, EA-Mean, and
-  token-based RA variants once per foundation model. It runs after extraction;
-  its default cohort supplies the clinical diagnostic subset while transforms
-  are fitted over the configured global population. Raw and per-transform
-  diagnostics are checkpointed immediately in `variance_diagnostics.csv`, with
-  atomic `_alignment_<model>_progress.json` state; a compatible resubmission
-  skips completed diagnostics and transforms whose recorded artifacts still
-  exist.
+- **09 (subject erasure)** writes, per weight set, the window vectors with
+  subject identity erased by LEACE, fitted on every window with its condition,
+  for the descriptive plots (decoding fits LEACE in its folds). EA and RA are not
+  used: per-subject recentering removes diagnosis by construction, and a
+  reference over mixed conditions adds the recording protocol (HANDOFF, fix 5).
 - **10 (foundation merge)** scans both raw and aligned embedding derivatives,
   then writes their combined tables, manifest, status, and report.
 - **11 / 12 / 13 (dim-reduction)** sweep every cohort under `CONFIGS_DIR`
@@ -152,7 +149,7 @@ the method). See `../configs/README.md`.
   loads each condition once and reduces every analysis mode), so the `--array`
   bound is just the cohort count for 11/12, and `cohorts × representation spaces
   × representations` for 13 (epoch/recording/subject, run separately). Each base
-  model contributes `none`, `leace`, `ea_coral`, `ea_mean`, and `ra`; explicit
+  model contributes `none` and `leace`; explicit
   pooling variants such as `reve_pool-attention` are raw-only. A
   guard fails the job loudly if `#SBATCH --array=1-N` is stale; set `CONFIGS_DIR`
   to a subtree (or `BASE_MODELS` / `ALIGNMENT_TRANSFORMS` /
@@ -186,9 +183,8 @@ the method). See `../configs/README.md`.
   from one run: every metric per epoch, and as `<metric>_by_recording` on the mean
   probability of each recording's test epochs.
 - **15 (classical decoding)** runs one descriptor baseline plus every configured
-  base foundation model × representation. Each foundation task evaluates raw,
-  fold-local LEACE, EA-CORAL, EA-Mean, and RA in the same run, so transforms use
-  identical folds and are not an array dimension. Array tasks suppress the
+  base foundation model × representation. Each foundation task evaluates raw and
+  fold-local LEACE in the same run, so both use identical folds. Array tasks suppress the
   shared report to avoid concurrent writes.
 - **16 (classical comparison)** reads every completed stage-15 result and writes
   the shared head-to-head and foundation-transform reports.

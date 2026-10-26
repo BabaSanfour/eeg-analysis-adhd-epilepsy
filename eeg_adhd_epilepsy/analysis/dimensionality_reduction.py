@@ -929,7 +929,7 @@ def main() -> None:
     parser.add_argument(
         "--alignment_transform",
         default=None,
-        help="Reduce one materialized alignment variant (for example none, leace, or ra).",
+        help="Reduce one materialized alignment variant (none or leace).",
     )
     parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
     parser.add_argument(

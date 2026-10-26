@@ -78,7 +78,7 @@ elif [ "$PIPELINE_TYPE" == "foundation" ]; then
     echo "================================================================="
     FOUND_ROOT="$EMBEDDING_ROOT"
     read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod}"
-    read -r -a ALIGNMENT_TRANSFORMS <<< "${ALIGNMENT_TRANSFORMS:-none leace ea_coral ea_mean ra}"
+    read -r -a ALIGNMENT_TRANSFORMS <<< "${ALIGNMENT_TRANSFORMS:-none leace}"
     read -r -a RAW_ONLY_MODELS <<< "${RAW_ONLY_MODELS:-reve_pool-attention}"
     REPS=(${REPRESENTATIONS:-epoch recording subject})
     require_dir "$FOUND_ROOT"

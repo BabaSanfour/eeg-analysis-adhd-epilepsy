@@ -90,7 +90,7 @@ merge: ## Descriptor shards -> combined descriptor tables
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.merge_descriptors --bids_root $(BIDS_ROOT)
 
-align-subject-embeddings: ## Per-recording embeddings -> subject-aligned files of every recording
+align-subject-embeddings: ## Per-recording window vectors -> LEACE-erased file of every recording
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
 	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the folder of the per-recording coco-pipe-<model> datasets))
 	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the model))

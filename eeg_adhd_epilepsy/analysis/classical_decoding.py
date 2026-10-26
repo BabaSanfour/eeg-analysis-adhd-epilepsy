@@ -12,12 +12,10 @@ experiment assembly, resume, export, reports, record extraction — lives in
 from __future__ import annotations
 
 import argparse
-import copy
 import gc
 import logging
 from collections import Counter
 from collections.abc import Iterator, Mapping
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +39,6 @@ from coco_pipe.decoding import (
     safe_group_n_splits,
 )
 from coco_pipe.io import DataContainer
-from coco_pipe.transforms.subject_alignment import VECTOR_TRANSFORMS, make_subject_transform
 from coco_pipe.utils import slug
 
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
@@ -71,10 +68,6 @@ LOGGER = logging.getLogger(__name__)
 
 _FS_METADATA_KEYS = {"name", "analysis_modes", "representations"}
 _MAX_FAILURE_REASONS_TO_LOG = 8
-
-_FOLD_LOCAL_TRANSFORMS = frozenset(
-    name for name in VECTOR_TRANSFORMS if make_subject_transform(name).fold_local
-)
 
 
 def _log_enumeration_failures(
@@ -248,13 +241,15 @@ def _build_selection_units(
 
     reduction_modes = [False, True] if plan.reducer_enabled else [False]
     for transform_name in plan.transforms:
+        params = dict(plan.transform_params.get(transform_name, {}))
         erasure = (
             ErasureConfig(
                 enabled=True,
                 method=transform_name,
-                params=plan.transform_params.get(transform_name, {}),
+                condition_column=params.pop("condition_column", None),
+                params=params,
             )
-            if transform_name in _FOLD_LOCAL_TRANSFORMS
+            if transform_name == "leace"
             else ErasureConfig(enabled=False)
         )
         for reduced in reduction_modes:
@@ -608,73 +603,54 @@ def _iter_classical_unit_batches(
     this generator is exhausted.
     """
     run_pooled = bool(config["run_pooled"]) and len(conditions) > 1
-    raw_transforms = [
-        name for name in plan.transforms if name == "none" or name in _FOLD_LOCAL_TRANSFORMS
-    ]
-    materialized_transforms = [
-        name for name in plan.transforms if name != "none" and name not in _FOLD_LOCAL_TRANSFORMS
-    ]
-    transform_batches: list[tuple[list[str], str | None]] = []
-    if raw_transforms:
-        transform_batches.append((raw_transforms, None))
-    transform_batches.extend(([name], name) for name in materialized_transforms)
-
-    for transform_names, materialized in transform_batches:
-        transform_plan = replace(plan, transforms=transform_names)
-        transform_loader = copy.copy(loader_args)
-        if materialized is not None:
-            transform_loader.embedding_model_key = (
-                f"{loader_args.embedding_model_key}_align-{materialized}"
-            )
-
-        pool_specs: list[dict[str, Any]] = []
-        pool_loaders: list[Any] = []
-        for condition in conditions:
-            container = build_dataset(transform_loader, metadata, condition, target_col=None)
-            if container.meta.get("qc_result") is not None:
-                qc_report_results.append((condition, container.meta["qc_result"]))
-            n_before = len(failures)
-            units = _classical_scope_units(
-                transform_plan,
-                condition,
-                container,
-                config=config,
-                derivative_root=derivative_root,
-                failures=failures,
-            )
-            enum_failures.extend(failures[n_before:])
-            stats["units"] += len(units)
-            _log_scope_resume_summary(units, scope=condition)
-            if run_pooled:
-                pool_specs.append(container_pool_spec(container))
-                pool_loaders.append(
-                    lambda args=transform_loader, cond=condition: build_dataset(
-                        args, metadata, cond, target_col=None
-                    )
+    pool_specs: list[dict[str, Any]] = []
+    pool_loaders: list[Any] = []
+    for condition in conditions:
+        container = build_dataset(loader_args, metadata, condition, target_col=None)
+        if container.meta.get("qc_result") is not None:
+            qc_report_results.append((condition, container.meta["qc_result"]))
+        n_before = len(failures)
+        units = _classical_scope_units(
+            plan,
+            condition,
+            container,
+            config=config,
+            derivative_root=derivative_root,
+            failures=failures,
+        )
+        enum_failures.extend(failures[n_before:])
+        stats["units"] += len(units)
+        _log_scope_resume_summary(units, scope=condition)
+        if run_pooled:
+            pool_specs.append(container_pool_spec(container))
+            pool_loaders.append(
+                lambda args=loader_args, cond=condition: build_dataset(
+                    args, metadata, cond, target_col=None
                 )
-            yield units
-            del container, units
-            gc.collect()
-
-        if len(pool_specs) > 1:
-            pooled = pool_containers_streaming(pool_specs, pool_loaders)
-            n_before = len(failures)
-            units = _classical_scope_units(
-                transform_plan,
-                "pooled",
-                pooled,
-                config=config,
-                derivative_root=derivative_root,
-                failures=failures,
             )
-            enum_failures.extend(failures[n_before:])
-            stats["units"] += len(units)
-            _log_scope_resume_summary(units, scope="pooled")
-            yield units
-            del pooled, units
-
-        del pool_specs, pool_loaders
+        yield units
+        del container, units
         gc.collect()
+
+    if len(pool_specs) > 1:
+        pooled = pool_containers_streaming(pool_specs, pool_loaders)
+        n_before = len(failures)
+        units = _classical_scope_units(
+            plan,
+            "pooled",
+            pooled,
+            config=config,
+            derivative_root=derivative_root,
+            failures=failures,
+        )
+        enum_failures.extend(failures[n_before:])
+        stats["units"] += len(units)
+        _log_scope_resume_summary(units, scope="pooled")
+        yield units
+        del pooled, units
+
+    del pool_specs, pool_loaders
+    gc.collect()
 
 
 # ---------------------------------------------------------------------------

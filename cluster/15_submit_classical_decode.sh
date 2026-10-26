@@ -90,7 +90,7 @@ echo "Input:          foundation_embeddings"
 echo "Analysis:       $FOUNDATION_ANALYSIS_CONFIG"
 echo "Model:          $model"
 echo "Representation: $representation"
-echo "Transforms:     none, fold-local leace, ea_coral, ea_mean, ra"
+echo "Transforms:     none, fold-local leace"
 echo "Embedding root: $EMBEDDING_ROOT"
 
 python -m eeg_adhd_epilepsy.analysis.classical_decoding \

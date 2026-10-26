@@ -21,7 +21,7 @@ OVERWRITE=${OVERWRITE:-0}
 # Each base model contributes its raw space plus every materialized alignment.
 # Pooling variants without their own aligned derivatives are raw-only spaces.
 read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
-read -r -a ALIGNMENT_TRANSFORMS <<< "${ALIGNMENT_TRANSFORMS:-none leace ea_coral ea_mean ra}"
+read -r -a ALIGNMENT_TRANSFORMS <<< "${ALIGNMENT_TRANSFORMS:-none leace}"
 read -r -a RAW_ONLY_MODELS <<< "${RAW_ONLY_MODELS:-reve_pool-attention}"
 
 # Embedding representations (canonical granularity ladder) to reduce, each as a
