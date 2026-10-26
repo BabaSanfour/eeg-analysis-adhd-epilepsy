@@ -21,7 +21,6 @@ class ReportStage(StrEnum):
     COMPARE = "compare"
     DESCRIPTOR_QC = "descriptor_qc"
     DIM_REDUCTION = "dim_reduction"
-    FOUNDATION_EMBEDDINGS = "foundation_embeddings"
     DECODING = "decoding"
 
 

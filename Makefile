@@ -38,7 +38,7 @@ FOUNDATION_EMB_CFG          ?= configs/foundation_extraction.yaml
 FOUNDATION_DECODE_ANALYSIS  ?= configs/analyses/decoding/foundation.yaml
 
 .PHONY: help install test all \
-        bids preprocess epochs descriptors merge align-subject-embeddings \
+        bids preprocess epochs descriptors merge align-subject-embeddings merge-embeddings \
         dim-reduce-alignments dim-reduce classical-decode \
         foundation-embeddings foundation-decode cohort-report metadata
 
@@ -96,6 +96,15 @@ align-subject-embeddings: ## Per-recording window vectors -> LEACE-erased file o
 	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the model))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.align_subject_embeddings \
 	  --config $(FOUNDATION_EMB_CFG) --bids_root $(BIDS_ROOT) --desc $(EPOCHS_DESC) \
+	  --source_root $(SOURCE_EMBEDDING_ROOT) --derivatives_root $(BIDS_ROOT)/derivatives \
+	  --model $(EMBEDDING_MODEL_KEY)
+
+merge-embeddings: ## Per-recording embedding files -> one file per label and view of every recording
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the folder of the per-recording coco-pipe-<model> datasets))
+	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the model))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.merge_foundation_embeddings \
+	  --config $(FOUNDATION_EMB_CFG) --bids_root $(BIDS_ROOT) \
 	  --source_root $(SOURCE_EMBEDDING_ROOT) --derivatives_root $(BIDS_ROOT)/derivatives \
 	  --model $(EMBEDDING_MODEL_KEY)
 
