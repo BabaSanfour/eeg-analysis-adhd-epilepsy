@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import logging
 import shutil
+import time
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -136,7 +137,14 @@ def run(
     source = Path(source_root) / f"coco-pipe-{model_key}"
     root = Path(derivatives_root) / f"coco-pipe-{model_key}"
     written: dict[str, list[str]] = {}
+    start = time.monotonic()
     index = index_files(source)
+    LOGGER.info(
+        "Listed %d files of %s in %.0f s.",
+        sum(map(len, index.values())),
+        source,
+        time.monotonic() - start,
+    )
     for desc in descs:
         for label in extraction_labels(model_cfg, desc, weights):
             records = read_json(source / f"desc-{label}_manifest.json")["records"]
