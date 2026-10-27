@@ -17,7 +17,10 @@ def test_merge_writes_one_file_per_label_and_view_and_refuses_a_missing_recordin
     efe.run(config, scratch, model_key="cbramod", weights=[None, 0], subjects=["0001", "0003"])
     options = {"model_key": "cbramod", "descs": ["base"], "weights": [None, 0]}
 
-    written = mfe.run(config, scratch, project, **options)
+    # Each label merged from a staged copy, which is removed afterwards.
+    stage = tmp_path / "stage"
+    written = mfe.run(config, scratch, project, **options, stage_dir=stage, n_jobs=4)
+    assert not any(stage.iterdir())
 
     source, root = scratch / "coco-pipe-cbramod", project / "coco-pipe-cbramod"
     views = ("token", "window", "channel", "patch")

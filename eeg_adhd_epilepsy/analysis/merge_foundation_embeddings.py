@@ -9,13 +9,21 @@ first checked against the extraction's manifest: every recording written or done
 its file in every view, and a failed recording stops the run. The manifest goes to the
 project with the files. The dataset files are written once, at the end, so they
 describe every file there, the subject-erased ones included.
+
+On a parallel file system the time goes to listing and opening a hundred thousand small
+files. The dataset is listed once, not once per label and view, and with ``stage_dir`` (a
+node's local disk) each label's files are first copied there by ``n_jobs`` threads, merged
+from there, and the copy deleted before the next label.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import shutil
+from collections import defaultdict
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -23,11 +31,10 @@ from coco_pipe.io import (
     EMBEDDING_VIEWS,
     consolidate_embeddings,
     embedding_label,
-    find_embeddings,
     read_json,
     write_embedding_manifest,
 )
-from mne_bids import BIDSPath
+from mne_bids import BIDSPath, find_matching_paths
 
 from eeg_adhd_epilepsy.analysis.extract_foundation_embeddings import (
     VARIANTS,
@@ -49,6 +56,25 @@ def extraction_labels(
         for seed in weights
         for pooling in poolings
     ]
+
+
+def index_files(source: Path) -> dict[tuple[str, str], list[BIDSPath]]:
+    """Every per-recording embedding file of a dataset, by label and view, sorted by path.
+
+    One walk of the dataset, as coco-pipe's ``find_embeddings`` makes for one label and
+    view; the files at the dataset root, which hold every recording, are not listed.
+    """
+    paths = find_matching_paths(
+        source,
+        suffixes=[f"{view}embeddings" for view in EMBEDDING_VIEWS],
+        extensions=".nc",
+        ignore_nosub=True,
+        check=False,
+    )
+    index: dict[tuple[str, str], list[BIDSPath]] = defaultdict(list)
+    for path in paths:
+        index[(path.description, path.suffix.removesuffix("embeddings"))].append(path)
+    return {key: sorted(found, key=lambda path: str(path.fpath)) for key, found in index.items()}
 
 
 def _recording_id(path: BIDSPath) -> str:
@@ -75,6 +101,25 @@ def check_coverage(
             )
 
 
+def stage_files(
+    files: Mapping[str, Sequence[BIDSPath]], source: Path, stage: Path, *, n_jobs: int = 1
+) -> dict[str, list[Path]]:
+    """Copy the files to ``stage`` with ``n_jobs`` threads, keeping their place under ``source``."""
+    pairs = [
+        (path.fpath, stage / path.fpath.relative_to(source))
+        for view_files in files.values()
+        for path in view_files
+    ]
+    for _, copy in pairs:
+        copy.parent.mkdir(parents=True, exist_ok=True)
+    with ThreadPoolExecutor(max_workers=max(1, n_jobs)) as pool:
+        list(pool.map(lambda pair: shutil.copyfile(*pair), pairs))
+    return {
+        view: [stage / path.fpath.relative_to(source) for path in view_files]
+        for view, view_files in files.items()
+    }
+
+
 def run(
     config: dict[str, Any],
     source_root: Path,
@@ -83,25 +128,34 @@ def run(
     model_key: str,
     descs: Sequence[str],
     weights: Sequence[int | None],
+    stage_dir: Path | None = None,
+    n_jobs: int = 1,
 ) -> dict[str, list[str]]:
     """Consolidate every label of one model; return the files written per label."""
     model_cfg = config["models"][model_key]
     source = Path(source_root) / f"coco-pipe-{model_key}"
     root = Path(derivatives_root) / f"coco-pipe-{model_key}"
     written: dict[str, list[str]] = {}
+    index = index_files(source)
     for desc in descs:
         for label in extraction_labels(model_cfg, desc, weights):
             records = read_json(source / f"desc-{label}_manifest.json")["records"]
-            files = {view: find_embeddings(source, label, view) for view in EMBEDDING_VIEWS}
-            files = {view: view_files for view, view_files in files.items() if view_files}
+            files = {
+                view: index[(label, view)] for view in EMBEDDING_VIEWS if (label, view) in index
+            }
             if not files:
                 raise FileNotFoundError(f"No file of {label} in {source}.")
             check_coverage(label, records, files)
+            if stage_dir is not None:
+                stage = Path(stage_dir) / label
+                files = stage_files(files, source, stage, n_jobs=n_jobs)
             written[label] = []
             for view, view_files in files.items():
                 path = consolidate_embeddings(view_files, root)
                 LOGGER.info("%s %s: %d recordings, %s", label, view, len(view_files), path.basename)
                 written[label].append(path.basename)
+            if stage_dir is not None:
+                shutil.rmtree(stage)
             write_embedding_manifest(root, label, records)
     write_dataset(root, model_key, Path(config["bids_root"]))
     return written
@@ -137,6 +191,12 @@ def main() -> None:
         default=["all"],
         help="Weight sets: pretrained and/or seeds of the model's random_seeds, or all.",
     )
+    parser.add_argument(
+        "--stage_dir",
+        default=None,
+        help="A local disk to copy each label's files to before merging (e.g. $SLURM_TMPDIR).",
+    )
+    parser.add_argument("--n_jobs", type=int, default=1, help="Threads copying files.")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -149,6 +209,8 @@ def main() -> None:
         model_key=args.model,
         descs=args.desc,
         weights=parse_weights(args.weights, config["models"][args.model]["random_seeds"]),
+        stage_dir=Path(args.stage_dir) if args.stage_dir else None,
+        n_jobs=args.n_jobs,
     )
 
 

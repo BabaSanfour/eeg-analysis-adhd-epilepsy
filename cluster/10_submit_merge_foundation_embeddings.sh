@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_merge_embeddings
-#SBATCH --time=06:00:00
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=8G
+#SBATCH --time=12:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=24G
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
 # All-recordings embedding files of one model on the project: for both epoch variants
 # and every weight set, the per-recording files on scratch (stage 08) become one file
 # per label and view, each label checked against its manifest first; then the dataset
-# files, once, describing every file there (stage 09's included). One file is copied
-# at a time, so memory stays small. Run after stage 09; 10b then archives the
+# files, once, describing every file there (stage 09's included). Each label's files
+# are first copied to the node's $SLURM_TMPDIR by 8 threads and merged from there: on
+# Lustre, opening a thousand small files one at a time is what takes the time (LUNA,
+# 57 GB, read in place: 1 h 30, 9% CPU). Run after stage 09; 10b then archives the
 # per-recording files.
-#   cluv submit fir cluster/10_submit_merge_foundation_embeddings.sh -- MODEL=reve
+#   cluv submit fir cluster/10_submit_merge_foundation_embeddings.sh -- MODEL=cbramod
+#   cluv submit fir cluster/10_submit_merge_foundation_embeddings.sh --mem=32G --time=20:00:00 -- MODEL=reve
 
 set -euo pipefail
 
@@ -35,5 +38,7 @@ python -m eeg_adhd_epilepsy.analysis.merge_foundation_embeddings \
     --bids_root "$BIDS_ROOT" \
     --source_root "$EMBEDDING_SCRATCH_ROOT" \
     --derivatives_root "$EMBEDDING_PROJECT_ROOT" \
-    --model "$MODEL"
+    --model "$MODEL" \
+    --stage_dir "${SLURM_TMPDIR:?}/stage" \
+    --n_jobs "${SLURM_CPUS_PER_TASK:-1}"
 validate_bids "$EMBEDDING_PROJECT_ROOT/coco-pipe-$MODEL"
