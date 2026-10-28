@@ -3,8 +3,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-# descriptor baseline + 8 foundation models x 2 representations.
-#SBATCH --array=1-17
+# descriptor baseline + 4 foundation models x 2 representations.
+#SBATCH --array=1-9
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -20,7 +20,7 @@ COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_c
 CLASSICAL_ANALYSIS_CONFIG=${CLASSICAL_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/classical.yaml}
 FOUNDATION_ANALYSIS_CONFIG=${FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation_embeddings.yaml}
 
-read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
+read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna}"
 REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording})
 
 # Descriptor tables (dataset paths -> supplied here, not in the analysis config).

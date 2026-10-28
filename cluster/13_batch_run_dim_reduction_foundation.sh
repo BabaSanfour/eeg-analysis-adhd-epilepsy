@@ -3,8 +3,8 @@
 #SBATCH --time=12:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-# array = cohorts x representation spaces x granularities; 71 x 41 x 3.
-#SBATCH --array=1-8733
+# array = cohorts x representation spaces x granularities; 72 x 9 x 3.
+#SBATCH --array=1-1944
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -20,7 +20,7 @@ OVERWRITE=${OVERWRITE:-0}
 
 # Each base model contributes its raw space plus every materialized alignment.
 # Pooling variants without their own aligned derivatives are raw-only spaces.
-read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
+read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna}"
 read -r -a ALIGNMENT_TRANSFORMS <<< "${ALIGNMENT_TRANSFORMS:-none leace}"
 read -r -a RAW_ONLY_MODELS <<< "${RAW_ONLY_MODELS:-reve_pool-attention}"
 

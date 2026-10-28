@@ -58,59 +58,6 @@ models:
       linear_probe: {}
       full: {}
       lora: {}
-  - model_key: biot
-    segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: true
-    window_source: derivative
-    window_mismatch_policy: raise
-    backend: auto
-    backend_kwargs: {}
-    lora: {}
-    trainer:
-      linear_probe: {}
-      full: {}
-      lora: {}
-  - model_key: signaljepa
-    segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: false
-    window_source: re_epoch
-    window_mismatch_policy: raise
-    bandpass: [0.5, 40.0]
-    backend: auto
-    backend_kwargs: {}
-    lora: {}
-    trainer:
-      linear_probe: {}
-      full: {}
-      lora: {}
-  - model_key: eegpt
-    segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: true
-    window_source: derivative
-    window_mismatch_policy: raise
-    backend: auto
-    backend_kwargs: {}
-    lora: {}
-    trainer:
-      linear_probe: {}
-      full: {}
-      lora: {}
-  - model_key: bendr
-    segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: true
-    window_source: derivative
-    window_mismatch_policy: raise
-    backend: auto
-    backend_kwargs: {}
-    lora: {}
-    trainer:
-      linear_probe: {}
-      full: {}
-      lora: {}
 
 # --- Training regime --------------------------------------------------------
 train_modes: [linear_probe, full, lora]

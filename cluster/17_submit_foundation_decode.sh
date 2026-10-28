@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_foundation_decode
 #SBATCH --time=24:00:00
-#SBATCH --array=1-8
+#SBATCH --array=1-4
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -14,7 +14,7 @@ dra_epochs_variant
 # jobs separate bounds runtime and GPU memory; stage 18 writes shared reports.
 COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation.yaml}
-read -r -a MODELS <<< "${MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
+read -r -a MODELS <<< "${MODELS:-cbramod labram reve luna}"
 
 require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"

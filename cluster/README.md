@@ -46,7 +46,7 @@ cd ~/eeg_analysis_adhd_epilepsy
 HF_HOME=$SCRATCH/eeg-epilepsy-adhd/hf_home .venv/bin/python -c "
 from coco_pipe.decoding import get_foundation_model_spec
 from huggingface_hub import snapshot_download
-for key in 'cbramod labram reve luna biot signaljepa eegpt bendr'.split():
+for key in 'cbramod labram reve luna'.split():
     spec = get_foundation_model_spec(key)
     snapshot_download(spec.hub_repo, revision=spec.checkpoint_revision)
 snapshot_download('brain-bzh/reve-positions')"
@@ -176,7 +176,7 @@ the method). See `../configs/README.md`.
   written by a live 11/12/13 job (per-fit `_SUCCESS` resumability depends on
   the live directory, not the archive). Example:
   ```bash
-  printf '%s\n' foundation_bendr_flat_epoch_cfg-... foundation_biot_flat_epoch_cfg-... \
+  printf '%s\n' foundation_cbramod_flat_epoch_cfg-... foundation_labram_flat_epoch_cfg-... \
       > /home/hamza97/foundation_all.txt
   sbatch --export=ALL,DIRS_FILE=/home/hamza97/foundation_all.txt,ARCHIVE_NAME=foundation_all \
       cluster/14b_submit_archive_dim_reduction.sh
