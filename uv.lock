@@ -646,9 +646,10 @@ wheels = [
 [[package]]
 name = "coco-pipe"
 version = "0.0.3"
-source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#fc207aa7a04f6bbebac13137722d188547e43ff4" }
+source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#20ad9dc6e4e7d724d136bc21ffd42df1605a3be8" }
 dependencies = [
     { name = "filelock" },
+    { name = "h5netcdf", extra = ["h5py"] },
     { name = "hydra-core" },
     { name = "joblib" },
     { name = "markdown" },
@@ -1276,6 +1277,24 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/78/17/3789c0c72e64d59ca2433237ec325b19f283b13c61b0ecfc0671afaf609b/h5io-0.2.5.tar.gz", hash = "sha256:265bc9c24508b30575e8a8806b19cd4440643ff26f8b82b51d0280444807eed8", size = 21000, upload-time = "2025-04-14T16:41:12.159Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/81/3c/e7260dcdbdb166a8e85b72929066f33a2892930eb81bd9080682f97c4855/h5io-0.2.5-py3-none-any.whl", hash = "sha256:657f85ecd0d0f307ccd2e13dc7af1c0aa546b1598065229aedab8a6afcacb8ee", size = 17663, upload-time = "2025-04-14T16:41:09.186Z" },
+]
+
+[[package]]
+name = "h5netcdf"
+version = "1.8.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ef/03/92d6cc02c0055158167255980461155d6e17f1c4143c03f8bcc18d3e3f3a/h5netcdf-1.8.1.tar.gz", hash = "sha256:9b396a4cc346050fc1a4df8523bc1853681ec3544e0449027ae397cb953c7a16", size = 78679, upload-time = "2026-01-23T07:35:31.233Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/8b/88f16936a8e8070a83d36239555227ecd91728f9ef222c5382cda07e0fd6/h5netcdf-1.8.1-py3-none-any.whl", hash = "sha256:a76ed7cfc9b8a8908ea7057c4e57e27307acff1049b7f5ed52db6c2247636879", size = 62915, upload-time = "2026-01-23T07:35:30.195Z" },
+]
+
+[package.optional-dependencies]
+h5py = [
+    { name = "h5py" },
 ]
 
 [[package]]

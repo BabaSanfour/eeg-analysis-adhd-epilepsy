@@ -276,8 +276,10 @@ checkpointed outputs outside the input BIDS tree without changing run identity.
 ## Foundation models and decoding
 
 ```bash
-# Dataset-wide embedding extraction (CBraMod, LaBraM, REVE, LUNA, BIOT, SignalJEPA, EEGPT, BENDR).
-eeg-foundation-embeddings --config configs/foundation_extraction.yaml --bids_root … --metadata …
+# Embeddings of every recording by one model (REVE, LaBraM, CBraMod, LUNA), pretrained
+# and random weights, into <derivatives_root>/coco-pipe-<model>/.
+eeg-foundation-embeddings --config configs/foundation_extraction.yaml --bids_root … --metadata … \
+  --desc base --derivatives_root … --model cbramod --weights all
 
 # Decoding (two-config). Classical = descriptors/embeddings; foundation = direct probing/fine-tune/LoRA.
 eeg-classical-decode  --cohort_config <cohort.yaml> --analysis_config configs/analyses/decoding/classical.yaml --bids_root … --metadata …

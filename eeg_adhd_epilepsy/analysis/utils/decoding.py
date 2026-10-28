@@ -289,6 +289,11 @@ def build_classical_plan(config: Mapping[str, Any]) -> ClassicalPlan:
     transforms = [str(value) for value in config.get("transforms", ["none"])]
     if input_mode != "foundation_embeddings" and transforms != ["none"]:
         raise ValueError("Subject transforms are only supported for foundation embeddings.")
+    if unknown := sorted(set(transforms) - {"none", "leace"}):
+        raise ValueError(
+            f"Unknown transforms {unknown}: decoding takes 'none' and 'leace' (fitted in "
+            "each fold)."
+        )
     reducer_cfg = dict(config.get("reducer") or {})
 
     return ClassicalPlan(

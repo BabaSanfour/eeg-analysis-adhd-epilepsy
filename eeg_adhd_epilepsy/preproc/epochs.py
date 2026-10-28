@@ -231,7 +231,7 @@ def main() -> None:
         "Epoching %d recordings into desc-%s on %d workers.", len(files), out_desc, args.n_jobs
     )
 
-    # Every output is rewritten: an epoch file left from an earlier stage 03 run is stale.
+    # Every output is rewritten: an epoch file left from an earlier cleaning is stale.
     outputs = [
         f.with_name(f.name.replace(f"desc-{args.desc}_eeg.fif", f"desc-{out_desc}_epo.fif"))
         for f in files

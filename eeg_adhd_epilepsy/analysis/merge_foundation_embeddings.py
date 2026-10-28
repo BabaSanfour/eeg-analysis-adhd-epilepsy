@@ -1,251 +1,225 @@
 #!/usr/bin/env python3
-"""Aggregate raw and aligned foundation embeddings into tables, a manifest, and a report.
+"""All-recordings embedding files of one model, from its per-recording files.
 
-Extraction writes raw per-recording ``*_embedding.npz`` derivatives and alignment
-adds transformed derivatives with distinct model keys. This final step scans both
-and materializes one table per (model variant, condition) at each
-:data:`~coco_pipe.io.AGGREGATION_LEVELS` granularity:
+A run takes one model's per-recording files on scratch, for each epoch variant and
+weight set (the extraction's labels, e.g. ``base``, ``baseRandom3`` and REVE's
+``baseAttention``), and writes one file per label and view at the root of the model's
+dataset on the project, with coco-pipe's ``consolidate_embeddings``. Each label is
+first checked against the extraction's manifest: every recording written or done has
+its file in every view, and a failed recording stops the run. The manifest goes to the
+project with the files. The dataset files are written once, at the end, so they
+describe every file there.
 
-- ``combined/<model>_<condition>_epoch_embeddings.{parquet,csv}``     — 1 row / epoch
-- ``combined/<model>_<condition>_recording_embeddings.{parquet,csv}`` — 1 row / recording
-- ``combined/<model>_<condition>_subject_embeddings.{parquet,csv}``   — 1 row / subject
-
-``epoch`` and ``recording`` come straight from the saved per-window / pooled arrays;
-``subject`` is mean-pooled from a subject's epochs here at merge (no re-extraction).
-Plus the run manifest, failures table, dataset description, run status, and HTML report.
-Successful units are recovered by tree-scanning the sidecars; failed/skipped units come
-from the per-subject failures CSVs (they leave no artifact to scan).
+On a parallel file system the time goes to listing and opening a hundred thousand small
+files. The dataset is listed once, not once per label and view, and with ``stage_dir`` (a
+node's local disk) each label's files are first copied there by ``n_jobs`` threads, merged
+from there, and the copy deleted before the next label.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import shutil
+import time
 from collections import defaultdict
+from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-import pandas as pd
-from coco_pipe.decoding import redact_sensitive, write_run_status
 from coco_pipe.io import (
-    combined_embedding_table_path,
-    embedding_sidecar_path,
-    load_embedding_derivatives,
+    EMBEDDING_VIEWS,
+    consolidate_embeddings,
+    embedding_label,
     read_json,
-    write_embedding_dataset_description,
     write_embedding_manifest,
 )
-from coco_pipe.report import make_foundation_embedding_report
+from mne_bids import BIDSPath, find_matching_paths
 
-from eeg_adhd_epilepsy.io.bids import (
-    DESCRIPTION_ONLY_BIDSIGNORE,
-    DerivativeStage,
-    get_derivative_root,
-    write_bidsignore,
-)
-from eeg_adhd_epilepsy.io.report_paths import (
-    ReportStage,
-    default_reports_root,
-    summary_report_dir,
+from eeg_adhd_epilepsy.analysis.extract_foundation_embeddings import (
+    VARIANTS,
+    parse_weights,
+    write_dataset,
 )
 from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 
 LOGGER = logging.getLogger(__name__)
 
-_ID_COLUMNS = (
-    "subject",
-    "session",
-    "run",
-    "condition",
-    "recording_id",
-    "model_key",
-    "window_index",
-)
+
+def extraction_labels(
+    model_cfg: Mapping[str, Any], desc: str, weights: Sequence[int | None]
+) -> list[str]:
+    """The labels the extraction wrote for one epoch variant and these weight sets."""
+    poolings = ("mean", *model_cfg.get("extra_poolings", ()))
+    return [
+        embedding_label(desc, seed=seed, pooling=pooling)
+        for seed in weights
+        for pooling in poolings
+    ]
 
 
-def _scan_artifacts(derivative_root: Path) -> tuple[dict[str, list[Path]], list[dict[str, Any]]]:
-    """Group raw and aligned ``*_embedding.npz`` paths by model key."""
-    by_model: dict[str, list[Path]] = defaultdict(list)
-    records: list[dict[str, Any]] = []
-    for npz_path in sorted(derivative_root.rglob("*_embedding.npz")):
-        sidecar = embedding_sidecar_path(npz_path)
-        if not sidecar.exists():
-            continue
-        metadata = read_json(sidecar)
-        by_model[str(metadata.get("model_key", ""))].append(npz_path)
-        records.append({**metadata, "artifact_path": str(npz_path), "status": "success"})
-    return by_model, records
+def index_files(source: Path) -> dict[tuple[str, str], list[BIDSPath]]:
+    """Every per-recording embedding file of a dataset, by label and view, sorted by path.
 
-
-def _failure_records(derivative_root: Path) -> list[dict[str, Any]]:
-    """Concatenate every task's per-subject failures CSV (the non-success rows)."""
-    frames: list[pd.DataFrame] = []
-    for csv_path in sorted((derivative_root / "_failures").glob("*.csv")):
-        try:
-            frame = pd.read_csv(csv_path)
-        except pd.errors.EmptyDataError:
-            continue
-        if not frame.empty:
-            frames.append(frame)
-    if not frames:
-        return []
-    return pd.concat(frames, ignore_index=True).to_dict("records")
-
-
-def _embedding_frame(container: Any) -> pd.DataFrame:
-    """Flatten a loaded embedding container to id columns + ``embedding_*`` features."""
-    metadata = container.observation_frame().reset_index(drop=True)
-    features = pd.DataFrame(
-        np.asarray(container.X),
-        columns=[str(name) for name in container.coords["feature"]],
+    One walk of the dataset, as coco-pipe's ``find_embeddings`` makes for one label and
+    view; the files at the dataset root, which hold every recording, are not listed.
+    """
+    paths = find_matching_paths(
+        source,
+        suffixes=[f"{view}embeddings" for view in EMBEDDING_VIEWS],
+        extensions=".nc",
+        ignore_nosub=True,
+        check=False,
     )
-    id_columns = [column for column in _ID_COLUMNS if column in metadata.columns]
-    return pd.concat([metadata[id_columns], features], axis=1)
+    index: dict[tuple[str, str], list[BIDSPath]] = defaultdict(list)
+    for path in paths:
+        index[(path.description, path.suffix.removesuffix("embeddings"))].append(path)
+    return {key: sorted(found, key=lambda path: str(path.fpath)) for key, found in index.items()}
 
 
-def _subject_frame(epoch_frame: pd.DataFrame) -> pd.DataFrame:
-    """Mean-pool a subject's epoch embeddings into one row per (condition, subject)."""
-    if not {"subject", "condition"}.issubset(epoch_frame.columns):
-        return pd.DataFrame()
-    feature_cols = [c for c in epoch_frame.columns if str(c).startswith("embedding_")]
-    keys = ["condition", "subject"]
-    subject_df = epoch_frame.groupby(keys, as_index=False)[feature_cols].mean()
-    if "model_key" in epoch_frame.columns:
-        model_keys = epoch_frame.groupby(keys, as_index=False)["model_key"].first()
-        subject_df = subject_df.merge(model_keys, on=keys)
-    return subject_df
+def _recording_id(path: BIDSPath) -> str:
+    return path.basename.split("_desc-", 1)[0]
 
 
-def _write_condition_tables(
-    derivative_root: Path, model_key: str, representation: str, frame: pd.DataFrame
+def check_coverage(
+    label: str, records: Sequence[Mapping[str, Any]], files: Mapping[str, Sequence[BIDSPath]]
 ) -> None:
-    """Split *frame* by condition and write one combined table per condition.
-
-    Paths come from ``combined_embedding_table_path`` — the same helper the
-    dim-reduction loader (:func:`load_combined_embedding_table`) reads back, so the
-    filename convention has a single source of truth shared by writer and reader.
-    """
-    if frame.empty or "condition" not in frame.columns:
-        return
-    for condition, condition_frame in frame.groupby("condition"):
-        parquet_path = combined_embedding_table_path(
-            derivative_root, model_key, str(condition), representation
-        )
-        condition_frame.to_parquet(parquet_path, index=False)
-        condition_frame.to_csv(parquet_path.with_suffix(".csv"), index=False)
-
-
-def _write_combined_tables(derivative_root: Path, by_model: dict[str, list[Path]]) -> None:
-    """Materialize per (model, condition) epoch/recording/subject feature tables.
-
-    ``epoch`` and ``recording`` are the saved per-window and pooled arrays;
-    ``subject`` is mean-pooled from the epoch rows here (no re-extraction needed).
-    """
-    (derivative_root / "combined").mkdir(parents=True, exist_ok=True)
-    for model_key, paths in by_model.items():
-        epoch_frame = _embedding_frame(
-            load_embedding_derivatives(paths, representation="epoch", model_key=model_key)
-        )
-        _write_condition_tables(derivative_root, model_key, "epoch", epoch_frame)
-        _write_condition_tables(derivative_root, model_key, "subject", _subject_frame(epoch_frame))
-        del epoch_frame
-
-        recording_frame = _embedding_frame(
-            load_embedding_derivatives(paths, representation="recording", model_key=model_key)
-        )
-        _write_condition_tables(derivative_root, model_key, "recording", recording_frame)
-        del recording_frame
+    """Refuse a label whose files do not match its manifest's recordings."""
+    failed = [record["recording_id"] for record in records if record.get("status") == "failed"]
+    if failed:
+        raise RuntimeError(f"{label}: {len(failed)} recording(s) failed, e.g. {failed[0]}.")
+    expected = {
+        record["recording_id"] for record in records if record.get("status") in ("written", "done")
+    }
+    for view, view_files in files.items():
+        found = {_recording_id(path) for path in view_files}
+        if found != expected:
+            missing, extra = sorted(expected - found), sorted(found - expected)
+            raise RuntimeError(
+                f"{label} {view}: {len(missing)} recording(s) of the manifest have no file "
+                f"({missing[:3]}), {len(extra)} file(s) are not in it ({extra[:3]})."
+            )
 
 
-def run(config: dict[str, Any]) -> Path:
-    bids_root = Path(config["bids_root"]).expanduser()
-    if config.get("derivative_root"):
-        derivative_root = Path(config["derivative_root"]).expanduser()
-    else:
-        derivative_root = get_derivative_root(bids_root, DerivativeStage.FOUNDATION_EMBEDDINGS)
+def stage_files(
+    files: Mapping[str, Sequence[BIDSPath]], source: Path, stage: Path, *, n_jobs: int = 1
+) -> dict[str, list[Path]]:
+    """Copy the files to ``stage`` with ``n_jobs`` threads, keeping their place under ``source``."""
+    pairs = [
+        (path.fpath, stage / path.fpath.relative_to(source))
+        for view_files in files.values()
+        for path in view_files
+    ]
+    for _, copy in pairs:
+        copy.parent.mkdir(parents=True, exist_ok=True)
+    with ThreadPoolExecutor(max_workers=max(1, n_jobs)) as pool:
+        list(pool.map(lambda pair: shutil.copyfile(*pair), pairs))
+    return {
+        view: [stage / path.fpath.relative_to(source) for path in view_files]
+        for view, view_files in files.items()
+    }
 
-    if config.get("reports_root"):
-        reports_root = Path(config["reports_root"]).expanduser()
-    else:
-        reports_root = Path(default_reports_root(bids_root)).expanduser()
 
-    by_model, success_records = _scan_artifacts(derivative_root)
-    failures = _failure_records(derivative_root)
-    records = success_records + failures
-
-    derivative_root.mkdir(parents=True, exist_ok=True)
-    write_embedding_manifest(derivative_root, records)
-    write_embedding_dataset_description(
-        derivative_root,
-        name=str(config["dataset_name"]),
-        bids_version=config.get("bids_version", "1.11.1"),
-        generated_by=[
-            {"Name": "coco-pipe", "Description": "EEG foundation-model embedding extraction"}
-        ],
-        source_datasets=[{"URL": bids_root.resolve().as_uri()}],
+def run(
+    config: dict[str, Any],
+    source_root: Path,
+    derivatives_root: Path,
+    *,
+    model_key: str,
+    descs: Sequence[str],
+    weights: Sequence[int | None],
+    stage_dir: Path | None = None,
+    n_jobs: int = 1,
+) -> dict[str, list[str]]:
+    """Consolidate every label of one model; return the files written per label."""
+    model_cfg = config["models"][model_key]
+    source = Path(source_root) / f"coco-pipe-{model_key}"
+    root = Path(derivatives_root) / f"coco-pipe-{model_key}"
+    written: dict[str, list[str]] = {}
+    start = time.monotonic()
+    index = index_files(source)
+    LOGGER.info(
+        "Listed %d files of %s in %.0f s.",
+        sum(map(len, index.values())),
+        source,
+        time.monotonic() - start,
     )
-    write_bidsignore(derivative_root, DESCRIPTION_ONLY_BIDSIGNORE)
-    pd.DataFrame(failures).to_csv(derivative_root / "failures.csv", index=False)
-    _write_combined_tables(derivative_root, by_model)
-
-    status = (
-        "SUCCESS"
-        if success_records and not failures
-        else "PARTIAL"
-        if success_records
-        else "FAILED"
-    )
-    write_run_status(derivative_root, status)
-
-    report_dir = summary_report_dir(reports_root, ReportStage.FOUNDATION_EMBEDDINGS) / str(
-        config["dataset_name"]
-    )
-    report_dir.mkdir(parents=True, exist_ok=True)
-    make_foundation_embedding_report(
-        records,
-        config=redact_sensitive(config),
-        asset_urls=config.get("report_asset_urls", "inline"),
-        output_path=str(report_dir / "dataset_summary.html"),
-    )
-    return derivative_root
+    for desc in descs:
+        for label in extraction_labels(model_cfg, desc, weights):
+            records = read_json(source / f"desc-{label}_manifest.json")["records"]
+            files = {
+                view: index[(label, view)] for view in EMBEDDING_VIEWS if (label, view) in index
+            }
+            if not files:
+                raise FileNotFoundError(f"No file of {label} in {source}.")
+            check_coverage(label, records, files)
+            if stage_dir is not None:
+                stage = Path(stage_dir) / label
+                files = stage_files(files, source, stage, n_jobs=n_jobs)
+            written[label] = []
+            for view, view_files in files.items():
+                path = consolidate_embeddings(view_files, root)
+                LOGGER.info("%s %s: %d recordings, %s", label, view, len(view_files), path.basename)
+                written[label].append(path.basename)
+            if stage_dir is not None:
+                shutil.rmtree(stage)
+            write_embedding_manifest(root, label, records)
+    write_dataset(root, model_key, Path(config["bids_root"]))
+    return written
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Aggregate EEG foundation-embedding shards into combined tables and a report."
+        description="Write one model's all-recordings embedding files, one per label and view."
     )
-    parser.add_argument("--bids_root", required=True, help="Path to BIDS dataset")
+    parser.add_argument("--config", required=True, help="The embedding extraction config.")
+    parser.add_argument("--bids_root", required=True, help="The raw BIDS dataset.")
     parser.add_argument(
-        "--derivative_root",
-        type=str,
+        "--source_root",
+        required=True,
+        help="Folder of the coco-pipe-<model> datasets with the per-recording files (scratch).",
+    )
+    parser.add_argument(
+        "--derivatives_root",
+        required=True,
+        help="Folder of the coco-pipe-<model> datasets to write to (project).",
+    )
+    parser.add_argument("--model", required=True, help="Model key, e.g. reve.")
+    parser.add_argument(
+        "--desc",
+        nargs="+",
+        default=sorted(VARIANTS),
+        choices=sorted(VARIANTS),
+        help="Epoch variants of the preproc derivative (default: all).",
+    )
+    parser.add_argument(
+        "--weights",
+        nargs="+",
+        default=["all"],
+        help="Weight sets: pretrained and/or seeds of the model's random_seeds, or all.",
+    )
+    parser.add_argument(
+        "--stage_dir",
         default=None,
-        help="Explicit path to the extraction derivatives",
+        help="A local disk to copy each label's files to before merging (e.g. $SLURM_TMPDIR).",
     )
-    parser.add_argument(
-        "--reports_root", type=str, default=None, help="Explicit path to write output reports"
-    )
+    parser.add_argument("--n_jobs", type=int, default=1, help="Threads copying files.")
     args = parser.parse_args()
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
-    bids_root = Path(args.bids_root).expanduser()
-    if args.derivative_root:
-        derivative_root = Path(args.derivative_root).expanduser()
-    else:
-        derivative_root = get_derivative_root(bids_root, DerivativeStage.FOUNDATION_EMBEDDINGS)
-
-    config_path = derivative_root / "config_used.yaml"
-    if not config_path.exists():
-        raise FileNotFoundError(
-            f"config_used.yaml not found under {derivative_root}; run "
-            "extract_foundation_embeddings first."
-        )
-    config = load_yaml_config(config_path)
+    config = load_yaml_config(args.config)
     config["bids_root"] = args.bids_root
-    config["derivative_root"] = str(derivative_root)
-    if args.reports_root:
-        config["reports_root"] = args.reports_root
-    run(config)
+    run(
+        config,
+        Path(args.source_root),
+        Path(args.derivatives_root),
+        model_key=args.model,
+        descs=args.desc,
+        weights=parse_weights(args.weights, config["models"][args.model]["random_seeds"]),
+        stage_dir=Path(args.stage_dir) if args.stage_dir else None,
+        n_jobs=args.n_jobs,
+    )
 
 
 if __name__ == "__main__":

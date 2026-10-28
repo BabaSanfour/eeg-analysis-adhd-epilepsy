@@ -122,24 +122,24 @@ def main() -> None:
         type=str,
         default="dss",
         choices=["dss", "ica", "blind-dss", "none"],
-        help="Stage 1 EOG method",
+        help="Correction EOG method",
     )
     parser.add_argument(
         "--ecg-method",
         type=str,
         default="dss",
         choices=["dss", "ica", "quasiperiodic", "none"],
-        help="Stage 1 ECG method",
+        help="Correction ECG method",
     )
     parser.add_argument(
         "--emg-method",
         type=str,
         default="mwf",
         choices=["mwf", "wica", "ica", "dss", "none"],
-        help="Stage 1 EMG method",
+        help="Correction EMG method",
     )
     parser.add_argument(
-        "--correct-desc", type=str, default="correct", help="Stage 1 output desc token"
+        "--correct-desc", type=str, default="correct", help="Correction output desc token"
     )
     parser.add_argument(
         "--correct-config-json",
@@ -153,10 +153,10 @@ def main() -> None:
         type=str,
         default="wiener",
         choices=["wiener", "asr", "dss", "none"],
-        help="Stage 2 transient method",
+        help="Denoising transient method",
     )
     parser.add_argument(
-        "--denoise-desc", type=str, default="denoise", help="Stage 2 output desc token"
+        "--denoise-desc", type=str, default="denoise", help="Denoising output desc token"
     )
     parser.add_argument(
         "--denoise-config-json",
@@ -172,7 +172,7 @@ def main() -> None:
         "--train-condition",
         type=str,
         default=None,
-        help="Optional training condition for Stage 1 fitting",
+        help="Optional training condition for the correction fitting",
     )
 
     parser.add_argument(
@@ -181,8 +181,8 @@ def main() -> None:
     parser.add_argument(
         "--compare-mode",
         type=str,
-        default="stage1",
-        choices=["stage1", "full", "reuse"],
+        default="correct",
+        choices=["correct", "full", "reuse"],
         help="Compare mode",
     )
     parser.add_argument(

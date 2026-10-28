@@ -36,6 +36,12 @@ done
 : "${RAW_ROOT:=$DATA_ROOT/raw_data}"
 : "${SCRATCH_ROOT:=$SCRATCH/eeg-epilepsy-adhd}"
 : "${REPORTS_ROOT:=$SCRATCH_ROOT/reports}"
+# The per-recording embedding files (stage 08), one coco-pipe-<model> dataset per
+# model; the epoch variant is in their desc label.
+: "${EMBEDDING_SCRATCH_ROOT:=$SCRATCH_ROOT/BIDS/derivatives}"
+# The same datasets on the project, holding the files of every recording (aggregates)
+# and the archives of the per-recording files.
+: "${EMBEDDING_PROJECT_ROOT:=$BIDS_ROOT/derivatives}"
 # A script that submits a follow-up job reuses the account it runs under.
 if [ -n "${SLURM_JOB_ACCOUNT:-}" ]; then
     export SBATCH_ACCOUNT="${SBATCH_ACCOUNT:-$SLURM_JOB_ACCOUNT}"
@@ -65,7 +71,6 @@ dra_epochs_variant() {
     : "${DESCRIPTOR_CONDITIONS:=EO_baseline EC_baseline}"
     : "${DESCRIPTOR_SHARDS_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC}"
     : "${DESCRIPTORS_ROOT:=$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC}"
-    : "${EMBEDDING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings_$EPOCHS_DESC}"
     : "${DIM_REDUCTION_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/dim_reduction_$EPOCHS_DESC}"
     : "${DECODING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/decoding_$EPOCHS_DESC}"
     case "$REPORTS_ROOT" in
@@ -87,7 +92,12 @@ dra_activate() {
     export MNE_HOME="${SLURM_TMPDIR:-/tmp}/mne_home"
     export MPLCONFIGDIR="${SLURM_TMPDIR:-/tmp}/mpl_config"
     export TRITON_CACHE_DIR="${SLURM_TMPDIR:-/tmp}/triton"
-    mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR" "$TRITON_CACHE_DIR"
+    # GPU nodes are shared: with another user's MPS daemon on the node, CUDA finds its
+    # pipe in the default folder and waits for ever, so each job has its own.
+    export CUDA_MPS_PIPE_DIRECTORY="${SLURM_TMPDIR:-/tmp}/mps_pipe"
+    export CUDA_MPS_LOG_DIRECTORY="${SLURM_TMPDIR:-/tmp}/mps_log"
+    mkdir -p "$NUMBA_CACHE_DIR" "$MNE_HOME" "$MPLCONFIGDIR" "$TRITON_CACHE_DIR" \
+        "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
 }
 
 # --- Native-library thread pinning -----------------------------------------

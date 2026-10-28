@@ -38,7 +38,7 @@ from coco_pipe.descriptors import (
     mad_failures_from_qc,
     save_descriptor_table,
 )
-from coco_pipe.io import DataContainer
+from coco_pipe.io import DataContainer, NoDataError
 from coco_pipe.io.quality import drop_epoch_outliers
 from mne_bids import get_entities_from_fname
 
@@ -47,6 +47,7 @@ from eeg_adhd_epilepsy.analysis.utils.common import require_config
 from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import (
     EPOCH_TABLE,
     SHARD_RECORD,
+    descriptor_dataset_description,
     recording_tables,
 )
 from eeg_adhd_epilepsy.analysis.utils.subject_resolution import (
@@ -314,18 +315,7 @@ def main() -> None:
         ),
     )
 
-    dataset_description = {
-        "Name": "Signal Features",
-        "BIDSVersion": "1.10.0",
-        "DatasetType": "derivative",
-        "GeneratedBy": [
-            {
-                "Name": "eeg-descriptors",
-                "Description": "Checkpointed coco-pipe descriptor feature extraction",
-            }
-        ],
-        "SourceDatasets": [{"URL": bids_root.resolve().as_uri()}],
-    }
+    dataset_description = descriptor_dataset_description(derivative_root)
     dataset_description_path = derivative_root / "dataset_description.json"
     if not dataset_description_path.exists():
         write_text_atomic(
@@ -373,8 +363,8 @@ def main() -> None:
 
         for session_entity in session_entities:
             session = session_entity or "01"
-            # Every run recomputes: a shard or report left from an earlier run (an earlier
-            # stage 03/04, another config, a crash halfway) never survives it.
+            # Every run recomputes: a shard or report left from an earlier run (earlier
+            # cleaning or epochs, another config, a crash halfway) never survives it.
             (
                 subject_report_dir(
                     reports_root=reports_root,
@@ -405,20 +395,15 @@ def main() -> None:
                         condition=condition,
                         session=session_entity,
                     )
-                except RuntimeError as error:
-                    # Skipped only when no recording has this condition; the loader's
-                    # message then names no recording that could not be loaded.
-                    message = str(error)
-                    if message.startswith("No valid data found in ") and (
-                        "could not be loaded" not in message
-                    ):
-                        LOGGER.info(
-                            "Skipping %s / %s: no saved epochs found for this condition.",
-                            condition,
-                            subject,
-                        )
-                        continue
-                    raise
+                except NoDataError:
+                    # Skipped only when no recording has this condition and none
+                    # failed to load.
+                    LOGGER.info(
+                        "Skipping %s / %s: no saved epochs found for this condition.",
+                        condition,
+                        subject,
+                    )
+                    continue
                 # A recording that could not be loaded stops the task: the shard would
                 # silently lack it.
                 load_failures = dc_loaded.meta.get("load_failures", [])

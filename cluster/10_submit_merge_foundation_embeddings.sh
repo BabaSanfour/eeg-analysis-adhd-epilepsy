@@ -1,32 +1,44 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=eeg_foundation_emb_merge
-#SBATCH --time=02:00:00
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=128G
+#SBATCH --job-name=eeg_merge_embeddings
+#SBATCH --time=12:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=24G
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
-# Aggregate every per-task shard (written by 08_submit_foundation_embeddings.sh)
-# into the dataset-level run_manifest.json, failures.csv, dataset_description.json,
-# run status, combined raw/aligned tables, and the HTML report. CPU-only; no model
-# is loaded. Submit this manually after the stage 09 alignment array completes.
+# All-recordings embedding files of one model on the project: for both epoch variants
+# and every weight set, the per-recording files on scratch (stage 08) become one file
+# per label and view, each label checked against its manifest first; then the dataset
+# files, once, describing every file there. Each label's files
+# are first copied to the node's $SLURM_TMPDIR by 8 threads and merged from there: on
+# Lustre, opening a thousand small files one at a time is what takes the time (LUNA,
+# 57 GB, read in place: 1 h 30, 9% CPU). Then 10b archives the per-recording files,
+# and 09 reads the all-recordings window files.
+#   cluv submit fir cluster/10_submit_merge_foundation_embeddings.sh -- MODEL=cbramod
+#   cluv submit fir cluster/10_submit_merge_foundation_embeddings.sh --mem=32G --time=20:00:00 -- MODEL=reve
 
 set -euo pipefail
+
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
-dra_epochs_variant
 
+FOUNDATION_CONFIG=${FOUNDATION_CONFIG:-$PROJECT_ROOT/configs/foundation_extraction.yaml}
+: "${MODEL:?Set MODEL=<model key> (after --).}"
 
+require_file "$FOUNDATION_CONFIG"
+require_dir "$BIDS_ROOT"
+require_dir "$EMBEDDING_SCRATCH_ROOT/coco-pipe-$MODEL"
 require_dir "$VENV_PATH"
 
 dra_activate
-# Single-process merge that wants threaded BLAS.
 dra_pin_threads "${SLURM_CPUS_PER_TASK:-1}"
 
 python -m eeg_adhd_epilepsy.analysis.merge_foundation_embeddings \
-  --bids_root "$BIDS_ROOT" \
-  --derivative_root "$EMBEDDING_ROOT" \
-  --reports_root "$REPORTS_ROOT"
-validate_bids "$EMBEDDING_ROOT"
+    --config "$FOUNDATION_CONFIG" \
+    --bids_root "$BIDS_ROOT" \
+    --source_root "$EMBEDDING_SCRATCH_ROOT" \
+    --derivatives_root "$EMBEDDING_PROJECT_ROOT" \
+    --model "$MODEL" \
+    --stage_dir "${SLURM_TMPDIR:?}/stage" \
+    --n_jobs "${SLURM_CPUS_PER_TASK:-1}"
+validate_bids "$EMBEDDING_PROJECT_ROOT/coco-pipe-$MODEL"

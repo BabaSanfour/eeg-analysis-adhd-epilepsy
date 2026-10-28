@@ -10,11 +10,16 @@ import numpy as np
 import pandas as pd
 from coco_pipe.descriptors import KNOWN_FAMILY_TOKENS, load_descriptor_table
 from coco_pipe.descriptors.qc import aggregate_family_qc
-from coco_pipe.io import AGGREGATION_LEVELS, BIDSConfig, DataContainer, load_data
-from coco_pipe.io.embeddings import (
-    combined_embedding_table_path,
-    load_combined_embedding_table,
-    load_embedding_derivatives,
+from coco_pipe.io import (
+    AGGREGATION_LEVELS,
+    BIDSConfig,
+    DataContainer,
+    NoDataError,
+    aggregate_recordings,
+    embedding_label,
+    embedding_path,
+    load_data,
+    load_embeddings,
 )
 from coco_pipe.io.quality import GROUP_BY_COLUMN, run_qc
 from mne_bids import BIDSPath, get_entities_from_fname
@@ -46,12 +51,16 @@ def build_container(
     subject_col: str = "subject",
     target_col: str | None = None,
     desc: str = "base",
-    condition: str | None = None,
+    condition: str | list[str] | None = None,
     window_source: str = "auto",
     units: str = "V",
     bandpass: tuple[float, float] | None = None,
+    n_jobs: int = 1,
 ) -> DataContainer:
-    """Load raw BIDS data or saved epoch derivatives into a DataContainer."""
+    """Load raw BIDS data or saved epoch derivatives into a DataContainer.
+
+    ``condition`` names one event or several; ``n_jobs`` threads read saved epochs.
+    """
     subjects = subjects or []
     if bandpass is not None and window_source != "re_epoch":
         raise ValueError(
@@ -88,6 +97,7 @@ def build_container(
             event_id=condition if condition else None,
             target_col=target_col,
             units=units,
+            n_jobs=n_jobs,
         )
         return load_data(config=config)
 
@@ -116,7 +126,7 @@ def reepoch_eeg(
     task: str,
     segment_duration: float,
     overlap: float,
-    condition: str | None,
+    condition: str | list[str] | None,
     metadata_df: pd.DataFrame | None = None,
     subject_col: str = "subject",
     desc: str = "base",
@@ -128,7 +138,12 @@ def reepoch_eeg(
 
     ``desc`` names the epoch variant, as for saved epochs: ``base`` re-epochs the
     ``desc-base`` recording, ``baserejected`` re-epochs the same recording and drops
-    the epochs overlapping a ``BAD_`` annotation, as stage 04 does.
+    the epochs overlapping a ``BAD_`` annotation. ``condition`` names one block
+    condition or several. As coco-pipe's BIDS loader, each row names the file read
+    (``source``), and ``meta`` lists the recordings with none of the conditions
+    (``skipped_no_matching_events``) and those that could not be read
+    (``load_failures``). It raises coco-pipe's ``NoDataError`` when no recording
+    has a condition and none failed to load.
 
     When ``bandpass`` is given, the continuous recording is band-pass filtered to
     ``(l_freq, h_freq)`` *before* epoching -- the correct place for it, since a
@@ -136,6 +151,7 @@ def reepoch_eeg(
     to match a foundation model's pretraining band (e.g. SignalJEPA: 0.5-40 Hz).
     """
     preproc_root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
+    conditions = [condition] if isinstance(condition, str) else list(condition or [])
     reject_by_annotation = desc.endswith(REJECTED_SUFFIX)
     desc = desc.removesuffix(REJECTED_SUFFIX)
     meta_lookup: pd.DataFrame | None = None
@@ -149,6 +165,8 @@ def reepoch_eeg(
     sfreq: float | None = None
     times: np.ndarray | None = None
     issues: list[str] = []
+    skipped: list[str] = []
+    load_failures: list[dict[str, str]] = []
 
     for raw_sid in subjects or []:
         subject = bids_subject(raw_sid)
@@ -172,11 +190,17 @@ def reepoch_eeg(
             continue
 
         for current_run in sorted(set(runs_to_process)):
+            recording_id = BIDSPath(
+                subject=subject, session=session, task=task, run=current_run
+            ).basename
             raw, _prov, load_issues = read_preproc_stage(
                 subject, preproc_root, desc=desc, task=task, session=session, run=current_run
             )
             if raw is None:
                 issues.extend(load_issues)
+                load_failures.append(
+                    {"recording_id": recording_id, "error": "; ".join(load_issues)}
+                )
                 continue
             if bandpass is not None:
                 # Continuous-domain band-pass before epoching (raw is preloaded).
@@ -190,37 +214,38 @@ def reepoch_eeg(
                 )
             except ValueError as exc:
                 issues.append(f"no_epochs:{subject_label}_run-{current_run}:{exc}")
+                skipped.append(recording_id)
                 continue
-            if condition is None or condition not in epochs.event_id:
-                issues.append(f"missing_condition:{subject_label}_run-{current_run}:{condition}")
+            present = [name for name in conditions if name in epochs.event_id]
+            cond_epochs = epochs[present] if present else None
+            if cond_epochs is None or len(cond_epochs) == 0:
+                issues.append(f"missing_condition:{subject_label}_run-{current_run}:{conditions}")
+                skipped.append(recording_id)
                 continue
-            cond_epochs = epochs[condition]
+            names = {code: name for name, code in epochs.event_id.items()}
             # The position of each epoch among all those of the recording.
             epoch_numbers = np.flatnonzero(np.isin(epochs.selection, cond_epochs.selection))
             data = np.asarray(cond_epochs.get_data(units=units), dtype=np.float32)
-            if data.shape[0] == 0:
-                continue
             if ch_names is None:
                 ch_names = list(cond_epochs.ch_names)
                 sfreq = float(cond_epochs.info["sfreq"])
                 times = np.asarray(cond_epochs.times)
-            recording_id = BIDSPath(
-                subject=subject, session=session, task=task, run=current_run
-            ).basename
             meta_row: dict[str, Any] = {}
             if meta_lookup is not None and subject in meta_lookup.index:
                 meta_row = {
                     str(column): meta_lookup.loc[subject, column] for column in meta_lookup.columns
                 }
-            for epoch_number in epoch_numbers:
+            for epoch_number, code in zip(epoch_numbers, cond_epochs.events[:, 2], strict=True):
                 obs_rows.append(
                     {
                         "subject": subject,
                         "session": session,
                         "run": current_run,
-                        "condition": condition,
+                        "condition": names[code],
                         "recording_id": recording_id,
+                        "source": str(raw.filenames[0]),
                         "epoch": int(epoch_number),
+                        "bad_channels": ",".join(raw.info["bads"]),
                         **meta_row,
                     }
                 )
@@ -228,10 +253,13 @@ def reepoch_eeg(
             x_chunks.append(data)
 
     if not x_chunks:
-        raise RuntimeError(
+        message = (
             f"No cleaned-continuous epochs for condition {condition!r} at "
             f"{segment_duration:g}s. First issues: {issues[:5]}"
         )
+        if load_failures:
+            message += f"; {len(load_failures)} recording(s) could not be loaded"
+        raise (RuntimeError if load_failures else NoDataError)(message)
 
     X = np.concatenate(x_chunks, axis=0)
     obs_df = pd.DataFrame(obs_rows)
@@ -255,8 +283,32 @@ def reepoch_eeg(
             "segment_duration": float(segment_duration),
             "bandpass": list(bandpass) if bandpass is not None else None,
             "load_issues": issues,
+            "skipped_no_matching_events": skipped,
+            "load_failures": load_failures,
         },
     )
+
+
+def foundation_embedding_file(
+    root: Path, space: str, desc: str, *, view: str = "window", task: str = "clinical"
+) -> Path:
+    """The all-recordings file of one embedding space, in its model's dataset under ``root``.
+
+    ``space`` names the space as the analyses do: the model key (``cbramod``), followed by
+    ``_pool-attention`` for REVE's attention read-out and ``_align-leace`` for the window
+    vectors with subject identity erased. ``desc`` is the epoch variant (``base`` or
+    ``baserejected``).
+    """
+    model, *parts = space.split("_")
+    unknown = set(parts) - {"pool-attention", "align-leace"}
+    if unknown:
+        raise ValueError(f"Unknown embedding space suffix {sorted(unknown)} in {space!r}.")
+    label = embedding_label(
+        desc,
+        pooling="attention" if "pool-attention" in parts else "mean",
+        transform="Leace" if "align-leace" in parts else None,
+    )
+    return embedding_path(Path(root) / f"coco-pipe-{model}", label, view, task=task).fpath
 
 
 def attach_subject_metadata(
@@ -414,7 +466,8 @@ def build_dataset(
         outlier_config = qc_config.get("outlier", {})
         group_by = outlier_config.get("group_by")
         if group_by is not None and group_by not in GROUP_BY_COLUMN:
-            raise ValueError("qc.outlier.group_by must be 'family', 'measure', or 'feature'.")
+            choices = ", ".join(repr(choice) for choice in GROUP_BY_COLUMN)
+            raise ValueError(f"qc.outlier.group_by must be one of {choices}; got {group_by!r}.")
         if qc_config and group_by is not None:
             family_masks, qc_result = compute_grouped_qc_masks(
                 scoring_container, subject_col=args.subject_col, qc_config=qc_config
@@ -453,51 +506,19 @@ def build_dataset(
                 container = container.isel(obs=keep_indices)
         container.meta = {**dict(container.meta), "qc_result": qc_result}
     elif effective_input_mode == "foundation_embeddings":
-        embedding_root = Path(args.embedding_derivative_root)
-        combined_path = (
-            combined_embedding_table_path(
-                embedding_root,
+        container = load_embeddings(
+            foundation_embedding_file(
+                Path(args.embedding_derivative_root),
                 args.embedding_model_key,
-                condition,
-                representation,
-            )
-            if condition
-            else None
+                args.desc,
+                task=args.task,
+            ),
+            representation="recording" if representation == "recording" else "epoch",
+            conditions=condition,
+            subjects=subjects,
+            subject_metadata_df=meta_df,
+            subject_key=args.subject_col if meta_df is not None else None,
         )
-        if combined_path is not None and combined_path.exists():
-            container = load_combined_embedding_table(
-                embedding_root,
-                args.embedding_model_key,
-                condition,
-                representation=representation,
-                aggregate_by=args.embedding_aggregate_by,
-            )
-        else:
-            requested_rep = representation
-            load_rep = "epoch" if requested_rep == "subject" else requested_rep
-            container = load_embedding_derivatives(
-                embedding_root,
-                representation=load_rep,
-                aggregate_by=args.embedding_aggregate_by,
-                model_key=args.embedding_model_key,
-            )
-            if condition and "condition" in container.coords:
-                values = np.asarray(container.coords["condition"]).astype(str)
-                container = container.isel(obs=np.flatnonzero(values == str(condition)))
-            if requested_rep == "subject":
-                subject_key = (
-                    args.subject_col if args.subject_col in container.coords else "subject"
-                )
-                if subject_key in container.coords:
-                    container = container.aggregate(by=subject_key, stats="mean")
-        if meta_df is not None:
-            container = attach_subject_metadata(container, meta_df, args.subject_col)
-        if subjects is not None:
-            subject_key = args.subject_col if args.subject_col in container.coords else "subject"
-            if subject_key in container.coords:
-                values = np.asarray(container.coords[subject_key]).astype(str)
-                wanted = {str(subject) for subject in subjects}
-                container = container.isel(obs=np.flatnonzero(np.isin(values, list(wanted))))
     else:
         raise ValueError(f"Unsupported input mode '{input_mode}'.")
     container = filter_cohort_container(
@@ -513,11 +534,13 @@ def build_dataset(
         )
 
     represented = container
+    if effective_input_mode == "foundation_embeddings" and representation == "subject":
+        container = represented = container.aggregate(by=args.subject_col, stats="mean")
     if effective_input_mode == "raw":
         if representation == "subject":
             container = container.aggregate(by=args.subject_col, stats="mean")
         elif representation == "recording":
-            container = container.aggregate(by="recording_id", stats="mean")
+            container = aggregate_recordings(container)
         elif representation != "epoch":
             raise ValueError(
                 f"Raw representation must be one of {list(AGGREGATION_LEVELS)}, "

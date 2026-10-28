@@ -106,7 +106,7 @@ run_saved_embedding_classical() {
     echo " 2. SAVED FOUNDATION EMBEDDING DECODING"
     echo "================================================================="
     require_file "$SAVED_FOUNDATION_ANALYSIS_CONFIG"
-    require_dir "$EMBEDDING_ROOT"
+    require_dir "$EMBEDDING_PROJECT_ROOT"
 
     dra_pin_threads 1
 
@@ -116,7 +116,7 @@ run_saved_embedding_classical() {
     for model in "${SAVED_MODELS[@]}"; do
         for rep in "${SAVED_REPRESENTATIONS[@]}"; do
             echo " -> Model: $model | Representation: $rep"
-            echo "    Transforms: none, fold-local leace, ea_coral, ea_mean, ra"
+            echo "    Transforms: none, fold-local leace"
             cmd=(
                 python -m eeg_adhd_epilepsy.analysis.classical_decoding
                 --cohort_config "$CONFIG"
@@ -126,7 +126,7 @@ run_saved_embedding_classical() {
                 --derivative_root "$DECODING_ROOT"
                 --reports_root "$REPORTS_ROOT"
                 --metadata "$METADATA_PATH"
-                --embedding_derivative_root "$EMBEDDING_ROOT"
+                --embedding_derivative_root "$EMBEDDING_PROJECT_ROOT"
                 --embedding_model_key "$model"
                 --representation "$rep"
                 --n_jobs "${CLASSICAL_OUTER_N_JOBS:-$THREADS}"
@@ -161,9 +161,6 @@ run_foundation() {
 
 
     read -r -a DIRECT_MODELS <<< "${DIRECT_MODELS:-cbramod}"
-    if [[ " ${DIRECT_MODELS[*]} " == *" reve "* && -z "${HF_TOKEN:-}" ]]; then
-        echo "WARN: HF_TOKEN is unset; REVE (gated) will be skipped." >&2
-    fi
 
     for model in "${DIRECT_MODELS[@]}"; do
         echo " -> Model: $model | epoch and recording scores"

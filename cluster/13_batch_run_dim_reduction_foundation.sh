@@ -3,8 +3,8 @@
 #SBATCH --time=12:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-# array = cohorts x representation spaces x granularities; 71 x 41 x 3.
-#SBATCH --array=1-8733
+# array = cohorts x representation spaces x granularities; 72 x 9 x 3.
+#SBATCH --array=1-1944
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -20,8 +20,8 @@ OVERWRITE=${OVERWRITE:-0}
 
 # Each base model contributes its raw space plus every materialized alignment.
 # Pooling variants without their own aligned derivatives are raw-only spaces.
-read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
-read -r -a ALIGNMENT_TRANSFORMS <<< "${ALIGNMENT_TRANSFORMS:-none leace ea_coral ea_mean ra}"
+read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna}"
+read -r -a ALIGNMENT_TRANSFORMS <<< "${ALIGNMENT_TRANSFORMS:-none leace}"
 read -r -a RAW_ONLY_MODELS <<< "${RAW_ONLY_MODELS:-reve_pool-attention}"
 
 # Embedding representations (canonical granularity ladder) to reduce, each as a
@@ -34,7 +34,7 @@ require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"
 require_dir "$CONFIGS_DIR"
 require_file "$ANALYSIS_CONFIG"
-require_dir "$EMBEDDING_ROOT"
+require_dir "$EMBEDDING_PROJECT_ROOT"
 
 dra_activate
 dra_pin_threads 1
@@ -98,7 +98,7 @@ echo "Base model:    $model"
 echo "Transform:     $transform"
 echo "Saved key:     $space_key"
 echo "Representation:$representation"
-echo "Embeddings:    $EMBEDDING_ROOT"
+echo "Embeddings:    $EMBEDDING_PROJECT_ROOT"
 echo "================================================================================"
 
 cmd=(
@@ -110,7 +110,7 @@ cmd=(
     --metadata "$METADATA_PATH"
     --cohort_config "$config"
     --analysis_config "$ANALYSIS_CONFIG"
-    --embedding_derivative_root "$EMBEDDING_ROOT"
+    --embedding_derivative_root "$EMBEDDING_PROJECT_ROOT"
     --embedding_model_key "$model"
     --alignment_transform "$transform"
     --representation "$representation"

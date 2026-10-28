@@ -16,7 +16,7 @@ RAW_ROOT         ?=
 COHORT           ?=
 DIM_ANALYSIS     ?=
 DECODE_ANALYSIS  ?=
-ALIGN_ANALYSIS   ?= configs/analyses/align_subject_embeddings.yaml
+EPOCHS_DESC      ?= base
 ALIGN_DIM_ANALYSIS ?= configs/analyses/dim_reduction/foundation.yaml
 SOURCE_EMBEDDING_ROOT ?=
 EMBEDDING_MODEL_KEY   ?=
@@ -34,11 +34,11 @@ ADHD_CSV                    ?=
 DRUG_RESISTANT_CSV          ?=
 METADATA_DIR                ?=
 REPORTS_DIR                 ?=
-FOUNDATION_EMB_CFG          ?=
+FOUNDATION_EMB_CFG          ?= configs/foundation_extraction.yaml
 FOUNDATION_DECODE_ANALYSIS  ?= configs/analyses/decoding/foundation.yaml
 
 .PHONY: help install test all \
-        bids preprocess epochs descriptors merge align-subject-embeddings \
+        bids preprocess epochs descriptors merge align-subject-embeddings merge-embeddings \
         dim-reduce-alignments dim-reduce classical-decode \
         foundation-embeddings foundation-decode cohort-report metadata
 
@@ -58,6 +58,8 @@ all: ## Run every local pipeline stage in order
 	$(MAKE) epochs
 	$(MAKE) descriptors
 	$(MAKE) merge
+	$(MAKE) foundation-embeddings
+	$(MAKE) merge-embeddings
 	$(MAKE) align-subject-embeddings
 	$(MAKE) dim-reduce-alignments
 	$(MAKE) dim-reduce
@@ -90,29 +92,33 @@ merge: ## Descriptor shards -> combined descriptor tables
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.merge_descriptors --bids_root $(BIDS_ROOT)
 
-align-subject-embeddings: ## Foundation embeddings -> aligned variants
+align-subject-embeddings: ## All-recordings window vectors -> LEACE-erased file of every recording
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
-	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
-	$(if $(COHORT),,$(error Set COHORT to the cohort config))
-	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the embedding derivatives))
-	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the source model))
+	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the model))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.align_subject_embeddings \
-	  --cohort_config $(COHORT) --analysis_config $(ALIGN_ANALYSIS) \
-	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) \
-	  --source_embedding_root $(SOURCE_EMBEDDING_ROOT) \
-	  --embedding_model_key $(EMBEDDING_MODEL_KEY)
+	  --config $(FOUNDATION_EMB_CFG) --bids_root $(BIDS_ROOT) --desc $(EPOCHS_DESC) \
+	  --derivatives_root $(BIDS_ROOT)/derivatives \
+	  --model $(EMBEDDING_MODEL_KEY)
 
-dim-reduce-alignments: ## Reduce one explicit raw/aligned embedding variant
+merge-embeddings: ## Per-recording embedding files -> one file per label and view of every recording
+	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the folder of the per-recording coco-pipe-<model> datasets))
+	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the model))
+	$(PYTHON) -m eeg_adhd_epilepsy.analysis.merge_foundation_embeddings \
+	  --config $(FOUNDATION_EMB_CFG) --bids_root $(BIDS_ROOT) \
+	  --source_root $(SOURCE_EMBEDDING_ROOT) --derivatives_root $(BIDS_ROOT)/derivatives \
+	  --model $(EMBEDDING_MODEL_KEY)
+
+dim-reduce-alignments: ## Reduce one embedding space, raw or with subject identity erased
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
 	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
 	$(if $(COHORT),,$(error Set COHORT to the cohort config))
-	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the embedding derivatives))
 	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the base model))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
 	  --cohort_config $(COHORT) --analysis_config $(ALIGN_DIM_ANALYSIS) \
-	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --n_jobs $(N_JOBS) \
+	  --bids_root $(BIDS_ROOT) --metadata $(METADATA) --n_jobs $(N_JOBS) --desc $(EPOCHS_DESC) \
 	  --alignment_transform $(ALIGNMENT_TRANSFORM) \
-	  --embedding_derivative_root $(SOURCE_EMBEDDING_ROOT) \
+	  --embedding_derivative_root $(BIDS_ROOT)/derivatives \
 	  --embedding_model_key $(EMBEDDING_MODEL_KEY)
 
 dim-reduce: ## Combined descriptors -> dimensionality reduction
@@ -136,12 +142,15 @@ classical-decode: ## Combined descriptors -> classical decoding
 	  --descriptor_table_path $(DESCRIPTOR_TABLE)
 
 # --- Additional standalone stages -------------------------------------------
-foundation-embeddings: ## Extract foundation-model embeddings
-	$(if $(FOUNDATION_EMB_CFG),,$(error Set FOUNDATION_EMB_CFG to the embedding config))
+foundation-embeddings: ## Extract foundation-model embeddings, one file per recording and view
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))
+	$(if $(METADATA),,$(error Set METADATA to the BIDS participants.tsv))
+	$(if $(SOURCE_EMBEDDING_ROOT),,$(error Set SOURCE_EMBEDDING_ROOT to the folder of the coco-pipe-<model> datasets))
+	$(if $(EMBEDDING_MODEL_KEY),,$(error Set EMBEDDING_MODEL_KEY to the model))
 	$(PYTHON) -m eeg_adhd_epilepsy.analysis.extract_foundation_embeddings \
-	  --config $(FOUNDATION_EMB_CFG) --bids_root $(BIDS_ROOT) \
-	  $(if $(METADATA),--metadata $(METADATA))
+	  --config $(FOUNDATION_EMB_CFG) --bids_root $(BIDS_ROOT) --desc $(EPOCHS_DESC) \
+	  --metadata $(METADATA) --derivatives_root $(SOURCE_EMBEDDING_ROOT) \
+	  --model $(EMBEDDING_MODEL_KEY)
 
 foundation-decode: ## Foundation-model probing or fine-tuning
 	$(if $(BIDS_ROOT),,$(error Set BIDS_ROOT to the BIDS dataset))

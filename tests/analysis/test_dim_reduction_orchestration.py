@@ -826,8 +826,8 @@ def test_compare_cohort_merges_per_model_leaderboards(tmp_path):
     )
     _write_foundation_run(
         cohort_dir,
-        "foundation_cbramod_align-ra_flat_epoch_cfg-c",
-        "cbramod_align-ra",
+        "foundation_cbramod_align-leace_flat_epoch_cfg-c",
+        "cbramod_align-leace",
         "epoch",
         0.70,
     )
@@ -838,7 +838,7 @@ def test_compare_cohort_merges_per_model_leaderboards(tmp_path):
 
     merged = pd.read_csv(out_path.parent / "foundation_model_comparison.csv")
     assert sorted(merged["model"]) == ["cbramod", "cbramod", "labram"]
-    assert sorted(merged["transform"]) == ["none", "none", "ra"]
+    assert sorted(merged["transform"]) == ["leace", "none", "none"]
     assert sorted(merged["representation"]) == ["epoch", "recording", "subject"]
 
 

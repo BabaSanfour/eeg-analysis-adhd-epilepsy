@@ -3,8 +3,8 @@
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-# descriptor baseline + 8 foundation models x 2 representations.
-#SBATCH --array=1-17
+# descriptor baseline + 4 foundation models x 2 representations.
+#SBATCH --array=1-9
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -20,7 +20,7 @@ COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_c
 CLASSICAL_ANALYSIS_CONFIG=${CLASSICAL_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/classical.yaml}
 FOUNDATION_ANALYSIS_CONFIG=${FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation_embeddings.yaml}
 
-read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
+read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna}"
 REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording})
 
 # Descriptor tables (dataset paths -> supplied here, not in the analysis config).
@@ -50,6 +50,7 @@ common_args=(
     --bids_root "$BIDS_ROOT"
     --derivative_root "$DECODING_ROOT"
     --metadata "$METADATA_PATH"
+    --desc "$EPOCHS_DESC"
     --n_jobs "$THREADS"
     --no-write-shared-comparison-report
 )
@@ -78,7 +79,7 @@ if (( TASK_ID == 1 )); then
 fi
 
 require_file "$FOUNDATION_ANALYSIS_CONFIG"
-require_dir "$EMBEDDING_ROOT"
+require_dir "$EMBEDDING_PROJECT_ROOT"
 
 foundation_index=$((TASK_ID - 2))
 model_index=$((foundation_index % MODEL_COUNT))
@@ -90,12 +91,12 @@ echo "Input:          foundation_embeddings"
 echo "Analysis:       $FOUNDATION_ANALYSIS_CONFIG"
 echo "Model:          $model"
 echo "Representation: $representation"
-echo "Transforms:     none, fold-local leace, ea_coral, ea_mean, ra"
-echo "Embedding root: $EMBEDDING_ROOT"
+echo "Transforms:     none, fold-local leace"
+echo "Embedding root: $EMBEDDING_PROJECT_ROOT"
 
 python -m eeg_adhd_epilepsy.analysis.classical_decoding \
     "${common_args[@]}" \
     --analysis_config "$FOUNDATION_ANALYSIS_CONFIG" \
-    --embedding_derivative_root "$EMBEDDING_ROOT" \
+    --embedding_derivative_root "$EMBEDDING_PROJECT_ROOT" \
     --embedding_model_key "$model" \
     --representation "$representation"

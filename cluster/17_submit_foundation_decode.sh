@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=eeg_foundation_decode
 #SBATCH --time=24:00:00
-#SBATCH --array=1-8
+#SBATCH --array=1-4
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -14,7 +14,7 @@ dra_epochs_variant
 # jobs separate bounds runtime and GPU memory; stage 18 writes shared reports.
 COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 ANALYSIS_CONFIG=${ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation.yaml}
-read -r -a MODELS <<< "${MODELS:-cbramod labram reve luna biot signaljepa eegpt bendr}"
+read -r -a MODELS <<< "${MODELS:-cbramod labram reve luna}"
 
 require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"
@@ -36,10 +36,6 @@ model=${MODELS[$((TASK_ID - 1))]}
 # GPU job (training runs on-device); no BLAS pinning. Add a HuggingFace cache on
 # node-local scratch on top of the standard numba/MNE/matplotlib caches.
 dra_activate
-
-if [[ "$model" == "reve" && -z "${HF_TOKEN:-}" ]]; then
-  echo "WARN: HF_TOKEN is unset; REVE (gated) will be skipped." >&2
-fi
 
 echo "Cohort:   $COHORT_CONFIG"
 echo "Analysis: $ANALYSIS_CONFIG"

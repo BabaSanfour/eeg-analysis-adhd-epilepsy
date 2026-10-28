@@ -9,10 +9,12 @@ import pytest
 from coco_pipe.descriptors import load_descriptor_table, save_descriptor_table
 from coco_pipe.dim_reduction import run_eval
 from coco_pipe.io import ANALYSIS_MODES, DataContainer, iter_analysis_units
-from coco_pipe.io.embeddings import save_embedding_derivative
 
 import eeg_adhd_epilepsy.analysis.dimensionality_reduction as dim_reduction
 import eeg_adhd_epilepsy.reports.dim_reduction as dim_report
+from eeg_adhd_epilepsy.analysis import align_subject_embeddings as ase
+from eeg_adhd_epilepsy.analysis import extract_foundation_embeddings as efe
+from eeg_adhd_epilepsy.analysis import merge_foundation_embeddings as mfe
 from eeg_adhd_epilepsy.analysis.dataset import build_dataset
 from eeg_adhd_epilepsy.analysis.dimensionality_reduction import _collect_scope_fit_requests
 from eeg_adhd_epilepsy.analysis.utils.common import (
@@ -24,6 +26,7 @@ from eeg_adhd_epilepsy.analysis.utils.common import (
     qc_keys,
 )
 from eeg_adhd_epilepsy.analysis.utils.dim_reduction import scale_features
+from tests.analysis.test_extract_foundation_embeddings import _config as _extraction_config
 
 
 def test_descriptor_loader_filters_subjects(tmp_path):
@@ -384,36 +387,21 @@ def test_column_prune_removes_all_nan_feature_without_row_drop(tmp_path):
     ]
 
 
-def test_foundation_embedding_loader_filters_condition_and_subject(tmp_path):
-    root = tmp_path / "embeddings"
-    for index, subject in enumerate(("0001", "0002")):
-        result = SimpleNamespace(
-            window_embeddings=np.full((2, 3), index, dtype=float),
-            recording_embedding=np.full(3, index, dtype=float),
-            window_start=np.asarray([0, 10]),
-            window_stop=np.asarray([10, 20]),
-            window_index=np.asarray([0, 1]),
-            metadata={},
-        )
-        save_embedding_derivative(
-            result,
-            root / f"sub-{subject}_embedding.npz",
-            metadata={
-                "model_key": "cbramod",
-                "recording_id": f"{subject}_ses-01_run-01",
-                "study_id": subject,
-                "subject": subject,
-                "session": "01",
-                "condition": "EO_baseline",
-            },
-        )
+def test_foundation_embedding_loader_reads_a_space_of_the_project_files(bids_root, tmp_path):
+    config = _extraction_config(bids_root)
+    config["alignment"] = {"leace": {"eta2": 0.5}}
+    scratch, project = tmp_path / "scratch", tmp_path / "project"
+    efe.run(config, scratch, model_key="cbramod", weights=[None], subjects=["0001", "0003"])
+    mfe.run(config, scratch, project, model_key="cbramod", descs=["base"], weights=[None])
+    ase.run(config, project, model_key="cbramod", seed=None)
     args = SimpleNamespace(
         input_mode="foundation_embeddings",
-        embedding_derivative_root=str(root),
-        representation="recording",
-        embedding_aggregate_by=None,
+        embedding_derivative_root=str(project),
         embedding_model_key="cbramod",
-        subject_col="study_id",
+        desc="base",
+        task="clinical",
+        representation="recording",
+        subject_col="subject",
         group_filters=None,
         filter_col=[],
         filter_val=[],
@@ -423,16 +411,18 @@ def test_foundation_embedding_loader_filters_condition_and_subject(tmp_path):
         location_statistic=None,
     )
 
-    # Subject filtering now flows through meta_df: restricting the metadata to
-    # study_id 0002 is what scopes the foundation loader to that subject.
-    container = build_dataset(
-        args,
-        meta_df=pd.DataFrame({"study_id": ["0002"]}),
-        condition="EO_baseline",
-    )
+    # The cohort's metadata scopes the subjects and is attached to them.
+    meta_df = pd.DataFrame({"subject": ["0003"], "group": ["case"]})
+    container = build_dataset(args, meta_df=meta_df, condition="EO_baseline")
+    assert set(container.coords["subject"]) == {"0003"}
+    assert set(container.coords["condition"]) == {"EO_baseline"}
+    assert set(container.coords["group"]) == {"case"}
+    assert container.X.shape == (1, 200)
 
-    assert container.X.shape == (1, 3)
-    assert container.coords["study_id"].tolist() == ["0002"]
+    # A space's suffix picks its label: the window vectors with subject identity erased.
+    args.embedding_model_key, args.representation = "cbramod_align-leace", "epoch"
+    erased = build_dataset(args, meta_df=None, condition="EO_baseline")
+    assert erased.meta["description"] == "baseLeace" and erased.X.shape[1] == 200
 
 
 def test_fit_request_collection_skips_invalid_n_components(tmp_path):
@@ -550,6 +540,7 @@ def test_raw_recording_representation_builds_recording_id(monkeypatch, tmp_path)
                 + ["sub-0001_ses-01_task-clinical_run-02"] * 2,
                 dtype=object,
             ),
+            "condition": np.asarray(["EO_baseline"] * 4, dtype=object),
         },
         ids=np.asarray(["epoch-1", "epoch-2", "epoch-3", "epoch-4"], dtype=object),
         meta={},
@@ -583,6 +574,11 @@ def test_raw_recording_representation_builds_recording_id(monkeypatch, tmp_path)
     assert container.coords["recording_id"].tolist() == [
         "sub-0001_ses-01_task-clinical_run-01",
         "sub-0001_ses-01_task-clinical_run-02",
+    ]
+    # Named like the recording rows of descriptors and embeddings.
+    assert container.ids.tolist() == [
+        "sub-0001_ses-01_task-clinical_run-01_cond-EO_baseline",
+        "sub-0001_ses-01_task-clinical_run-02_cond-EO_baseline",
     ]
 
 

@@ -49,7 +49,7 @@ LOGGER = logging.getLogger("preproc_base")
 
 DEFAULT_HIGHPASS_HZ = 0.1
 DEFAULT_LOWPASS_HZ = 100.0
-# AutoReject: fitted per condition on the 10 s epochs stage 04 cuts (same grid,
+# AutoReject: fitted per condition on the 10 s analysis epochs (`epochs.py`, same grid,
 # `build_block_events_by_condition`), so each rejection drops one analysis epoch; only when a
 # condition has at least AR_MIN_EPOCHS of them; longer conditions are fitted in
 # AR_CHUNK_MINUTES chunks. It only rejects: no channel is interpolated, and the channels it

@@ -13,10 +13,9 @@ configs/
 │   └── medicated_adhd_vs_controls/  # populations and clinical questions
 ├── analyses/
 │   ├── dim_reduction/              # reducers and selection settings
-│   ├── decoding/                   # classical + foundation decoding methods
-│   └── align_subject_embeddings.yaml   # subject-alignment transforms
+│   └── decoding/                   # classical + foundation decoding methods
 ├── descriptors.yaml                    # dataset-wide descriptor extraction
-├── foundation_extraction.yaml          # dataset-wide embedding extraction
+├── foundation_extraction.yaml          # dataset-wide embedding extraction and subject alignment
 ├── annotations.yaml                    # annotation normalization
 ```
 

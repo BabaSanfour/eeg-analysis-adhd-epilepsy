@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 from coco_pipe.descriptors import build_descriptor_tables, feature_columns_of
-from coco_pipe.io import DataContainer
+from coco_pipe.io import DataContainer, NoDataError
 
 from eeg_adhd_epilepsy.analysis import extract_descriptors, merge_descriptors
 from eeg_adhd_epilepsy.utils.artifacts import write_text_atomic
@@ -432,6 +432,8 @@ aggregation:
     )
     extract_descriptors.main()
 
+    # The merged tables go to another copy of the BIDS tree, as scratch to project.
+    output_root = tmp_path / "project" / "BIDS" / "derivatives" / "signal_features" / "descriptors"
     monkeypatch.setattr(
         sys,
         "argv",
@@ -440,14 +442,14 @@ aggregation:
             "--derivative_root",
             str(bids_root / "derivatives" / "signal_features" / "descriptors"),
             "--output_root",
-            str(tmp_path / "merged"),
+            str(output_root),
             "--reports_root",
             str(tmp_path / "reports"),
         ],
     )
     merge_descriptors.main()
 
-    combined_root = tmp_path / "merged" / "combined"
+    combined_root = output_root / "combined"
     reports_root = tmp_path / "reports"
     combined_sensor_epoch_df = pd.read_parquet(combined_root / "sensor_epoch_features.parquet")
     combined_sensor_recording_df = pd.read_parquet(
@@ -463,6 +465,15 @@ aggregation:
         "EC_baseline": 3,
         "EO_baseline": 3,
     }
+    assert combined_sensor_recording_df["obs_id"].is_unique
+    assert (
+        combined_sensor_recording_df["obs_id"]
+        == combined_sensor_recording_df["recording_id"]
+        + "_cond-"
+        + combined_sensor_recording_df["condition"]
+    ).all()
+    description = json.loads((output_root / "dataset_description.json").read_text())
+    assert description["SourceDatasets"] == [{"URL": "../../../"}]
     recording_columns = feature_columns_of(combined_sensor_recording_df, combined_root)
     assert "mean_band_log_abs_alpha_ch-Fz" in recording_columns
     assert not any(column.startswith("mean_band_abs_") for column in recording_columns)
@@ -531,7 +542,7 @@ aggregation:
     def _load_demo_data(**kwargs):
         condition = kwargs.get("condition")
         if condition == "HV_EO":
-            raise RuntimeError("No valid data found in /tmp/mock_preproc")
+            raise NoDataError("No valid data found in /tmp/mock_preproc")
         return _demo_container_for_subjects(kwargs.get("subjects"))
 
     monkeypatch.setattr(extract_descriptors, "build_container", _load_demo_data)
@@ -566,7 +577,7 @@ def test_extract_descriptors_cli_fails_on_a_recording_that_cannot_be_loaded(
     tmp_path: Path,
     corrupt_runs: tuple[str, ...],
 ) -> None:
-    """A saved epoch file that cannot be read stops stage 05, whether or not the subject's
+    """A saved epoch file that cannot be read stops the extraction, whether or not the subject's
     other recordings load: it is not a subject without epochs."""
     config_path = tmp_path / "descriptors.yaml"
     config_path.write_text(
@@ -756,7 +767,7 @@ aggregation:
     )
 
     def _raise_missing_data(**kwargs):
-        raise RuntimeError("No valid data found in BIDS root")
+        raise NoDataError("No valid data found in BIDS root")
 
     monkeypatch.setattr(extract_descriptors, "build_container", _raise_missing_data)
     monkeypatch.setattr(
@@ -885,7 +896,7 @@ aggregation:
     )
 
     def _raise_missing_data(**kwargs):
-        raise RuntimeError("No valid data found in BIDS root")
+        raise NoDataError("No valid data found in BIDS root")
 
     monkeypatch.setattr(extract_descriptors, "build_container", _raise_missing_data)
     monkeypatch.setattr(

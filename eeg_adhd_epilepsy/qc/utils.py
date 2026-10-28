@@ -63,7 +63,7 @@ class SignalQCThresholds:
 class DescriptorQCThresholds:
     """Thresholds for descriptor-extraction QC flagging.
 
-    Stage 05 reads them from ``qc.thresholds`` of ``configs/descriptors.yaml`` (any
+    The extraction reads them from ``qc.thresholds`` of ``configs/descriptors.yaml`` (any
     field left out keeps its default) and records them in ``config_used.yaml``.
 
     Parameters

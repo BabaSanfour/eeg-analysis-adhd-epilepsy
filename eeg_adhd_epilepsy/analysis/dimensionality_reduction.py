@@ -929,14 +929,14 @@ def main() -> None:
     parser.add_argument(
         "--alignment_transform",
         default=None,
-        help="Reduce one materialized alignment variant (for example none, leace, or ra).",
+        help="Reduce one materialized alignment variant (none or leace).",
     )
     parser.add_argument("--bids_root", default=None, help="Override BIDS root (else from config).")
     parser.add_argument(
         "--desc",
         default="base",
         help=(
-            "Epoch variant written by stage 04: base (every epoch) or baserejected "
+            "Epoch variant of the preproc derivative: base (every epoch) or baserejected "
             "(epochs overlapping a BAD_ annotation dropped)."
         ),
     )

@@ -1,69 +1,39 @@
+# extract_foundation_embeddings: each model's embeddings of every recording, with its
+# pretrained weights and with random weights from each seed.
 task: clinical
-dataset_name: foundation_embeddings
 conditions: [EO_baseline, EC_baseline]
-batch_size: 64
+# All extraction runs on one GPU type (trillium's H100): under PyTorch's CUDA defaults
+# LUNA's embeddings differ from the CPU's by up to 2e-3, the others' by 3e-5 or less.
+device: cuda
+# Subjects loaded together: 64 subjects' EO and EC windows are about 0.7 GB.
+chunk_subjects: 64
+token_dtype: float16
 models:
-  - model_key: cbramod
+  reve:
     segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: true
     window_source: derivative
-    store_tokens: true
-  - model_key: labram
+    # The attention read-out from the same forward pass: <label>Attention files.
+    extra_poolings: [attention]
+    random_seeds: &seeds [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+  labram:
+    # LaBraM needs 3,000 samples (15 s at 200 Hz): re-cut from the continuous recording.
     segment_duration: 15.0
-    overlap: 0.0
-    use_derivatives: false
     window_source: re_epoch
-    store_tokens: true
     batch_size: 16
-    backend_kwargs: {}
-  - model_key: reve
+    random_seeds: *seeds
+  cbramod:
     segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: true
     window_source: derivative
-    store_tokens: true
-  - model_key: reve
+    random_seeds: *seeds
+  luna:
     segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: true
     window_source: derivative
-    pooling: attention
-    store_tokens: true
-  - model_key: luna
-    segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: true
-    window_source: derivative
-    store_tokens: true
-  - model_key: biot
-    segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: true
-    window_source: derivative
-    store_tokens: true
-  - model_key: signaljepa
-    segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: false
-    window_source: re_epoch
-    store_tokens: true
-    bandpass: [0.5, 40.0]
-  - model_key: eegpt
-    segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: true
-    window_source: derivative
-    store_tokens: true
-  - model_key: bendr
-    segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: true
-    window_source: derivative
-    store_tokens: true
-device: auto
-precision: fp32
-on_unsupported: skip
-overwrite: false
-detailed_unit_reports: true
-report_asset_urls: inline
+    random_seeds: *seeds
+
+# align_subject_embeddings: each weight set's window vectors with subject identity erased
+# by LEACE, fitted on every window of the label, one file holding every recording, on the
+# project. For the descriptive plots; decoding fits LEACE in its folds.
+alignment:
+  # Erase the directions whose subject eta^2 (share of variance between subjects, with
+  # each window's condition) is at least eta2; no file when that is almost all of them.
+  leace: {eta2: 0.5}

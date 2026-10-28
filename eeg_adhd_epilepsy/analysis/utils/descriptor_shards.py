@@ -1,4 +1,5 @@
-"""File layout of a descriptor shard, shared by stages 05 (writer), 06 and 07 (readers).
+"""File layout of a descriptor shard: ``extract_descriptors`` writes it, ``verify_descriptors``
+and ``merge_descriptors`` read it.
 
 A shard is ``<derivative_root>/sub-<subject>/ses-<session>/eeg/<condition>/`` with two files:
 
@@ -7,7 +8,7 @@ A shard is ``<derivative_root>/sub-<subject>/ses-<session>/eeg/<condition>/`` wi
 - ``shard.json``: the shard's QC summary, QC flags and extraction failures. It is written
   last, so a shard without it is incomplete.
 
-The recording table is not kept per shard: stage 07 rebuilds it from the merged epoch
+The recording table is not kept per shard: the merge rebuilds it from the merged epoch
 table with the aggregation settings in ``config_used.yaml``.
 """
 
@@ -23,6 +24,28 @@ from coco_pipe.io import DataContainer, read_json
 EPOCH_TABLE = "sensor_epoch_features"
 SHARD_RECORD = "shard.json"
 SHARD_FILES: tuple[str, ...] = (f"{EPOCH_TABLE}.parquet", SHARD_RECORD)
+
+
+def descriptor_dataset_description(derivative_root: Path) -> dict[str, Any]:
+    """The ``dataset_description.json`` of a descriptor derivative.
+
+    ``SourceDatasets`` points at the raw dataset relative to the derivative, which sits
+    under ``<BIDS>/derivatives/`` on scratch and on the project alike, so the link
+    survives a copy between clusters.
+    """
+    depth = Path(derivative_root).parts[::-1].index("derivatives") + 1
+    return {
+        "Name": "Signal Features",
+        "BIDSVersion": "1.10.0",
+        "DatasetType": "derivative",
+        "GeneratedBy": [
+            {
+                "Name": "eeg-descriptors",
+                "Description": "Checkpointed coco-pipe descriptor feature extraction",
+            }
+        ],
+        "SourceDatasets": [{"URL": "../" * depth}],
+    }
 
 
 def find_shards(derivative_root: Path) -> list[Path]:
@@ -42,8 +65,10 @@ def recording_tables(
 ) -> dict[str, Any]:
     """Epoch and recording tables from one condition's epochs, as configured.
 
-    Stage 05 calls it on a shard's epochs for its QC, stage 07 on the merged epochs of
-    each condition: both get the recording values from the same settings.
+    The extraction calls it on a shard's epochs for its QC, the merge on the merged epochs of
+    each condition: both get the recording values from the same settings. A recording
+    row's ``obs_id`` is ``<recording_id>_cond-<condition>``, as coco-pipe names the
+    recording level of raw epochs and embeddings.
     """
     bands = DescriptorConfig.model_validate(
         {
@@ -52,7 +77,7 @@ def recording_tables(
             if key not in {"aggregation", "qc", "desc"}
         }
     ).families.bands
-    return build_descriptor_tables(
+    tables = build_descriptor_tables(
         container,
         metadata_df,
         group_by="recording_id",
@@ -62,3 +87,10 @@ def recording_tables(
         ratio_floor=float(bands.min_denominator_power) if bands.enabled else 0.0,
         on_insufficient="warn",
     )
+    recordings = tables["subject_df"]
+    recordings.insert(
+        0,
+        "obs_id",
+        recordings["recording_id"].astype(str) + "_cond-" + recordings["condition"].astype(str),
+    )
+    return tables

@@ -1,12 +1,12 @@
-"""Merge the descriptor shards of stage 05 into combined tables.
+"""Merge the per-subject descriptor shards into combined tables.
 
 - ``combined/sensor_epoch_features.parquet``: the shards' epoch tables, 1 row / epoch
 - ``combined/sensor_recording_features.parquet``: 1 row / recording and condition, built
   from the merged epochs with the aggregation settings of ``config_used.yaml``
 
 Each table carries its feature columns in its own metadata. ``combined/merge_manifest.json``
-records the inputs and counts. Stage 06 runs first: a shard missing a file, or with other
-feature columns, stops the merge.
+records the inputs and counts. ``verify_descriptors`` runs first: a shard missing a file,
+or with other feature columns, stops the merge.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ from coco_pipe.io import DataContainer, write_json
 from eeg_adhd_epilepsy.analysis.utils.descriptor_shards import (
     EPOCH_TABLE,
     SHARD_FILES,
+    descriptor_dataset_description,
     find_shards,
     read_shard_record,
     recording_tables,
@@ -49,7 +50,7 @@ def _recording_table(
     """The recording table of the merged epochs, one condition at a time.
 
     A recording holds several conditions, so its epochs are grouped within each condition,
-    as stage 05 does within a shard.
+    as the extraction does within a shard.
     """
     metadata_columns = [column for column in epoch_df.columns if column not in set(feature_columns)]
     frames: list[pd.DataFrame] = []
@@ -76,14 +77,14 @@ def main() -> None:
     parser.add_argument(
         "--derivative_root",
         required=True,
-        help="Descriptor derivative with the per-subject shards (stage 05, on scratch).",
+        help="Descriptor derivative with the per-subject shards (on scratch).",
     )
     parser.add_argument(
         "--output_root",
         required=True,
         help=(
-            "Derivative to write the merged tables to (combined/), with the shards' "
-            "dataset_description.json, .bidsignore and config_used.yaml."
+            "Derivative to write the merged tables to (combined/), with its "
+            "dataset_description.json and the shards' .bidsignore and config_used.yaml."
         ),
     )
     parser.add_argument("--reports_root", required=True, help="Root directory for reports.")
@@ -107,7 +108,8 @@ def main() -> None:
     shard_roots = find_shards(derivative_root)
     if not shard_roots:
         raise ValueError(f"No descriptor shards found under {derivative_root}.")
-    # A shard without its shard.json (written last) crashed halfway; stage 06 lists it.
+    # A shard without its shard.json (written last) crashed halfway; verify_descriptors
+    # lists it.
     incomplete = [
         str(shard_root.relative_to(derivative_root))
         for shard_root in shard_roots
@@ -116,7 +118,7 @@ def main() -> None:
     if incomplete:
         raise ValueError(
             f"{len(incomplete)} incomplete shard(s) under {derivative_root}, e.g. "
-            f"{incomplete[:5]}; rerun stage 05 for them (stage 06 lists them)."
+            f"{incomplete[:5]}; extract them again (verify_descriptors lists them)."
         )
     LOGGER.info("Merging %d shards from %s", len(shard_roots), derivative_root)
 
@@ -128,7 +130,10 @@ def main() -> None:
 
     combined_root = output_root / "combined"
     combined_root.mkdir(parents=True, exist_ok=True)
-    for name in ("dataset_description.json", ".bidsignore", "config_used.yaml"):
+    write_json(
+        output_root / "dataset_description.json", descriptor_dataset_description(output_root)
+    )
+    for name in (".bidsignore", "config_used.yaml"):
         shutil.copy2(derivative_root / name, output_root / name)
 
     # The merge refuses a shard whose feature columns differ from the first one's.

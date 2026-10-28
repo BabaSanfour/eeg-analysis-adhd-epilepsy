@@ -1,4 +1,4 @@
-"""Shared ICA helpers for Stage 1 artifact correction."""
+"""Shared ICA helpers for the artifact correction."""
 
 from __future__ import annotations
 

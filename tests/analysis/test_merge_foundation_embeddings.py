@@ -1,115 +1,43 @@
-import json
-import sys
+"""All-recordings files of small preproc derivatives, with the cached CBraMod."""
 
-import pandas as pd
+import numpy as np
 import pytest
-import yaml
-from coco_pipe.io import read_json
+from coco_pipe.io import find_embeddings, load_embeddings, read_json
 
+from eeg_adhd_epilepsy.analysis import extract_foundation_embeddings as efe
 from eeg_adhd_epilepsy.analysis import merge_foundation_embeddings as mfe
-from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+from tests.analysis.test_extract_foundation_embeddings import _config
 
 
-def test_scan_artifacts_keeps_pooling_and_alignment_model_keys_separate(tmp_path):
-    raw_path = tmp_path / "sub-0001_desc-demo_embedding.npz"
-    attention_path = tmp_path / "sub-0001_desc-demoAttention_embedding.npz"
-    aligned_path = tmp_path / "sub-0001_proc-alignra_desc-demo_embedding.npz"
-    for path, model_key in (
-        (raw_path, "demo"),
-        (attention_path, "demo_pool-attention"),
-        (aligned_path, "demo_align-ra"),
-    ):
-        path.touch()
-        path.with_suffix(".json").write_text(
-            json.dumps({"model_key": model_key}),
-            encoding="utf-8",
+def test_merge_writes_one_file_per_label_and_view_and_refuses_a_missing_recording(
+    bids_root, tmp_path
+):
+    config = _config(bids_root)
+    scratch, project = tmp_path / "scratch", tmp_path / "project"
+    efe.run(config, scratch, model_key="cbramod", weights=[None, 0], subjects=["0001", "0003"])
+    options = {"model_key": "cbramod", "descs": ["base"], "weights": [None, 0]}
+
+    # Each label merged from a staged copy, which is removed afterwards.
+    stage = tmp_path / "stage"
+    written = mfe.run(config, scratch, project, **options, stage_dir=stage, n_jobs=4)
+    assert not any(stage.iterdir())
+
+    source, root = scratch / "coco-pipe-cbramod", project / "coco-pipe-cbramod"
+    views = ("token", "window", "channel", "patch")
+    assert sorted(written) == ["base", "baseRandom0"]
+    for label in written:
+        assert sorted(written[label]) == sorted(
+            f"task-clinical_desc-{label}_{view}embeddings.nc" for view in views
         )
+        for view in views:
+            parts = load_embeddings(find_embeddings(source, label, view))
+            whole = load_embeddings(root / f"task-clinical_desc-{label}_{view}embeddings.nc")
+            np.testing.assert_array_equal(whole.X, parts.X)
+        manifest = read_json(root / f"desc-{label}_manifest.json")["records"]
+        assert manifest == read_json(source / f"desc-{label}_manifest.json")["records"]
+    assert (root / "descriptions.tsv").exists()
 
-    by_model, records = mfe._scan_artifacts(tmp_path)
-
-    expected = {"demo", "demo_pool-attention", "demo_align-ra"}
-    assert set(by_model) == expected
-    assert {record["model_key"] for record in records} == expected
-
-
-def test_merge_reads_config_used_and_unions_failure_shards(tmp_path, monkeypatch):
-    """Merge takes its config from the frozen config_used.yaml and unions every task's
-    ``_failures`` shard; last-writer-wins would lose shards."""
-    monkeypatch.setattr(mfe, "make_foundation_embedding_report", lambda *args, **kwargs: None)
-    bids_root = tmp_path / "BIDS"
-    bids_root.mkdir()
-    derivative_root = get_derivative_root(bids_root, DerivativeStage.FOUNDATION_EMBEDDINGS)
-    derivative_root.mkdir(parents=True, exist_ok=True)
-
-    # extract_foundation_embeddings would have frozen this; merge reads it instead of --config.
-    (derivative_root / "config_used.yaml").write_text(
-        yaml.safe_dump({"dataset_name": "synthetic"}, sort_keys=True), encoding="utf-8"
-    )
-
-    # Two array tasks, disjoint subjects, each leaving only its per-task failures shard.
-    failures_dir = derivative_root / "_failures"
-    failures_dir.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(
-        [
-            {
-                "recording_id": "sub-0001_ses-01_run-01",
-                "model_key": "labram",
-                "status": "skipped",
-                "reason": "unsupported",
-            }
-        ]
-    ).to_csv(failures_dir / "row-0001.csv", index=False)
-    pd.DataFrame(
-        [
-            {
-                "recording_id": "sub-0002_ses-01_run-01",
-                "model_key": "cbramod",
-                "status": "failed",
-                "reason": "boom",
-            }
-        ]
-    ).to_csv(failures_dir / "row-0002.csv", index=False)
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "merge_foundation_embeddings",
-            "--bids_root",
-            str(bids_root),
-            "--derivative_root",
-            str(derivative_root),
-            "--reports_root",
-            str(tmp_path / "reports"),
-        ],
-    )
-    mfe.main()
-
-    manifest = read_json(derivative_root / "run_manifest.json")
-    assert len(manifest["records"]) == 2  # nothing dropped across shards
-
-    failures = pd.read_csv(derivative_root / "failures.csv")
-    assert len(failures) == 2  # both non-success rows survive
-    assert set(failures["status"]) == {"skipped", "failed"}
-    assert (derivative_root / "dataset_description.json").exists()
-
-
-def test_merge_requires_config_used(tmp_path, monkeypatch):
-    """Without a frozen config_used.yaml the merge fails fast (extraction never ran)."""
-    bids_root = tmp_path / "BIDS"
-    bids_root.mkdir()
-    derivative_root = get_derivative_root(bids_root, DerivativeStage.FOUNDATION_EMBEDDINGS)
-
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "merge_foundation_embeddings",
-            "--bids_root",
-            str(bids_root),
-            "--derivative_root",
-            str(derivative_root),
-        ],
-    )
-    with pytest.raises(FileNotFoundError, match="config_used.yaml not found"):
-        mfe.main()
+    # A recording of the manifest without its file stops the run.
+    find_embeddings(source, "baseRandom0", "patch")[0].fpath.unlink()
+    with pytest.raises(RuntimeError, match="baseRandom0 patch: 1 recording"):
+        mfe.run(config, scratch, project, **options)

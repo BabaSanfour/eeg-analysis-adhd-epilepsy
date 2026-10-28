@@ -46,7 +46,7 @@ cd ~/eeg_analysis_adhd_epilepsy
 HF_HOME=$SCRATCH/eeg-epilepsy-adhd/hf_home .venv/bin/python -c "
 from coco_pipe.decoding import get_foundation_model_spec
 from huggingface_hub import snapshot_download
-for key in 'cbramod labram reve luna biot signaljepa eegpt bendr'.split():
+for key in 'cbramod labram reve luna'.split():
     spec = get_foundation_model_spec(key)
     snapshot_download(spec.hub_repo, revision=spec.checkpoint_revision)
 snapshot_download('brain-bzh/reve-positions')"
@@ -66,9 +66,10 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 06 | `06_verify_descriptors.sh` | audit shard completeness + QC before merge | single |
 | 07 | `07_submit_merge_descriptors.sh` | shards → combined tables (project) | single |
 | 07b | `07b_submit_archive_descriptors.sh` | shards → one validated `shards.tar.zst` on the project; scratch shards deleted | single |
-| 08 | `08_submit_foundation_embeddings.sh` | epochs → embedding shards | array (per metadata row, GPU) |
-| 09 | `09_submit_align_subject_embeddings.sh` | pooled embeddings + native tokens → aligned variants | array (per model, CPU) |
-| 10 | `10_submit_merge_foundation_embeddings.sh` | raw/aligned shards → combined tables, manifest, and report | single |
+| 08 | `08_submit_foundation_embeddings.sh` | epochs → per-recording embedding files, one `coco-pipe-<model>` dataset per model (scratch) | single (per variant, one H100 shared by 12 processes, each a model and some of its weight sets) |
+| 09 | `09_submit_align_subject_embeddings.sh` | all-recordings window file (project, from 10) → LEACE-erased window file of every recording (project) | array (per weight set of one model and variant, CPU; after 10) |
+| 10 | `10_submit_merge_foundation_embeddings.sh` | per-recording embedding files (scratch) → one file per label and view of every recording, manifests, dataset files (project) | single (per model, both variants and every weight set) |
+| 10b | `10b_submit_archive_embeddings.sh` | per-recording embedding files → one `desc-<label>_shards.tar.zst` per label on the project; scratch copy deleted after the entry-count check | single (per model) |
 | 11 | `11_batch_run_dim_reduction.sh` | raw dim-reduction | array (per cohort) |
 | 12 | `12_batch_run_dim_reduction_descriptors.sh` | descriptor dim-reduction | array (per cohort) |
 | 13 | `13_batch_run_dim_reduction_foundation.sh` | foundation dim-reduction | array (cohorts × raw/aligned spaces × representations) |
@@ -103,10 +104,11 @@ derivative tree has a `.bidsignore` for the files BIDS does not define.
 | `EPOCHS_DESC` | epoch variant of stages 05-20: `base` or `baserejected` (required) | — |
 | `DESCRIPTOR_SHARDS_ROOT` | per-subject descriptor shards (05, 06) | `$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
 | `DESCRIPTORS_ROOT` | merged descriptor tables and shard archive (07, 07b) | `$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
-| `EMBEDDING_ROOT` | foundation embeddings (08-10) | `$SCRATCH_ROOT/BIDS/derivatives/eeg_foundation_embeddings_$EPOCHS_DESC` |
+| `EMBEDDING_SCRATCH_ROOT` | per-recording embedding files (08), in `coco-pipe-<model>/` | `$SCRATCH_ROOT/BIDS/derivatives` |
+| `EMBEDDING_PROJECT_ROOT` | the all-recordings embedding files (09, 10) and their archives (10b), read by 13, 15, 19, 20 | `$BIDS_ROOT/derivatives` |
 | `DECODING_ROOT` | decoding checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/decoding_$EPOCHS_DESC` |
 | `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/dim_reduction_$EPOCHS_DESC` |
-| `OVERWRITE` | `1` to force reprocessing | `0` |
+| `OVERWRITE` | `1` to force reprocessing (01, 09, 12, 13, 20) | `0` |
 
 Stage 04 writes two epoch variants: `desc-base` (every epoch) and
 `desc-baserejected` (the epochs overlapping a `BAD_` annotation dropped). Every
@@ -120,12 +122,14 @@ dimensionality-reduction roots are independent output locations, so moving those
 two derivative trees to scratch does not change run hashes or prevent checkpoint
 resume.
 
-Foundation extraction honors `OVERWRITE=0` and resumes complete embedding/token
-pairs. Use `OVERWRITE=1` once when migrating an existing token-free derivative
-root to a configuration with `store_tokens: true`; subsequent submissions should
-return to the default. Script 08 is one array of every `participants.tsv` row.
-Submit stage 09 alignment and stage 10 merge manually, in that order, after
-extraction completes.
+Stage 08 is one job per variant on trillium-gpu: eight processes share the H100,
+each running one model with some of its weight sets (`PROCESSES` in the script).
+A resubmission skips every recording whose files already hold its windows, made
+with the same settings (the files' `config_hash`), and rewrites any other. Each
+label's `desc-<label>_manifest.json` lists the recordings written, done, skipped
+(no EO or EC epochs) and failed; a failed recording fails the job. After extraction,
+submit stage 10 merge manually; then 10b archive and 09 alignment, in any order (09
+reads the merged window files on the project, not the per-recording ones).
 
 ## Two-config analysis stages (09, 11–13, 15–18)
 
@@ -133,16 +137,13 @@ Analysis stages take a **cohort** config (`configs/cohorts/...`, the dataset +
 clinical question) **and** an **analysis** config (`configs/analyses/<type>/...`,
 the method). See `../configs/README.md`.
 
-- **09 (subject alignment)** materializes LEACE, EA-CORAL, EA-Mean, and
-  token-based RA variants once per foundation model. It runs after extraction;
-  its default cohort supplies the clinical diagnostic subset while transforms
-  are fitted over the configured global population. Raw and per-transform
-  diagnostics are checkpointed immediately in `variance_diagnostics.csv`, with
-  atomic `_alignment_<model>_progress.json` state; a compatible resubmission
-  skips completed diagnostics and transforms whose recorded artifacts still
-  exist.
-- **10 (foundation merge)** scans both raw and aligned embedding derivatives,
-  then writes their combined tables, manifest, status, and report.
+- **09 (subject erasure)** writes, per weight set, the window vectors with
+  subject identity erased by LEACE, fitted on every window with its condition,
+  for the descriptive plots (decoding fits LEACE in its folds). EA and RA are not
+  used: per-subject recentering removes diagnosis by construction, and a
+  reference over mixed conditions adds the recording protocol (HANDOFF, fix 5).
+- **10 (foundation merge)** writes one model's all-recordings file per label and
+  view, checked against each label's manifest, and the dataset files.
 - **11 / 12 / 13 (dim-reduction)** sweep every cohort under `CONFIGS_DIR`
   (default `configs/cohorts`) paired with the input-specific `ANALYSIS_CONFIG`
   (`configs/analyses/dim_reduction/{raw,descriptors,foundation}.yaml`). The
@@ -150,7 +151,7 @@ the method). See `../configs/README.md`.
   loads each condition once and reduces every analysis mode), so the `--array`
   bound is just the cohort count for 11/12, and `cohorts × representation spaces
   × representations` for 13 (epoch/recording/subject, run separately). Each base
-  model contributes `none`, `leace`, `ea_coral`, `ea_mean`, and `ra`; explicit
+  model contributes `none` and `leace`; explicit
   pooling variants such as `reve_pool-attention` are raw-only. A
   guard fails the job loudly if `#SBATCH --array=1-N` is stale; set `CONFIGS_DIR`
   to a subtree (or `BASE_MODELS` / `ALIGNMENT_TRANSFORMS` /
@@ -175,7 +176,7 @@ the method). See `../configs/README.md`.
   written by a live 11/12/13 job (per-fit `_SUCCESS` resumability depends on
   the live directory, not the archive). Example:
   ```bash
-  printf '%s\n' foundation_bendr_flat_epoch_cfg-... foundation_biot_flat_epoch_cfg-... \
+  printf '%s\n' foundation_cbramod_flat_epoch_cfg-... foundation_labram_flat_epoch_cfg-... \
       > /home/hamza97/foundation_all.txt
   sbatch --export=ALL,DIRS_FILE=/home/hamza97/foundation_all.txt,ARCHIVE_NAME=foundation_all \
       cluster/14b_submit_archive_dim_reduction.sh
@@ -184,9 +185,8 @@ the method). See `../configs/README.md`.
   from one run: every metric per epoch, and as `<metric>_by_recording` on the mean
   probability of each recording's test epochs.
 - **15 (classical decoding)** runs one descriptor baseline plus every configured
-  base foundation model × representation. Each foundation task evaluates raw,
-  fold-local LEACE, EA-CORAL, EA-Mean, and RA in the same run, so transforms use
-  identical folds and are not an array dimension. Array tasks suppress the
+  base foundation model × representation. Each foundation task evaluates raw and
+  fold-local LEACE in the same run, so both use identical folds. Array tasks suppress the
   shared report to avoid concurrent writes.
 - **16 (classical comparison)** reads every completed stage-15 result and writes
   the shared head-to-head and foundation-transform reports.
@@ -237,10 +237,7 @@ Stages **08**, **17**, and the foundation branch of **20** need a GPU
 For **20**, pass `--gres`
 only when submitting `foundation` or `all`; use separate `descriptors`,
 `embeddings` and `foundation` submissions to avoid reserving a GPU for classical
-decoding. REVE
-is a gated Hugging Face model — run
-`hf auth login` or export `HF_TOKEN` before submitting, or REVE is skipped with
-`authentication_required`.
+decoding.
 
 Submit stage 15 and its comparison dependency explicitly:
 

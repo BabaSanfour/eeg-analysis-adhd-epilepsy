@@ -1,4 +1,4 @@
-"""Stage 2: Residual Denoising & Final Cleanup."""
+"""Residual Denoising & Final Cleanup, after the artifact correction."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass
 class ArtifactDenoisingConfig:
-    """Configuration for Stage 2 (Denoising)."""
+    """Configuration for the denoising."""
 
     transient_method: str | None = "wiener"  # 'asr', 'wiener', 'dss', None
 
@@ -269,7 +269,7 @@ def _refine_autoreject(
     figures_dir: Path | None = None,
     subject_id: str = "unknown",
 ) -> tuple[mne.io.BaseRaw, dict[str, Any]]:
-    """Run final AutoReject refinement and compare against Stage 1 BAD segments."""
+    """Run final AutoReject refinement and compare against the correction's BAD segments."""
     ar_conf_dict = {
         "artifacts": {
             "segment_length": 1.0,
@@ -294,7 +294,7 @@ def _refine_autoreject(
         config=ar_conf_dict,
         figures_dir=figures_dir,
         subject_id=subject_id,
-        n_interpolate=[0, 1, 2, 4],  # Allow interpolation for Stage 2 repair
+        n_interpolate=[0, 1, 2, 4],  # Allow interpolation for the denoising repair
     )
 
     new_bad_segments = [
@@ -317,7 +317,7 @@ def run_residual_denoising(
     figures_dir: Path | None = None,
     subject_id: str = "unknown",
 ) -> tuple[mne.io.BaseRaw, dict[str, Any]]:
-    """Orchestrate Stage 2 denoising."""
+    """Orchestrate the denoising."""
     provenance: dict[str, Any] = {
         "steps_completed": [],
         "transient_stats": {},
@@ -381,7 +381,7 @@ def run_denoising_pipeline(
     raw_lookup: dict[str, dict[str, object]] | None = None,
     previous_lookup: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Run Stage 2 on one subject (Stage 1 -> Stage 2 handoff)."""
+    """Denoise one subject's corrected recordings."""
     result: dict[str, object] = {
         "success": False,
         "subject_id": bids.bids_subject_label(subject_id),
@@ -416,7 +416,7 @@ def run_denoising_pipeline(
             result["error"] = f"Input file not found: {input_path}"
             return result
 
-        LOGGER.info("Loading Stage 1 output: %s", input_path)
+        LOGGER.info("Loading the correction output: %s", input_path)
         raw = mne.io.read_raw_fif(input_path, preload=True, verbose="ERROR")
 
         stage_name = preproc_qc.get_preproc_qc_stage_name("denoise", output_desc)
@@ -483,7 +483,7 @@ def run_denoising_pipeline(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Stage 2 Residual Denoising")
+    parser = argparse.ArgumentParser(description="Run the residual denoising")
     parser.add_argument("--bids_root", type=str, required=True, help="Path to BIDS dataset root")
     parser.add_argument(
         "--preproc_root",
@@ -506,7 +506,7 @@ def main() -> None:
     )
     parser.add_argument("--start-from", type=str, help="Start processing from this subject ID")
     parser.add_argument(
-        "--all", action="store_true", help="Process all subjects found in Stage 1 outputs"
+        "--all", action="store_true", help="Process all subjects found in the correction outputs"
     )
     parser.add_argument("--test", action="store_true", help="Run on a small subset (5 subjects)")
     parser.add_argument("--random", action="store_true", help="Select random subjects in test mode")
@@ -574,11 +574,11 @@ def main() -> None:
 
     files = sorted(preproc_root.rglob(pattern))
     if not files:
-        LOGGER.error("No Stage 1 FIF files found in %s (pattern: %s)", preproc_root, pattern)
+        LOGGER.error("No correction FIF files found in %s (pattern: %s)", preproc_root, pattern)
         sys.exit(1)
 
     subjects_found = sorted({get_entities_from_fname(f)["subject"] for f in files})
-    LOGGER.info("Found %d stage-1 runs across %d subjects.", len(files), len(subjects_found))
+    LOGGER.info("Found %d corrected runs across %d subjects.", len(files), len(subjects_found))
 
     subjects_to_process = select_subjects(
         subjects_found,

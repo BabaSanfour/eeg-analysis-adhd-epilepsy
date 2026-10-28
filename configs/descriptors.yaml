@@ -93,7 +93,7 @@ families:
       kurtosis: {fisher: true, bias: false}
 
 # One CPU per recording, no worker threads: on fir this ran each recording faster than
-# 16 threads did, at 1/16 of the cores (stage 05 is one array task per subject).
+# 16 threads did, at 1/16 of the cores (the extraction is one array task per subject).
 runtime:
   execution_backend: sequential
   n_jobs: 1
@@ -130,7 +130,7 @@ qc:
     exclude_prefixes: [band_abs_]
   # Fewest epochs a recording value may rest on (30 s); recordings with fewer are left out.
   min_obs: 3
-  # Shard (stage 05) and dataset (stage 07) QC verdicts; fields of
+  # Shard (extraction) and dataset (merge) QC verdicts; fields of
   # eeg_adhd_epilepsy.qc.utils.DescriptorQCThresholds. Rates are fractions.
   thresholds:
     warn_nan_rate: 0.01  # mean missing rate of a shard's features
