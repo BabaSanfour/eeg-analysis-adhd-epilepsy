@@ -3,10 +3,10 @@
 
 A run erases subject identity from the window vectors of one model and epoch variant,
 one weight set at a time (the label of the extracted files, e.g. ``base`` or
-``baseRandom3``). It reads that label's per-recording window files from the extraction's
-dataset (on scratch) and writes, with coco-pipe's ``write_transformed_embeddings``, one
-``Leace`` file to the model's dataset on the project, ``<derivatives_root>/coco-pipe-
-<model>/``, with a manifest of the recordings it holds and a sidecar.
+``baseRandom3``). It reads that label's all-recordings window file from the model's
+dataset, ``<derivatives_root>/coco-pipe-<model>/``, so it runs after the merge, and writes
+there, with coco-pipe's ``write_transformed_embeddings``, one ``Leace`` file, with a
+manifest of the recordings it holds and a sidecar.
 
 LEACE (``alignment.leace`` settings) erases the directions in which subjects differ
 most, fitted on every window with each window's condition. The file serves the
@@ -25,7 +25,7 @@ import numpy as np
 from coco_pipe.io import (
     DataContainer,
     embedding_label,
-    find_embeddings,
+    embedding_path,
     load_embeddings,
     write_embedding_manifest,
     write_transformed_embeddings,
@@ -42,19 +42,18 @@ from eeg_adhd_epilepsy.utils.yaml import load_yaml_config
 LOGGER = logging.getLogger(__name__)
 
 
-def load_windows(root: Path, label: str) -> DataContainer:
-    """Every window vector of one label, from its per-recording files."""
-    paths = find_embeddings(root, label, "window")
-    if not paths:
-        raise FileNotFoundError(f"No window file of {label} in {root}.")
-    container = load_embeddings(paths)
+def load_windows(root: Path, label: str, task: str) -> DataContainer:
+    """Every window vector of one label, from its all-recordings file."""
+    path = embedding_path(root, label, "window", task=task).fpath
+    if not path.exists():
+        raise FileNotFoundError(f"No all-recordings window file {path}; merge {label} first.")
+    container = load_embeddings(path)
     LOGGER.info("%s: %d windows, shape %s.", label, len(container.X), container.X.shape)
     return container
 
 
 def run(
     config: dict[str, Any],
-    source_root: Path,
     derivatives_root: Path,
     *,
     model_key: str,
@@ -62,9 +61,8 @@ def run(
 ) -> list[dict[str, Any]]:
     """Write the LEACE file of one weight set; return the records of its manifest."""
     label = embedding_label(str(config["desc"]), seed=seed)
-    source = Path(source_root) / f"coco-pipe-{model_key}"
     root = Path(derivatives_root) / f"coco-pipe-{model_key}"
-    windows = load_windows(source, label)
+    windows = load_windows(root, label, config["task"])
     eraser = LeaceEraser(**config["alignment"]["leace"])
     erased_label = embedding_label(label, transform=eraser.label)
     try:
@@ -108,14 +106,9 @@ def main() -> None:
         help="Epoch variant of the preproc derivative (its desc-<variant> epochs).",
     )
     parser.add_argument(
-        "--source_root",
-        required=True,
-        help="Folder of the coco-pipe-<model> datasets with the per-recording files (scratch).",
-    )
-    parser.add_argument(
         "--derivatives_root",
         required=True,
-        help="Folder of the coco-pipe-<model> datasets to write to (project).",
+        help="Folder of the coco-pipe-<model> datasets with the all-recordings files (project).",
     )
     parser.add_argument("--model", required=True, help="Model key, e.g. reve.")
     parser.add_argument(
@@ -133,7 +126,6 @@ def main() -> None:
     for seed in parse_weights(args.weights, config["models"][args.model]["random_seeds"]):
         run(
             config,
-            Path(args.source_root),
             Path(args.derivatives_root),
             model_key=args.model,
             seed=seed,

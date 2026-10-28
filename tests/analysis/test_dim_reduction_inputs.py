@@ -393,7 +393,7 @@ def test_foundation_embedding_loader_reads_a_space_of_the_project_files(bids_roo
     scratch, project = tmp_path / "scratch", tmp_path / "project"
     efe.run(config, scratch, model_key="cbramod", weights=[None], subjects=["0001", "0003"])
     mfe.run(config, scratch, project, model_key="cbramod", descs=["base"], weights=[None])
-    ase.run(config, scratch, project, model_key="cbramod", seed=None)
+    ase.run(config, project, model_key="cbramod", seed=None)
     args = SimpleNamespace(
         input_mode="foundation_embeddings",
         embedding_derivative_root=str(project),

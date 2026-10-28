@@ -8,7 +8,7 @@ dataset on the project, with coco-pipe's ``consolidate_embeddings``. Each label 
 first checked against the extraction's manifest: every recording written or done has
 its file in every view, and a failed recording stops the run. The manifest goes to the
 project with the files. The dataset files are written once, at the end, so they
-describe every file there, the subject-erased ones included.
+describe every file there.
 
 On a parallel file system the time goes to listing and opening a hundred thousand small
 files. The dataset is listed once, not once per label and view, and with ``stage_dir`` (a

@@ -67,7 +67,7 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 07 | `07_submit_merge_descriptors.sh` | shards → combined tables (project) | single |
 | 07b | `07b_submit_archive_descriptors.sh` | shards → one validated `shards.tar.zst` on the project; scratch shards deleted | single |
 | 08 | `08_submit_foundation_embeddings.sh` | epochs → per-recording embedding files, one `coco-pipe-<model>` dataset per model (scratch) | single (per variant, one H100 shared by 12 processes, each a model and some of its weight sets) |
-| 09 | `09_submit_align_subject_embeddings.sh` | per-recording window vectors (scratch) → LEACE-erased window file of every recording (project) | array (per weight set of one model and variant, CPU) |
+| 09 | `09_submit_align_subject_embeddings.sh` | all-recordings window file (project, from 10) → LEACE-erased window file of every recording (project) | array (per weight set of one model and variant, CPU; after 10) |
 | 10 | `10_submit_merge_foundation_embeddings.sh` | per-recording embedding files (scratch) → one file per label and view of every recording, manifests, dataset files (project) | single (per model, both variants and every weight set) |
 | 10b | `10b_submit_archive_embeddings.sh` | per-recording embedding files → one `desc-<label>_shards.tar.zst` per label on the project; scratch copy deleted after the entry-count check | single (per model) |
 | 11 | `11_batch_run_dim_reduction.sh` | raw dim-reduction | array (per cohort) |
@@ -127,8 +127,9 @@ each running one model with some of its weight sets (`PROCESSES` in the script).
 A resubmission skips every recording whose files already hold its windows, made
 with the same settings (the files' `config_hash`), and rewrites any other. Each
 label's `desc-<label>_manifest.json` lists the recordings written, done, skipped
-(no EO or EC epochs) and failed; a failed recording fails the job. Submit stage 09
-alignment and stage 10 merge manually, in that order, after extraction completes.
+(no EO or EC epochs) and failed; a failed recording fails the job. After extraction,
+submit stage 10 merge manually; then 10b archive and 09 alignment, in any order (09
+reads the merged window files on the project, not the per-recording ones).
 
 ## Two-config analysis stages (09, 11–13, 15–18)
 
@@ -141,8 +142,8 @@ the method). See `../configs/README.md`.
   for the descriptive plots (decoding fits LEACE in its folds). EA and RA are not
   used: per-subject recentering removes diagnosis by construction, and a
   reference over mixed conditions adds the recording protocol (HANDOFF, fix 5).
-- **10 (foundation merge)** scans both raw and aligned embedding derivatives,
-  then writes their combined tables, manifest, status, and report.
+- **10 (foundation merge)** writes one model's all-recordings file per label and
+  view, checked against each label's manifest, and the dataset files.
 - **11 / 12 / 13 (dim-reduction)** sweep every cohort under `CONFIGS_DIR`
   (default `configs/cohorts`) paired with the input-specific `ANALYSIS_CONFIG`
   (`configs/analyses/dim_reduction/{raw,descriptors,foundation}.yaml`). The

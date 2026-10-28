@@ -9,11 +9,11 @@
 # All-recordings embedding files of one model on the project: for both epoch variants
 # and every weight set, the per-recording files on scratch (stage 08) become one file
 # per label and view, each label checked against its manifest first; then the dataset
-# files, once, describing every file there (stage 09's included). Each label's files
+# files, once, describing every file there. Each label's files
 # are first copied to the node's $SLURM_TMPDIR by 8 threads and merged from there: on
 # Lustre, opening a thousand small files one at a time is what takes the time (LUNA,
-# 57 GB, read in place: 1 h 30, 9% CPU). Run after stage 09; 10b then archives the
-# per-recording files.
+# 57 GB, read in place: 1 h 30, 9% CPU). Then 10b archives the per-recording files,
+# and 09 reads the all-recordings window files.
 #   cluv submit fir cluster/10_submit_merge_foundation_embeddings.sh -- MODEL=cbramod
 #   cluv submit fir cluster/10_submit_merge_foundation_embeddings.sh --mem=32G --time=20:00:00 -- MODEL=reve
 
