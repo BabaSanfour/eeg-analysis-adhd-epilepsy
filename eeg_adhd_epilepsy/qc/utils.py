@@ -9,7 +9,6 @@ This module is the single source of truth for:
 
 from __future__ import annotations
 
-from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
@@ -32,7 +31,8 @@ class SignalQCThresholds:
     Parameters
     ----------
     n_bad_unusable:
-        Number of bad (flat + noisy) channels that triggers ``unusable``.
+        Number of the stage's bad channels (RANSAC at the base cleaning) that triggers
+        ``unusable``; a record without a bad-channel count skips the check.
     n_bad_borderline:
         Number of bad channels that triggers ``borderline``.
     line_noise_ratio:
@@ -119,7 +119,6 @@ TOPOMAP_METRIC_KEYS: tuple[str, ...] = (
 
 _BASE_WEIGHTED_METRICS: tuple[str, ...] = (
     "amplitude_mean_uv",
-    "pct_bad_channels",
     "line_noise_ratio",
     "hf_lf_ratio",
     "alpha_peak_hz",
@@ -127,11 +126,7 @@ _BASE_WEIGHTED_METRICS: tuple[str, ...] = (
 )
 """Weighted-average metric keys shared by the raw-QC and preproc-QC stages."""
 
-MAX_METRICS: tuple[str, ...] = (
-    "amplitude_max_uv",
-    "n_flat_channels",
-    "n_noisy_channels",
-)
+MAX_METRICS: tuple[str, ...] = ("amplitude_max_uv",)
 """Max-aggregate metric keys shared by the raw-QC and preproc-QC stages."""
 
 
@@ -249,7 +244,7 @@ def _build_channel_diagnostics(
     Returns
     -------
     Dict with keys:
-        ``flat_channels``, ``noisy_channels``,
+        ``bad_channels`` (the stage's, when it has them),
         ``top_amplitude_channels``, ``top_line_noise_channels``.
     """
     per_channel_metrics = metrics.get("per_channel_metrics") or {}
@@ -264,62 +259,10 @@ def _build_channel_diagnostics(
         line_pairs = sorted(zip(channel_names, line_noise), key=lambda x: x[1], reverse=True)
         top_line_noise = [(ch, float(v)) for ch, v in line_pairs[:5] if np.isfinite(v)]
     return {
-        "flat_channels": list(metrics.get("flat_channels", [])),
-        "noisy_channels": list(metrics.get("noisy_channels", [])),
+        "bad_channels": list(metrics.get("bad_channels", [])),
         "top_amplitude_channels": top_amplitude,
         "top_line_noise_channels": top_line_noise,
     }
-
-
-# ---------------------------------------------------------------------------
-# Cross-run electrode failure rates  (state-of-the-art: consensus bad-channel)
-# ---------------------------------------------------------------------------
-
-
-def compute_channel_failure_rates(
-    records: Sequence[Mapping[str, object]],
-) -> dict[str, float]:
-    """Compute per-electrode failure rate across a collection of run records.
-
-    Aggregates ``flat_channels`` and ``noisy_channels`` from each record's
-    ``channel_diagnostics`` dict and returns the fraction of records in which
-    each channel was marked bad.  Useful for identifying systematic equipment
-    or placement problems at the electrode level.
-
-    Parameters
-    ----------
-    records:
-        Sequence of QC run records, each expected to have a
-        ``"channel_diagnostics"`` key produced by
-        :func:`_build_channel_diagnostics`.
-
-    Returns
-    -------
-    ``{channel_name: failure_rate}`` where ``failure_rate`` ∈ ``[0, 1]``.
-    An empty dict is returned when ``records`` is empty.
-    """
-    if not records:
-        return {}
-    flat_counter: Counter[str] = Counter()
-    noisy_counter: Counter[str] = Counter()
-    for record in records:
-        diag = record.get("channel_diagnostics") or {}
-        for ch in diag.get("flat_channels", []):
-            flat_counter[ch] += 1
-        for ch in diag.get("noisy_channels", []):
-            noisy_counter[ch] += 1
-    total = len(records)
-    all_channels = set(flat_counter) | set(noisy_counter)
-    return {ch: (flat_counter[ch] + noisy_counter[ch]) / total for ch in sorted(all_channels)}
-
-
-def _n_bad_channels(metrics_row: Mapping[str, object]) -> float:
-    """The record's bad channels: the stage's own when it has them, else flat + noisy."""
-    if "n_bad_channels" in metrics_row:
-        return float(metrics_row["n_bad_channels"] or 0)
-    return float(metrics_row.get("n_flat_channels", 0) or 0) + float(
-        metrics_row.get("n_noisy_channels", 0) or 0
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -353,8 +296,9 @@ def compute_qc_score(
     t = thresholds or DEFAULT_SIGNAL_THRESHOLDS
     components: list[float] = []
 
-    n_bad = _n_bad_channels(metrics_row)
-    components.append(min(n_bad / max(t.n_bad_unusable, 1), 1.0))
+    n_bad = pd.to_numeric(metrics_row.get("n_bad_channels"), errors="coerce")
+    if np.isfinite(n_bad):
+        components.append(min(float(n_bad) / max(t.n_bad_unusable, 1), 1.0))
 
     ln = pd.to_numeric(metrics_row.get("line_noise_ratio"), errors="coerce")
     if np.isfinite(ln):
@@ -380,7 +324,7 @@ def evaluate_signal_qc_flag(
 ) -> tuple[str, list[str]]:
     """Evaluate a run's signal QC flag from its metric row.
 
-    Checks bad-channel count, line-noise ratio, and HF/LF
+    Checks the bad-channel count (when the record has one), line-noise ratio, and HF/LF
     ratio against ``thresholds``.  When ``check_retention=True`` the
     preprocessed-stage retention metrics (``duration_retention_pct`` and
     ``condition_coverage_retention_pct``) are also evaluated — these fields
@@ -407,10 +351,10 @@ def evaluate_signal_qc_flag(
     t = thresholds or DEFAULT_SIGNAL_THRESHOLDS
     reasons: list[str] = []
 
-    n_bad = _n_bad_channels(metrics_row)
-    if n_bad >= t.n_bad_unusable:
+    n_bad = pd.to_numeric(metrics_row.get("n_bad_channels"), errors="coerce")
+    if np.isfinite(n_bad) and n_bad >= t.n_bad_unusable:
         reasons.append("too_many_bad_channels")
-    elif n_bad >= t.n_bad_borderline:
+    elif np.isfinite(n_bad) and n_bad >= t.n_bad_borderline:
         reasons.append("many_bad_channels")
 
     line_noise = pd.to_numeric(metrics_row.get("line_noise_ratio"), errors="coerce")
