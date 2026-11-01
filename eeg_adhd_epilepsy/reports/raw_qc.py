@@ -22,7 +22,6 @@ from eeg_adhd_epilepsy.reports._common import (
 REASON_LABELS = {
     "too_many_bad_channels": "Too many bad channels",
     "many_bad_channels": "Many bad channels",
-    "amplitude_above_threshold": "Peak amplitude above threshold",
     "line_noise_residual": "Residual line noise",
     "high_hf_ratio": "High HF/LF ratio",
     "low_duration_retention": "Low clean-duration retention",
@@ -141,12 +140,6 @@ def build_threshold_verdict_table(record: Mapping[str, object]) -> pd.DataFrame:
             "Value": f"{int(n_bad)}",
             "Threshold": f">={n_borderline} borderline, >={n_unusable} unusable",
             "Status": bad_status,
-        },
-        {
-            "Check": "Peak amplitude (uV)",
-            "Value": format_value(record.get("amplitude_max_uv")),
-            "Threshold": f"<= {thresholds['amplitude_max_uv']:g}",
-            "Status": _status(record.get("amplitude_max_uv"), thresholds["amplitude_max_uv"]),
         },
         {
             "Check": "Line-noise ratio",

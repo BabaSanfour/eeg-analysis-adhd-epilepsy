@@ -293,7 +293,6 @@ def build_raw_qc_run_record(
     record["thresholds"] = {
         "n_bad_borderline": active.n_bad_borderline,
         "n_bad_unusable": active.n_bad_unusable,
-        "amplitude_max_uv": active.amplitude_max_uv,
         "line_noise_ratio": active.line_noise_ratio,
         "hf_lf_ratio": active.hf_lf_ratio,
     }
