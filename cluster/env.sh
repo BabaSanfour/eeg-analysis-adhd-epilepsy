@@ -15,6 +15,7 @@
 # The same layout is used on every cluster:
 #   /project/rrg-kjerbi/shared/eeg-adhdh-epilepsy   inputs (BIDS, csv)
 #   $SCRATCH/eeg-epilepsy-adhd                      outputs, reports, model cache
+#   $SCRATCH/eeg-epilepsy-adhd/results              group-level results (not BIDS derivatives)
 
 # --- Job variables -----------------------------------------------------------
 # `cluv submit <cluster> <script> -- MODELS=cbramod COHORT_CONFIG=...` passes
@@ -36,6 +37,10 @@ done
 : "${RAW_ROOT:=$DATA_ROOT/raw_data}"
 : "${SCRATCH_ROOT:=$SCRATCH/eeg-epilepsy-adhd}"
 : "${REPORTS_ROOT:=$SCRATCH_ROOT/reports}"
+# Group-level results (dimensionality reduction, decoding, variance diagnostics) are not
+# BIDS derivatives: they live outside the dataset, on scratch.
+: "${RESULTS_ROOT:=$SCRATCH_ROOT/results}"
+: "${VARIANCE_DIAGNOSTICS_ROOT:=$RESULTS_ROOT/variance_diagnostics}"
 # The per-recording embedding files (stage 08), one coco-pipe-<model> dataset per
 # model; the epoch variant is in their desc label.
 : "${EMBEDDING_SCRATCH_ROOT:=$SCRATCH_ROOT/BIDS/derivatives}"
@@ -71,8 +76,8 @@ dra_epochs_variant() {
     : "${DESCRIPTOR_CONDITIONS:=EO_baseline EC_baseline}"
     : "${DESCRIPTOR_SHARDS_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC}"
     : "${DESCRIPTORS_ROOT:=$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC}"
-    : "${DIM_REDUCTION_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/dim_reduction_$EPOCHS_DESC}"
-    : "${DECODING_ROOT:=$SCRATCH_ROOT/BIDS/derivatives/decoding_$EPOCHS_DESC}"
+    : "${DIM_REDUCTION_ROOT:=$RESULTS_ROOT/dim_reduction_$EPOCHS_DESC}"
+    : "${DECODING_ROOT:=$RESULTS_ROOT/decoding_$EPOCHS_DESC}"
     case "$REPORTS_ROOT" in
         */"$EPOCHS_DESC") ;;
         *) REPORTS_ROOT="$REPORTS_ROOT/$EPOCHS_DESC" ;;

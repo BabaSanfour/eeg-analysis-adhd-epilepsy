@@ -59,8 +59,8 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     validate_inputs,
 )
 from eeg_adhd_epilepsy.io.bids import (
-    DerivativeStage,
-    get_derivative_root,
+    ResultStage,
+    get_results_root,
     read_participants,
 )
 from eeg_adhd_epilepsy.io.report_paths import (
@@ -701,6 +701,8 @@ def compare_cohort(
     bids_root: str | Path | None = None,
     alignment_diagnostics_cohort_name: str | None = None,
     alignment_diagnostics_population: str | None = None,
+    variance_diagnostics_root: str | Path | None = None,
+    desc: str = "base",
 ) -> Path | None:
     """Render one cohort comparison and any explicitly requested diagnostics.
 
@@ -743,11 +745,21 @@ def compare_cohort(
         selection_metric=selection_metric,
         selection_eval_name=selection_eval_name,
     )
+    if alignment_diagnostics_population and variance_diagnostics_root is None and bids_root is None:
+        raise ValueError(
+            "Alignment diagnostics need variance_diagnostics_root or bids_root to find them."
+        )
     alignment_diagnostics = (
         AlignmentDiagnosticsSpec(
             base_model_key=embedding_model_key,
             cohort_name=alignment_diagnostics_cohort_name,
             population=alignment_diagnostics_population,
+            root=(
+                Path(variance_diagnostics_root)
+                if variance_diagnostics_root is not None
+                else get_results_root(Path(bids_root), ResultStage.VARIANCE_DIAGNOSTICS)
+            ),
+            desc=desc,
         )
         if alignment_diagnostics_population
         else None
@@ -755,7 +767,6 @@ def compare_cohort(
     report = generate_rollup_report(
         args=args,
         summaries=summaries,
-        bids_root=bids_root,
         alignment_diagnostics=alignment_diagnostics,
     )
 
@@ -785,7 +796,7 @@ def run(config: dict[str, Any]) -> None:
         dim_root = (
             Path(config["derivative_root"]).expanduser()
             if config.get("derivative_root")
-            else get_derivative_root(bids_root, DerivativeStage.DIM_REDUCTION)
+            else get_results_root(bids_root, ResultStage.DIM_REDUCTION)
         )
         reports_root = (
             Path(config["reports_root"]).expanduser()
@@ -816,6 +827,8 @@ def run(config: dict[str, Any]) -> None:
                     config.get("dataset_name"),
                 ),
                 alignment_diagnostics_population=config.get("alignment_diagnostics_population"),
+                variance_diagnostics_root=config.get("variance_diagnostics_root"),
+                desc=config.get("desc", "base"),
             )
         return
 

@@ -792,6 +792,8 @@ def run(config: dict[str, Any]) -> Path:
             ),
             alignment_diagnostics_population=alignment_diagnostics_population,
             generate_foundation_transform_report=(plan.input_mode == "foundation_embeddings"),
+            variance_diagnostics_root=config.get("variance_diagnostics_root"),
+            desc=config.get("desc", "base"),
         )
     return derivative_root
 
@@ -833,6 +835,11 @@ def main() -> None:
         "--derivative_root",
         default=None,
         help="Custom decoding output root, independent of the input BIDS root.",
+    )
+    parser.add_argument(
+        "--variance_diagnostics_root",
+        default=None,
+        help="Variance-diagnostics root the comparison report reads (default: next to BIDS).",
     )
     parser.add_argument(
         "--descriptor_table_path",
@@ -891,6 +898,7 @@ def main() -> None:
         inner_n_jobs=args.inner_n_jobs,
         reports_root=args.reports_root,
         derivative_root=args.derivative_root,
+        variance_diagnostics_root=args.variance_diagnostics_root,
         descriptor_table_path=args.descriptor_table_path,
         embedding_derivative_root=args.embedding_derivative_root,
         embedding_model_key=args.embedding_model_key,

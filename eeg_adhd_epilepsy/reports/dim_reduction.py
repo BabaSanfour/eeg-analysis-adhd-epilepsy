@@ -302,7 +302,6 @@ def generate_rollup_report(
     args: Any,
     summaries: Sequence[dict[str, Any]],
     task_failures: Sequence[dict[str, str]] = (),
-    bids_root: str | Path | None = None,
     alignment_diagnostics: AlignmentDiagnosticsSpec | None = None,
 ) -> Report:
     """Cross-mode leaderboard answering which representation wins for this cohort.
@@ -367,9 +366,7 @@ def generate_rollup_report(
         asset_urls=asset_urls,
     )
     if alignment_diagnostics is not None:
-        if bids_root is None:
-            raise ValueError("bids_root is required when alignment_diagnostics is requested.")
-        diagnostics = load_alignment_diagnostics(bids_root, alignment_diagnostics)
+        diagnostics = load_alignment_diagnostics(alignment_diagnostics)
         section = build_subject_alignment_diagnostics_section(diagnostics)
         if section is None:
             raise ValueError("Requested alignment diagnostics contain no reportable rows.")

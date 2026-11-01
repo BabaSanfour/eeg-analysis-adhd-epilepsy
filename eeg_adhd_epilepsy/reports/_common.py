@@ -19,7 +19,6 @@ from coco_pipe.report import select_subject_alignment_diagnostics
 from coco_pipe.report.core import ImageElement, Section, TableElement
 from coco_pipe.utils import slug
 
-from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
 from eeg_adhd_epilepsy.utils.formatting import format_duration_hms
 
 MODE_TITLES = {
@@ -36,11 +35,17 @@ MODE_TITLES = {
 
 @dataclass(frozen=True)
 class AlignmentDiagnosticsSpec:
-    """Exact project diagnostic artifact and assessment population to load."""
+    """Exact project diagnostic artifact and assessment population to load.
+
+    ``root`` is the variance-diagnostics root the scoring run wrote to and ``desc`` its
+    epoch variant; the artifact is ``<root>/<desc>/<model>/variance_diagnostics.csv``.
+    """
 
     base_model_key: str
     cohort_name: str
     population: str
+    root: Path
+    desc: str
 
     def __post_init__(self) -> None:
         """Reject incomplete or derived-model identities at the contract boundary."""
@@ -55,13 +60,11 @@ class AlignmentDiagnosticsSpec:
             )
 
 
-def load_alignment_diagnostics(
-    bids_root: str | Path,
-    spec: AlignmentDiagnosticsSpec,
-) -> pd.DataFrame:
-    """Load one BIDS diagnostic artifact and apply coco-pipe's exact selection."""
+def load_alignment_diagnostics(spec: AlignmentDiagnosticsSpec) -> pd.DataFrame:
+    """Load one diagnostic artifact and apply coco-pipe's exact selection."""
     path = (
-        get_derivative_root(Path(bids_root), DerivativeStage.VARIANCE_DIAGNOSTICS)
+        Path(spec.root).expanduser()
+        / spec.desc
         / slug(spec.base_model_key)
         / "variance_diagnostics.csv"
     )

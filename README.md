@@ -267,11 +267,12 @@ The most common subject-level raw setup is `raw.yaml` with the `flat` mode and
 space. Best-fit selection is driven by `selection_metric` /`selection_eval_name`
 (in the analysis config); the default separation ranking uses RF balanced
 accuracy first and LR balanced accuracy second. Outputs are separated by a
-configuration hash under `BIDS/derivatives/dim_reduction/<dataset_name>/...`.
+configuration hash under `results/dim_reduction/<dataset_name>/...`, next to the BIDS
+dataset: group-level results are not BIDS derivatives.
 Re-runs rebuild inventories from reusable checkpoints. `--n_jobs` controls
 outer-task parallelism (start with 4–6).
-Pass `--derivative_root /scratch/.../BIDS/derivatives/dim_reduction` to keep
-checkpointed outputs outside the input BIDS tree without changing run identity.
+Pass `--derivative_root /scratch/.../results/dim_reduction` to put the checkpointed
+outputs elsewhere without changing run identity.
 
 ## Foundation models and decoding
 
@@ -286,8 +287,8 @@ eeg-classical-decode  --cohort_config <cohort.yaml> --analysis_config configs/an
 eeg-foundation-decode --cohort_config <cohort.yaml> --analysis_config configs/analyses/decoding/foundation.yaml --bids_root … --metadata …
 ```
 
-Both decoding commands accept
-`--derivative_root /scratch/.../BIDS/derivatives/decoding`. This relocates
+Both decoding commands write to `results/decoding/` next to the BIDS dataset and accept
+`--derivative_root /scratch/.../results/decoding`. This relocates
 checkpoints and aggregate inputs while leaving `--bids_root` pointed at the
 source dataset; the output-only path is excluded from the scientific run hash.
 
