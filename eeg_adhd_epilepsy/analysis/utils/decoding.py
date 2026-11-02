@@ -72,8 +72,8 @@ def resolve_decoding_paths(
     for classical and foundation scripts.
     """
     from eeg_adhd_epilepsy.io.bids import (
-        DerivativeStage,
-        get_derivative_root,
+        ResultStage,
+        get_results_root,
         read_participants,
     )
     from eeg_adhd_epilepsy.io.report_paths import (
@@ -94,7 +94,7 @@ def resolve_decoding_paths(
     decoding_root = (
         Path(config["derivative_root"]).expanduser()
         if config.get("derivative_root")
-        else get_derivative_root(bids_root, DerivativeStage.DECODING)
+        else get_results_root(bids_root, ResultStage.DECODING)
     )
     derivative_root = decoding_root / dataset_name_slug / run_variant
     reports_root = Path(config.get("reports_root", default_reports_root(bids_root))).expanduser()

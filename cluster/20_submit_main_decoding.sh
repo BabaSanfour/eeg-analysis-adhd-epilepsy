@@ -149,6 +149,7 @@ run_saved_embedding_classical() {
         --bids_root "$BIDS_ROOT" \
         --desc "$EPOCHS_DESC" \
         --derivative_root "$DECODING_ROOT" \
+        --variance_diagnostics_root "$VARIANCE_DIAGNOSTICS_ROOT" \
         --reports_root "$REPORTS_ROOT" \
         --metadata "$METADATA_PATH"
 }

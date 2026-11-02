@@ -110,7 +110,6 @@ def build_condition_comparison_table(segment_comparison: pd.DataFrame) -> pd.Dat
         ("Ampl uV", "mean_amplitude_pre", "mean_amplitude_post"),
         ("Line noise", "mean_line_noise_pre", "mean_line_noise_post"),
         ("HF/LF", "mean_hf_lf_pre", "mean_hf_lf_post"),
-        ("Bad ch %", "mean_pct_bad_channels_pre", "mean_pct_bad_channels_post"),
         ("Slope", "mean_aperiodic_slope_pre", "mean_aperiodic_slope_post"),
     ]:
         if pre_col in segment_comparison.columns:
@@ -131,7 +130,6 @@ def build_delta_table(
     specs = (
         ("Mean amplitude", f"amplitude_mean_uv_delta_{suffix}", " uV"),
         ("Max amplitude", f"amplitude_max_uv_delta_{suffix}", " uV"),
-        ("Bad channels", f"pct_bad_channels_delta_{suffix}", "%"),
         ("Line-noise ratio", f"line_noise_ratio_delta_{suffix}", ""),
         ("HF/LF ratio", f"hf_lf_ratio_delta_{suffix}", ""),
         ("Alpha peak", f"alpha_peak_hz_delta_{suffix}", " Hz"),
@@ -297,7 +295,6 @@ def build_dataset_effect_table(
     specs = (
         ("Mean amplitude", f"amplitude_mean_uv_delta_{suffix}", " uV"),
         ("Max amplitude", f"amplitude_max_uv_delta_{suffix}", " uV"),
-        ("Bad channels", f"pct_bad_channels_delta_{suffix}", "%"),
         ("Line-noise ratio", f"line_noise_ratio_delta_{suffix}", ""),
         ("HF/LF ratio", f"hf_lf_ratio_delta_{suffix}", ""),
         ("Alpha peak", f"alpha_peak_hz_delta_{suffix}", " Hz"),
@@ -543,7 +540,6 @@ def generate_dataset_report(
             figures,
             (
                 "amplitude_mean_uv_delta_prev",
-                "pct_bad_channels_delta_prev",
                 "line_noise_ratio_delta_prev",
                 "hf_lf_ratio_delta_prev",
                 "alpha_peak_hz_delta_prev",
@@ -563,7 +559,6 @@ def generate_dataset_report(
         figures,
         (
             "amplitude_mean_uv_delta_raw",
-            "pct_bad_channels_delta_raw",
             "line_noise_ratio_delta_raw",
             "hf_lf_ratio_delta_raw",
             "alpha_peak_hz_delta_raw",

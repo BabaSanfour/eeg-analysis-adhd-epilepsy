@@ -11,8 +11,9 @@ fold's number of erased directions is recorded. The subject probe trains on the 
 half of each recording's windows and tests on the second (and the reverse), so
 neighbouring windows are not split between the two.
 
-Rows go to ``variance_diagnostics.csv`` under the ``eeg_variance_diagnostics``
-derivative, per epoch variant and space. They carry the cohort, population and exact
+Rows go to ``<variance_diagnostics_root>/<desc>/<space>/variance_diagnostics.csv``
+(default root: ``results/variance_diagnostics`` next to the BIDS dataset, since they
+are group-level results, not BIDS derivatives). They carry the cohort, population and exact
 target-selection fingerprint, so raw/transformed deltas are only formed from paired
 observations.
 """
@@ -40,7 +41,7 @@ from sklearn.model_selection import GroupKFold
 from threadpoolctl import threadpool_info
 
 from eeg_adhd_epilepsy.analysis.dataset import filter_cohort_container, foundation_embedding_file
-from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root, read_participants
+from eeg_adhd_epilepsy.io.bids import ResultStage, get_results_root, read_participants
 from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 
 LOGGER = logging.getLogger(__name__)
@@ -327,6 +328,13 @@ def skipped_variance_diagnostics(
     ]
 
 
+def variance_diagnostics_root(config: Mapping[str, Any]) -> Path:
+    """The run's diagnostics root: ``variance_diagnostics_root``, else the default results root."""
+    if config.get("variance_diagnostics_root"):
+        return Path(config["variance_diagnostics_root"]).expanduser()
+    return get_results_root(Path(config["bids_root"]), ResultStage.VARIANCE_DIAGNOSTICS)
+
+
 def write_variance_diagnostics(
     rows: list[dict[str, Any]],
     diagnostics_root: Path,
@@ -377,12 +385,7 @@ def run(config: dict[str, Any]) -> Path:
     rows = score_variance_diagnostics(features, tasks, config, transform=transform, extra=extra)
     output_path = write_variance_diagnostics(
         rows,
-        get_derivative_root(
-            Path(config["bids_root"]).expanduser(),
-            DerivativeStage.VARIANCE_DIAGNOSTICS,
-        )
-        / desc
-        / slug(space),
+        variance_diagnostics_root(config) / desc / slug(space),
     )
     LOGGER.info("Wrote %d variance-diagnostic row(s) to %s.", len(rows), output_path)
     return output_path
@@ -406,6 +409,11 @@ def main() -> None:
     )
     parser.add_argument("--desc", default="base", help="Epoch variant: base or baserejected.")
     parser.add_argument(
+        "--variance_diagnostics_root",
+        default=None,
+        help="Output root (default: results/variance_diagnostics next to the BIDS root).",
+    )
+    parser.add_argument(
         "--diagnostic_transform",
         required=True,
         choices=["none", "leace"],
@@ -423,6 +431,7 @@ def main() -> None:
             embedding_derivative_root=args.embedding_derivative_root,
             embedding_model_key=args.embedding_model_key,
             desc=args.desc,
+            variance_diagnostics_root=args.variance_diagnostics_root,
             diagnostic_transform=args.diagnostic_transform,
         )
     )

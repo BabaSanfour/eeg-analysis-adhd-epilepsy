@@ -7,7 +7,7 @@ import tempfile
 import warnings
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import mne
@@ -32,17 +32,12 @@ from eeg_adhd_epilepsy.qc.utils import (
 )
 from eeg_adhd_epilepsy.utils import events
 
-# No amplitude limit after the base cleaning: AutoReject has rejected the epochs over the thresholds
-# it fits per recording and condition. In the epochs it kept (2026-10-15, all 1,237
-# recordings) the worst channel's 10 s peak-to-peak has a median of 236 µV, blinks and
-# slow drift; the 800 µV whole-run limit made 992 recordings unusable whatever they kept.
-PREPROC_SIGNAL_THRESHOLDS = replace(DEFAULT_SIGNAL_THRESHOLDS, amplitude_max_uv=None)
-
 LOGGER = logging.getLogger(__name__)
 
 
 WEIGHTED_METRICS = (
     *_BASE_WEIGHTED_METRICS,
+    "pct_bad_channels",
     "duration_retention_pct",
     "condition_coverage_retention_pct",
     # Amplitude delta keys keep _uv suffix — consistent with signal_quality output naming.
@@ -50,8 +45,6 @@ WEIGHTED_METRICS = (
     "amplitude_mean_uv_delta_raw",
     "amplitude_max_uv_delta_prev",
     "amplitude_max_uv_delta_raw",
-    "pct_bad_channels_delta_prev",
-    "pct_bad_channels_delta_raw",
     "line_noise_ratio_delta_prev",
     "line_noise_ratio_delta_raw",
     "hf_lf_ratio_delta_prev",
@@ -66,7 +59,6 @@ WEIGHTED_METRICS = (
 _DELTA_METRICS = (
     "amplitude_mean_uv",
     "amplitude_max_uv",
-    "pct_bad_channels",
     "line_noise_ratio",
     "hf_lf_ratio",
     "alpha_peak_hz",
@@ -302,7 +294,7 @@ def build_preproc_qc_run_record(
     thresholds: SignalQCThresholds | None = None,
     provenance: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
-    thresholds = thresholds or PREPROC_SIGNAL_THRESHOLDS
+    thresholds = thresholds or DEFAULT_SIGNAL_THRESHOLDS
     ids = report_paths.build_bids_report_ids(current_filepath)
     prepared_raw, picks = _prepare_signal(current_raw)
     # Metrics on the data outside global BAD spans: the annotated stretches are what the
@@ -313,10 +305,9 @@ def build_preproc_qc_run_record(
         line_freq=line_freq,
         include_channel_metrics=True,
     )
-    # The stage's bad channels (RANSAC), not the variance-percentile flat/noisy detector,
-    # which names the quietest and the loudest channel of every recording.
+    # The stage's bad channels (RANSAC).
     bad_channels = [ch for ch in prepared_raw.info["bads"] if ch in picks]
-    metrics["flat_channels"], metrics["noisy_channels"] = [], bad_channels
+    metrics["bad_channels"] = bad_channels
     retained_duration_sec = compute_clean_duration(prepared_raw)
     usable_condition_coverage_sec = compute_usable_condition_coverage(prepared_raw)
     subject_session_prefix = str(ids["subject_session_prefix"])
@@ -391,7 +382,6 @@ def build_preproc_qc_run_record(
         "aperiodic_slope": metrics.get("aperiodic_slope"),
         **_stage_actions(provenance),
     }
-    metrics["pct_bad_channels"] = run_metrics["pct_bad_channels"]  # the delta uses RANSAC's
 
     # With no previous stage the previous stage is the raw reference: no _prev deltas.
     for metric in _DELTA_METRICS:
@@ -486,7 +476,6 @@ def _compute_post_clean_segment_metrics(
                 "duration": duration,
                 "segment_amplitude_mean_uv": m.get("amplitude_mean_uv"),
                 "segment_amplitude_max_uv": m.get("amplitude_max_uv"),
-                "segment_pct_bad_channels": m.get("pct_bad_channels"),
                 "segment_line_noise_ratio": m.get("line_noise_ratio"),
                 "segment_hf_lf_ratio": m.get("hf_lf_ratio"),
                 "segment_aperiodic_slope": m.get("aperiodic_slope"),
@@ -526,7 +515,6 @@ def _compute_post_clean_segment_metrics(
                 mean_amplitude_post=("segment_amplitude_mean_uv", "mean"),
                 mean_line_noise_post=("segment_line_noise_ratio", "mean"),
                 mean_hf_lf_post=("segment_hf_lf_ratio", "mean"),
-                mean_pct_bad_channels_post=("segment_pct_bad_channels", "mean"),
                 mean_aperiodic_slope_post=("segment_aperiodic_slope", "mean"),
             )
             .reset_index()
@@ -540,7 +528,6 @@ def _compute_post_clean_segment_metrics(
                 mean_amplitude_pre=("segment_amplitude_mean_uv", "mean"),
                 mean_line_noise_pre=("segment_line_noise_ratio", "mean"),
                 mean_hf_lf_pre=("segment_hf_lf_ratio", "mean"),
-                mean_pct_bad_channels_pre=("segment_pct_bad_channels", "mean"),
                 mean_aperiodic_slope_pre=("segment_aperiodic_slope", "mean"),
             )
             .reset_index()
@@ -553,7 +540,6 @@ def _compute_post_clean_segment_metrics(
             "mean_amplitude_pre",
             "mean_line_noise_pre",
             "mean_hf_lf_pre",
-            "mean_pct_bad_channels_pre",
             "mean_aperiodic_slope_pre",
         ):
             result[col] = float("nan")
@@ -569,8 +555,6 @@ def _compute_post_clean_segment_metrics(
         "mean_line_noise_post",
         "mean_hf_lf_pre",
         "mean_hf_lf_post",
-        "mean_pct_bad_channels_pre",
-        "mean_pct_bad_channels_post",
         "mean_aperiodic_slope_pre",
         "mean_aperiodic_slope_post",
     ]
@@ -662,9 +646,6 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
         record.get("topomap_aggregates", {}) for record in records
     )
     aggregate["channel_diagnostics"] = records[0].get("channel_diagnostics", {})
-    from eeg_adhd_epilepsy.qc.utils import compute_channel_failure_rates
-
-    aggregate["channel_failure_rates"] = compute_channel_failure_rates(records)
 
     # Combine per-condition segment comparisons across runs: average numeric columns
     # per segment_type so multi-run subjects don't get duplicate condition rows.
