@@ -7,7 +7,7 @@ name = "eeg-analysis-adhd-epilepsy"
 version = "0.1.0"
 description = "EEG analysis, ML/DL pipelines, and visualization for ADHD/Epilepsy psychostimulant study."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
   { name = "Hamza Abdelhedi" }
@@ -23,7 +23,7 @@ dependencies = [
   "mne",
   "mne-bids",
   "pybv>=0.7.3",
-  "coco-pipe[full] @ git+https://github.com/BabaSanfour/coco-pipe.git@decoding-module",
+  "coco-pipe[full] @ git+https://github.com/BabaSanfour/coco-pipe.git@054510e463ee81ad289adeacc1a21d37201edfe3",
   "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",
