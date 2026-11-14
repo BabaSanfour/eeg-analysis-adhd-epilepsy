@@ -1036,7 +1036,7 @@ requires-dist = [
     { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main" },
     { name = "filelock", specifier = ">=3.20.4" },
     { name = "mne", specifier = ">=1.13" },
-    { name = "mne-bids", git = "https://github.com/BabaSanfour/mne-bids?rev=read-epochs-fif" },
+    { name = "mne-bids", git = "https://github.com/mne-tools/mne-bids.git?rev=main" },
     { name = "mne-denoise", git = "https://github.com/mne-tools/mne-denoise.git?rev=main" },
     { name = "numpy", specifier = "<2.4" },
     { name = "pandas", specifier = "<3.0.0" },
@@ -1975,8 +1975,8 @@ hdf5 = [
 
 [[package]]
 name = "mne-bids"
-version = "0.21.0.dev0"
-source = { git = "https://github.com/BabaSanfour/mne-bids?rev=read-epochs-fif#d9bf2fb945040fc2a4fc90b368c516823b2a83ab" }
+version = "0.21.0.dev31+gd437a0036"
+source = { git = "https://github.com/mne-tools/mne-bids.git?rev=main#d437a00369470168ee47fa168a1bc3ceca530b60" }
 dependencies = [
     { name = "mne" },
     { name = "numpy" },
