@@ -653,7 +653,6 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         segment_duration=float(config.get("segment_duration", 60.0)),
         overlap=float(config.get("overlap", 0.0)),
         desc=config.get("desc", "base"),
-        window_source=config.get("window_source", "auto"),
         units=config.get("units"),
         # Descriptors
         descriptor_table_path=config.get("descriptor_table_path"),

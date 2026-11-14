@@ -8,7 +8,6 @@ models:
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
-    window_source: derivative
     window_mismatch_policy: raise
     backend: auto
     backend_kwargs: {}
@@ -18,10 +17,9 @@ models:
       full: {}
       lora: {}
   - model_key: labram
-    segment_duration: 15.0
+    segment_duration: 10.0
     overlap: 0.0
-    use_derivatives: false
-    window_source: re_epoch
+    use_derivatives: true
     window_mismatch_policy: raise
     backend: auto
     backend_kwargs: {}
@@ -34,7 +32,6 @@ models:
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
-    window_source: derivative
     window_mismatch_policy: raise
     backend: auto
     backend_kwargs: {}
@@ -47,7 +44,6 @@ models:
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
-    window_source: derivative
     window_mismatch_policy: raise
     backend: auto
     backend_kwargs: {}
@@ -60,22 +56,7 @@ models:
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
-    window_source: derivative
     window_mismatch_policy: raise
-    backend: auto
-    backend_kwargs: {}
-    lora: {}
-    trainer:
-      linear_probe: {}
-      full: {}
-      lora: {}
-  - model_key: signaljepa
-    segment_duration: 10.0
-    overlap: 0.0
-    use_derivatives: false
-    window_source: re_epoch
-    window_mismatch_policy: raise
-    bandpass: [0.5, 40.0]
     backend: auto
     backend_kwargs: {}
     lora: {}
@@ -87,7 +68,6 @@ models:
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
-    window_source: derivative
     window_mismatch_policy: raise
     backend: auto
     backend_kwargs: {}
@@ -100,7 +80,6 @@ models:
     segment_duration: 10.0
     overlap: 0.0
     use_derivatives: true
-    window_source: derivative
     window_mismatch_policy: raise
     backend: auto
     backend_kwargs: {}

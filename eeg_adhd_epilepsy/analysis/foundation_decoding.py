@@ -80,7 +80,6 @@ def _build_foundation_unit(
     )
 
     segment_duration = float(model_cfg["segment_duration"])
-    window_source = str(model_cfg["window_source"])
     # One fit gives both levels: every metric is scored per epoch and, as
     # "<metric>_by_recording", on the mean probability of a recording's test
     # epochs.
@@ -99,7 +98,6 @@ def _build_foundation_unit(
         "train_mode": train_mode,
         "primary": train_mode == "linear_probe",
         "segment_duration": segment_duration,
-        "window_source": window_source,
         "window_mismatch_policy": str(model_cfg["window_mismatch_policy"]),
         "cv_strategy": "stratified_group_kfold",
         "effective_n_splits": n_splits,
@@ -256,7 +254,6 @@ def _enumerate_foundation_scope(
                 train_mode=train_mode,
                 sfreq=sfreq,
                 ch_names=channels,
-                n_times=int(target_container.X.shape[-1]),
                 backend=model_cfg["backend"],
                 backend_kwargs=model_cfg["backend_kwargs"],
             )
@@ -360,12 +357,6 @@ def _iter_foundation_unit_batches(
 
     for model_cfg in model_configs:
         model_key = str(model_cfg["model_key"])
-        window_source = str(model_cfg["window_source"])
-        if window_source not in ("re_epoch", "derivative"):
-            raise ValueError(
-                f"model '{model_key}' window_source must be 're_epoch' or 'derivative', "
-                f"got: '{window_source}'"
-            )
         loader_args = build_loader_args(
             config,
             input_mode="raw",
@@ -373,7 +364,6 @@ def _iter_foundation_unit_batches(
             segment_duration=float(model_cfg["segment_duration"]),
             overlap=float(model_cfg["overlap"]),
             use_derivatives=bool(model_cfg["use_derivatives"]),
-            window_source=window_source,
         )
         # The models take epochs, never a signal averaged over a recording.
         loader_args.representation = "epoch"

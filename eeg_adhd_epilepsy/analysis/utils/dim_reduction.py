@@ -221,7 +221,6 @@ def build_input_signature(
                 "segment_duration": float(args.segment_duration),
                 "overlap": float(args.overlap),
                 "desc": args.desc,
-                "window_source": args.window_source,
             }
         )
     elif args.input_mode == "descriptors":
@@ -289,7 +288,6 @@ def build_run_config_payload(
                 "segment_duration": args.segment_duration,
                 "overlap": args.overlap,
                 "desc": args.desc,
-                "window_source": args.window_source,
             }
         )
 

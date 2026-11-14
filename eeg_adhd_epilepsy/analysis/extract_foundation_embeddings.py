@@ -107,7 +107,6 @@ def load_recordings(
             segment_duration=segment_duration,
             desc=config["desc"],
             condition=list(config["conditions"]),
-            window_source=model_cfg["window_source"],
             units="uV",
             n_jobs=n_jobs,
         )
