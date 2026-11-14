@@ -689,6 +689,7 @@ def _pool_equivalence_containers(channels_per_condition):
                 meta={
                     "condition": condition,
                     "sfreq": 200.0,
+                    "units": {"eeg": "µV"},
                     "family_qc_group_by": "family",
                     "family_qc_bad_ids": {"fam": [f"{condition}_r0"]},
                 },
@@ -725,6 +726,7 @@ def test_streaming_pool_matches_eager_pool(channels_per_condition):
     assert streamed.meta["family_qc_bad_ids"] == eager.meta["family_qc_bad_ids"]
     assert streamed.meta["family_qc_group_by"] == eager.meta["family_qc_group_by"]
     assert streamed.meta["sfreq"] == eager.meta["sfreq"] == 200.0
+    assert streamed.meta["units"] == eager.meta["units"] == {"eeg": "µV"}
 
 
 def test_fit_identity_changes_with_matrix_content_and_qc(tmp_path):
