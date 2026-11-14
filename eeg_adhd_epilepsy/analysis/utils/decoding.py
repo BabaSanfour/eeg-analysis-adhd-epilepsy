@@ -72,8 +72,8 @@ def resolve_decoding_paths(
     for classical and foundation scripts.
     """
     from eeg_adhd_epilepsy.io.bids import (
-        DerivativeStage,
-        get_derivative_root,
+        ResultStage,
+        get_results_root,
         read_participants,
     )
     from eeg_adhd_epilepsy.io.report_paths import (
@@ -94,7 +94,7 @@ def resolve_decoding_paths(
     decoding_root = (
         Path(config["derivative_root"]).expanduser()
         if config.get("derivative_root")
-        else get_derivative_root(bids_root, DerivativeStage.DECODING)
+        else get_results_root(bids_root, ResultStage.DECODING)
     )
     derivative_root = decoding_root / dataset_name_slug / run_variant
     reports_root = Path(config.get("reports_root", default_reports_root(bids_root))).expanduser()
@@ -128,16 +128,10 @@ def foundation_provenance(
         "config_hash": config_hash,
         "model_key": str(model_cfg["model_key"]),
         "pooling": str(model_cfg.get("pooling", "mean")),
-        "bandpass": (
-            [float(v) for v in model_cfg["bandpass"]] if model_cfg.get("bandpass") else None
-        ),
         "segment_duration": float(model_cfg["segment_duration"]),
         "overlap": float(model_cfg["overlap"]),
         "use_derivatives": bool(model_cfg["use_derivatives"]),
-        "window_source": str(model_cfg["window_source"]),
-        "expected_n_times": spec.pretrained_n_times,
         "expected_sfreq": float(spec.pretrained_sfreq),
-        "expected_duration": spec.pretrained_window_seconds,
     }
 
 
@@ -324,7 +318,6 @@ def build_loader_args(
     segment_duration: float | None = None,
     overlap: float | None = None,
     use_derivatives: bool | None = None,
-    window_source: str | None = None,
 ) -> SimpleNamespace:
     """Explicit dataset-loader args for classical decoding.
 
@@ -374,9 +367,6 @@ def build_loader_args(
         balance_target=None,
         balance_strategy="undersample",
         representation=config.get("representation", "subject"),
-        window_source=(
-            window_source if window_source is not None else config.get("window_source", "auto")
-        ),
     )
 
 

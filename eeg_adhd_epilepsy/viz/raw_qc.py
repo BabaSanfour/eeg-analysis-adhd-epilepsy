@@ -20,7 +20,6 @@ plt.style.use("seaborn-v0_8-whitegrid")
 FIGURE_FILENAMES = {
     "amplitude_mean_uv": "amplitude_mean_distribution.png",
     "amplitude_max_uv": "amplitude_max_distribution.png",
-    "pct_bad_channels": "pct_bad_channels_distribution.png",
     "line_noise_ratio": "line_noise_ratio_distribution.png",
     "hf_lf_ratio": "hf_lf_ratio_distribution.png",
     "alpha_peak_hz": "alpha_peak_distribution.png",
@@ -38,7 +37,6 @@ FIGURE_FILENAMES = {
 RUN_METRIC_SPECS = (
     ("amplitude_mean_uv", "Run Mean Amplitude", "Mean amplitude (uV)"),
     ("amplitude_max_uv", "Run Max Amplitude", "Max amplitude (uV)"),
-    ("pct_bad_channels", "Bad Channels", "Bad channels (%)"),
     ("line_noise_ratio", "Line Noise Ratio", "Line-noise ratio"),
     ("hf_lf_ratio", "HF/LF Ratio", "HF/LF ratio"),
     ("alpha_peak_hz", "Alpha Peak", "Alpha peak (Hz)"),

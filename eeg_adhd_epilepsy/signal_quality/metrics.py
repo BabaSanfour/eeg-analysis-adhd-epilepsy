@@ -16,7 +16,6 @@ from eeg_adhd_epilepsy.signal_quality.spectral import (
 )
 from eeg_adhd_epilepsy.signal_quality.time import (
     compute_channel_amplitude_stats,
-    detect_flat_and_noisy_channels,
 )
 
 LOGGER = logging.getLogger("qc_metrics")
@@ -64,7 +63,6 @@ def compute_signal_qc_metrics(
         picks = [lower_map[p.lower()] for p in picks if p.lower() in lower_map]
 
     amp_stats = compute_channel_amplitude_stats(signal, picks)
-    noise_info = detect_flat_and_noisy_channels(signal, picks)
     duration_sec = float(signal.times[-1]) if signal.times.size else float("nan")
 
     psd, freqs, alpha_peak, band_powers = compute_spectral_metrics(
@@ -85,11 +83,6 @@ def compute_signal_qc_metrics(
         "amplitude_std_uv": amp_stats["std"],
         "amplitude_min_uv": amp_stats["min"],
         "amplitude_max_uv": amp_stats["max"],
-        "flat_channels": noise_info["flat_channels"],
-        "noisy_channels": noise_info["noisy_channels"],
-        "n_flat_channels": noise_info["n_flat_channels"],
-        "n_noisy_channels": noise_info["n_noisy_channels"],
-        "pct_bad_channels": noise_info["pct_bad_channels"],
         "alpha_peak_hz": alpha_peak,
         "hf_lf_ratio": hf_ratio_mean,
         "line_noise_ratio": line_noise_mean,
@@ -113,9 +106,6 @@ def compute_signal_qc_metrics(
     slope = metrics.get("aperiodic_slope", float("nan"))
     if np.isfinite(slope) and (slope < 0.50 or slope > 3.0):
         reasons.append("aperiodic_slope_out_of_range")
-    bad_pct = metrics.get("pct_bad_channels", float("nan"))
-    if np.isfinite(bad_pct) and bad_pct > 30.0:
-        reasons.append("too_many_bad_channels")
     metrics["flag_bad"] = bool(reasons)
     metrics["flag_reasons"] = ";".join(reasons)
     return metrics

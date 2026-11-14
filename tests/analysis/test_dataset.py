@@ -1,13 +1,9 @@
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
-import pytest
 from coco_pipe.io import DataContainer
 
 from eeg_adhd_epilepsy.analysis.dataset import (
     attach_subject_metadata,
-    build_container,
     filter_cohort_container,
 )
 
@@ -74,16 +70,3 @@ def test_filter_cohort_container_applies_group_union_and_column_filter():
     )
 
     assert selected.ids.tolist() == ["rec-0", "rec-3"]
-
-
-def test_build_container_rejects_bandpass_without_reepoch():
-    # Filtering happens on the continuous recording inside the re-epoch path;
-    # the saved epoch derivatives are already windowed, so bandpass there is
-    # ill-posed and must raise rather than silently no-op.
-    with pytest.raises(ValueError, match="bandpass is only supported"):
-        build_container(
-            bids_root=Path("/nonexistent"),
-            use_derivatives=True,
-            window_source="derivative",
-            bandpass=(0.5, 40.0),
-        )

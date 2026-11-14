@@ -20,9 +20,6 @@ from eeg_adhd_epilepsy.reports._common import (
 
 # Human-readable labels for the coded flag reasons from ``evaluate_signal_qc_flag``.
 REASON_LABELS = {
-    "too_many_bad_channels": "Too many bad channels",
-    "many_bad_channels": "Many bad channels",
-    "amplitude_above_threshold": "Peak amplitude above threshold",
     "line_noise_residual": "Residual line noise",
     "high_hf_ratio": "High HF/LF ratio",
     "low_duration_retention": "Low clean-duration retention",
@@ -33,7 +30,6 @@ OUTLIER_Z = 3.5
 OUTLIER_METRICS: tuple[tuple[str, str], ...] = (
     ("amplitude_mean_uv", "Mean amplitude"),
     ("amplitude_max_uv", "Max amplitude"),
-    ("pct_bad_channels", "Bad channels %"),
     ("line_noise_ratio", "Line-noise ratio"),
     ("hf_lf_ratio", "HF/LF ratio"),
     ("aperiodic_slope", "Aperiodic slope"),
@@ -93,12 +89,6 @@ def build_usability_table(record: Mapping[str, object]) -> pd.DataFrame:
                 "Metric": "Max amplitude",
                 "Value": format_value(record.get("amplitude_max_uv"), suffix=" uV"),
             },
-            {"Metric": "Flat channels", "Value": int(record.get("n_flat_channels", 0) or 0)},
-            {"Metric": "Noisy channels", "Value": int(record.get("n_noisy_channels", 0) or 0)},
-            {
-                "Metric": "Bad channels",
-                "Value": format_value(record.get("pct_bad_channels"), suffix="%"),
-            },
             {"Metric": "Line-noise ratio", "Value": format_value(record.get("line_noise_ratio"))},
             {"Metric": "HF/LF ratio", "Value": format_value(record.get("hf_lf_ratio"))},
             {
@@ -127,27 +117,7 @@ def build_threshold_verdict_table(record: Mapping[str, object]) -> pd.DataFrame:
             return "n/a"
         return "exceeds" if float(v) > float(limit) else "ok"
 
-    n_bad = float(record.get("n_flat_channels", 0) or 0) + float(
-        record.get("n_noisy_channels", 0) or 0
-    )
-    n_borderline = int(thresholds["n_bad_borderline"])
-    n_unusable = int(thresholds["n_bad_unusable"])
-    bad_status = (
-        "unusable" if n_bad >= n_unusable else "borderline" if n_bad >= n_borderline else "ok"
-    )
     rows = [
-        {
-            "Check": "Bad channels (count)",
-            "Value": f"{int(n_bad)}",
-            "Threshold": f">={n_borderline} borderline, >={n_unusable} unusable",
-            "Status": bad_status,
-        },
-        {
-            "Check": "Peak amplitude (uV)",
-            "Value": format_value(record.get("amplitude_max_uv")),
-            "Threshold": f"<= {thresholds['amplitude_max_uv']:g}",
-            "Status": _status(record.get("amplitude_max_uv"), thresholds["amplitude_max_uv"]),
-        },
         {
             "Check": "Line-noise ratio",
             "Value": format_value(record.get("line_noise_ratio")),
@@ -168,15 +138,10 @@ def build_channel_diagnostics_tables(
     channel_diagnostics: Mapping[str, object] | None,
 ) -> dict[str, pd.DataFrame]:
     if not channel_diagnostics:
-        empty = pd.DataFrame(columns=["Channel"])
         return {
-            "flat": empty,
-            "noisy": empty,
             "top_amplitude": pd.DataFrame(columns=["Channel", "Amplitude PTP (uV)"]),
             "top_line_noise": pd.DataFrame(columns=["Channel", "Line Noise Ratio"]),
         }
-    flat_df = pd.DataFrame({"Channel": list(channel_diagnostics.get("flat_channels", []))})
-    noisy_df = pd.DataFrame({"Channel": list(channel_diagnostics.get("noisy_channels", []))})
     top_amp_df = pd.DataFrame(
         [
             {"Channel": channel, "Amplitude PTP (uV)": float(value)}
@@ -190,8 +155,6 @@ def build_channel_diagnostics_tables(
         ]
     )
     return {
-        "flat": flat_df,
-        "noisy": noisy_df,
         "top_amplitude": top_amp_df,
         "top_line_noise": top_line_df,
     }
@@ -205,7 +168,6 @@ def build_run_summary_table(records: Sequence[Mapping[str, object]]) -> pd.DataF
                 "Run": record.get("run_id", ""),
                 "QC Status": record.get("subject_flag", ""),
                 "QC Score (0=best)": format_value(record.get("qc_score")),
-                "Bad Channels (%)": format_value(record.get("pct_bad_channels")),
                 "Mean Amplitude (uV)": format_value(record.get("amplitude_mean_uv")),
                 "Max Amplitude (uV)": format_value(record.get("amplitude_max_uv")),
                 "Line Noise Ratio": format_value(record.get("line_noise_ratio")),
@@ -239,7 +201,6 @@ def build_noise_metrics_table(runs_df: pd.DataFrame) -> pd.DataFrame:
     return build_dataset_mean_metric_table(
         runs_df,
         (
-            ("Mean bad channels", "pct_bad_channels", "%"),
             ("Mean amplitude", "amplitude_mean_uv", " uV"),
             ("Mean max amplitude", "amplitude_max_uv", " uV"),
             ("Mean line-noise ratio", "line_noise_ratio", ""),
@@ -258,23 +219,6 @@ def build_flag_reason_table(runs_df: pd.DataFrame) -> pd.DataFrame:
         table = table.copy()
         table["Reason"] = table["Reason"].map(lambda code: REASON_LABELS.get(str(code), str(code)))
     return table
-
-
-def build_channel_failure_table(failure_rates: Mapping[str, float] | None) -> pd.DataFrame:
-    """Per-electrode fraction of recordings in which it was flagged bad.
-
-    High values point to systematic equipment/placement problems for a channel
-    rather than per-recording noise.
-    """
-    columns = ["Channel", "Recordings flagged bad (%)"]
-    if not failure_rates:
-        return pd.DataFrame(columns=columns)
-    rows = [
-        {"Channel": channel, "Recordings flagged bad (%)": format_value(rate * 100.0, suffix="%")}
-        for channel, rate in sorted(failure_rates.items(), key=lambda kv: kv[1], reverse=True)
-        if rate > 0
-    ]
-    return pd.DataFrame(rows, columns=columns)
 
 
 def build_cohort_outlier_table(
@@ -356,8 +300,6 @@ def generate_raw_qc_subject_report(
 
     diagnostics = Section("Per-Channel Diagnostics", icon="📡")
     diag_tables = build_channel_diagnostics_tables(channel_diagnostics)
-    add_optional_table(diagnostics, diag_tables["flat"], "Flat Channels")
-    add_optional_table(diagnostics, diag_tables["noisy"], "Noisy Channels")
     add_optional_table(diagnostics, diag_tables["top_amplitude"], "Top Amplitude Channels")
     add_optional_table(diagnostics, diag_tables["top_line_noise"], "Top Line-Noise Channels")
     report.add_section(diagnostics)
@@ -413,7 +355,6 @@ def generate_raw_qc_dataset_report(
         (
             "amplitude_mean_uv",
             "amplitude_max_uv",
-            "pct_bad_channels",
             "line_noise_ratio",
             "hf_lf_ratio",
             "alpha_peak_hz",
@@ -436,16 +377,6 @@ def generate_raw_qc_dataset_report(
         ),
     )
     report.add_section(segments)
-
-    electrodes = Section("Electrode Reliability", icon="📡")
-    electrodes.add_markdown(
-        "Fraction of recordings in which each electrode was flagged bad. "
-        "Consistently failing channels suggest systematic hardware or placement issues."
-    )
-    add_optional_table(
-        electrodes, tables.get("channel_failure_df", pd.DataFrame()), "Consensus Bad Electrodes"
-    )
-    report.add_section(electrodes)
 
     outliers = Section("Cohort Outliers", icon="🚩")
     outliers.add_markdown(

@@ -10,7 +10,7 @@ from coco_pipe.report import (
 )
 from coco_pipe.utils import slug
 
-from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+from eeg_adhd_epilepsy.io.bids import ResultStage, get_results_root
 from eeg_adhd_epilepsy.reports._common import (
     AlignmentDiagnosticsSpec,
     load_alignment_diagnostics,
@@ -44,8 +44,7 @@ def test_legacy_head_to_head_migration_policy_is_explicit_and_non_mutating():
 
 
 def test_alignment_diagnostics_section_matches_decoding_cohort_and_population(tmp_path):
-    bids_root = tmp_path / "BIDS"
-    root = get_derivative_root(bids_root, DerivativeStage.VARIANCE_DIAGNOSTICS) / slug("demo")
+    root = tmp_path / "variance_diagnostics" / "base" / slug("demo")
     root.mkdir(parents=True)
     pd.DataFrame(
         [
@@ -69,11 +68,12 @@ def test_alignment_diagnostics_section_matches_decoding_cohort_and_population(tm
     ).to_csv(root / "variance_diagnostics.csv", index=False)
 
     diagnostics = load_alignment_diagnostics(
-        bids_root,
         AlignmentDiagnosticsSpec(
             base_model_key="demo",
             cohort_name="wanted",
             population="clinical_task_subset",
+            root=tmp_path / "variance_diagnostics",
+            desc="base",
         ),
     )
 
@@ -84,17 +84,18 @@ def test_alignment_diagnostics_section_matches_decoding_cohort_and_population(tm
 def test_alignment_diagnostics_rejects_inferred_aligned_model_keys(tmp_path):
     with pytest.raises(ValueError, match="exact non-empty base model key"):
         load_alignment_diagnostics(
-            tmp_path,
             AlignmentDiagnosticsSpec(
                 base_model_key="demo_align-leace",
                 cohort_name="cohort",
                 population="clinical_task_subset",
+                root=tmp_path / "variance_diagnostics",
+                desc="base",
             ),
         )
 
 
 def test_alignment_diagnostics_requires_explicit_schema(tmp_path):
-    root = get_derivative_root(tmp_path, DerivativeStage.VARIANCE_DIAGNOSTICS) / slug("demo")
+    root = tmp_path / "variance_diagnostics" / "base" / slug("demo")
     root.mkdir(parents=True)
     pd.DataFrame([{"metric": "between_subject_excess_over_null", "value": 0.4}]).to_csv(
         root / "variance_diagnostics.csv", index=False
@@ -102,11 +103,12 @@ def test_alignment_diagnostics_requires_explicit_schema(tmp_path):
 
     with pytest.raises(ValueError, match="missing required columns"):
         load_alignment_diagnostics(
-            tmp_path,
             AlignmentDiagnosticsSpec(
                 base_model_key="demo",
                 cohort_name="cohort",
                 population="clinical_task_subset",
+                root=tmp_path / "variance_diagnostics",
+                desc="base",
             ),
         )
 
@@ -908,9 +910,9 @@ def test_head_to_head_report_includes_grouped_cv_signature(tmp_path):
         ]
     ).to_csv(foundation_root / "foundation_results.csv", index=False)
     for model_key in ("cbramod", "labram"):
-        diagnostics_root = get_derivative_root(
-            bids_root, DerivativeStage.VARIANCE_DIAGNOSTICS
-        ) / slug(model_key)
+        diagnostics_root = (
+            get_results_root(bids_root, ResultStage.VARIANCE_DIAGNOSTICS) / "base" / slug(model_key)
+        )
         diagnostics_root.mkdir(parents=True)
         diagnostic_values = {
             "none": {

@@ -15,11 +15,7 @@ from eeg_adhd_epilepsy.analysis.utils.decoding import (
 
 
 def _fm_spec():
-    return SimpleNamespace(
-        pretrained_n_times=2000,
-        pretrained_sfreq=200.0,
-        pretrained_window_seconds=10.0,
-    )
+    return SimpleNamespace(pretrained_sfreq=200.0)
 
 
 def _base_model_cfg(**overrides):
@@ -28,7 +24,6 @@ def _base_model_cfg(**overrides):
         "segment_duration": 10.0,
         "overlap": 0.0,
         "use_derivatives": True,
-        "window_source": "derivative",
     }
     cfg.update(overrides)
     return cfg
@@ -70,20 +65,6 @@ def test_decoding_derivative_root_relocates_output_without_changing_run_identity
 def test_foundation_provenance_defaults_pooling_to_mean():
     prov = foundation_provenance(_base_model_cfg(), _fm_spec(), config_hash="abc")
     assert prov["pooling"] == "mean"
-
-
-def test_foundation_provenance_defaults_bandpass_to_none():
-    prov = foundation_provenance(_base_model_cfg(), _fm_spec(), config_hash="abc")
-    assert prov["bandpass"] is None
-
-
-def test_foundation_provenance_records_bandpass():
-    prov = foundation_provenance(
-        _base_model_cfg(window_source="re_epoch", bandpass=[0.5, 40.0]),
-        _fm_spec(),
-        config_hash="abc",
-    )
-    assert prov["bandpass"] == [0.5, 40.0]
 
 
 def test_foundation_provenance_distinguishes_pooling_variants():

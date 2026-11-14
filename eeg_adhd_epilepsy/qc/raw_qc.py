@@ -25,7 +25,6 @@ from eeg_adhd_epilepsy.qc.utils import (
     _build_topomap_aggregates,
     _clean_scalar,
     _combine_weighted_topomaps,
-    compute_channel_failure_rates,
     compute_qc_score,
     evaluate_signal_qc_flag,
 )
@@ -63,9 +62,6 @@ def _build_run_metric_row(
     return {
         "amplitude_mean_uv": metrics.get("amplitude_mean_uv"),
         "amplitude_max_uv": metrics.get("amplitude_max_uv"),
-        "n_flat_channels": int(metrics.get("n_flat_channels", 0) or 0),
-        "n_noisy_channels": int(metrics.get("n_noisy_channels", 0) or 0),
-        "pct_bad_channels": metrics.get("pct_bad_channels"),
         "line_noise_ratio": metrics.get("line_noise_ratio"),
         "hf_lf_ratio": metrics.get("hf_lf_ratio"),
         "alpha_peak_hz": metrics.get("alpha_peak_hz"),
@@ -117,7 +113,6 @@ def _build_segment_qc_rows(
                 "segment_alpha_power": (metrics.get("band_powers") or {}).get("alpha", np.nan),
                 "segment_amplitude_mean_uv": metrics.get("amplitude_mean_uv"),
                 "segment_amplitude_max_uv": metrics.get("amplitude_max_uv"),
-                "segment_pct_bad_channels": metrics.get("pct_bad_channels"),
                 "segment_line_noise_ratio": metrics.get("line_noise_ratio"),
                 "segment_hf_lf_ratio": metrics.get("hf_lf_ratio"),
                 "segment_aperiodic_slope": metrics.get("aperiodic_slope"),
@@ -147,9 +142,6 @@ def _build_run_summary_row(record: dict[str, object]) -> dict[str, object]:
         "subject_flag_reasons": record["subject_flag_reasons"],
         "amplitude_mean_uv": record["amplitude_mean_uv"],
         "amplitude_max_uv": record["amplitude_max_uv"],
-        "n_flat_channels": record["n_flat_channels"],
-        "n_noisy_channels": record["n_noisy_channels"],
-        "pct_bad_channels": record["pct_bad_channels"],
         "line_noise_ratio": record["line_noise_ratio"],
         "hf_lf_ratio": record["hf_lf_ratio"],
         "alpha_peak_hz": record["alpha_peak_hz"],
@@ -237,9 +229,6 @@ def build_raw_qc_run_record(
             **base_metrics,
             "amplitude_mean_uv": np.nan,
             "amplitude_max_uv": np.nan,
-            "n_flat_channels": 0,
-            "n_noisy_channels": 0,
-            "pct_bad_channels": np.nan,
             "line_noise_ratio": np.nan,
             "hf_lf_ratio": np.nan,
             "alpha_peak_hz": np.nan,
@@ -291,9 +280,6 @@ def build_raw_qc_run_record(
     record["qc_score"] = compute_qc_score(run_metrics, thresholds=thresholds)
     active = thresholds or DEFAULT_SIGNAL_THRESHOLDS
     record["thresholds"] = {
-        "n_bad_borderline": active.n_bad_borderline,
-        "n_bad_unusable": active.n_bad_unusable,
-        "amplitude_max_uv": active.amplitude_max_uv,
         "line_noise_ratio": active.line_noise_ratio,
         "hf_lf_ratio": active.hf_lf_ratio,
     }
@@ -362,20 +348,6 @@ def _aggregate_channel_diagnostics(
     records: Sequence[dict[str, object]],
     topomap_aggregates: Mapping[str, tuple[list[str], np.ndarray]],
 ) -> dict[str, object]:
-    flat_channels = sorted(
-        {
-            channel
-            for record in records
-            for channel in record.get("channel_diagnostics", {}).get("flat_channels", [])
-        }
-    )
-    noisy_channels = sorted(
-        {
-            channel
-            for record in records
-            for channel in record.get("channel_diagnostics", {}).get("noisy_channels", [])
-        }
-    )
     top_amplitude = []
     top_line_noise = []
     amplitude_payload = topomap_aggregates.get("amplitude_ptp_uv")
@@ -393,8 +365,6 @@ def _aggregate_channel_diagnostics(
             (channel, float(value)) for channel, value in line_pairs[:5] if np.isfinite(value)
         ]
     return {
-        "flat_channels": flat_channels,
-        "noisy_channels": noisy_channels,
         "top_amplitude_channels": top_amplitude,
         "top_line_noise_channels": top_line_noise,
     }
@@ -415,9 +385,6 @@ def _build_subject_summary_row(record: dict[str, object]) -> dict[str, object]:
         "subject_flag_reasons": record["subject_flag_reasons"],
         "amplitude_mean_uv": record["amplitude_mean_uv"],
         "amplitude_max_uv": record["amplitude_max_uv"],
-        "n_flat_channels": record["n_flat_channels"],
-        "n_noisy_channels": record["n_noisy_channels"],
-        "pct_bad_channels": record["pct_bad_channels"],
         "line_noise_ratio": record["line_noise_ratio"],
         "hf_lf_ratio": record["hf_lf_ratio"],
         "alpha_peak_hz": record["alpha_peak_hz"],
@@ -559,9 +526,6 @@ def write_raw_qc_aggregate_reports(
         summary_dir / "figures",
     )
     dataset_tables = report_raw_qc.build_dataset_report_tables(runs_df, subjects_df)
-    dataset_tables["channel_failure_df"] = report_raw_qc.build_channel_failure_table(
-        compute_channel_failure_rates(run_records)
-    )
     dataset_tables["outlier_df"] = report_raw_qc.build_cohort_outlier_table(runs_df)
     report_raw_qc.generate_raw_qc_dataset_report(
         tables=dataset_tables,

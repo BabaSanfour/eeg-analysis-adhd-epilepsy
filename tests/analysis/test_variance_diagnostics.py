@@ -12,7 +12,7 @@ from coco_pipe.io import DataContainer
 from eeg_adhd_epilepsy.analysis import extract_foundation_embeddings as efe
 from eeg_adhd_epilepsy.analysis import merge_foundation_embeddings as mfe
 from eeg_adhd_epilepsy.analysis import variance_diagnostics as vd
-from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+from eeg_adhd_epilepsy.io.bids import ResultStage, get_results_root
 from tests.analysis.test_extract_foundation_embeddings import _config
 
 
@@ -45,7 +45,7 @@ def test_run_scores_a_space_from_the_project_files_per_epoch_variant(bids_root, 
     output_path = vd.run(config)
 
     assert output_path == (
-        get_derivative_root(bids_root, DerivativeStage.VARIANCE_DIAGNOSTICS)
+        get_results_root(bids_root, ResultStage.VARIANCE_DIAGNOSTICS)
         / "base"
         / "cbramod"
         / "variance_diagnostics.csv"

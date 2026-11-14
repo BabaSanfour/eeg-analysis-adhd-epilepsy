@@ -42,13 +42,14 @@ _FAMILY_CONFIG_KEYS: tuple[tuple[str, str], ...] = (
 )
 
 
-_PEAK_FEATURE = re.compile(r"_alpha_peak_|_peak_[a-z]+_dom")
+_PEAK_FEATURE = re.compile(r"_alpha_peak_")
 
 
 def _is_peak_feature(column: object) -> bool:
-    """A peak feature (alpha peak, dominant peak): NaN where specparam found no such
-    peak, a result, not missing data, so it is left out of the missingness, all-NaN
-    and constant checks (one epoch with a peak leaves a single value)."""
+    """An alpha peak feature: its frequency and power are NaN where specparam found no
+    alpha peak, a result, not missing data, so they (and the presence flag, constant
+    where every epoch or none has one) are left out of the missingness, all-NaN and
+    constant checks."""
     return bool(_PEAK_FEATURE.search(str(column)))
 
 
@@ -320,6 +321,13 @@ def run_descriptor_shard_qc(
         ]
         return float(1 - rates.mean()) if not rates.empty else np.nan
 
+    def any_peak_rate() -> float:
+        """Share of fitted channel-epochs where specparam found at least one peak."""
+        counts = sensor_epoch_df[[c for c in feature_cols if "_peak_count_" in str(c)]]
+        counts = counts.to_numpy(dtype=float)
+        counts = counts[np.isfinite(counts)]
+        return float((counts > 0).mean()) if counts.size else np.nan
+
     metrics = {
         "n_epochs": int(len(sensor_epoch_df)),
         "n_epochs_rejected": n_epochs_rejected,
@@ -343,7 +351,7 @@ def run_descriptor_shard_qc(
         )
         if not constant_df.empty
         else 0,
-        "peak_rate": peak_rate("_peak_freq_dom"),
+        "peak_rate": any_peak_rate(),
         "alpha_peak_rate": peak_rate("_alpha_peak_freq"),
     }
     for row in family_summary_df.to_dict("records"):

@@ -21,7 +21,9 @@ qc:
     enabled: true
     max_missing_rate: 0.2
     drop_constant: true
-    max_row_drop_rate: 0.0
+    # NaN columns are dropped (most NaN first) only until at most 1 % of rows have a NaN;
+    # those rows are then dropped, so a few failed fits cost their rows, not their family.
+    max_row_drop_rate: 0.01
   outlier:
     z_threshold: 5.0
     group_by: subfamily

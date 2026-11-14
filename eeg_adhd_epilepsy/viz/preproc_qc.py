@@ -32,8 +32,6 @@ RUN_METRIC_SPECS = (
 DELTA_SPECS = (
     ("amplitude_mean_uv_delta_prev", "Mean Amplitude Change vs Previous", "Delta amplitude (uV)"),
     ("amplitude_mean_uv_delta_raw", "Mean Amplitude Change vs Raw", "Delta amplitude (uV)"),
-    ("pct_bad_channels_delta_prev", "Bad Channel Change vs Previous", "Delta bad channels (%)"),
-    ("pct_bad_channels_delta_raw", "Bad Channel Change vs Raw", "Delta bad channels (%)"),
     ("line_noise_ratio_delta_prev", "Line Noise Change vs Previous", "Delta line-noise ratio"),
     ("line_noise_ratio_delta_raw", "Line Noise Change vs Raw", "Delta line-noise ratio"),
     ("hf_lf_ratio_delta_prev", "HF/LF Change vs Previous", "Delta HF/LF ratio"),
@@ -160,7 +158,7 @@ def save_subject_preproc_qc_figures(
 
     # Extract bad channels from diagnostics if available
     diag = record.get("channel_diagnostics", {})
-    bad_channels = list(set((diag.get("flat_channels") or []) + (diag.get("noisy_channels") or [])))
+    bad_channels = list(diag.get("bad_channels") or [])
 
     paths.update(
         _save_topomap_figures(

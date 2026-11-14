@@ -11,23 +11,18 @@ token_dtype: float16
 models:
   reve:
     segment_duration: 10.0
-    window_source: derivative
     # The attention read-out from the same forward pass: <label>Attention files.
     extra_poolings: [attention]
     random_seeds: &seeds [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
   labram:
-    # LaBraM needs 3,000 samples (15 s at 200 Hz): re-cut from the continuous recording.
-    segment_duration: 15.0
-    window_source: re_epoch
+    segment_duration: 10.0
     batch_size: 16
     random_seeds: *seeds
   cbramod:
     segment_duration: 10.0
-    window_source: derivative
     random_seeds: *seeds
   luna:
     segment_duration: 10.0
-    window_source: derivative
     random_seeds: *seeds
 
 # align_subject_embeddings: each weight set's window vectors with subject identity erased

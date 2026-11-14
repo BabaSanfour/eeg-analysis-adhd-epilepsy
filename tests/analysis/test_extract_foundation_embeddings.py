@@ -21,16 +21,8 @@ def _config(bids_root: Path, conditions=("EO_baseline", "EC_baseline")) -> dict:
         "chunk_subjects": 1,
         "token_dtype": "float16",
         "models": {
-            "cbramod": {
-                "segment_duration": 10.0,
-                "window_source": "derivative",
-                "random_seeds": seeds,
-            },
-            "labram": {
-                "segment_duration": 15.0,
-                "window_source": "re_epoch",
-                "random_seeds": seeds,
-            },
+            "cbramod": {"segment_duration": 10.0, "random_seeds": seeds},
+            "labram": {"segment_duration": 10.0, "random_seeds": seeds},
         },
     }
 
@@ -88,7 +80,7 @@ def test_extraction_writes_every_view_and_a_resubmission_skips_done_recordings(b
     assert _windows(window) == [("EC_baseline", n) for n in range(3, 6)]
 
 
-def test_extraction_recuts_windows_for_labram(bids_root, tmp_path):
+def test_labram_embeds_the_saved_epochs(bids_root, tmp_path):
     root = tmp_path / "scratch" / "coco-pipe-labram"
     efe.run(
         _config(bids_root),
@@ -100,12 +92,11 @@ def test_extraction_recuts_windows_for_labram(bids_root, tmp_path):
 
     recording = "sub-0001_ses-01_task-clinical_run-01"
     path = embedding_path(root, "baseRandom1", "window", recording_id=recording).fpath
-    assert _windows(path) == [("EO_baseline", 0), ("EO_baseline", 1)] + [
-        ("EC_baseline", 2),
-        ("EC_baseline", 3),
+    assert _windows(path) == [("EO_baseline", n) for n in range(3)] + [
+        ("EC_baseline", n) for n in range(3, 6)
     ]
     with xr.open_dataset(path, engine="h5netcdf") as dataset:
-        assert dataset["source"].item().endswith(f"{recording}_desc-base_eeg.fif")
+        assert dataset["source"].item().endswith(f"{recording}_desc-base_epo.fif")
 
 
 def test_extraction_stops_on_a_recording_that_cannot_be_read(bids_root, tmp_path):

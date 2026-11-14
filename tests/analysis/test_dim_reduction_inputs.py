@@ -449,7 +449,6 @@ def test_fit_request_collection_skips_invalid_n_components(tmp_path):
         segment_duration=60.0,
         overlap=0.0,
         desc="base",
-        window_source="auto",
         qc=None,
         run_label="test",
         run_config_hash="cfg",
@@ -497,7 +496,6 @@ def test_fit_request_collection_passes_per_reducer_execution_params(tmp_path):
         segment_duration=60.0,
         overlap=0.0,
         desc="base",
-        window_source="auto",
         qc=None,
         run_label="test",
         run_config_hash="cfg",
@@ -560,7 +558,6 @@ def test_raw_recording_representation_builds_recording_id(monkeypatch, tmp_path)
         overlap=0.0,
         subject_col="study_id",
         desc="base",
-        window_source="auto",
         units="V",
         group_filters=None,
         filter_col=[],
@@ -692,6 +689,7 @@ def _pool_equivalence_containers(channels_per_condition):
                 meta={
                     "condition": condition,
                     "sfreq": 200.0,
+                    "units": {"eeg": "µV"},
                     "family_qc_group_by": "family",
                     "family_qc_bad_ids": {"fam": [f"{condition}_r0"]},
                 },
@@ -728,6 +726,7 @@ def test_streaming_pool_matches_eager_pool(channels_per_condition):
     assert streamed.meta["family_qc_bad_ids"] == eager.meta["family_qc_bad_ids"]
     assert streamed.meta["family_qc_group_by"] == eager.meta["family_qc_group_by"]
     assert streamed.meta["sfreq"] == eager.meta["sfreq"] == 200.0
+    assert streamed.meta["units"] == eager.meta["units"] == {"eeg": "µV"}
 
 
 def test_fit_identity_changes_with_matrix_content_and_qc(tmp_path):

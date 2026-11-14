@@ -45,7 +45,6 @@ def _descriptor_dim_args(bids_root: Path, representation: str) -> SimpleNamespac
         segment_duration=60.0,
         overlap=0.0,
         desc="base",
-        window_source="auto",
     )
 
 

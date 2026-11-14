@@ -157,12 +157,12 @@ def _selection_config(run_dir: Path) -> tuple[str, str | None]:
 
 def build_output_root(bids_root: Path, args: Any, mode: str, representation: str) -> Path:
     """Build the final output root directory for a given dim reduction run."""
-    from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+    from eeg_adhd_epilepsy.io.bids import ResultStage, get_results_root
 
     output_base = (
         Path(args.derivative_root).expanduser()
         if getattr(args, "derivative_root", None)
-        else get_derivative_root(bids_root, DerivativeStage.DIM_REDUCTION)
+        else get_results_root(bids_root, ResultStage.DIM_REDUCTION)
     )
 
     input_token = (
@@ -221,7 +221,6 @@ def build_input_signature(
                 "segment_duration": float(args.segment_duration),
                 "overlap": float(args.overlap),
                 "desc": args.desc,
-                "window_source": args.window_source,
             }
         )
     elif args.input_mode == "descriptors":
@@ -289,7 +288,6 @@ def build_run_config_payload(
                 "segment_duration": args.segment_duration,
                 "overlap": args.overlap,
                 "desc": args.desc,
-                "window_source": args.window_source,
             }
         )
 

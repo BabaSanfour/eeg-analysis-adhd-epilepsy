@@ -156,9 +156,11 @@ def _pooled_meta(metas: list[dict[str, Any]]) -> dict[str, Any]:
     }
     if group_by_values:
         merged["family_qc_group_by"] = next(iter(group_by_values))
+    # units is a dict per channel type (coco-pipe's loader), so compare values, not hashes
     for key in ("sfreq", "units"):
-        if len({meta.get(key) for meta in metas}) == 1 and metas[0].get(key) is not None:
-            merged[key] = metas[0][key]
+        values = [meta.get(key) for meta in metas]
+        if values[0] is not None and all(value == values[0] for value in values):
+            merged[key] = values[0]
     return merged
 
 

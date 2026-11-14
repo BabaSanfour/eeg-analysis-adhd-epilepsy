@@ -75,9 +75,6 @@ class DerivativeStage(StrEnum):
 
     PREPROC = "preproc"
     DESCRIPTORS = "signal_features/descriptors"
-    VARIANCE_DIAGNOSTICS = "eeg_variance_diagnostics"
-    DIM_REDUCTION = "dim_reduction"
-    DECODING = "decoding"
 
 
 def get_derivative_root(bids_root: Path, stage: DerivativeStage) -> Path:
@@ -90,6 +87,25 @@ def get_derivative_root(bids_root: Path, stage: DerivativeStage) -> Path:
     if not isinstance(stage, DerivativeStage):
         raise TypeError(f"stage must be a DerivativeStage, got {stage!r}")
     return Path(bids_root).expanduser() / "derivatives" / stage.value
+
+
+class ResultStage(StrEnum):
+    """Group-level analysis outputs.
+
+    They are not BIDS derivatives (no per-recording data), so they live outside the dataset:
+    in ``results/`` next to it unless the run gives its own root.
+    """
+
+    VARIANCE_DIAGNOSTICS = "variance_diagnostics"
+    DIM_REDUCTION = "dim_reduction"
+    DECODING = "decoding"
+
+
+def get_results_root(bids_root: Path, stage: ResultStage) -> Path:
+    """Return the default ``results/<stage>`` root, next to the BIDS dataset."""
+    if not isinstance(stage, ResultStage):
+        raise TypeError(f"stage must be a ResultStage, got {stage!r}")
+    return Path(bids_root).expanduser().parent / "results" / stage.value
 
 
 # Authors of the raw dataset and of the derivatives this repo writes.

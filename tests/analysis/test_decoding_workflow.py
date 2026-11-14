@@ -483,7 +483,6 @@ def test_foundation_run_wires_sweep_and_capability_without_gpu(tmp_path, monkeyp
                 "segment_duration": 10.0,
                 "overlap": 0.0,
                 "use_derivatives": True,
-                "window_source": "derivative",
                 "window_mismatch_policy": "raise",
                 "backend": "auto",
                 "backend_kwargs": {},

@@ -891,10 +891,12 @@ def main() -> None:
         )
         sys.exit(1)
 
-    if successful_ids or skipped_ids:
+    # Skipped recordings are already in the dataset, so only a conversion rewrites its files;
+    # their reports are built from the existing recordings.
+    if successful_ids:
         _write_participants(args.bids_root, metadata_df)
         _write_dataset_description(args.bids_root)
-    if successful_ids:
+    if successful_ids or skipped_ids:
         if args.with_eeg_reports:
             LOGGER.info("Generating EEG aggregate reports in %s", eeg_reports_dir)
             report_eeg.write_eeg_aggregate_reports(eeg_reports_dir, eeg_run_records)

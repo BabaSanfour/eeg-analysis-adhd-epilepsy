@@ -28,7 +28,7 @@ from coco_pipe.report import (
 from coco_pipe.report.core import Report, Section
 from coco_pipe.report.qc import build_qc_section
 
-from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+from eeg_adhd_epilepsy.io.bids import ResultStage, get_results_root
 from eeg_adhd_epilepsy.io.report_paths import ReportStage, summary_report_dir
 from eeg_adhd_epilepsy.reports._common import (
     AlignmentDiagnosticsSpec,
@@ -209,7 +209,7 @@ def generate_foundation_decoding_comparison(
     decoding_base = (
         Path(derivative_root).expanduser()
         if derivative_root is not None
-        else get_derivative_root(Path(bids_root), DerivativeStage.DECODING)
+        else get_results_root(Path(bids_root), ResultStage.DECODING)
     )
     decoding_root = decoding_base / dataset_name
     result_frames: list[pd.DataFrame] = []
@@ -285,7 +285,6 @@ def _apply_legacy_head_to_head_migration_policy(
 
 
 def _build_requested_alignment_diagnostics_sections(
-    bids_root: Path,
     specs: Sequence[AlignmentDiagnosticsSpec],
 ) -> tuple[list[Section], pd.DataFrame]:
     """Load explicitly requested assessments and render one section per model."""
@@ -295,7 +294,7 @@ def _build_requested_alignment_diagnostics_sections(
     sections: list[Section] = []
     loaded_diagnostics: list[pd.DataFrame] = []
     for spec in specs:
-        diagnostics = load_alignment_diagnostics(bids_root, spec)
+        diagnostics = load_alignment_diagnostics(spec)
         diagnostics["model"] = spec.base_model_key
         diagnostics["target"] = diagnostics["eval_name"].astype(str)
         loaded_diagnostics.append(diagnostics)
@@ -429,12 +428,16 @@ def generate_head_to_head_report(
     alignment_diagnostics_population: str | None = None,
     generate_foundation_transform_report: bool = False,
     derivative_root: str | Path | None = None,
+    variance_diagnostics_root: str | Path | None = None,
+    desc: str = "base",
 ) -> tuple[Path, Path] | None:
     """Compare primary classical inputs and linear probes in one table.
 
     When an exact diagnostic cohort and population are requested, every explicit
     ``embedding_model_key`` represented by saved-embedding results gets its own
-    section. Model identities are never inferred from paths or display labels.
+    section, read from ``variance_diagnostics_root`` (default: the results root next to
+    ``bids_root``) for the epoch variant ``desc``. Model identities are never inferred
+    from paths or display labels.
     """
     bids_root = Path(bids_root)
     # Classical and foundation runs share one decoding derivative tree; they are
@@ -442,7 +445,7 @@ def generate_head_to_head_report(
     decoding_base = (
         Path(derivative_root).expanduser()
         if derivative_root is not None
-        else get_derivative_root(bids_root, DerivativeStage.DECODING)
+        else get_results_root(bids_root, ResultStage.DECODING)
     )
     decoding_root = decoding_base / dataset_name
     if not decoding_root.exists():
@@ -512,13 +515,19 @@ def generate_head_to_head_report(
                     base_model_key=model_key,
                     cohort_name=alignment_diagnostics_cohort_name,
                     population=alignment_diagnostics_population,
+                    root=(
+                        Path(variance_diagnostics_root)
+                        if variance_diagnostics_root is not None
+                        else get_results_root(bids_root, ResultStage.VARIANCE_DIAGNOSTICS)
+                    ),
+                    desc=desc,
                 )
                 for model_key in sorted(model_keys.astype(str).unique())
             ]
     (
         alignment_sections,
         alignment_diagnostics_frame,
-    ) = _build_requested_alignment_diagnostics_sections(bids_root, alignment_diagnostics)
+    ) = _build_requested_alignment_diagnostics_sections(alignment_diagnostics)
     derivative_output = decoding_root / "head_to_head_comparison.csv"
     derivative_output.parent.mkdir(parents=True, exist_ok=True)
     normalize_head_to_head_frame(comparison).to_csv(derivative_output, index=False)

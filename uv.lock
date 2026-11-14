@@ -323,19 +323,6 @@ wheels = [
 ]
 
 [[package]]
-name = "axial-positional-embedding"
-version = "0.3.12"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "einops" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/12/e6/294c09aa82ccfb8ea18276cbce61964f35758f5de28f2677acf4fd71fcce/axial_positional_embedding-0.3.12.tar.gz", hash = "sha256:10d98f342f8fa0d4d3d20b36ed27fb0fc63f1d398202b9165e07bc9d6130bc17", size = 6312, upload-time = "2025-02-25T17:06:32.783Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/e7/f9/25753b9de3029d3eb2487755520b98eb72b0cb562d8974329c6e19831063/axial_positional_embedding-0.3.12-py3-none-any.whl", hash = "sha256:f5708106b18903c3b99aced0bfa79d1ae6f708dae34f56e641e8c24dbc06b02f", size = 6726, upload-time = "2025-02-25T17:06:31.811Z" },
-]
-
-[[package]]
 name = "bids-validator-deno"
 version = "3.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -349,13 +336,13 @@ wheels = [
 
 [[package]]
 name = "braindecode"
-version = "1.8.1"
+version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "docstring-inheritance" },
+    { name = "einops" },
     { name = "h5py" },
     { name = "joblib" },
-    { name = "linear-attention-transformer" },
     { name = "mne" },
     { name = "mne-bids" },
     { name = "pandas" },
@@ -366,9 +353,9 @@ dependencies = [
     { name = "torchinfo" },
     { name = "wfdb" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1d/4e/7eb4ccf42326d86d8149025569a02ff5bda44452554fcc92ad1b8a83cad1/braindecode-1.8.1.tar.gz", hash = "sha256:9267480d04698163e4310104680a62a8d491fcffe3fbd0a8b7006f5d01b3e8b9", size = 1122886, upload-time = "2026-08-31T14:23:31.7Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2f/59/0906473c1846f269fcd4f45f459c2dac22061839e17224edf8c94bc0fbb0/braindecode-2.0.0.tar.gz", hash = "sha256:14bb2155a20b243522e2ff7c097d8464cbe7f0e1484f60ff2c0b8d72bc036628", size = 934813, upload-time = "2026-11-02T19:54:10.708Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/42/d4/875fd5d98ac6b3a2d5cbd84aa0ed56901bec89d52f2ecfd9413b5d0d28f1/braindecode-1.8.1-py3-none-any.whl", hash = "sha256:9c25a8fe87e7fe8b1ef9e0a3236e8ced752a07bbb986911a9136742a5746dc7c", size = 679175, upload-time = "2026-08-31T14:23:29.587Z" },
+    { url = "https://files.pythonhosted.org/packages/4b/57/6cec41b92bf4b28879894f632cab822a24c79d27d240ce2dce1b2017844e/braindecode-2.0.0-py3-none-any.whl", hash = "sha256:0e5e40281a9dff796ac4adec6c960338be5a27ed3ec245ff4c0c1948a88f7b68", size = 927804, upload-time = "2026-11-02T19:54:08.904Z" },
 ]
 
 [[package]]
@@ -646,7 +633,7 @@ wheels = [
 [[package]]
 name = "coco-pipe"
 version = "0.0.3"
-source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#20ad9dc6e4e7d724d136bc21ffd42df1605a3be8" }
+source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#5056af72257a0eb7e7bcc2f7966e1f48db869399" }
 dependencies = [
     { name = "filelock" },
     { name = "h5netcdf", extra = ["h5py"] },
@@ -697,21 +684,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/d8/53/6f443c9a4a8358a93a6792e2acffb9d9d5cb0a5cfd8802644b7b1c9a02e4/colorama-0.4.6.tar.gz", hash = "sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44", size = 27697, upload-time = "2022-10-25T02:36:22.414Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d1/d6/3965ed04c63042e047cb6a3e6ed1a63a35087b6a609aa3a15ed8ac56c221/colorama-0.4.6-py2.py3-none-any.whl", hash = "sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6", size = 25335, upload-time = "2022-10-25T02:36:20.889Z" },
-]
-
-[[package]]
-name = "colt5-attention"
-version = "0.11.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "einops" },
-    { name = "local-attention" },
-    { name = "packaging" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5a/20/ec563faeed84cca4bab13be2e6a6e73af6489e9700003c6fe4636ec2c755/colt5_attention-0.11.2.tar.gz", hash = "sha256:839d746a4f725fd6554328c5a683c6227a938118c475a7e0b68e9382db4e1437", size = 20895, upload-time = "2026-08-14T14:32:48.622Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d7/48/be3872aedd6dcd99475be98a5e55088f10b32cfb3dfb3e8c57cd83e1b70e/colt5_attention-0.11.2-py3-none-any.whl", hash = "sha256:fd03b28ba55a6a3a03e63cbd5c2c414b3d886a6ee399766f659c77038280a489", size = 23624, upload-time = "2026-08-14T14:32:47.413Z" },
 ]
 
 [[package]]
@@ -1036,7 +1008,7 @@ requires-dist = [
     { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main" },
     { name = "filelock", specifier = ">=3.20.4" },
     { name = "mne", specifier = ">=1.13" },
-    { name = "mne-bids", git = "https://github.com/BabaSanfour/mne-bids?rev=read-epochs-fif" },
+    { name = "mne-bids", git = "https://github.com/mne-tools/mne-bids.git?rev=main" },
     { name = "mne-denoise", git = "https://github.com/mne-tools/mne-denoise.git?rev=main" },
     { name = "numpy", specifier = "<2.4" },
     { name = "pandas", specifier = "<3.0.0" },
@@ -1446,20 +1418,6 @@ wheels = [
 ]
 
 [[package]]
-name = "hyper-connections"
-version = "0.4.11"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "einops" },
-    { name = "torch" },
-    { name = "torch-einops-utils" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/86/2e/47f00583d958527f006459e0e769aa3b20dc61b7b1916df1fa0b9820a192/hyper_connections-0.4.11.tar.gz", hash = "sha256:d4f852733cf8595b2b15e81597ec0ce931907f284a812272c03edea0a4ef12e3", size = 17864, upload-time = "2026-05-13T18:28:47.553Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/42/2d/23143d9e5af1b6a2e7ed4e5f88a6c0cbf7587563acb8f15a740b726ce07f/hyper_connections-0.4.11-py3-none-any.whl", hash = "sha256:92a8d24340ef6dbf2a356b1f2e74ebb877d680aa96afc6f9f1cff636ab2e55f0", size = 29558, upload-time = "2026-05-13T18:28:46.304Z" },
-]
-
-[[package]]
 name = "idna"
 version = "3.20"
 source = { registry = "https://pypi.org/simple" }
@@ -1635,35 +1593,6 @@ wheels = [
 ]
 
 [[package]]
-name = "linear-attention-transformer"
-version = "0.19.1"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "axial-positional-embedding" },
-    { name = "einops" },
-    { name = "linformer" },
-    { name = "local-attention" },
-    { name = "product-key-memory" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/1a/f4/e7aedb94bc94583983d2371eb987943e000c82907a32a4353ba64881ebb0/linear_attention_transformer-0.19.1.tar.gz", hash = "sha256:8ef53a62ce43d56d3cd58cbd372645079e19fc601145440bb6530ee27ae0a9ca", size = 13154, upload-time = "2021-09-07T20:16:58.69Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/47/42/25383874182050502e2c5b1ed0895b326f87e77243f0c26b05700f330d51/linear_attention_transformer-0.19.1-py3-none-any.whl", hash = "sha256:4d0ea2d7953210c7d5516c52028c2a07efc76cd799944476e1d5171f65c5efe8", size = 12940, upload-time = "2021-09-07T20:16:57.445Z" },
-]
-
-[[package]]
-name = "linformer"
-version = "0.2.3"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7b/a1/a3834aec6591c141e54ec0cd7311432708ec19f6ee1d5dd9bf4a79a72c67/linformer-0.2.3.tar.gz", hash = "sha256:747a4dc025a557d164b61170f140ec4aa37cfca3ce088318f3d5f39194cfcaba", size = 6518, upload-time = "2024-01-05T20:40:37.23Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/43/d0/72ebb12edbfd28ae8e9838db10dd6e5a1ecfa1958bcf769e8f2e1df4698e/linformer-0.2.3-py3-none-any.whl", hash = "sha256:6e44ab72443014582c967d4323e8034e8e0f51e9a0ab360c22c4e4c47366f13e", size = 6172, upload-time = "2024-01-05T20:40:35.252Z" },
-]
-
-[[package]]
 name = "llvmlite"
 version = "0.50.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1700,20 +1629,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f3/21/3d108d6c9a87142927073fbc3d82d161f2dbfdeb046063a51edb196d1132/llvmlite-0.50.0-cp315-cp315t-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:c7d4e2bbb29a860a6e85e22afdb96696241263942a5b214cac3e4b704e1d3abf", size = 58344488, upload-time = "2026-09-29T18:44:36.859Z" },
     { url = "https://files.pythonhosted.org/packages/6e/de/496d19b7a54acc487266ac7fa39d902cddf24998f5266b3aa499c8eacbd6/llvmlite-0.50.0-cp315-cp315t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:afd7b438c60e0f60c4368ec603bb9f20d938a203b5f59b80bbe50c749b4b2f16", size = 59696591, upload-time = "2026-09-29T18:44:40.642Z" },
     { url = "https://files.pythonhosted.org/packages/93/73/72553170eada174775d9a738c471c7be4ab3dc2c06368beeee89e002345c/llvmlite-0.50.0-cp315-cp315t-win_amd64.whl", hash = "sha256:4da0e8c6e6f144b433672a632f75d6b4da7bd4fdb5c3e9981d6ea6741319aeae", size = 42986722, upload-time = "2026-09-29T18:44:44.491Z" },
-]
-
-[[package]]
-name = "local-attention"
-version = "1.11.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "einops" },
-    { name = "hyper-connections" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/9b/b4/7cc5b3122ff63d58c7dd58cb122edfc8f5c74c88b14fcd22b444f0527952/local_attention-1.11.2.tar.gz", hash = "sha256:94e48fec748e96fa81ac6c3e27a357950eaab22cd8f69a10c50b23d6eec8f09c", size = 10918, upload-time = "2025-07-16T14:30:37.094Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/d8/f6/074ef5c98f2d062177af24a9e20db20b009d141e4ca827c1e419461595b0/local_attention-1.11.2-py3-none-any.whl", hash = "sha256:8bbb03cef6a6f0b694de64f9ecd81886fd1e73ef367b57f02995b469ac52fd16", size = 9504, upload-time = "2025-07-16T14:30:35.9Z" },
 ]
 
 [[package]]
@@ -1975,8 +1890,8 @@ hdf5 = [
 
 [[package]]
 name = "mne-bids"
-version = "0.21.0.dev0"
-source = { git = "https://github.com/BabaSanfour/mne-bids?rev=read-epochs-fif#d9bf2fb945040fc2a4fc90b368c516823b2a83ab" }
+version = "0.21.0.dev31+gd437a0036"
+source = { git = "https://github.com/mne-tools/mne-bids.git?rev=main#d437a00369470168ee47fa168a1bc3ceca530b60" }
 dependencies = [
     { name = "mne" },
     { name = "numpy" },
@@ -2717,20 +2632,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/83/43/85ef45e8b36c6a48546af7b266592dc32d7f67837a6514d111bced6d7d75/pooch-1.9.0.tar.gz", hash = "sha256:de46729579b9857ffd3e741987a2f6d5e0e03219892c167c6578c0091fb511ed", size = 61788, upload-time = "2026-01-30T19:15:09.649Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/2a/2d/d4bf65e47cea8ff2c794a600c4fd1273a7902f268757c531e0ee9f18aa58/pooch-1.9.0-py3-none-any.whl", hash = "sha256:f265597baa9f760d25ceb29d0beb8186c243d6607b0f60b83ecf14078dbc703b", size = 67175, upload-time = "2026-01-30T19:15:08.36Z" },
-]
-
-[[package]]
-name = "product-key-memory"
-version = "0.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "colt5-attention" },
-    { name = "einops" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d2/15/88ff08fc280ee8fe702379699e57220aebaf4a676dc740ef6b0a97b3a26d/product_key_memory-0.3.0.tar.gz", hash = "sha256:e4961ee71da62a25e6740bfca693feef20f4503e1049233c8684c27def065a2a", size = 36610161, upload-time = "2025-11-01T16:09:58.921Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/95/16/83bd0a7213e5f38713a565ce3b62d53d7ddec7ac0dfa1aa18b0144b48e9f/product_key_memory-0.3.0-py3-none-any.whl", hash = "sha256:bea0b37808906f173aa05f54bcda508d9e22c63055513124022c503dfa2e5c70", size = 8254, upload-time = "2025-11-01T16:09:56.869Z" },
 ]
 
 [[package]]
@@ -3984,19 +3885,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/e4/94/b97e863c9ceef2bc6e082e967cbfb9065b5e232f2a60c5af0f5115a1bc31/torch-2.14.1-cp314-cp314t-manylinux_2_28_aarch64.whl", hash = "sha256:9113f94f70429f9f302bf55b090b5411269083e8a72a5d015ffcc5a7f83f2c69", size = 453998592, upload-time = "2026-09-30T17:54:38.268Z" },
     { url = "https://files.pythonhosted.org/packages/03/d8/8272157c438cc26a199a8fa0caf87985477b8a1ed8a09084eb2ae40609d8/torch-2.14.1-cp314-cp314t-manylinux_2_28_x86_64.whl", hash = "sha256:e65d5fe136e533b23c2d134377f7f126721c7c78dd75b3dbb735af082a8aeb85", size = 554578730, upload-time = "2026-09-30T17:54:54.838Z" },
     { url = "https://files.pythonhosted.org/packages/45/05/451a69a4287033d8f106f5c65f92c2c0c37229d81ea101d4b047caf758cc/torch-2.14.1-cp314-cp314t-win_amd64.whl", hash = "sha256:e07306caa1de2a4ac1467e11ecfc92fc44f523dd6a521145039aef46d913963c", size = 124400129, upload-time = "2026-09-30T17:54:12.306Z" },
-]
-
-[[package]]
-name = "torch-einops-utils"
-version = "0.1.36"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "einops" },
-    { name = "torch" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/7a/3a/aa3cf1eef4a7305f29df5961d1e573e8435b00453dadd131e8153bae81ff/torch_einops_utils-0.1.36.tar.gz", hash = "sha256:106ae495450e0a9ec3fb150a2f1d1d36628f1a5884abad2bf63fce240551ff14", size = 28317, upload-time = "2026-10-05T15:44:19.493Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/5d/dac32f7b925b4a7b1ba0a1f1dff392c96f77910a7f1ba203d185e749c52a/torch_einops_utils-0.1.36-py3-none-any.whl", hash = "sha256:1806455c4c76318cf11e604fa9501187be32eebce8ffd6973e1c52336f34f4cb", size = 18420, upload-time = "2026-10-05T15:44:18.301Z" },
 ]
 
 [[package]]

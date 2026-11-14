@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -22,7 +23,7 @@ from eeg_adhd_epilepsy.analysis.utils.dim_reduction import (
     build_output_root,
     group_fit_requests,
 )
-from eeg_adhd_epilepsy.io.bids import DerivativeStage, get_derivative_root
+from eeg_adhd_epilepsy.io.bids import ResultStage, get_results_root
 from eeg_adhd_epilepsy.reports._common import AlignmentDiagnosticsSpec
 from eeg_adhd_epilepsy.reports.dim_reduction import (
     collect_mode_leaderboard,
@@ -451,15 +452,14 @@ def test_foundation_leaderboard_tags_alignment_transform(tmp_path):
 def test_rollup_adds_subject_alignment_diagnostics(tmp_path):
     args = _leaderboard_args()
     args.embedding_model_key = "demo"
-    bids_root = tmp_path / "BIDS"
     diagnostics_spec = AlignmentDiagnosticsSpec(
         base_model_key="demo",
         cohort_name="cohortX",
         population="clinical_task_subset",
+        root=tmp_path / "variance_diagnostics",
+        desc="base",
     )
-    root = get_derivative_root(bids_root, DerivativeStage.VARIANCE_DIAGNOSTICS) / slug(
-        args.embedding_model_key
-    )
+    root = tmp_path / "variance_diagnostics" / "base" / slug(args.embedding_model_key)
     root.mkdir(parents=True)
     pd.DataFrame(
         [
@@ -484,7 +484,6 @@ def test_rollup_adds_subject_alignment_diagnostics(tmp_path):
     report = generate_rollup_report(
         args=args,
         summaries=[],
-        bids_root=bids_root,
         alignment_diagnostics=diagnostics_spec,
     )
     titles = [getattr(section, "title", None) for section in report.children]
@@ -500,6 +499,8 @@ def test_alignment_diagnostics_spec_requires_explicit_identity():
             base_model_key="",
             cohort_name="cohortX",
             population="clinical_task_subset",
+            root=Path("variance_diagnostics"),
+            desc="base",
         )
 
     with pytest.raises(ValueError, match="explicit cohort_name and population"):
@@ -507,20 +508,8 @@ def test_alignment_diagnostics_spec_requires_explicit_identity():
             base_model_key="demo",
             cohort_name="",
             population="clinical_task_subset",
-        )
-
-
-def test_rollup_requires_bids_root_for_requested_diagnostics():
-    spec = AlignmentDiagnosticsSpec(
-        base_model_key="demo",
-        cohort_name="cohortX",
-        population="clinical_task_subset",
-    )
-    with pytest.raises(ValueError, match="bids_root is required"):
-        generate_rollup_report(
-            args=_leaderboard_args(),
-            summaries=[],
-            alignment_diagnostics=spec,
+            root=Path("variance_diagnostics"),
+            desc="base",
         )
 
 
@@ -648,7 +637,9 @@ def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch, c
     # Two modes (flat, family) share ONE load of the single condition.
     assert load_calls["n"] == 1
 
-    fit_inventories = list((bids_root / "derivatives" / "dim_reduction").rglob("fit_runs.json"))
+    fit_inventories = list(
+        get_results_root(bids_root, ResultStage.DIM_REDUCTION).rglob("fit_runs.json")
+    )
     assert len(fit_inventories) == 2  # one run namespace per mode
     statuses = set()
     reducer_sets = []

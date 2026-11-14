@@ -106,8 +106,10 @@ derivative tree has a `.bidsignore` for the files BIDS does not define.
 | `DESCRIPTORS_ROOT` | merged descriptor tables and shard archive (07, 07b) | `$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
 | `EMBEDDING_SCRATCH_ROOT` | per-recording embedding files (08), in `coco-pipe-<model>/` | `$SCRATCH_ROOT/BIDS/derivatives` |
 | `EMBEDDING_PROJECT_ROOT` | the all-recordings embedding files (09, 10) and their archives (10b), read by 13, 15, 19, 20 | `$BIDS_ROOT/derivatives` |
-| `DECODING_ROOT` | decoding checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/decoding_$EPOCHS_DESC` |
-| `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$SCRATCH_ROOT/BIDS/derivatives/dim_reduction_$EPOCHS_DESC` |
+| `RESULTS_ROOT` | group-level results, outside the BIDS dataset | `$SCRATCH_ROOT/results` |
+| `DECODING_ROOT` | decoding checkpoints/results | `$RESULTS_ROOT/decoding_$EPOCHS_DESC` |
+| `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$RESULTS_ROOT/dim_reduction_$EPOCHS_DESC` |
+| `VARIANCE_DIAGNOSTICS_ROOT` | variance diagnostics, read by the comparison reports (16, 20) | `$RESULTS_ROOT/variance_diagnostics` |
 | `OVERWRITE` | `1` to force reprocessing (01, 09, 12, 13, 20) | `0` |
 
 Stage 04 writes two epoch variants: `desc-base` (every epoch) and
