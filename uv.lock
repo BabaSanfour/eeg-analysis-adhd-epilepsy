@@ -633,7 +633,7 @@ wheels = [
 [[package]]
 name = "coco-pipe"
 version = "0.0.3"
-source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#d21762f0a8b971b0ff2557b9d4fea44cf2ef1ed6" }
+source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#5056af72257a0eb7e7bcc2f7966e1f48db869399" }
 dependencies = [
     { name = "filelock" },
     { name = "h5netcdf", extra = ["h5py"] },
