@@ -3,7 +3,7 @@
 
 One process runs one model with some of its weight sets (the pretrained weights, and
 random weights drawn from a seed) over the subjects: each weight set is loaded once,
-and each recording is read once for all of them. A recording gives one file per view
+and each recording is read and resampled once for all of them. A recording gives one file per view
 and weight set in ``<derivatives_root>/coco-pipe-<model>/``, written and labelled by
 coco-pipe's ``write_recording_embeddings``: ``<variant>`` for the pretrained weights,
 ``<variant>Random<seed>`` for random ones, and REVE's attention read-out as
@@ -24,6 +24,7 @@ import torch
 from coco_pipe.decoding import get_foundation_model_spec
 from coco_pipe.decoding.foundation_models import (
     FoundationEmbeddingExtractor,
+    extract_weight_sets,
     normalize_inclusive_endpoint,
 )
 from coco_pipe.io import (
@@ -126,20 +127,22 @@ def load_recordings(
 
 def embed_recording(
     recording: DataContainer,
-    extractor: FoundationEmbeddingExtractor,
+    extractors: dict[int | None, FoundationEmbeddingExtractor],
     *,
     root: Path,
     label: str,
-    written: dict[tuple[str, str], BIDSPath],
+    written: dict[int | None, dict[tuple[str, str], BIDSPath]],
     token_dtype: str,
-) -> dict[str, Any]:
-    """Write one recording's files for one weight set, unless they are done.
+) -> dict[int | None, dict[str, Any]]:
+    """Write one recording's files for each weight set whose files are not done.
 
-    ``label`` is the epoch variant. ``written`` holds the files of the first recording
-    this process writes with the weight set, which it fills in: a recording whose
-    files hold its windows with their settings is done (audit E1). That first
-    recording is embedded again, but its files are kept when up to date, so a
-    resubmission rewrites nothing.
+    ``label`` is the epoch variant. ``written[seed]`` holds the files of the first
+    recording this process writes with that weight set, which it fills in: a
+    recording whose files hold its windows with their settings is done (audit E1).
+    That first recording is embedded again, but its files are kept when up to date,
+    so a resubmission rewrites nothing. The weight sets left are extracted together,
+    the recording resampled once; an extraction error fails them all, as it comes
+    from the recording.
     """
     rows = recording.obs_table()
     recording_id = str(rows["recording_id"].iloc[0])
@@ -149,28 +152,44 @@ def embed_recording(
         "conditions": sorted(set(rows["condition"].astype(str))),
         "n_windows": len(rows),
     }
-    if written and embeddings_up_to_date(recording, written):
-        return {**record, "status": "done"}
-    try:
-        paths = write_recording_embeddings(
-            extractor.extract_recording(recording),
-            root,
-            label=label,
-            source=rows["source"].iloc[0],
-            source_dataset="preproc",
-            bad_channels=rows["bad_channels"].iloc[0],
-            token_dtype=token_dtype,
-            skip_up_to_date=True,
-        )
-    except (ValueError, RuntimeError) as error:
+    records = {
+        seed: {**record, "status": "done"}
+        for seed in extractors
+        if written[seed] and embeddings_up_to_date(recording, written[seed])
+    }
+    todo = [seed for seed in extractors if seed not in records]
+    if not todo:
+        return records
+
+    def failed(seed: int | None, error: Exception) -> dict[str, Any]:
         if isinstance(error, torch.cuda.OutOfMemoryError):
-            raise
-        seed = None if extractor.pretrained else extractor.seed
+            raise error
         LOGGER.exception("%s failed for %s", embedding_label(label, seed=seed), recording_id)
         return {**record, "status": "failed", "reason": f"{type(error).__name__}: {error}"}
-    if not written:
-        written.update(paths)
-    return {**record, "status": "written"}
+
+    try:
+        results = extract_weight_sets([extractors[seed] for seed in todo], recording)
+    except (ValueError, RuntimeError) as error:
+        return {**records, **{seed: failed(seed, error) for seed in todo}}
+    for seed, result in zip(todo, results, strict=True):
+        try:
+            paths = write_recording_embeddings(
+                result,
+                root,
+                label=label,
+                source=rows["source"].iloc[0],
+                source_dataset="preproc",
+                bad_channels=rows["bad_channels"].iloc[0],
+                token_dtype=token_dtype,
+                skip_up_to_date=True,
+            )
+        except (ValueError, RuntimeError) as error:
+            records[seed] = failed(seed, error)
+            continue
+        if not written[seed]:
+            written[seed].update(paths)
+        records[seed] = {**record, "status": "written"}
+    return records
 
 
 def run(
@@ -234,17 +253,16 @@ def run(
         recording_ids = rows["recording_id"].astype(str)
         for recording_id in recording_ids.unique():
             recording = container.isel(obs=np.flatnonzero(recording_ids == recording_id))
-            for seed, extractor in extractors.items():
-                records[seed].append(
-                    embed_recording(
-                        recording,
-                        extractor,
-                        root=root,
-                        label=desc,
-                        written=written[seed],
-                        token_dtype=str(config["token_dtype"]),
-                    )
-                )
+            recording_records = embed_recording(
+                recording,
+                extractors,
+                root=root,
+                label=desc,
+                written=written,
+                token_dtype=str(config["token_dtype"]),
+            )
+            for seed in extractors:
+                records[seed].append(recording_records[seed])
     for seed, seed_records in records.items():
         for pooling in ("mean", *poolings):
             write_embedding_manifest(

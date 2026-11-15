@@ -247,12 +247,10 @@ def build_classical_plan(config: Mapping[str, Any]) -> ClassicalPlan:
     evals_spec = require_config(dict(config), "evals", expected_type=list)
     model_specs = require_config(dict(config), "models", expected_type=dict)
 
-    input_kind = "embeddings" if input_mode == "foundation_embeddings" else "tabular"
     model_configs = {
         name: ClassicalModelConfig(
             estimator=spec["estimator"],
             params=dict(spec.get("params", {})),
-            input_kind=input_kind,
         )
         for name, spec in model_specs.items()
     }

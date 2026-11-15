@@ -5,7 +5,8 @@ PyPREP, and AutoReject. The pipeline includes:
 
 1.  Block Awareness: Uses embedded `BLOCK_*` annotations already present in BIDS.
 2.  Filtering: Applies high-pass and low-pass filters.
-3.  Line Noise Removal: ZapLine with at most ``ZAPLINE_MAX_COMPONENTS`` components, then
+3.  Line Noise Removal: ZapLine with at most ``ZAPLINE_MAX_COMPONENTS`` components, which
+    subtracts only their part within ``ZAPLINE_LINE_BANDWIDTH_HZ`` of the line, then
     spectrum interpolation where line noise remains.
 4.  Resampling: Adjusts sampling rate (downsampled last, after band-limiting).
 5.  Global Bad Channel Detection: Identifies broken channels using RANSAC.
@@ -62,10 +63,15 @@ RANDOM_SEED = 42
 # Line noise: ZapLine keeps at most this many components, then spectrum interpolation
 # removes what is left when the QC line-noise index (median over channels) is above
 # LINE_NOISE_RATIO_MAX. Line noise from many sources otherwise takes ZapLine 13-19 of 19
-# components and 5-6 dB of 30-55 Hz power. Measured on all 1,237 recordings (2026-10-15):
-# 259 are interpolated, 11 keep a 60 Hz peak above 3 dB over the floor, and the others
-# stay as ZapLine made them.
+# components and 5-6 dB of 30-55 Hz power. ZapLine subtracts only the components' part
+# within ZAPLINE_LINE_BANDWIDTH_HZ of the line (mne-denoise #148): subtracting them whole
+# moved other channels' broadband activity, lowering beta and gamma (channel mean down to
+# -1.4 and -3.2 dB) and raising a band by over 0.5 dB on a channel in 466 of 1,237
+# recordings. Measured on all 1,237 (2026-11-14): no band away from the line changes by
+# more than 0.2 dB, the same components are removed, and 216 recordings are interpolated
+# (259 with whole components, which dented the floor around the line).
 ZAPLINE_MAX_COMPONENTS = 3
+ZAPLINE_LINE_BANDWIDTH_HZ = 1.0
 LINE_NOISE_RATIO_MAX = 1.25
 
 
@@ -259,12 +265,18 @@ def _remove_line_noise(
     from mne_denoise.zapline import ZapLine
 
     sfreq = raw.info["sfreq"]
-    zapline = ZapLine(sfreq=sfreq, line_freq=line_freq, adaptive=adaptive)
+    band = ZAPLINE_LINE_BANDWIDTH_HZ
+    zapline = ZapLine(sfreq=sfreq, line_freq=line_freq, adaptive=adaptive, line_bandwidth=band)
     cleaned = zapline.fit_transform(raw)
     n_auto = int(zapline.n_removed_)
     # Adaptive mode bounds its components per segment itself.
     if not adaptive and n_auto > ZAPLINE_MAX_COMPONENTS:
-        zapline = ZapLine(sfreq=sfreq, line_freq=line_freq, n_select=ZAPLINE_MAX_COMPONENTS)
+        zapline = ZapLine(
+            sfreq=sfreq,
+            line_freq=line_freq,
+            n_select=ZAPLINE_MAX_COMPONENTS,
+            line_bandwidth=band,
+        )
         cleaned = zapline.fit_transform(raw)
     line_ratio = _line_noise_ratio(cleaned, line_freq)
     interpolated = line_ratio > LINE_NOISE_RATIO_MAX
@@ -274,6 +286,7 @@ def _remove_line_noise(
         "method": "zapline",
         "line_freq": line_freq,
         "adaptive": adaptive,
+        "line_bandwidth_hz": band,
         "n_selected_auto": n_auto,
         "n_removed": int(zapline.n_removed_),
         "line_noise_ratio_after_zapline": line_ratio,
