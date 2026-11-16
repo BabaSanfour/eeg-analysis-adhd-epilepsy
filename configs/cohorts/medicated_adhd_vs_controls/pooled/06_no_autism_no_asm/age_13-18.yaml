@@ -12,6 +12,10 @@ group_filters:
   - 0
   psychostimulant:
   - 0
+  autism:
+  - 0
+  asm:
+  - 0
 - adhd:
   - 1
   psychostimulant:

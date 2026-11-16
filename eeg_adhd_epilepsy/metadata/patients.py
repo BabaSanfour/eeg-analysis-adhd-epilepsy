@@ -384,6 +384,13 @@ def build_patients_metadata(
         _compute_medication_mismatch_mask(working),
         "medication_mismatch",
     )
+    # A patient whose ADHD diagnosis differs between recordings: uncertain at one of them.
+    working = _append_removed(
+        removed_frames,
+        working,
+        working.groupby("patient_id")["adhd"].transform("nunique").gt(1),
+        "diagnosis_changed",
+    )
 
     clean_df = working.copy()
 

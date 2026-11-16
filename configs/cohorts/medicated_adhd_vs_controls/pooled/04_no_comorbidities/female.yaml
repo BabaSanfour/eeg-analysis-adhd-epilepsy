@@ -14,9 +14,6 @@ group_filters:
   - 0
   combined_diagnosis:
   - Control
-  - Epilepsy
-  - ASD
-  - ASD+Epilepsy
 - adhd:
   - 1
   psychostimulant:
