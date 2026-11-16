@@ -37,7 +37,6 @@ from eeg_adhd_epilepsy.io import bids, readers, report_paths
 from eeg_adhd_epilepsy.preproc.epochs import build_block_events_by_condition
 from eeg_adhd_epilepsy.preproc.utils import (
     NumpyEncoder,
-    _compute_artifact_overlap,
     benchmark_step,
     inflate_bad_annotations,
 )
@@ -51,11 +50,11 @@ LOGGER = logging.getLogger("preproc_base")
 DEFAULT_HIGHPASS_HZ = 0.1
 DEFAULT_LOWPASS_HZ = 100.0
 # AutoReject: fitted per condition on the 10 s analysis epochs (`epochs.py`, same grid,
-# `build_block_events_by_condition`), so each rejection drops one analysis epoch; only when a
-# condition has at least AR_MIN_EPOCHS of them; longer conditions are fitted in
-# AR_CHUNK_MINUTES chunks. It only rejects: no channel is interpolated, and the channels it
-# finds bad in the epochs it keeps are counted, not annotated (MNE would reject a
-# channel-specific BAD_ span for every channel).
+# `build_block_events_by_condition`), so each rejection drops one analysis epoch; only on
+# AR_MIN_EPOCHS epochs or more; longer conditions are fitted in AR_CHUNK_MINUTES chunks. It
+# only rejects: no channel is interpolated, and the channels it finds bad in the epochs it
+# keeps are counted, not annotated (MNE would reject a channel-specific BAD_ span for every
+# channel). RANSAC's bad channels stay out of the fit (AutoReject drops `info["bads"]`).
 AR_SEGMENT_S = 10.0
 AR_MIN_EPOCHS = 5
 AR_CHUNK_MINUTES = 30.0
@@ -73,126 +72,6 @@ RANDOM_SEED = 42
 ZAPLINE_MAX_COMPONENTS = 3
 ZAPLINE_LINE_BANDWIDTH_HZ = 1.0
 LINE_NOISE_RATIO_MAX = 1.25
-
-
-def _event_sample_to_onset(raw: mne.io.BaseRaw, event_sample: int) -> float:
-    """Convert an event sample index into onset seconds in raw time."""
-    return max(0.0, (event_sample - raw.first_samp) / raw.info["sfreq"])
-
-
-def _prepare_condition_epoch_inputs(
-    raw: mne.io.BaseRaw,
-    segment_duration: float,
-) -> list[tuple[str, list[events.BlockWindow], np.ndarray]]:
-    """Return condition-grouped blocks with their fixed-length events."""
-    block_windows = events.collect_block_windows(raw)
-    grouped_blocks: dict[str, list[events.BlockWindow]] = {}
-    for block in block_windows:
-        grouped_blocks.setdefault(block.name, []).append(block)
-
-    events_by_condition = build_block_events_by_condition(
-        raw,
-        segment_duration=segment_duration,
-        overlap=0.0,
-    )
-    prepared: list[tuple[str, list[events.BlockWindow], np.ndarray]] = []
-    for condition_name, blocks in grouped_blocks.items():
-        condition_events = events_by_condition.get(condition_name)
-        if condition_events is None or len(condition_events) == 0:
-            continue
-        prepared.append((condition_name, blocks, condition_events))
-    return prepared
-
-
-def _iter_autoreject_chunks(
-    epochs: mne.Epochs, condition_name: str
-) -> list[tuple[int, mne.Epochs]]:
-    """Split a condition's epochs into AutoReject-sized chunks."""
-    n_epochs_total = len(epochs)
-    if n_epochs_total < AR_MIN_EPOCHS:
-        LOGGER.warning(
-            "Too few epochs (%d < %d) for AutoReject in condition %s. Skipping AR.",
-            n_epochs_total,
-            AR_MIN_EPOCHS,
-            condition_name,
-        )
-        return []
-
-    n_epochs_chunk_max = max(1, int((AR_CHUNK_MINUTES * 60.0) / AR_SEGMENT_S))
-    if n_epochs_total <= n_epochs_chunk_max:
-        return [(0, epochs)]
-
-    n_chunks = int(np.ceil(n_epochs_total / n_epochs_chunk_max))
-    LOGGER.info(
-        "Condition '%s' too long (%d epochs). "
-        "Splitting into %d chunks of ~%d epochs (~%.1f min each).",
-        condition_name,
-        n_epochs_total,
-        n_chunks,
-        n_epochs_chunk_max,
-        AR_CHUNK_MINUTES,
-    )
-    chunks: list[tuple[int, mne.Epochs]] = []
-    for chunk_idx in range(n_chunks):
-        start_idx = chunk_idx * n_epochs_chunk_max
-        end_idx = min((chunk_idx + 1) * n_epochs_chunk_max, n_epochs_total)
-        chunk = epochs[start_idx:end_idx]
-        if len(chunk) >= AR_MIN_EPOCHS:
-            chunks.append((chunk_idx, chunk))
-    return chunks
-
-
-def _reject_log_to_annotations(
-    raw: mne.io.BaseRaw,
-    epochs_chunk: mne.Epochs,
-    reject_log,
-    condition_name: str,
-) -> tuple[list[tuple[float, float, str, tuple[str, ...]]], int, int]:
-    """A ``BAD_epoch_<condition>`` span per rejected epoch, and the count of channels
-    AutoReject found bad in the epochs it kept.
-
-    A span starts half a sample after its epoch and ends half a sample before the next:
-    MNE compares span and epoch edges as floats, and a span ending exactly where the next
-    epoch starts can reject that epoch too (seen at 256 and 512 Hz).
-    """
-    half_sample = 0.5 / raw.info["sfreq"]
-    bad_epochs = np.flatnonzero(reject_log.bad_epochs)
-    new_annots = [
-        (
-            _event_sample_to_onset(raw, int(epochs_chunk.events[ep_idx, 0])) + half_sample,
-            AR_SEGMENT_S - 2 * half_sample,
-            f"BAD_epoch_{condition_name}",
-            (),
-        )
-        for ep_idx in bad_epochs
-    ]
-    kept_labels = np.asarray(reject_log.labels)[~np.asarray(reject_log.bad_epochs, dtype=bool)]
-    return new_annots, len(bad_epochs), int(np.count_nonzero(np.nan_to_num(kept_labels)))
-
-
-def _run_autoreject_chunk(
-    raw: mne.io.BaseRaw,
-    epochs_chunk: mne.Epochs,
-    condition_name: str,
-    chunk_suffix: str,
-    n_jobs: int,
-) -> tuple[list[tuple[float, float, str, tuple[str, ...]]], int, int]:
-    """Fit AutoReject on one chunk and convert the reject log to annotations."""
-    n_epochs_chunk = len(epochs_chunk)
-    LOGGER.info(
-        "Processing AutoReject for %s%s (%d epochs)", condition_name, chunk_suffix, n_epochs_chunk
-    )
-    ar = AutoReject(
-        n_interpolate=np.array([0]),
-        random_state=RANDOM_SEED,
-        n_jobs=n_jobs,
-        verbose=False,
-        cv=min(10, n_epochs_chunk),
-    )
-    ar.fit(epochs_chunk)
-    return _reject_log_to_annotations(
-        raw, epochs_chunk, ar.get_reject_log(epochs_chunk), condition_name=condition_name
-    )
 
 
 def _compute_clean_stats(raw: mne.io.BaseRaw) -> dict[str, float]:
@@ -329,13 +208,11 @@ def run_base_pipeline(
         "pipeline_warnings": [],
         "bad_channels_global": [],
         "artifact_stats": {},
-        "block_stats": [],
         "integrity_stats": {},
     }
 
     # 1. Embedded block annotations
-    n_blocks = len(events.collect_block_windows(raw))
-    if n_blocks == 0:
+    if not events.collect_block_windows(raw):
         LOGGER.warning(
             "No embedded BLOCK_* annotations found; block-aware steps will have limited context."
         )
@@ -403,12 +280,8 @@ def run_base_pipeline(
         raw, artifact_stats = annotate_artifacts_blockwise(raw, n_jobs=int(config.get("n_jobs", 1)))
 
     provenance["artifact_stats"] = artifact_stats
-    provenance["block_stats"] = artifact_stats.get("by_block", [])
     provenance["steps_completed"].append("block_artifact_annotation")
-
-    # Clean Data Duration & Detailed Artifact Stats
     provenance["integrity_stats"] = _compute_clean_stats(raw)
-    provenance["artifact_stats"]["artifacts_count"] = len(raw.annotations)
 
     LOGGER.info("Base pipeline completed for %s.", record_label)
     return raw, provenance
@@ -477,105 +350,78 @@ def detect_global_bads_ransac(raw: mne.io.BaseRaw) -> tuple[list[str], str | Non
 def annotate_artifacts_blockwise(
     raw: mne.io.BaseRaw, n_jobs: int = 1
 ) -> tuple[mne.io.BaseRaw, dict]:
-    """Run condition-wise AutoReject and add non-destructive BAD annotations.
+    """AutoReject per condition, adding a ``BAD_epoch_<condition>`` span per rejected epoch.
 
-    Groups disjoint blocks by condition (e.g., all "EO_baseline" blocks) and
-    runs AutoReject on them as a single set of epochs. This ensures consistent
-    thresholds across the condition.
+    A span starts half a sample after its epoch and ends half a sample before the next:
+    MNE compares span and epoch edges as floats, and a span ending exactly where the next
+    epoch starts can reject that epoch too (seen at 256 and 512 Hz).
 
-    Args:
-        raw: The raw data object.
-        n_jobs: Cores AutoReject may use.
-
-    Returns:
-        A tuple containing the annotated raw object and a statistics dictionary.
+    Returns the annotated raw and the counts of rejected epochs and of channels AutoReject
+    found bad in the epochs it kept.
     """
-    block_windows = events.collect_block_windows(raw)
-    stats: dict[str, Any] = {
-        "blocks_total": len(block_windows),
-        "blocks_processed": 0,
-        "bad_epochs": 0,
-        "bad_channels_in_kept_epochs": 0,
-        "artifacts_count": 0,
-        "by_block": [],
-    }
-
+    stats = {"bad_epochs": 0, "bad_channels_in_kept_epochs": 0}
     eeg_picks = mne.pick_types(raw.info, eeg=True, exclude=[])
     if len(eeg_picks) == 0:
         LOGGER.warning("No EEG channels available for AutoReject annotation.")
         return raw, stats
 
-    epoch_tmax = max(AR_SEGMENT_S - (1.0 / raw.info["sfreq"]), 0.0)
-    condition_inputs = _prepare_condition_epoch_inputs(raw, segment_duration=AR_SEGMENT_S)
-
-    LOGGER.info(
-        "Running condition-wise artifact annotation on %d conditions...", len(condition_inputs)
-    )
-
-    new_annots: list[tuple[float, float, str, tuple[str, ...]]] = []
-
-    for condition_name, blocks, condition_events in condition_inputs:
+    sfreq = raw.info["sfreq"]
+    half_sample = 0.5 / sfreq
+    chunk_size = int(AR_CHUNK_MINUTES * 60.0 / AR_SEGMENT_S)
+    onsets: list[float] = []
+    descriptions: list[str] = []
+    for condition, condition_events in build_block_events_by_condition(raw, AR_SEGMENT_S).items():
         epochs = mne.Epochs(
             raw,
             condition_events,
-            event_id={"seg": 1},
             tmin=0.0,
-            tmax=epoch_tmax,
+            tmax=AR_SEGMENT_S - 1.0 / sfreq,
             baseline=None,
-            reject=None,
-            verbose="ERROR",
+            picks=eeg_picks,
             preload=True,
             proj=False,
-            picks=eeg_picks,
             reject_by_annotation=False,
+            verbose="ERROR",
         )
-
-        n_epochs_total = len(epochs)
-        epoch_chunks = _iter_autoreject_chunks(epochs, condition_name)
-        if not epoch_chunks:
-            continue
-
-        for chunk_idx, epochs_chunk in epoch_chunks:
-            chunk_suffix = f"_chunk{chunk_idx + 1}" if len(epoch_chunks) > 1 else ""
-            chunk_annots, chunk_bad_epochs, chunk_bad_channels = _run_autoreject_chunk(
-                raw, epochs_chunk, condition_name, chunk_suffix, n_jobs
+        if len(epochs) < AR_MIN_EPOCHS:
+            LOGGER.warning(
+                "Too few epochs (%d < %d) for AutoReject in %s; skipped.",
+                len(epochs),
+                AR_MIN_EPOCHS,
+                condition,
             )
-            new_annots.extend(chunk_annots)
-            stats["bad_epochs"] += chunk_bad_epochs
-            stats["bad_channels_in_kept_epochs"] += chunk_bad_channels
+            continue
+        for start in range(0, len(epochs), chunk_size):
+            chunk = epochs[start : start + chunk_size]
+            if len(chunk) < AR_MIN_EPOCHS:
+                continue
+            LOGGER.info("AutoReject on %s, epochs %d-%d", condition, start, start + len(chunk))
+            ar = AutoReject(
+                n_interpolate=np.array([0]),
+                random_state=RANDOM_SEED,
+                n_jobs=n_jobs,
+                verbose=False,
+                cv=min(10, len(chunk)),
+            )
+            reject_log = ar.fit(chunk).get_reject_log(chunk)
+            bad = np.asarray(reject_log.bad_epochs, dtype=bool)
+            onsets.extend((chunk.events[bad, 0] - raw.first_samp) / sfreq + half_sample)
+            descriptions.extend([f"BAD_epoch_{condition}"] * int(bad.sum()))
+            stats["bad_epochs"] += int(bad.sum())
+            kept_labels = np.nan_to_num(np.asarray(reject_log.labels)[~bad])
+            stats["bad_channels_in_kept_epochs"] += int(np.count_nonzero(kept_labels))
 
-        stats["blocks_processed"] += len(blocks)
-        stats["by_block"].append(
-            {
-                "condition": condition_name,
-                "n_blocks_merged": len(blocks),
-                "epochs_total": n_epochs_total,
-                "chunks_processed": len(epoch_chunks),
-            }
+    if onsets:
+        raw.set_annotations(
+            raw.annotations
+            + mne.Annotations(
+                onset=onsets,
+                duration=AR_SEGMENT_S - 2 * half_sample,
+                description=descriptions,
+                orig_time=raw.annotations.orig_time,
+            )
         )
-
-    if not new_annots:
-        stats["artifacts_count"] = 0
-        return raw, stats
-
-    overlap_pct = _compute_artifact_overlap(raw, new_annots)
-    LOGGER.info(
-        "Manual BAD Overlap: %.1f%% of manual segments were re-detected.",
-        overlap_pct,
-    )
-    stats["manual_overlap_pct"] = overlap_pct
-
-    new_annots.sort(key=lambda x: x[0])
-    artifact_annots = mne.Annotations(
-        onset=[row[0] for row in new_annots],
-        duration=[row[1] for row in new_annots],
-        description=[row[2] for row in new_annots],
-        orig_time=raw.annotations.orig_time,
-        ch_names=[row[3] for row in new_annots],
-    )
-    raw.set_annotations(raw.annotations + artifact_annots)
-    LOGGER.info("Added %d artifact annotations.", len(new_annots))
-    stats["artifacts_count"] = len(new_annots)
+    LOGGER.info("Added %d AutoReject annotations.", len(onsets))
     return raw, stats
 
 

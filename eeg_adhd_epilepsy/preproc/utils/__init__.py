@@ -10,7 +10,7 @@ to import from the specific submodule directly, e.g.::
 from eeg_adhd_epilepsy.io.readers import read_preproc_stage
 
 from . import thresholds  # expose sub-module for callers that do `from .utils import thresholds`
-from .artifacts import _compute_artifact_overlap, inflate_bad_annotations
+from .artifacts import inflate_bad_annotations
 from .subjects import _normalize_subject_list, select_subjects
 from .timing import benchmark_step
 from .types import NumpyEncoder
@@ -21,7 +21,6 @@ __all__ = [
     # io
     "read_preproc_stage",
     # artifacts
-    "_compute_artifact_overlap",
     "inflate_bad_annotations",
     # subjects
     "_normalize_subject_list",
