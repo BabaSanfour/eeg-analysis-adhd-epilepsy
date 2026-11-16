@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 from coco_pipe.viz import plot_bar, plot_histogram, plot_topomap_from_channel_values
 
-from eeg_adhd_epilepsy.viz import qc_plots, utils
+from eeg_adhd_epilepsy.viz import utils
 
 matplotlib.use("Agg")
 plt.style.use("seaborn-v0_8-whitegrid")
@@ -150,69 +150,13 @@ def save_subject_preproc_qc_figures(
     *,
     record: Mapping[str, object],
     topomap_aggregates: Mapping[str, tuple[Sequence[str], np.ndarray]] | None,
-    segments_df: pd.DataFrame | None = None,
     output_dir: Path,
 ) -> dict[str, Path]:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    paths: dict[str, Path] = {}
-
-    # Extract bad channels from diagnostics if available
-    diag = record.get("channel_diagnostics", {})
-    bad_channels = list(diag.get("bad_channels") or [])
-
-    paths.update(
-        _save_topomap_figures(
-            topomap_aggregates, output_dir / "topomaps", bad_channels=bad_channels
-        )
+    """The subject's topomaps, with the stage's bad channels marked."""
+    bad_channels = list(record.get("channel_diagnostics", {}).get("bad_channels") or [])
+    return _save_topomap_figures(
+        topomap_aggregates, output_dir / "topomaps", bad_channels=bad_channels
     )
-
-    if segments_df is not None and not segments_df.empty:
-        temporal_dir = output_dir / "temporal"
-        temporal_paths = save_subject_temporal_qc_figures(segments_df, temporal_dir)
-        paths.update(temporal_paths)
-
-    return paths
-
-
-def save_subject_temporal_qc_figures(
-    segments_df: pd.DataFrame,
-    output_dir: Path,
-) -> dict[str, Path]:
-    """Save block-style temporal QC plots for a subject."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-    paths: dict[str, Path] = {}
-
-    # 1. Amplitude Blocks
-    if "amplitude_mean_uv" in segments_df.columns:
-        fig = plot_segment_metric_blocks(
-            segments_df, "amplitude_mean_uv", "Mean Amplitude per Segment", "uV"
-        )
-        if fig:
-            out_path = output_dir / "temporal_amplitude.png"
-            utils.save_fig(fig, out_path)
-            paths["temporal_amplitude"] = out_path
-
-    # 2. Line Noise Blocks
-    if "line_noise_ratio" in segments_df.columns:
-        fig = plot_segment_metric_blocks(
-            segments_df, "line_noise_ratio", "Line Noise Ratio per Segment", "Ratio"
-        )
-        if fig:
-            out_path = output_dir / "temporal_line_noise.png"
-            utils.save_fig(fig, out_path)
-            paths["temporal_line_noise"] = out_path
-
-    # 3. HF/LF Ratio Blocks
-    if "hf_lf_ratio" in segments_df.columns:
-        fig = plot_segment_metric_blocks(
-            segments_df, "hf_lf_ratio", "HF/LF Ratio per Segment", "Ratio"
-        )
-        if fig:
-            out_path = output_dir / "temporal_hf_lf_ratio.png"
-            utils.save_fig(fig, out_path)
-            paths["temporal_hf_lf_ratio"] = out_path
-
-    return paths
 
 
 def save_dataset_preproc_qc_figures(
@@ -287,70 +231,6 @@ def truncate_plot_data(
     if data.ndim == 3:
         return data[:, :, :n_plot]
     return data
-
-
-def plot_segment_metric_blocks(
-    segments_df: pd.DataFrame,
-    column: str,
-    title: str,
-    ylabel: str,
-) -> matplotlib.figure.Figure | None:
-    """Plot mean metric value per segment type as time-aligned blocks."""
-    if column not in segments_df or "t_start" not in segments_df or "t_stop" not in segments_df:
-        return None
-    df = segments_df.copy()
-    df["metric"] = pd.to_numeric(df[column], errors="coerce")
-    df["t_start"] = pd.to_numeric(df["t_start"], errors="coerce")
-    df["t_stop"] = pd.to_numeric(df["t_stop"], errors="coerce")
-    df["segment_type"] = df.get("segment_type", pd.Series(["Unknown"] * len(df))).fillna("Unknown")
-    val = df.get("segment_flag_bad")
-    if val is None:
-        df["flag_bad_bool"] = False
-    else:
-        df["flag_bad_bool"] = pd.to_numeric(val, errors="coerce").fillna(0).astype(bool)
-    df = df.dropna(subset=["metric", "t_start", "t_stop"])
-    if df.empty:
-        return None
-    palette = qc_plots.get_segment_palette(df["segment_type"].unique())
-    means = df.groupby("segment_type")["metric"].mean()
-    boundaries = sorted(set(df["t_start"].dropna().tolist()) | set(df["t_stop"].dropna().tolist()))
-
-    fig, ax = plt.subplots(figsize=(8, 4))
-    seen_labels: dict[str, matplotlib.artist.Artist] = {}
-    flagged_added = False
-    for seg_type, group in df.sort_values("t_start").groupby("segment_type", dropna=False):
-        mean_val = means.get(seg_type)
-        color = palette.get(seg_type, "#4C72B0")
-        for _, row in group.iterrows():
-            start = float(row["t_start"])
-            stop = float(row["t_stop"])
-            if not (np.isfinite(start) and np.isfinite(stop)) or stop <= start:
-                continue
-            artist = ax.hlines(mean_val, start, stop, colors=color, linewidth=6)
-            if seg_type not in seen_labels:
-                seen_labels[seg_type] = artist
-            if row.get("flag_bad_bool", False):
-                midpoint = start + (stop - start) / 2.0
-                flag_artist = ax.scatter(
-                    midpoint, mean_val, color="red", marker="x", s=70, zorder=5
-                )
-                if not flagged_added:
-                    seen_labels["Flagged"] = flag_artist
-                    flagged_added = True
-                ax.axvspan(start, stop, color="red", alpha=0.08, linewidth=0)
-
-    for boundary in boundaries:
-        ax.axvline(boundary, color="gray", linestyle="--", linewidth=1, alpha=0.3)
-
-    if seen_labels:
-        labels, handles = zip(*seen_labels.items())
-        ax.legend(handles, labels, bbox_to_anchor=(1.05, 1), loc="upper left")
-    ax.set_title(title)
-    ax.set_xlabel("Time (s)")
-    ax.set_ylabel(ylabel)
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-    return fig
 
 
 def save_eeg_snapshot(
