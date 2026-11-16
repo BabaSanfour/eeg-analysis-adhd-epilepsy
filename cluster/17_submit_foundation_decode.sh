@@ -43,7 +43,7 @@ echo "Model:    $model"
 echo "Input:    raw EEG epochs"
 
 python -m eeg_adhd_epilepsy.analysis.foundation_decoding \
-    --cohort_config "$COHORT_CONFIG" \
+    --cohort_config "$COHORT_CONFIG" "${MATCHED_ARGS[@]}" \
     --analysis_config "$ANALYSIS_CONFIG" \
     --bids_root "$BIDS_ROOT" \
     --desc "$EPOCHS_DESC" \

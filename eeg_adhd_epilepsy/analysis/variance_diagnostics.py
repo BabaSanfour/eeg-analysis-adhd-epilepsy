@@ -124,6 +124,7 @@ def build_diagnostic_tasks(
         group_filters=config.get("group_filters") or [],
         filter_col=config.get("filter_col") or [],
         filter_val=config.get("filter_val") or [],
+        matched=bool(config.get("matched", False)),
     )
 
     available_conditions = list(dict.fromkeys(np.asarray(clinical.coords["condition"]).astype(str)))
@@ -394,6 +395,11 @@ def run(config: dict[str, Any]) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cohort_config", required=True)
+    parser.add_argument(
+        "--matched",
+        action="store_true",
+        help="Match the groups on sex, age (years) and epilepsy; writes to <dataset_name>_matched.",
+    )
     parser.add_argument("--analysis_config", required=True)
     parser.add_argument("--bids_root", required=True)
     parser.add_argument("--metadata", required=True)
@@ -426,6 +432,7 @@ def main() -> None:
         resolve_cli_config(
             cohort_config=args.cohort_config,
             analysis_config=args.analysis_config,
+            matched=args.matched,
             bids_root=args.bids_root,
             metadata=args.metadata,
             embedding_derivative_root=args.embedding_derivative_root,

@@ -33,6 +33,13 @@ done
 : "${BIDS_ROOT:=$DATA_ROOT/BIDS}"
 # Subject labels of every analysis stage; stage 01 writes them from PATIENTS_CSV.
 : "${METADATA_PATH:=$BIDS_ROOT/participants.tsv}"
+# MATCHED=1: the analyses match each cohort's groups on sex, age and epilepsy (--matched)
+# and write to <dataset_name>_matched. Submit a script once without and once with it;
+# a cohort with one group (checks/) cannot be matched.
+MATCHED_ARGS=()
+if [[ "${MATCHED:-0}" == 1 ]]; then
+    MATCHED_ARGS=(--matched)
+fi
 : "${PATIENTS_CSV:=$DATA_ROOT/csv/patients_metadata_clean.csv}"
 : "${RAW_ROOT:=$DATA_ROOT/raw_data}"
 : "${SCRATCH_ROOT:=$SCRATCH/eeg-epilepsy-adhd}"

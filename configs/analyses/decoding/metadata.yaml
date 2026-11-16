@@ -1,0 +1,71 @@
+# Metadata-only model: age, sex and epilepsy, no EEG, on the recordings of the descriptor
+# recording table (the EEG analyses' rows), with the flat models, tuning, CV and chance of
+# classical.yaml. Its score is what these three explain by themselves; on a matched cohort
+# (--matched) it should be at chance. Pair with a cohort config via --cohort_config.
+
+input_mode: metadata
+
+location_statistic: mean
+
+analysis_modes:
+  - flat
+
+feature_selection:
+  - name: baseline
+    method: none
+
+tuning:
+  enabled: true
+  scoring: balanced_accuracy
+  n_splits: 3
+
+models:
+  logreg_enet:
+    estimator: LogisticRegression
+    params:
+      penalty: elasticnet
+      solver: saga
+      l1_ratio: 0.5
+      class_weight: balanced
+      max_iter: 5000
+    grid:
+      C: [0.01, 0.1, 1.0, 10.0]
+      l1_ratio: [0.2, 0.5, 0.8]
+  random_forest:
+    estimator: RandomForestClassifier
+    params:
+      n_estimators: 300
+      class_weight: balanced
+      n_jobs: 1
+
+cv:
+  n_splits: 5
+
+# Labels are shuffled within groups and the whole pipeline is refit
+# `n_permutations` times, so the smallest p-value is 1 / (n_permutations + 1).
+chance_method: permutation
+n_permutations: 20
+store_null_distribution: false
+
+metrics:
+  - accuracy
+  - balanced_accuracy
+  - f1
+  - precision
+  - recall
+  - roc_auc
+
+session_col: session
+subject_col: subject
+task: clinical
+representation: recording
+run_pooled: true
+random_state: 42
+n_jobs: -1
+verbose: true
+overwrite: false
+
+detailed_unit_reports: true
+detailed_unit_report_modes:
+  - flat
+report_asset_urls: null

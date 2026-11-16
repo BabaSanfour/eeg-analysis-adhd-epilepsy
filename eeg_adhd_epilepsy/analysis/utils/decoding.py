@@ -222,10 +222,10 @@ class ClassicalPlan:
 def build_classical_plan(config: Mapping[str, Any]) -> ClassicalPlan:
     """Validate config into a :class:`ClassicalPlan` (raises on bad input)."""
     input_mode = config["input_mode"]
-    if input_mode not in {"descriptors", "foundation_embeddings"}:
+    if input_mode not in {"descriptors", "foundation_embeddings", "metadata"}:
         raise ValueError(
             f"Invalid input_mode '{input_mode}'. Classical decoding requires "
-            "'descriptors' or 'foundation_embeddings'."
+            "'descriptors', 'foundation_embeddings' or 'metadata'."
         )
 
     analysis_modes = require_config(
@@ -238,9 +238,9 @@ def build_classical_plan(config: Mapping[str, Any]) -> ClassicalPlan:
     for mode in analysis_modes:
         if mode in DESCRIPTOR_ONLY_ANALYSIS_MODES and input_mode != "descriptors":
             raise ValueError(f"analysis_mode='{mode}' is only supported for descriptor inputs.")
-        if input_mode == "foundation_embeddings" and mode != "flat":
+        if input_mode in {"foundation_embeddings", "metadata"} and mode != "flat":
             raise ValueError(
-                f"analysis_mode='{mode}' is not supported for foundation embeddings; "
+                f"analysis_mode='{mode}' is not supported for {input_mode} inputs; "
                 "use analysis_mode='flat'."
             )
 
@@ -362,6 +362,7 @@ def build_loader_args(
         filter_col=filter_col,
         filter_val=filter_val,
         group_filters=config.get("group_filters"),
+        matched=bool(config.get("matched", False)),
         balance_target=None,
         balance_strategy="undersample",
         representation=config.get("representation", "subject"),

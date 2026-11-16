@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 # array = cohorts x representation spaces x granularities; 72 x 9 x 3.
-#SBATCH --array=1-1944
+#SBATCH --array=1-1890
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -108,7 +108,7 @@ cmd=(
     --derivative_root "$DIM_REDUCTION_ROOT"
     --reports_root "$REPORTS_ROOT"
     --metadata "$METADATA_PATH"
-    --cohort_config "$config"
+    --cohort_config "$config" "${MATCHED_ARGS[@]}"
     --analysis_config "$ANALYSIS_CONFIG"
     --embedding_derivative_root "$EMBEDDING_PROJECT_ROOT"
     --embedding_model_key "$model"

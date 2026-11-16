@@ -90,3 +90,44 @@ def test_filter_cohort_container_keeps_each_childs_first_recording_per_condition
     selected = filter_cohort_container(container, group_filters=None, filter_col=[], filter_val=[])
 
     assert selected.ids.tolist() == ["rec-0", "rec-1", "rec-3", "rec-4", "rec-5"]
+
+
+def test_filter_cohort_container_matched_keeps_equal_groups_per_cell():
+    # Controls: 3 boys aged 8, 1 girl aged 9; ADHD: 1 boy aged 8, 2 girls aged 9, 1 girl
+    # aged 10 (no control to match). Each child has two epochs.
+    subjects = [f"{i:04d}" for i in range(8)]
+    adhd = [0, 0, 0, 0, 1, 1, 1, 1]
+    sex = ["M", "M", "M", "F", "M", "F", "F", "F"]
+    age = [8.2, 8.5, 8.9, 9.1, 8.4, 9.3, 9.8, 10.2]
+    container = _embedding_container([s for s in subjects for _ in range(2)])
+    container = container.replace(
+        coords={
+            **container.coords,
+            "patient_group_id": np.repeat(subjects, 2).astype(object),
+            "adhd": np.repeat(adhd, 2),
+            "sex": np.repeat(sex, 2),
+            "age": np.repeat(age, 2),
+            "epilepsy": np.zeros(16, dtype=int),
+        }
+    )
+
+    selected = filter_cohort_container(
+        container,
+        group_filters=[{"adhd": [0]}, {"adhd": [1]}],
+        filter_col=[],
+        filter_val=[],
+        matched=True,
+    )
+
+    kept = pd.DataFrame(
+        {
+            "subject": selected.coords["subject"],
+            "adhd": selected.coords["adhd"],
+            "sex": selected.coords["sex"],
+            "age": np.floor(selected.coords["age"]),
+        }
+    )
+    assert kept.groupby("subject").size().eq(2).all()  # every epoch of a kept child
+    children = kept.drop_duplicates("subject")
+    cells = children.groupby(["sex", "age", "adhd"]).size().unstack("adhd")
+    assert cells.to_dict("index") == {("F", 9.0): {0: 1, 1: 1}, ("M", 8.0): {0: 1, 1: 1}}

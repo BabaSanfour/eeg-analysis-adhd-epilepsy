@@ -44,7 +44,7 @@ if [ "$PIPELINE_TYPE" == "raw" ]; then
             --derivative_root "$DIM_REDUCTION_ROOT" \
             --reports_root "$REPORTS_ROOT" \
             --metadata "$METADATA_PATH" \
-            --cohort_config "$CONFIG" \
+            --cohort_config "$CONFIG" "${MATCHED_ARGS[@]}" \
             --analysis_config "$PROJECT_ROOT/configs/analyses/dim_reduction/raw.yaml" \
             --representation "$rep" \
             --n_jobs "$THREADS"
@@ -65,7 +65,7 @@ elif [ "$PIPELINE_TYPE" == "descriptors" ]; then
             --derivative_root "$DIM_REDUCTION_ROOT" \
             --reports_root "$REPORTS_ROOT" \
             --metadata "$METADATA_PATH" \
-            --cohort_config "$CONFIG" \
+            --cohort_config "$CONFIG" "${MATCHED_ARGS[@]}" \
             --analysis_config "$PROJECT_ROOT/configs/analyses/dim_reduction/descriptors.yaml" \
             --descriptor_table_path "$DESC_ROOT/sensor_${rep}_features.parquet" \
             --representation "$rep" \
@@ -93,7 +93,7 @@ elif [ "$PIPELINE_TYPE" == "foundation" ]; then
                     --derivative_root "$DIM_REDUCTION_ROOT" \
                     --reports_root "$REPORTS_ROOT" \
                     --metadata "$METADATA_PATH" \
-                    --cohort_config "$CONFIG" \
+                    --cohort_config "$CONFIG" "${MATCHED_ARGS[@]}" \
                     --analysis_config "$PROJECT_ROOT/configs/analyses/dim_reduction/foundation.yaml" \
                     --embedding_derivative_root "$FOUND_ROOT" \
                     --embedding_model_key "$model" \
@@ -113,7 +113,7 @@ elif [ "$PIPELINE_TYPE" == "foundation" ]; then
                 --derivative_root "$DIM_REDUCTION_ROOT" \
                 --reports_root "$REPORTS_ROOT" \
                 --metadata "$METADATA_PATH" \
-                --cohort_config "$CONFIG" \
+                --cohort_config "$CONFIG" "${MATCHED_ARGS[@]}" \
                 --analysis_config "$PROJECT_ROOT/configs/analyses/dim_reduction/foundation.yaml" \
                 --embedding_derivative_root "$FOUND_ROOT" \
                 --embedding_model_key "$model" \

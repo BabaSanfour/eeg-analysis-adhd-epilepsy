@@ -3,7 +3,7 @@
 #SBATCH --time=03:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=256G
-#SBATCH --array=1-74
+#SBATCH --array=1-70
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -53,6 +53,6 @@ python -m eeg_adhd_epilepsy.analysis.dimensionality_reduction \
     --derivative_root "$DIM_REDUCTION_ROOT" \
     --reports_root "$REPORTS_ROOT" \
     --metadata "$METADATA_PATH" \
-    --cohort_config "$config" \
+    --cohort_config "$config" "${MATCHED_ARGS[@]}" \
     --analysis_config "$ANALYSIS_CONFIG" \
     --n_jobs "$THREADS"

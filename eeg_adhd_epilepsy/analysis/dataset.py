@@ -156,34 +156,106 @@ def attach_subject_metadata(
     )
 
 
+def group_index(
+    container: DataContainer, group_filters: list[dict[str, list[Any]]] | None
+) -> np.ndarray:
+    """Each row's group: the index of the first group filter it meets, -1 for none (all 0
+    without group filters)."""
+    group = np.full(container.X.shape[0], -1 if group_filters else 0)
+    for index, filters in enumerate(group_filters or []):
+        member = np.ones(container.X.shape[0], dtype=bool)
+        for column, values in filters.items():
+            member &= np.isin(
+                np.asarray(container.coords[column]).astype(str), [str(v) for v in values]
+            )
+        group[(group == -1) & member] = index
+    return group
+
+
 def filter_cohort_container(
     container: DataContainer,
     *,
     group_filters: list[dict[str, list[Any]]] | None,
     filter_col: list[str],
     filter_val: list[list[Any]],
+    matched: bool = False,
 ) -> DataContainer:
     """Select the configured cohort from a metadata-enriched container: the group and
-    stratum filters, then each child's first recording."""
-    keep = np.ones(container.X.shape[0], dtype=bool)
-    if group_filters:
-        group_keep = np.zeros(container.X.shape[0], dtype=bool)
-        for group in group_filters:
-            current = np.ones(container.X.shape[0], dtype=bool)
-            for column, values in group.items():
-                current &= np.isin(
-                    np.asarray(container.coords[column]).astype(str),
-                    [str(value) for value in values],
-                )
-            group_keep |= current
-        keep &= group_keep
+    stratum filters, then each child's first recording, then (``matched``) the groups
+    matched on sex, age and epilepsy."""
+    keep = group_index(container, group_filters) >= 0
     for column, values in zip(filter_col, filter_val):
         if values:
             keep &= np.isin(
                 np.asarray(container.coords[column]).astype(str),
                 [str(value) for value in values],
             )
-    return keep_first_recording(container.isel(obs=np.flatnonzero(keep)))
+    container = keep_first_recording(container.isel(obs=np.flatnonzero(keep)))
+    return match_groups(container, group_filters) if matched else container
+
+
+def metadata_container(container: DataContainer) -> DataContainer:
+    """The container's recordings with age, sex (male) and epilepsy as their only features.
+
+    The input of the metadata-only model: what these three explain without any EEG, on the
+    rows (recordings and conditions) the EEG analyses use.
+    """
+    coords = container.coords
+    features = np.column_stack(
+        [
+            pd.to_numeric(np.asarray(coords["age"]), errors="coerce"),
+            (np.asarray(coords["sex"]).astype(str) == "M").astype(float),
+            pd.to_numeric(np.asarray(coords["epilepsy"]), errors="coerce"),
+        ]
+    )
+    return DataContainer(
+        X=features,
+        dims=("obs", "feature"),
+        coords={
+            **{key: value for key, value in coords.items() if not key.startswith("feature")},
+            "feature": np.asarray(["age", "sex_male", "epilepsy"], dtype=object),
+        },
+        ids=container.ids,
+        meta={},
+    )
+
+
+MATCH_COVARIATES = ("sex", "age", "epilepsy")
+
+
+def match_groups(
+    container: DataContainer, group_filters: list[dict[str, list[Any]]], random_state: int = 0
+) -> DataContainer:
+    """The cohort's groups matched on sex, age in whole years and epilepsy, per condition.
+
+    coco-pipe's ``balance`` keeps, in every cell of condition x covariates, a random draw of
+    the larger group the size of the smaller one; a child's rows of a condition go together.
+    Covariates the groups are defined by are left out.
+    """
+    if not group_filters or len(group_filters) < 2:
+        raise ValueError("Matching needs a cohort with two groups (group_filters).")
+    defining = {column for filters in group_filters for column in filters}
+    covariates = [f"_{name}" for name in MATCH_COVARIATES if name not in defining]
+    age = np.floor(pd.to_numeric(np.asarray(container.coords["age"]), errors="coerce"))
+    matched = container.replace(
+        coords={
+            **container.coords,
+            "_group": group_index(container, group_filters),
+            # As text: balance bins numeric covariates into quantiles.
+            "_sex": np.asarray(container.coords["sex"]).astype(str),
+            "_age": pd.Series(age).map(lambda years: f"{years:.0f}").to_numpy(),
+            "_epilepsy": np.asarray(container.coords["epilepsy"]).astype(str),
+        }
+    ).balance(
+        target="_group",
+        strategy="undersample",
+        covariates=["condition", *covariates],
+        groups=["subject", "condition"],
+        random_state=random_state,
+    )
+    return matched.replace(
+        coords={key: value for key, value in matched.coords.items() if not key.startswith("_")}
+    )
 
 
 def keep_first_recording(container: DataContainer) -> DataContainer:
@@ -328,6 +400,18 @@ def build_dataset(
                 )
                 container = container.isel(obs=keep_indices)
         container.meta = {**dict(container.meta), "qc_result": qc_result}
+    elif effective_input_mode == "metadata":
+        container = metadata_container(
+            load_descriptor_table(
+                table_path=Path(args.descriptor_table_path),
+                known_families=KNOWN_FAMILY_TOKENS,
+                condition=condition,
+                target_col=target_col,
+                subjects=subjects,
+                subject_col=args.subject_col,
+                location_statistic=args.location_statistic,
+            )
+        )
     elif effective_input_mode == "foundation_embeddings":
         container = load_embeddings(
             foundation_embedding_file(
@@ -349,6 +433,7 @@ def build_dataset(
         group_filters=args.group_filters,
         filter_col=args.filter_col,
         filter_val=args.filter_val,
+        matched=bool(getattr(args, "matched", False)),
     )
     if args.balance_target:
         container = container.balance(

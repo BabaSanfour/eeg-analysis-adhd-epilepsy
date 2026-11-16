@@ -806,6 +806,11 @@ def main() -> None:
         help="Cohort/dataset config: subjects + clinical question (configs/cohorts/).",
     )
     parser.add_argument(
+        "--matched",
+        action="store_true",
+        help="Match the groups on sex, age (years) and epilepsy; writes to <dataset_name>_matched.",
+    )
+    parser.add_argument(
         "--analysis_config",
         required=True,
         help=(
@@ -891,6 +896,7 @@ def main() -> None:
     config = resolve_cli_config(
         cohort_config=args.cohort_config,
         analysis_config=args.analysis_config,
+        matched=args.matched,
         bids_root=args.bids_root,
         desc=args.desc,
         metadata=args.metadata,

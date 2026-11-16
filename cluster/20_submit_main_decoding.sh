@@ -79,7 +79,7 @@ run_descriptor_classical() {
 
         cmd=(
             python -m eeg_adhd_epilepsy.analysis.classical_decoding
-            --cohort_config "$CONFIG"
+            --cohort_config "$CONFIG" "${MATCHED_ARGS[@]}"
             --analysis_config "$CLASSICAL_ANALYSIS_CONFIG"
             --bids_root "$BIDS_ROOT"
             --desc "$EPOCHS_DESC"
@@ -119,7 +119,7 @@ run_saved_embedding_classical() {
             echo "    Transforms: none, fold-local leace"
             cmd=(
                 python -m eeg_adhd_epilepsy.analysis.classical_decoding
-                --cohort_config "$CONFIG"
+                --cohort_config "$CONFIG" "${MATCHED_ARGS[@]}"
                 --analysis_config "$SAVED_FOUNDATION_ANALYSIS_CONFIG"
                 --bids_root "$BIDS_ROOT"
                 --desc "$EPOCHS_DESC"
@@ -144,7 +144,7 @@ run_saved_embedding_classical() {
 
     python -m eeg_adhd_epilepsy.analysis.classical_decoding \
         --compare_only \
-        --cohort_config "$CONFIG" \
+        --cohort_config "$CONFIG" "${MATCHED_ARGS[@]}" \
         --analysis_config "$SAVED_FOUNDATION_ANALYSIS_CONFIG" \
         --bids_root "$BIDS_ROOT" \
         --desc "$EPOCHS_DESC" \
@@ -174,7 +174,7 @@ run_foundation() {
         # the GPU can hold that many concurrent models.
         cmd=(
             python -m eeg_adhd_epilepsy.analysis.foundation_decoding
-            --cohort_config "$CONFIG"
+            --cohort_config "$CONFIG" "${MATCHED_ARGS[@]}"
             --analysis_config "$FOUNDATION_ANALYSIS_CONFIG"
             --bids_root "$BIDS_ROOT"
             --desc "$EPOCHS_DESC"
@@ -194,7 +194,7 @@ run_foundation() {
 
     python -m eeg_adhd_epilepsy.analysis.foundation_decoding \
         --compare_only \
-        --cohort_config "$CONFIG" \
+        --cohort_config "$CONFIG" "${MATCHED_ARGS[@]}" \
         --analysis_config "$FOUNDATION_ANALYSIS_CONFIG" \
         --bids_root "$BIDS_ROOT" \
         --desc "$EPOCHS_DESC" \
