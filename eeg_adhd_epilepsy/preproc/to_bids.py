@@ -755,9 +755,7 @@ def _write_dataset_description(bids_root: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="EEG -> BIDS converter")
-    parser.add_argument(
-        "--raw_root", type=Path, required=True, help="Root directory containing raw_data"
-    )
+    parser.add_argument("--raw_root", type=Path, help="Root directory containing raw_data")
     parser.add_argument("--bids_root", type=Path, required=True, help="BIDS root directory")
     parser.add_argument("--metadata_csv", type=Path, required=True, help="Canonical metadata CSV")
     parser.add_argument(
@@ -791,7 +789,14 @@ def main() -> None:
         default=None,
         help="Custom root directory for reports (defaults to sibling of bids_root)",
     )
+    parser.add_argument(
+        "--participants_only",
+        action="store_true",
+        help="Only rewrite participants.tsv from --metadata_csv for the converted recordings",
+    )
     args = parser.parse_args()
+    if args.raw_root is None and not args.participants_only:
+        parser.error("--raw_root is required unless --participants_only is given")
     reports_root = (
         args.reports_root
         if args.reports_root
@@ -809,6 +814,10 @@ def main() -> None:
         "Int64"
     )
     LOGGER.info("Loaded metadata CSV with %d rows", len(metadata_df))
+    if args.participants_only:
+        _write_participants(args.bids_root, metadata_df)
+        LOGGER.info("Rewrote %s", args.bids_root / "participants.tsv")
+        return
     metadata_lookup = _build_metadata_lookup(metadata_df)
 
     selected_study_ids: set[int] | None = None

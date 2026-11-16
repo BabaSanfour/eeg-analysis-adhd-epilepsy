@@ -325,6 +325,7 @@ DROP_REASON_DISPLAY = {
     "missing_diagnosis": "Missing diagnosis",
     "duplicate_same_source_patient_id": "Duplicate same-source patient",
     "medication_mismatch": "Medication mismatch",
+    "diagnosis_changed": "ADHD diagnosis changed between recordings",
 }
 
 

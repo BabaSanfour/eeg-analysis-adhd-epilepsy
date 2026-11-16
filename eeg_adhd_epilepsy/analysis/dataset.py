@@ -163,7 +163,8 @@ def filter_cohort_container(
     filter_col: list[str],
     filter_val: list[list[Any]],
 ) -> DataContainer:
-    """Select the configured cohort from a metadata-enriched container."""
+    """Select the configured cohort from a metadata-enriched container: the group and
+    stratum filters, then each child's first recording."""
     keep = np.ones(container.X.shape[0], dtype=bool)
     if group_filters:
         group_keep = np.zeros(container.X.shape[0], dtype=bool)
@@ -182,6 +183,27 @@ def filter_cohort_container(
                 np.asarray(container.coords[column]).astype(str),
                 [str(value) for value in values],
             )
+    return keep_first_recording(container.isel(obs=np.flatnonzero(keep)))
+
+
+def keep_first_recording(container: DataContainer) -> DataContainer:
+    """Each child's recording at the youngest age, per condition, among those the cohort kept.
+
+    A child (``patient_group_id``) recorded twice counts once; one whose first recording has
+    no epochs of a condition keeps the other for it.
+    """
+    if not {"patient_group_id", "age"} <= set(container.coords):
+        return container
+    rows = pd.DataFrame(
+        {
+            key: np.asarray(container.coords[key])
+            for key in ("patient_group_id", "condition", "subject")
+        }
+    ).assign(age=pd.to_numeric(np.asarray(container.coords["age"]), errors="coerce"))
+    first = rows.sort_values(["age", "subject"]).drop_duplicates(["patient_group_id", "condition"])
+    keep = pd.MultiIndex.from_frame(rows[["condition", "subject"]]).isin(
+        pd.MultiIndex.from_frame(first[["condition", "subject"]])
+    )
     return container.isel(obs=np.flatnonzero(keep))
 
 

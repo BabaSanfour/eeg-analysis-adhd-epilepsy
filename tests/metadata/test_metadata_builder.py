@@ -250,6 +250,9 @@ def test_build_patients_metadata_writes_raw_clean_and_removed_outputs(tmp_path: 
                 "LEV": 1,
             }
         ),
+        # Patient 1009: no ADHD at the first recording, ADHD at the second.
+        _old_row(**{"Study ID": 9, "Pt ID": 1009, "TDAH": 0, "EEG_date": "1/1/2020"}),
+        _old_row(**{"Study ID": 10, "Pt ID": 1009, "TDAH": 1, "EEG_date": "1/1/2023"}),
     ]
     new_rows = [
         _new_row(**{"Study ID": 1014, "Patient ID": 2001, "LEV": 1}),
@@ -405,9 +408,10 @@ def test_build_patients_metadata_writes_raw_clean_and_removed_outputs(tmp_path: 
         "no_eeg_files": 2,
         "missing_diagnosis": 2,
         "medication_mismatch": 2,
+        "diagnosis_changed": 2,
     }
     assert removed["summary"]["source_dataset_counts"] == {
-        "adhd": 6,
+        "adhd": 8,
         "drug_resistant": 1,
     }
     assert list(removed["removed_rows"][0].keys()) == [
@@ -421,4 +425,5 @@ def test_build_patients_metadata_writes_raw_clean_and_removed_outputs(tmp_path: 
     assert removed_reasons[5] == "missing_diagnosis"
     assert removed_reasons[6] == "medication_mismatch"
     assert removed_reasons[7] == "medication_mismatch"
+    assert removed_reasons[9] == removed_reasons[10] == "diagnosis_changed"
     assert removed_reasons[1016] == "missing_diagnosis"

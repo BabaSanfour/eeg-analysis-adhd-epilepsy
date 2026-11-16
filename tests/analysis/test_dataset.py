@@ -70,3 +70,23 @@ def test_filter_cohort_container_applies_group_union_and_column_filter():
     )
 
     assert selected.ids.tolist() == ["rec-0", "rec-3"]
+
+
+def test_filter_cohort_container_keeps_each_childs_first_recording_per_condition():
+    # Child g1 has two recordings, 0001 (age 8) and 0002; 0001 has no EC epochs,
+    # so EC falls back to 0002. Child g2 has one recording.
+    container = _embedding_container(["0001", "0001", "0002", "0002", "0003", "0003"])
+    container = container.replace(
+        coords={
+            **container.coords,
+            "condition": np.asarray(
+                ["EO_baseline"] * 3 + ["EC_baseline", "EO_baseline", "EC_baseline"]
+            ),
+            "patient_group_id": np.asarray(["g1", "g1", "g1", "g1", "g2", "g2"], dtype=object),
+            "age": np.asarray([8.0, 8.0, 10.5, 10.5, 12.0, 12.0], dtype=object),
+        }
+    )
+
+    selected = filter_cohort_container(container, group_filters=None, filter_col=[], filter_val=[])
+
+    assert selected.ids.tolist() == ["rec-0", "rec-1", "rec-3", "rec-4", "rec-5"]
