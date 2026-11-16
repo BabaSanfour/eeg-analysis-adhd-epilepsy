@@ -3,56 +3,6 @@
 from __future__ import annotations
 
 import mne
-import numpy as np
-
-
-def _compute_artifact_overlap(
-    raw: mne.io.BaseRaw,
-    new_annots: list[tuple[float, float, str, tuple[str, ...]]],
-) -> float:
-    """Calculate percentage of existing manual BAD segments re-detected by AutoReject.
-
-    Assumes any pre-existing ``BAD_*`` annotation is a manual reference and
-    that all BAD annotations have already been inflated to positive durations.
-
-    Returns:
-        Overlap percentage (0–100).
-    """
-    existing_bads = [
-        (float(a["onset"]), float(a["onset"]) + float(a.get("duration", 0)))
-        for a in raw.annotations
-        if str(a["description"]).startswith("BAD_")
-    ]
-    if not existing_bads or not new_annots:
-        return 0.0
-
-    detected_intervals = [(onset, onset + dur) for onset, dur, _, _ in new_annots]
-
-    max_time = raw.times[-1]
-    res = 0.1  # 100 ms resolution
-    n_points = int(max_time / res) + 1
-    if n_points <= 0:
-        return 0.0
-
-    mask_existing = np.zeros(n_points, dtype=bool)
-    mask_detected = np.zeros(n_points, dtype=bool)
-
-    for s, e in existing_bads:
-        i_s = max(0, min(int(s / res), n_points))
-        i_e = max(0, min(int(e / res) + 1, n_points))
-        if i_e > i_s:
-            mask_existing[i_s:i_e] = True
-
-    for s, e in detected_intervals:
-        i_s = max(0, min(int(s / res), n_points))
-        i_e = max(0, min(int(e / res) + 1, n_points))
-        if i_e > i_s:
-            mask_detected[i_s:i_e] = True
-
-    n_existing = int(mask_existing.sum())
-    if n_existing == 0:
-        return 0.0
-    return float((mask_existing & mask_detected).sum()) / n_existing * 100.0
 
 
 def inflate_bad_annotations(
