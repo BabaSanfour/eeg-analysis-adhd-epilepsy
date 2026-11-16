@@ -131,17 +131,9 @@ def load_stage_run_lookup(
     )
     if not summary_path.exists():
         return {}
-    df = pd.read_csv(summary_path)
     lookup: dict[str, dict[str, object]] = {}
-    for row in df.to_dict(orient="records"):
-        for key in (
-            row.get("run_prefix"),
-            row.get("subject_session_prefix"),
-            row.get("filepath"),
-        ):
-            key_str = str(key or "").strip()
-            if key_str:
-                lookup[key_str] = row
+    for row in pd.read_csv(summary_path).to_dict(orient="records"):
+        update_run_lookup(lookup, row)
     return lookup
 
 
@@ -274,10 +266,6 @@ def _delta(current_value: object, reference_value: object) -> float:
     return float("nan")
 
 
-def _reference_metric(raw_reference: Mapping[str, object], key: str) -> object:
-    return raw_reference.get(key)
-
-
 def build_preproc_qc_run_record(
     *,
     profile: PreprocQCProfile,
@@ -389,9 +377,7 @@ def build_preproc_qc_run_record(
             run_metrics[f"{metric}_delta_prev"] = _delta(
                 metrics.get(metric), prev_metrics.get(metric)
             )
-        run_metrics[f"{metric}_delta_raw"] = _delta(
-            metrics.get(metric), _reference_metric(raw_reference, metric)
-        )
+        run_metrics[f"{metric}_delta_raw"] = _delta(metrics.get(metric), raw_reference.get(metric))
 
     qc_flag, qc_reasons = evaluate_signal_qc_flag(run_metrics, thresholds, check_retention=True)
     run_metrics["qc_flag"] = qc_flag
@@ -402,7 +388,7 @@ def build_preproc_qc_run_record(
         warnings.append("Spectral slope fitting skipped (insufficient clean/finite data).")
     run_metrics["pipeline_warnings"] = "; ".join(warnings)
 
-    segment_comparison, segments_df = _compute_post_clean_segment_metrics(
+    segment_comparison = _compute_post_clean_segment_metrics(
         prepared_raw,
         picks=picks,
         reports_root=reports_root,
@@ -416,7 +402,6 @@ def build_preproc_qc_run_record(
             metrics, channel_names=picks, weight=max(retained_duration_sec, 1.0)
         ),
         "segment_comparison": segment_comparison,
-        "segments_df": segments_df,
     }
 
 
@@ -435,14 +420,11 @@ def _compute_post_clean_segment_metrics(
     function used for the pre-base stage — so pre vs post values are on the same basis
     (full segment window, no BAD sub-interval splitting).
 
-    Returns:
-        tuple[pd.DataFrame, pd.DataFrame]:
-            1. Aggregated Summary: one row per segment_type with mean stats.
-            2. Raw Segments: one row per individual segment with timing and metrics.
+    Returns one row per segment_type with mean stats, pre and post.
     """
     segments_df = events.segments_from_block_annotations(raw)
     if segments_df is None or segments_df.empty:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame()
 
     post_rows: list[dict[str, object]] = []
     for row in segments_df.itertuples(index=False):
@@ -484,7 +466,7 @@ def _compute_post_clean_segment_metrics(
     post_rows_df = pd.DataFrame(post_rows)
 
     if post_rows_df.empty:
-        return pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame()
 
     # Load pre-base segment rows from the raw_qc_segments CSV (written by raw_qc stage).
     raw_qc_csv = (
@@ -534,15 +516,7 @@ def _compute_post_clean_segment_metrics(
         )
         result = post_agg.merge(pre_agg, on="segment_type", how="left")
     else:
-        result = post_agg.copy()
-        for col in (
-            "n_segments_pre",
-            "mean_amplitude_pre",
-            "mean_line_noise_pre",
-            "mean_hf_lf_pre",
-            "mean_aperiodic_slope_pre",
-        ):
-            result[col] = float("nan")
+        result = post_agg
 
     cols = [
         "segment_type",
@@ -558,12 +532,7 @@ def _compute_post_clean_segment_metrics(
         "mean_aperiodic_slope_pre",
         "mean_aperiodic_slope_post",
     ]
-    summary_df = (
-        result[[c for c in cols if c in result.columns]]
-        .sort_values("segment_type")
-        .reset_index(drop=True)
-    )
-    return summary_df, post_rows_df
+    return result.reindex(columns=cols).sort_values("segment_type").reset_index(drop=True)
 
 
 def collect_existing_preproc_qc_record(
@@ -594,6 +563,35 @@ def collect_existing_preproc_qc_record(
     )
 
 
+# Record fields kept in memory for the reports, not written to the runs table.
+_IN_MEMORY_FIELDS = {"topomap_aggregates", "channel_diagnostics", "segment_comparison"}
+
+
+def _mean_by_condition(
+    records: Sequence[Mapping[str, object]], *, count_runs: bool = False
+) -> pd.DataFrame:
+    """Mean of the runs' ``segment_comparison`` columns per condition."""
+    frames = [
+        r["segment_comparison"]
+        for r in records
+        if isinstance(r.get("segment_comparison"), pd.DataFrame)
+        and not r["segment_comparison"].empty
+    ]
+    if not frames:
+        return pd.DataFrame()
+    combined = pd.concat(frames, ignore_index=True)
+    numeric_cols = [c for c in combined.columns if c != "segment_type"]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", category=RuntimeWarning)
+        means = combined.groupby("segment_type", as_index=False)[numeric_cols].mean(
+            numeric_only=True
+        )
+    if count_runs:
+        counts = combined.groupby("segment_type").size().reset_index(name="n_usable_runs")
+        means = means.merge(counts, on="segment_type")
+    return means.sort_values("segment_type").reset_index(drop=True)
+
+
 def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[str, object]:
     if not records:
         raise ValueError("records must be non-empty")
@@ -603,12 +601,7 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
         dtype=float,
     ).fillna(0.0)
 
-    aggregate = {
-        key: value
-        for key, value in first.items()
-        if key
-        not in {"topomap_aggregates", "channel_diagnostics", "segment_comparison", "segments_df"}
-    }
+    aggregate = {key: value for key, value in first.items() if key not in _IN_MEMORY_FIELDS}
     aggregate["n_runs"] = len(records)
     aggregate["retained_duration_sec"] = float(
         sum(float(record.get("retained_duration_sec", 0.0) or 0.0) for record in records)
@@ -647,36 +640,8 @@ def _aggregate_subject_metrics(records: Sequence[Mapping[str, object]]) -> dict[
     )
     aggregate["channel_diagnostics"] = records[0].get("channel_diagnostics", {})
 
-    # Combine per-condition segment comparisons across runs: average numeric columns
-    # per segment_type so multi-run subjects don't get duplicate condition rows.
-    seg_frames = [
-        r.get("segment_comparison")
-        for r in records
-        if isinstance(r.get("segment_comparison"), pd.DataFrame)
-        and not r["segment_comparison"].empty
-    ]
-    if seg_frames:
-        combined = pd.concat(seg_frames, ignore_index=True)
-        numeric_cols = [c for c in combined.columns if c != "segment_type"]
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            aggregate["segment_comparison"] = (
-                combined.groupby("segment_type", as_index=False)[numeric_cols]
-                .mean(numeric_only=True)
-                .sort_values("segment_type")
-                .reset_index(drop=True)
-            )
-    else:
-        aggregate["segment_comparison"] = pd.DataFrame()
-
-    # Combine individual segments for temporal plotting (concatenation is fine here)
-    seg_dfs = [
-        r.get("segments_df")
-        for r in records
-        if isinstance(r.get("segments_df"), pd.DataFrame) and not r["segments_df"].empty
-    ]
-    aggregate["segments_df"] = pd.concat(seg_dfs, ignore_index=True) if seg_dfs else pd.DataFrame()
-
+    # Multi-run subjects get one row per condition.
+    aggregate["segment_comparison"] = _mean_by_condition(records)
     return aggregate
 
 
@@ -710,7 +675,6 @@ def write_subject_preproc_qc_report(
         figure_paths = viz_preproc_qc.save_subject_preproc_qc_figures(
             record=aggregate,
             topomap_aggregates=aggregate.get("topomap_aggregates"),
-            segments_df=aggregate.get("segments_df"),
             output_dir=Path(figures_dir),
         )
         report_preproc_qc.generate_subject_report(
@@ -742,9 +706,8 @@ def write_preproc_qc_aggregate_reports(
     )
     stage_name = get_preproc_qc_stage_name(profile.stage, output_desc)
     summary_dir = report_paths.summary_report_dir(reports_root, stage_name, create=True)
-    in_memory = {"topomap_aggregates", "channel_diagnostics", "segment_comparison", "segments_df"}
     runs_df = pd.DataFrame(
-        [{k: v for k, v in record.items() if k not in in_memory} for record in run_records]
+        [{k: v for k, v in record.items() if k not in _IN_MEMORY_FIELDS} for record in run_records]
     )
     runs_df.to_csv(summary_dir / f"{stage_name}_runs.csv", index=False)
 
@@ -759,43 +722,12 @@ def write_preproc_qc_aggregate_reports(
             profile=profile,
             output_desc=output_desc,
         )
-        subject_rows.append(
-            {
-                k: v
-                for k, v in subject_record.items()
-                if k not in {"topomap_aggregates", "channel_diagnostics", "segment_comparison"}
-            }
-        )
+        subject_rows.append({k: v for k, v in subject_record.items() if k not in _IN_MEMORY_FIELDS})
     subjects_df = pd.DataFrame(subject_rows)
 
     topomap_aggregates = _combine_weighted_topomaps(
         record.get("topomap_aggregates", {}) for record in run_records
     )
-    # Build cross-subject per-condition summary by aggregating all run segment_comparisons.
-    seg_frames = [
-        r.get("segment_comparison")
-        for r in run_records
-        if isinstance(r.get("segment_comparison"), pd.DataFrame)
-        and not r["segment_comparison"].empty
-    ]
-    if seg_frames:
-        combined_segs = pd.concat(seg_frames, ignore_index=True)
-        numeric_cols = [c for c in combined_segs.columns if c != "segment_type"]
-
-        counts = combined_segs.groupby("segment_type").size().reset_index(name="n_usable_runs")
-
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", category=RuntimeWarning)
-            condition_summary_df = (
-                combined_segs.groupby("segment_type", as_index=False)[numeric_cols]
-                .mean(numeric_only=True)
-                .merge(counts, on="segment_type")
-                .sort_values("segment_type")
-                .reset_index(drop=True)
-            )
-    else:
-        condition_summary_df = pd.DataFrame()
-
     # The report embeds its figures, so they only exist until it is saved.
     with tempfile.TemporaryDirectory() as figures_dir:
         report_preproc_qc.generate_dataset_report(
@@ -809,7 +741,7 @@ def write_preproc_qc_aggregate_reports(
                 topomap_aggregates=topomap_aggregates,
                 output_dir=Path(figures_dir),
             ),
-            condition_summary_df=condition_summary_df,
+            condition_summary_df=_mean_by_condition(run_records, count_runs=True),
             output_path=summary_dir / f"{stage_name}_dataset_summary.html",
         )
     return summary_dir

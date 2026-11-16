@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from functools import partial
+from itertools import zip_longest
 from pathlib import Path
 
 import pandas as pd
@@ -25,7 +26,7 @@ add_uncaptioned_images = partial(add_images, caption_from_key=False)
 
 
 def build_stage_overview_table(
-    record: Mapping[str, object], *, stage_display_name: str, previous_stage_label: str
+    record: Mapping[str, object], *, stage_display_name: str
 ) -> pd.DataFrame:
     return pd.DataFrame(
         [
@@ -49,36 +50,31 @@ def build_top_channels_table(
     Flat/noisy channel names are surfaced in the residual-metrics table, so only
     the ranked problem-channel view is built here.
     """
-    top_amp = list(channel_diagnostics.get("top_amplitude_channels") or [])
-    top_noise = list(channel_diagnostics.get("top_line_noise_channels") or [])
-    rank_rows = []
-    max_rank = max(len(top_amp), len(top_noise), 0)
-    for rank in range(max_rank):
-        amp_ch, amp_val = top_amp[rank] if rank < len(top_amp) else ("", float("nan"))
-        noise_ch, noise_val = top_noise[rank] if rank < len(top_noise) else ("", float("nan"))
-        rank_rows.append(
-            {
-                "Rank": rank + 1,
-                "High Amplitude Channel": amp_ch,
-                "Amplitude PTP (uV)": f"{amp_val:.1f}" if math.isfinite(amp_val) else "—",
-                "High Line-Noise Channel": noise_ch,
-                "Line-Noise Ratio": f"{noise_val:.3f}" if math.isfinite(noise_val) else "—",
-            }
+    top_amp = channel_diagnostics.get("top_amplitude_channels") or []
+    top_noise = channel_diagnostics.get("top_line_noise_channels") or []
+    missing = ("", float("nan"))
+    rows = [
+        {
+            "Rank": rank,
+            "High Amplitude Channel": amp_ch,
+            "Amplitude PTP (uV)": f"{amp_val:.1f}" if math.isfinite(amp_val) else "—",
+            "High Line-Noise Channel": noise_ch,
+            "Line-Noise Ratio": f"{noise_val:.3f}" if math.isfinite(noise_val) else "—",
+        }
+        for rank, ((amp_ch, amp_val), (noise_ch, noise_val)) in enumerate(
+            zip_longest(top_amp, top_noise, fillvalue=missing), start=1
         )
-    rank_df = (
-        pd.DataFrame(rank_rows)
-        if rank_rows
-        else pd.DataFrame(
-            columns=[
-                "Rank",
-                "High Amplitude Channel",
-                "Amplitude PTP (uV)",
-                "High Line-Noise Channel",
-                "Line-Noise Ratio",
-            ]
-        )
+    ]
+    return pd.DataFrame(
+        rows,
+        columns=[
+            "Rank",
+            "High Amplitude Channel",
+            "Amplitude PTP (uV)",
+            "High Line-Noise Channel",
+            "Line-Noise Ratio",
+        ],
     )
-    return rank_df
 
 
 def build_condition_comparison_table(segment_comparison: pd.DataFrame) -> pd.DataFrame:
@@ -100,10 +96,7 @@ def build_condition_comparison_table(segment_comparison: pd.DataFrame) -> pd.Dat
         )
     if "total_duration_post_sec" in segment_comparison.columns:
         out["Mean Dur (s)"] = _fmt(
-            pd.to_numeric(segment_comparison["total_duration_post_sec"], errors="coerce").fillna(
-                float("nan")
-            ),
-            1,
+            pd.to_numeric(segment_comparison["total_duration_post_sec"], errors="coerce"), 1
         )
 
     for label, pre_col, post_col in [
@@ -112,22 +105,17 @@ def build_condition_comparison_table(segment_comparison: pd.DataFrame) -> pd.Dat
         ("HF/LF", "mean_hf_lf_pre", "mean_hf_lf_post"),
         ("Slope", "mean_aperiodic_slope_pre", "mean_aperiodic_slope_post"),
     ]:
-        if pre_col in segment_comparison.columns:
-            out[f"{label} (pre)"] = _fmt(
-                pd.to_numeric(segment_comparison[pre_col], errors="coerce").fillna(float("nan"))
-            )
-        if post_col in segment_comparison.columns:
-            out[f"{label} (post)"] = _fmt(
-                pd.to_numeric(segment_comparison[post_col], errors="coerce").fillna(float("nan"))
-            )
+        for side, col in (("pre", pre_col), ("post", post_col)):
+            if col in segment_comparison.columns:
+                out[f"{label} ({side})"] = _fmt(
+                    pd.to_numeric(segment_comparison[col], errors="coerce")
+                )
 
     return out.reset_index(drop=True)
 
 
-def build_delta_table(
-    record: Mapping[str, object], *, suffix: str, reference_label: str
-) -> pd.DataFrame:
-    specs = (
+def _delta_specs(suffix: str) -> tuple[tuple[str, str, str], ...]:
+    return (
         ("Mean amplitude", f"amplitude_mean_uv_delta_{suffix}", " uV"),
         ("Max amplitude", f"amplitude_max_uv_delta_{suffix}", " uV"),
         ("Line-noise ratio", f"line_noise_ratio_delta_{suffix}", ""),
@@ -135,8 +123,13 @@ def build_delta_table(
         ("Alpha peak", f"alpha_peak_hz_delta_{suffix}", " Hz"),
         ("Aperiodic slope", f"aperiodic_slope_delta_{suffix}", ""),
     )
+
+
+def build_delta_table(
+    record: Mapping[str, object], *, suffix: str, reference_label: str
+) -> pd.DataFrame:
     return build_record_metric_table(
-        record, specs, value_col=f"Delta vs {reference_label}", skip_empty=True
+        record, _delta_specs(suffix), value_col=f"Delta vs {reference_label}", skip_empty=True
     )
 
 
@@ -160,10 +153,7 @@ def build_retention_table(record: Mapping[str, object]) -> pd.DataFrame:
     )
 
 
-def build_residual_metrics_table(
-    record: Mapping[str, object],
-    channel_diagnostics: Mapping[str, object] | None = None,
-) -> pd.DataFrame:
+def build_residual_metrics_table(record: Mapping[str, object]) -> pd.DataFrame:
     base = build_record_metric_table(
         record,
         (
@@ -292,16 +282,8 @@ def build_dataset_summary_table(
 def build_dataset_effect_table(
     runs_df: pd.DataFrame, *, suffix: str, reference_label: str
 ) -> pd.DataFrame:
-    specs = (
-        ("Mean amplitude", f"amplitude_mean_uv_delta_{suffix}", " uV"),
-        ("Max amplitude", f"amplitude_max_uv_delta_{suffix}", " uV"),
-        ("Line-noise ratio", f"line_noise_ratio_delta_{suffix}", ""),
-        ("HF/LF ratio", f"hf_lf_ratio_delta_{suffix}", ""),
-        ("Alpha peak", f"alpha_peak_hz_delta_{suffix}", " Hz"),
-        ("Aperiodic slope", f"aperiodic_slope_delta_{suffix}", ""),
-    )
     return build_dataset_mean_metric_table(
-        runs_df, specs, value_col=f"Mean delta vs {reference_label}"
+        runs_df, _delta_specs(suffix), value_col=f"Mean delta vs {reference_label}"
     )
 
 
@@ -369,9 +351,7 @@ def generate_subject_report(
     overview = Section("Stage Overview", icon="🧭")
     add_optional_table(
         overview,
-        build_stage_overview_table(
-            record, stage_display_name=stage_display_name, previous_stage_label=previous_stage_label
-        ),
+        build_stage_overview_table(record, stage_display_name=stage_display_name),
         "Overview",
     )
     report.add_section(overview)
@@ -413,7 +393,7 @@ def generate_subject_report(
     residual = Section("Residual Artifact Burden", icon="📉")
     add_optional_table(
         residual,
-        build_residual_metrics_table(record, channel_diagnostics=channel_diagnostics),
+        build_residual_metrics_table(record),
         "Residual Metrics",
     )
     report.add_section(residual)
@@ -446,17 +426,6 @@ def generate_subject_report(
         runs = Section("What The Stage Did, Per Run", icon="🗂️")
         add_optional_table(runs, run_summary_df, "Per-Run Summary")
         report.add_section(runs)
-
-    temporal = Section("Temporal Signal Quality", icon="⏲️")
-    temporal.add_markdown(
-        "Time-aligned signal quality diagnostics. Horizontal blocks represent the mean metric "
-        "value for each experimental segment. Red 'x' markers and shaded backgrounds "
-        "indicate segments flagged as bad by the automated diagnostics."
-    )
-    add_uncaptioned_images(
-        temporal, figures, ("temporal_amplitude", "temporal_line_noise", "temporal_hf_lf_ratio")
-    )
-    report.add_section(temporal)
 
     figures_section = Section("Figures", icon="📈")
     # Only topomaps are shown per-subject (single-value histograms moved to dataset report)

@@ -144,29 +144,6 @@ def write_preproc_dataset_description(preproc_root: Path) -> None:
     write_bidsignore(preproc_root, PREPROC_BIDSIGNORE)
 
 
-def get_bids_derivative_variant_path(
-    source_path: Path,
-    derivative_root: Path,
-    *,
-    processing: str,
-    suffix: str,
-    datatype: str = "eeg",
-) -> Path:
-    """Return a BIDS derivative path with explicit updated entities."""
-    variant = get_bids_path_from_fname(Path(source_path), check=False)
-    variant.update(
-        root=Path(derivative_root),
-        datatype=datatype,
-        processing=_sanitize_bids_token(processing, "processing"),
-        suffix=_sanitize_bids_token(suffix, "suffix"),
-        check=False,
-    )
-    output_path = variant.fpath
-    if output_path is None:
-        raise ValueError(f"Could not construct a BIDS derivative path for {source_path}.")
-    return output_path
-
-
 def get_stage_output_path(
     source: Path | BIDSPath,
     preproc_root: Path,
