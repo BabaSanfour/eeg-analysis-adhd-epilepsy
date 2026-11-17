@@ -7,6 +7,10 @@ conditions:
 - EO_baseline
 - EC_baseline
 run_pooled: true
+# Matched on with sex and age (--matched); also the metadata-only model's features.
+match_covariates:
+- epilepsy
+- autism
 group_filters:
 - adhd:
   - 0

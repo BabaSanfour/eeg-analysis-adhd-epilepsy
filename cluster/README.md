@@ -111,6 +111,7 @@ derivative tree has a `.bidsignore` for the files BIDS does not define.
 | `DIM_REDUCTION_ROOT` | dim-reduction checkpoints/results | `$RESULTS_ROOT/dim_reduction_$EPOCHS_DESC` |
 | `VARIANCE_DIAGNOSTICS_ROOT` | variance diagnostics, read by the comparison reports (16, 20) | `$RESULTS_ROOT/variance_diagnostics` |
 | `OVERWRITE` | `1` to force reprocessing (01, 09, 12, 13, 20) | `0` |
+| `MATCHED` | `1` to match each cohort's groups on sex, age (years) and the cohort's `match_covariates` (`--matched`, outputs `<dataset_name>_matched`; 11-20). Submit once without and once with it; with 11-13, set `CONFIGS_DIR=$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls` (the EO/EC check cohort has one group) and `--array=1-69` (13: `1-1863`) | `0` |
 
 Stage 04 writes two epoch variants: `desc-base` (every epoch) and
 `desc-baserejected` (the epochs overlapping a `BAD_` annotation dropped). Every

@@ -668,6 +668,8 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         filter_col=list(config.get("filter_col", []) or []),
         filter_val=list(config.get("filter_val", []) or []),
         group_filters=config.get("group_filters"),
+        matched=bool(config.get("matched", False)),
+        match_covariates=config.get("match_covariates"),
         balance_target=config.get("balance_target"),
         balance_strategy=config.get("balance_strategy", "undersample"),
         # Reduction plan (per-mode sweep overrides happen in execute_analysis_mode)
@@ -934,6 +936,12 @@ def main() -> None:
         help="Cohort/dataset config: subjects + clinical question (configs/cohorts/).",
     )
     parser.add_argument(
+        "--matched",
+        action="store_true",
+        help="Match the groups on sex, age and the cohort's match_covariates; "
+        "writes to <dataset_name>_matched.",
+    )
+    parser.add_argument(
         "--analysis_config",
         help="Analysis/method config: analysis_modes (reducers + sweep per mode) "
         "(configs/analyses/dim_reduction/).",
@@ -1033,6 +1041,7 @@ def main() -> None:
     config = resolve_cli_config(
         cohort_config=args.cohort_config,
         analysis_config=args.analysis_config,
+        matched=args.matched,
         bids_root=args.bids_root,
         desc=args.desc,
         metadata=args.metadata,

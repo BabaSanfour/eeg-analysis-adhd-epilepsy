@@ -13,12 +13,14 @@ PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
 dra_epochs_variant
 
-# Task 1 decodes the descriptor baseline. Remaining tasks decode one saved
+# Task 1 decodes the descriptor baseline, then the metadata-only model (the matching
+# covariates on the recording table's rows). Remaining tasks decode one saved
 # foundation model and representation, including every transform declared by
 # foundation_embeddings.yaml. A separate dependency job writes shared reports.
 COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
 CLASSICAL_ANALYSIS_CONFIG=${CLASSICAL_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/classical.yaml}
 FOUNDATION_ANALYSIS_CONFIG=${FOUNDATION_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/foundation_embeddings.yaml}
+METADATA_ANALYSIS_CONFIG=${METADATA_ANALYSIS_CONFIG:-$PROJECT_ROOT/configs/analyses/decoding/metadata.yaml}
 
 read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna}"
 REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording})
@@ -46,7 +48,7 @@ dra_pin_threads 1
 THREADS=${SLURM_CPUS_PER_TASK:-16}
 
 common_args=(
-    --cohort_config "$COHORT_CONFIG"
+    --cohort_config "$COHORT_CONFIG" "${MATCHED_ARGS[@]}"
     --bids_root "$BIDS_ROOT"
     --derivative_root "$DECODING_ROOT"
     --metadata "$METADATA_PATH"
@@ -75,6 +77,13 @@ if (( TASK_ID == 1 )); then
             --descriptor_table_path "$table_path" \
             --representation "$representation"
     done
+    require_file "$METADATA_ANALYSIS_CONFIG"
+    echo "Input:    metadata (the matching covariates)"
+    python -m eeg_adhd_epilepsy.analysis.classical_decoding \
+        "${common_args[@]}" \
+        --analysis_config "$METADATA_ANALYSIS_CONFIG" \
+        --descriptor_table_path "$DESC_ROOT/sensor_recording_features.parquet" \
+        --representation recording
     exit 0
 fi
 

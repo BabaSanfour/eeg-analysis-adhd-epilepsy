@@ -162,11 +162,13 @@ def resolve_cli_config(
     *,
     cohort_config: str | Path | None,
     analysis_config: str | Path | None,
+    matched: bool = False,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Resolve a consumer CLI's config from the required two-config flags.
 
-    Non-``None`` overrides (e.g. CLI ``--bids_root``) are layered on last.
+    Non-``None`` overrides (e.g. CLI ``--bids_root``) are layered on last. ``matched``
+    (CLI ``--matched``) matches the cohort's groups and writes to ``<dataset_name>_matched``.
     """
     if cohort_config is None or analysis_config is None:
         raise ConfigError(
@@ -175,6 +177,9 @@ def resolve_cli_config(
         )
     config = load_cohort_analysis_config(cohort_config, analysis_config)
     apply_overrides(config, **overrides)
+    if matched:
+        config["matched"] = True
+        config["dataset_name"] = f"{config['dataset_name']}_matched"
     if not config.get("bids_root"):
         raise ConfigError(
             "bids_root is required but not set. Dataset paths live on the CLI/env, "

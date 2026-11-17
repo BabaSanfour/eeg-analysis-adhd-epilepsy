@@ -3,7 +3,7 @@
 #SBATCH --time=24:00:00
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
-#SBATCH --array=1-74
+#SBATCH --array=1-70
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -66,7 +66,7 @@ for rep in "${REPRESENTATIONS[@]}"; do
         --derivative_root "$DIM_REDUCTION_ROOT"
         --reports_root "$REPORTS_ROOT"
         --metadata "$METADATA_PATH"
-        --cohort_config "$config"
+        --cohort_config "$config" "${MATCHED_ARGS[@]}"
         --analysis_config "$ANALYSIS_CONFIG"
         --descriptor_table_path "$table_path"
         --representation "$rep"

@@ -56,7 +56,7 @@ cv:
 # Labels are shuffled within groups and the whole pipeline is refit
 # `n_permutations` times, so the smallest p-value is 1 / (n_permutations + 1).
 chance_method: permutation
-n_permutations: 20
+n_permutations: 100
 store_null_distribution: false
 
 metrics:

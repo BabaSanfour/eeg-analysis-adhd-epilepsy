@@ -156,34 +156,119 @@ def attach_subject_metadata(
     )
 
 
+def group_index(
+    container: DataContainer, group_filters: list[dict[str, list[Any]]] | None
+) -> np.ndarray:
+    """Each row's group: the index of the first group filter it meets, -1 for none (all 0
+    without group filters)."""
+    group = np.full(container.X.shape[0], -1 if group_filters else 0)
+    for index, filters in enumerate(group_filters or []):
+        member = np.ones(container.X.shape[0], dtype=bool)
+        for column, values in filters.items():
+            member &= np.isin(
+                np.asarray(container.coords[column]).astype(str), [str(v) for v in values]
+            )
+        group[(group == -1) & member] = index
+    return group
+
+
 def filter_cohort_container(
     container: DataContainer,
     *,
     group_filters: list[dict[str, list[Any]]] | None,
     filter_col: list[str],
     filter_val: list[list[Any]],
+    matched: bool = False,
+    covariates: list[str] | None = None,
 ) -> DataContainer:
     """Select the configured cohort from a metadata-enriched container: the group and
-    stratum filters, then each child's first recording."""
-    keep = np.ones(container.X.shape[0], dtype=bool)
-    if group_filters:
-        group_keep = np.zeros(container.X.shape[0], dtype=bool)
-        for group in group_filters:
-            current = np.ones(container.X.shape[0], dtype=bool)
-            for column, values in group.items():
-                current &= np.isin(
-                    np.asarray(container.coords[column]).astype(str),
-                    [str(value) for value in values],
-                )
-            group_keep |= current
-        keep &= group_keep
+    stratum filters, then each child's first recording, then (``matched``) the groups
+    matched on ``covariates`` (see :func:`match_covariates`)."""
+    keep = group_index(container, group_filters) >= 0
     for column, values in zip(filter_col, filter_val):
         if values:
             keep &= np.isin(
                 np.asarray(container.coords[column]).astype(str),
                 [str(value) for value in values],
             )
-    return keep_first_recording(container.isel(obs=np.flatnonzero(keep)))
+    container = keep_first_recording(container.isel(obs=np.flatnonzero(keep)))
+    return match_groups(container, group_filters, covariates) if matched else container
+
+
+def metadata_container(container: DataContainer, covariates: list[str]) -> DataContainer:
+    """The container's rows with ``covariates`` as their only features.
+
+    The input of the metadata-only model: what the matching covariates explain without any
+    EEG, on the rows (recordings and conditions) the EEG analyses use. Numbers are kept as
+    they are; a text covariate (sex) becomes indicator columns.
+    """
+    columns = {}
+    for name in covariates:
+        values = pd.Series(np.asarray(container.coords[name]))
+        numbers = pd.to_numeric(values, errors="coerce")
+        if numbers.notna().any():
+            columns[name] = numbers
+        else:
+            columns.update(pd.get_dummies(values.astype(str), prefix=name, drop_first=True))
+    features = pd.DataFrame(columns).astype(float)
+    return DataContainer(
+        X=features.to_numpy(),
+        dims=("obs", "feature"),
+        coords={
+            **{k: v for k, v in container.coords.items() if not k.startswith("feature")},
+            "feature": np.asarray(features.columns, dtype=object),
+        },
+        ids=container.ids,
+        meta={},
+    )
+
+
+# Matched on in every cohort; a cohort config adds its clinical ones (``match_covariates``).
+MATCH_COVARIATES = ("sex", "age")
+
+
+def match_covariates(
+    group_filters: list[dict[str, list[Any]]] | None, covariates: list[str] | None = None
+) -> list[str]:
+    """``MATCH_COVARIATES`` and the cohort's ``covariates``, without those its groups are
+    defined by: the matching covariates and the metadata-only model's features."""
+    defining = {column for filters in group_filters or [] for column in filters}
+    names = dict.fromkeys([*MATCH_COVARIATES, *(covariates or [])])
+    return [name for name in names if name not in defining]
+
+
+def match_groups(
+    container: DataContainer,
+    group_filters: list[dict[str, list[Any]]],
+    covariates: list[str] | None = None,
+    random_state: int = 0,
+) -> DataContainer:
+    """The cohort's groups matched on ``match_covariates`` (age in whole years), per condition.
+
+    coco-pipe's ``balance`` keeps, in every cell of condition x covariates, a random draw of
+    the larger group the size of the smaller one; a child's rows of a condition go together.
+    """
+    if not group_filters or len(group_filters) < 2:
+        raise ValueError("Matching needs a cohort with two groups (group_filters).")
+    names = match_covariates(group_filters, covariates)
+    coords = {**container.coords, "_group": group_index(container, group_filters)}
+    for name in names:
+        values = np.asarray(container.coords[name])
+        if name == "age":
+            values = np.floor(pd.to_numeric(values, errors="coerce"))
+            values = pd.Series(values).map(lambda years: f"{years:.0f}").to_numpy()
+        # As text: balance bins numeric covariates into quantiles.
+        coords[f"_{name}"] = values.astype(str)
+    matched = container.replace(coords=coords).balance(
+        target="_group",
+        strategy="undersample",
+        covariates=["condition", *(f"_{name}" for name in names)],
+        groups=["subject", "condition"],
+        random_state=random_state,
+    )
+    return matched.replace(
+        coords={key: value for key, value in matched.coords.items() if not key.startswith("_")}
+    )
 
 
 def keep_first_recording(container: DataContainer) -> DataContainer:
@@ -328,6 +413,22 @@ def build_dataset(
                 )
                 container = container.isel(obs=keep_indices)
         container.meta = {**dict(container.meta), "qc_result": qc_result}
+    elif effective_input_mode == "metadata":
+        # Complete columns only, so no row is lost to an undefined descriptor.
+        container = metadata_container(
+            load_descriptor_table(
+                table_path=Path(args.descriptor_table_path),
+                known_families=KNOWN_FAMILY_TOKENS,
+                condition=condition,
+                target_col=target_col,
+                subjects=subjects,
+                subject_col=args.subject_col,
+                location_statistic=args.location_statistic,
+                drop_degenerate_columns=True,
+                max_missing_rate=0.0,
+            ),
+            match_covariates(args.group_filters, getattr(args, "match_covariates", None)),
+        )
     elif effective_input_mode == "foundation_embeddings":
         container = load_embeddings(
             foundation_embedding_file(
@@ -349,6 +450,8 @@ def build_dataset(
         group_filters=args.group_filters,
         filter_col=args.filter_col,
         filter_val=args.filter_val,
+        matched=bool(getattr(args, "matched", False)),
+        covariates=getattr(args, "match_covariates", None),
     )
     if args.balance_target:
         container = container.balance(

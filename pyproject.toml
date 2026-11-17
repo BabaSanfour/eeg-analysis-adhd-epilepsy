@@ -22,6 +22,8 @@ dependencies = [
   "pandas<3.0.0",
   "mne>=1.13",
   "mne-bids @ git+https://github.com/mne-tools/mne-bids.git@main",
+  # LUNA in coco-pipe needs braindecode master (#1565, #1566, #1568) until 2.1.
+  "braindecode @ git+https://github.com/braindecode/braindecode.git@master",
   "filelock>=3.20.4",
   "pybv>=0.7.3",
   "bids-validator-deno",

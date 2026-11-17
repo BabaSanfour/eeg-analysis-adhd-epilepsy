@@ -29,7 +29,7 @@ echo "Analysis: $ANALYSIS_CONFIG"
 
 python -m eeg_adhd_epilepsy.analysis.foundation_decoding \
     --compare_only \
-    --cohort_config "$COHORT_CONFIG" \
+    --cohort_config "$COHORT_CONFIG" "${MATCHED_ARGS[@]}" \
     --analysis_config "$ANALYSIS_CONFIG" \
     --bids_root "$BIDS_ROOT" \
     --desc "$EPOCHS_DESC" \
