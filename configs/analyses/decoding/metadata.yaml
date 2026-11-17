@@ -1,7 +1,8 @@
-# Metadata-only model: age, sex and epilepsy, no EEG, on the recordings of the descriptor
-# recording table (the EEG analyses' rows), with the flat models, tuning, CV and chance of
-# classical.yaml. Its score is what these three explain by themselves; on a matched cohort
-# (--matched) it should be at chance. Pair with a cohort config via --cohort_config.
+# Metadata-only model: the matching covariates (sex, age and the cohort's match_covariates,
+# minus those its groups are defined by), no EEG, on the recordings
+# of the descriptor recording table (the EEG analyses' rows), with the flat models, tuning, CV
+# and chance of classical.yaml. Its score is what these explain by themselves; on a matched
+# cohort (--matched) it should be at chance. Pair with a cohort config via --cohort_config.
 
 input_mode: metadata
 

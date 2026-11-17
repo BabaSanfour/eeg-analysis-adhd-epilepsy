@@ -515,7 +515,8 @@ def main() -> None:
     parser.add_argument(
         "--matched",
         action="store_true",
-        help="Match the groups on sex, age (years) and epilepsy; writes to <dataset_name>_matched.",
+        help="Match the groups on sex, age and the cohort's match_covariates; "
+        "writes to <dataset_name>_matched.",
     )
     parser.add_argument(
         "--analysis_config",

@@ -108,6 +108,7 @@ def test_filter_cohort_container_matched_keeps_equal_groups_per_cell():
             "sex": np.repeat(sex, 2),
             "age": np.repeat(age, 2),
             "epilepsy": np.zeros(16, dtype=int),
+            "autism": np.zeros(16, dtype=int),
         }
     )
 

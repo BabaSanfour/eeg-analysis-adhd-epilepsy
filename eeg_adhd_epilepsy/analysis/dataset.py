@@ -179,10 +179,11 @@ def filter_cohort_container(
     filter_col: list[str],
     filter_val: list[list[Any]],
     matched: bool = False,
+    covariates: list[str] | None = None,
 ) -> DataContainer:
     """Select the configured cohort from a metadata-enriched container: the group and
     stratum filters, then each child's first recording, then (``matched``) the groups
-    matched on sex, age and epilepsy."""
+    matched on ``covariates`` (see :func:`match_covariates`)."""
     keep = group_index(container, group_filters) >= 0
     for column, values in zip(filter_col, filter_val):
         if values:
@@ -191,65 +192,77 @@ def filter_cohort_container(
                 [str(value) for value in values],
             )
     container = keep_first_recording(container.isel(obs=np.flatnonzero(keep)))
-    return match_groups(container, group_filters) if matched else container
+    return match_groups(container, group_filters, covariates) if matched else container
 
 
-def metadata_container(container: DataContainer) -> DataContainer:
-    """The container's recordings with age, sex (male) and epilepsy as their only features.
+def metadata_container(container: DataContainer, covariates: list[str]) -> DataContainer:
+    """The container's rows with ``covariates`` as their only features.
 
-    The input of the metadata-only model: what these three explain without any EEG, on the
-    rows (recordings and conditions) the EEG analyses use.
+    The input of the metadata-only model: what the matching covariates explain without any
+    EEG, on the rows (recordings and conditions) the EEG analyses use. Numbers are kept as
+    they are; a text covariate (sex) becomes indicator columns.
     """
-    coords = container.coords
-    features = np.column_stack(
-        [
-            pd.to_numeric(np.asarray(coords["age"]), errors="coerce"),
-            (np.asarray(coords["sex"]).astype(str) == "M").astype(float),
-            pd.to_numeric(np.asarray(coords["epilepsy"]), errors="coerce"),
-        ]
-    )
+    columns = {}
+    for name in covariates:
+        values = pd.Series(np.asarray(container.coords[name]))
+        numbers = pd.to_numeric(values, errors="coerce")
+        if numbers.notna().any():
+            columns[name] = numbers
+        else:
+            columns.update(pd.get_dummies(values.astype(str), prefix=name, drop_first=True))
+    features = pd.DataFrame(columns).astype(float)
     return DataContainer(
-        X=features,
+        X=features.to_numpy(),
         dims=("obs", "feature"),
         coords={
-            **{key: value for key, value in coords.items() if not key.startswith("feature")},
-            "feature": np.asarray(["age", "sex_male", "epilepsy"], dtype=object),
+            **{k: v for k, v in container.coords.items() if not k.startswith("feature")},
+            "feature": np.asarray(features.columns, dtype=object),
         },
         ids=container.ids,
         meta={},
     )
 
 
-MATCH_COVARIATES = ("sex", "age", "epilepsy")
+# Matched on in every cohort; a cohort config adds its clinical ones (``match_covariates``).
+MATCH_COVARIATES = ("sex", "age")
+
+
+def match_covariates(
+    group_filters: list[dict[str, list[Any]]] | None, covariates: list[str] | None = None
+) -> list[str]:
+    """``MATCH_COVARIATES`` and the cohort's ``covariates``, without those its groups are
+    defined by: the matching covariates and the metadata-only model's features."""
+    defining = {column for filters in group_filters or [] for column in filters}
+    names = dict.fromkeys([*MATCH_COVARIATES, *(covariates or [])])
+    return [name for name in names if name not in defining]
 
 
 def match_groups(
-    container: DataContainer, group_filters: list[dict[str, list[Any]]], random_state: int = 0
+    container: DataContainer,
+    group_filters: list[dict[str, list[Any]]],
+    covariates: list[str] | None = None,
+    random_state: int = 0,
 ) -> DataContainer:
-    """The cohort's groups matched on sex, age in whole years and epilepsy, per condition.
+    """The cohort's groups matched on ``match_covariates`` (age in whole years), per condition.
 
     coco-pipe's ``balance`` keeps, in every cell of condition x covariates, a random draw of
     the larger group the size of the smaller one; a child's rows of a condition go together.
-    Covariates the groups are defined by are left out.
     """
     if not group_filters or len(group_filters) < 2:
         raise ValueError("Matching needs a cohort with two groups (group_filters).")
-    defining = {column for filters in group_filters for column in filters}
-    covariates = [f"_{name}" for name in MATCH_COVARIATES if name not in defining]
-    age = np.floor(pd.to_numeric(np.asarray(container.coords["age"]), errors="coerce"))
-    matched = container.replace(
-        coords={
-            **container.coords,
-            "_group": group_index(container, group_filters),
-            # As text: balance bins numeric covariates into quantiles.
-            "_sex": np.asarray(container.coords["sex"]).astype(str),
-            "_age": pd.Series(age).map(lambda years: f"{years:.0f}").to_numpy(),
-            "_epilepsy": np.asarray(container.coords["epilepsy"]).astype(str),
-        }
-    ).balance(
+    names = match_covariates(group_filters, covariates)
+    coords = {**container.coords, "_group": group_index(container, group_filters)}
+    for name in names:
+        values = np.asarray(container.coords[name])
+        if name == "age":
+            values = np.floor(pd.to_numeric(values, errors="coerce"))
+            values = pd.Series(values).map(lambda years: f"{years:.0f}").to_numpy()
+        # As text: balance bins numeric covariates into quantiles.
+        coords[f"_{name}"] = values.astype(str)
+    matched = container.replace(coords=coords).balance(
         target="_group",
         strategy="undersample",
-        covariates=["condition", *covariates],
+        covariates=["condition", *(f"_{name}" for name in names)],
         groups=["subject", "condition"],
         random_state=random_state,
     )
@@ -410,7 +423,8 @@ def build_dataset(
                 subjects=subjects,
                 subject_col=args.subject_col,
                 location_statistic=args.location_statistic,
-            )
+            ),
+            match_covariates(args.group_filters, getattr(args, "match_covariates", None)),
         )
     elif effective_input_mode == "foundation_embeddings":
         container = load_embeddings(
@@ -434,6 +448,7 @@ def build_dataset(
         filter_col=args.filter_col,
         filter_val=args.filter_val,
         matched=bool(getattr(args, "matched", False)),
+        covariates=getattr(args, "match_covariates", None),
     )
     if args.balance_target:
         container = container.balance(

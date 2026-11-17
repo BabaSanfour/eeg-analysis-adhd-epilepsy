@@ -125,6 +125,7 @@ def build_diagnostic_tasks(
         filter_col=config.get("filter_col") or [],
         filter_val=config.get("filter_val") or [],
         matched=bool(config.get("matched", False)),
+        covariates=config.get("match_covariates"),
     )
 
     available_conditions = list(dict.fromkeys(np.asarray(clinical.coords["condition"]).astype(str)))
@@ -398,7 +399,8 @@ def main() -> None:
     parser.add_argument(
         "--matched",
         action="store_true",
-        help="Match the groups on sex, age (years) and epilepsy; writes to <dataset_name>_matched.",
+        help="Match the groups on sex, age and the cohort's match_covariates; "
+        "writes to <dataset_name>_matched.",
     )
     parser.add_argument("--analysis_config", required=True)
     parser.add_argument("--bids_root", required=True)

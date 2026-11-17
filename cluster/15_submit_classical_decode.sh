@@ -13,8 +13,8 @@ PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 source "$PROJECT_ROOT/cluster/env.sh"
 dra_epochs_variant
 
-# Task 1 decodes the descriptor baseline, then the metadata-only model (age, sex and
-# epilepsy on the recording table's rows). Remaining tasks decode one saved
+# Task 1 decodes the descriptor baseline, then the metadata-only model (the matching
+# covariates on the recording table's rows). Remaining tasks decode one saved
 # foundation model and representation, including every transform declared by
 # foundation_embeddings.yaml. A separate dependency job writes shared reports.
 COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml}
@@ -78,7 +78,7 @@ if (( TASK_ID == 1 )); then
             --representation "$representation"
     done
     require_file "$METADATA_ANALYSIS_CONFIG"
-    echo "Input:    metadata (age, sex, epilepsy)"
+    echo "Input:    metadata (the matching covariates)"
     python -m eeg_adhd_epilepsy.analysis.classical_decoding \
         "${common_args[@]}" \
         --analysis_config "$METADATA_ANALYSIS_CONFIG" \
