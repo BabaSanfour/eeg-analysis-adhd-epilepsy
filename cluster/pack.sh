@@ -18,6 +18,11 @@ PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 : "${SCRIPT:?Set SCRIPT=cluster/<stage script>.sh}" "${PACK:?Set PACK=<tasks per node>}"
 cpus=${SLURM_CPUS_ON_NODE:-$(nproc)}
 first=$(( (${SLURM_ARRAY_TASK_ID:-1} - 1) * PACK + 1 ))
+# The stage scripts check the array size against their task count: this job covers
+# its array size x PACK tasks.
+if [[ -n ${SLURM_ARRAY_TASK_COUNT:-} ]]; then
+    export SLURM_ARRAY_TASK_COUNT=$((SLURM_ARRAY_TASK_COUNT * PACK))
+fi
 
 pids=()
 for task in $(seq "$first" $((first + PACK - 1))); do
