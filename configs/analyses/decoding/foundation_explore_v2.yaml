@@ -1,0 +1,146 @@
+# Second round of stage 17 on the diagnosis (2026-11-17), after the first round
+# (foundation_explore.yaml) overfit from the first epoch: training loss fell while the
+# validation loss rose, so early stopping kept epoch 1 on a noisy 10 % validation split.
+# Changes: a 20 % validation split (grouped by child) and more patience; full and LoRA
+# train the head alone for 2 epochs first (LP-FT) after one warm-up epoch; each mode's
+# learning rate is searched on 3 inner folds grouped by child (balanced accuracy). One
+# training seed here; `seeds` repeats the chosen settings on the same CV split.
+
+# --- Foundation model sweep -------------------------------------------------
+models:
+  - model_key: cbramod
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+    grid:
+      linear_probe: {trainer__lr: [0.0003, 0.001, 0.003]}
+      full: {trainer__lr: [0.000003, 0.00001, 0.00003]}
+      lora: {trainer__lr: [0.00003, 0.0001, 0.0003]}
+  - model_key: labram
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+    grid:
+      linear_probe: {trainer__lr: [0.0003, 0.001, 0.003]}
+      full: {trainer__lr: [0.000003, 0.00001, 0.00003]}
+      lora: {trainer__lr: [0.00003, 0.0001, 0.0003]}
+  - model_key: reve
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+    grid:
+      linear_probe: {trainer__lr: [0.0003, 0.001, 0.003]}
+      full: {trainer__lr: [0.000003, 0.00001, 0.00003]}
+      lora: {trainer__lr: [0.00003, 0.0001, 0.0003]}
+  - model_key: luna
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+    grid:
+      linear_probe: {trainer__lr: [0.0003, 0.001, 0.003]}
+      full: {trainer__lr: [0.000003, 0.00001, 0.00003]}
+      lora: {trainer__lr: [0.00003, 0.0001, 0.0003]}
+
+# --- Training regime --------------------------------------------------------
+train_modes: [linear_probe, full, lora]
+training_defaults:
+  linear_probe:
+    max_epochs: 30
+    lr: 0.001
+    weight_decay: 0.01
+    batch_size: 16
+    early_stopping_patience: 8
+    validation_fraction: 0.2
+  full:
+    max_epochs: 15
+    lr: 0.00001
+    weight_decay: 0.01
+    batch_size: 8
+    early_stopping_patience: 5
+    validation_fraction: 0.2
+    lr_warmup_epochs: 1
+    probe_epochs: 2
+  lora:
+    max_epochs: 20
+    lr: 0.0001
+    weight_decay: 0.01
+    batch_size: 8
+    early_stopping_patience: 6
+    validation_fraction: 0.2
+    lr_warmup_epochs: 1
+    probe_epochs: 2
+
+tuning:
+  scoring: balanced_accuracy
+  n_splits: 3
+
+# --- Evaluation -------------------------------------------------------------
+targets: [med_adhd_vs_ctrl]
+cv:
+  n_splits: 5
+
+chance_method: binomial
+n_permutations: 1  # unused with binomial
+store_null_distribution: false
+
+metrics:
+  - accuracy
+  - balanced_accuracy
+  - f1
+  - precision
+  - recall
+  - roc_auc
+
+# --- Hardware / runtime -----------------------------------------------------
+device: auto
+on_unsupported: skip
+# The models expect microvolts; the loader default is volts.
+units: uV
+
+# --- Column identity --------------------------------------------------------
+session_col: session
+subject_col: subject
+
+# --- Run controls -----------------------------------------------------------
+random_state: 42
+verbose: true
+overwrite: false
+n_jobs: 1
+class_weight: balanced
+run_pooled: false
+
+# --- Reporting --------------------------------------------------------------
+detailed_unit_reports: true
+report_asset_urls: inline

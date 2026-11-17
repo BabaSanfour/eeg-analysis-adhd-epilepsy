@@ -70,13 +70,17 @@ def _build_foundation_unit(
     capability: Any,
     config: dict[str, Any],
     derivative_root: Path,
+    seed: int | None = None,
 ) -> Any:
+    """One fit. ``seed`` (from the config's ``seeds``) seeds the training (head, dropout,
+    batch order) and names the output; the CV split keeps ``random_state``."""
     from coco_pipe.decoding import (
         CheckpointConfig,
         DeviceConfig,
         LoRAConfig,
         NeuralFineTuneConfig,
         TrainerConfig,
+        TuningConfig,
     )
 
     segment_duration = float(model_cfg["segment_duration"])
@@ -96,6 +100,7 @@ def _build_foundation_unit(
         "target": target_name,
         "model_key": model_key,
         "train_mode": train_mode,
+        "seed": seed,
         "primary": train_mode == "linear_probe",
         "segment_duration": segment_duration,
         "window_mismatch_policy": str(model_cfg["window_mismatch_policy"]),
@@ -109,6 +114,8 @@ def _build_foundation_unit(
     stem = (
         f"fit_{slug(condition)}_{slug(target_name)}_foundation_{slug(model_key)}_{slug(train_mode)}"
     )
+    if seed is not None:
+        stem += f"_seed{seed}"
     output_dir = derivative_root / "artifacts" / "fits" / stem
 
     if capability.status != "available":
@@ -139,11 +146,31 @@ def _build_foundation_unit(
         backend_kwargs=model_cfg["backend_kwargs"],
         class_weight=config["class_weight"],
     )
+    # `grid` (per model and mode, e.g. {full: {trainer__lr: [...]}}) is searched on inner
+    # folds grouped like the outer ones, scored with `tuning.scoring`.
+    grid = (model_cfg.get("grid") or {}).get(train_mode)
+    tuning_cfg = config.get("tuning") or {}
+    tuning = TuningConfig(enabled=False)
+    if grid:
+        tuning = TuningConfig(
+            enabled=True,
+            scoring=tuning_cfg.get("scoring", "balanced_accuracy"),
+            cv=CVConfig(
+                strategy="stratified_group_kfold",
+                n_splits=min(int(tuning_cfg.get("n_splits", 3)), n_splits),
+                shuffle=True,
+                random_state=int(config["random_state"]),
+                group_key="group_id",
+            ),
+        )
+    model_name = f"{model_key}_{train_mode}"
     experiment_config = ExperimentConfig(
         task="classification",
         tag=f"{target_name}_{model_key}_{train_mode}",
-        random_state=int(config["random_state"]),
-        models={f"{model_key}_{train_mode}": neural},
+        random_state=int(config["random_state"] if seed is None else seed),
+        models={model_name: neural},
+        grids={model_name: grid} if grid else None,
+        tuning=tuning,
         cv=CVConfig(
             strategy="stratified_group_kfold",
             n_splits=n_splits,
@@ -262,24 +289,26 @@ def _enumerate_foundation_scope(
                 backend=model_cfg["backend"],
                 backend_kwargs=model_cfg["backend_kwargs"],
             )
-            yield _build_foundation_unit(
-                condition=condition,
-                target_name=target_name,
-                model_key=name,
-                train_mode=train_mode,
-                model_cfg=model_cfg,
-                sfreq=sfreq,
-                channels=channels,
-                target_container=target_container,
-                y=y,
-                groups=groups,
-                sample_metadata=sample_metadata,
-                n_splits=n_splits,
-                provenance=provenance,
-                capability=capability,
-                config=config,
-                derivative_root=derivative_root,
-            )
+            for seed in config.get("seeds") or [None]:
+                yield _build_foundation_unit(
+                    condition=condition,
+                    target_name=target_name,
+                    model_key=name,
+                    train_mode=train_mode,
+                    model_cfg=model_cfg,
+                    sfreq=sfreq,
+                    channels=channels,
+                    target_container=target_container,
+                    y=y,
+                    groups=groups,
+                    sample_metadata=sample_metadata,
+                    n_splits=n_splits,
+                    provenance=provenance,
+                    capability=capability,
+                    config=config,
+                    derivative_root=derivative_root,
+                    seed=seed,
+                )
 
 
 def _foundation_scope_units(

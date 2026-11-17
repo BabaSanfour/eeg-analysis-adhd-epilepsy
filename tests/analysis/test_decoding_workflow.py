@@ -484,7 +484,7 @@ def test_foundation_targets_keep_only_the_named_evals():
 
 
 def test_foundation_model_entry_runs_under_its_name_and_modes(tmp_path, monkeypatch):
-    """A random-init copy keeps its own name in the outputs and only its modes."""
+    """A model entry runs under its name and modes; seeds and a grid set each fit."""
     import coco_pipe.decoding.foundation_models as fm
 
     from eeg_adhd_epilepsy.analysis import foundation_decoding as fdn
@@ -531,6 +531,52 @@ def test_foundation_model_entry_runs_under_its_name_and_modes(tmp_path, monkeypa
     assert [(r["model_key"], r["train_mode"]) for r in records] == [("reve_scratch", "full")]
     assert records[0]["reason"] == "reve {'pretrained': False, 'seed': 0}"
     assert "foundation_reve_scratch_full" in records[0]["output_dir"]
+
+    # seeds: one fit each on the same split; a mode's grid is searched on inner folds
+    monkeypatch.setattr(
+        fm,
+        "check_capability",
+        lambda key, **kwargs: SimpleNamespace(status="available", to_dict=dict),
+    )
+    container = SimpleNamespace(X=np.zeros((2, 2, 2000)), **vars(container))
+    metadata = pd.DataFrame({"sample_id": ["a", "b"]})
+    scope = (container, pd.Series([0, 1]), np.array([0, 1]), metadata, 2)
+    model_cfg |= {"grid": {"full": {"trainer__lr": [1e-4, 1e-3]}}, "trainer": {"full": {}}}
+    units = list(
+        fdn._enumerate_foundation_scope(
+            condition="EO_baseline",
+            model_cfg=model_cfg,
+            container=container,
+            spec=None,
+            provenance={},
+            evals=[{"name": "adhd", "target_col": "a", "group_col": "g"}],
+            train_modes=["full"],
+            config={
+                "session_col": "session",
+                "subject_col": "subject",
+                "cv": {"n_splits": 2},
+                "random_state": 0,
+                "seeds": [1, 2],
+                "training_defaults": {"full": {}},
+                "device": "cpu",
+                "class_weight": "balanced",
+                "chance_method": "binomial",
+                "n_permutations": 1,
+                "store_null_distribution": False,
+                "metrics": ["balanced_accuracy"],
+                "verbose": False,
+                "overwrite": False,
+                "on_unsupported": "skip",
+            },
+            derivative_root=tmp_path,
+        )
+    )
+    configs = [unit.experiment_config for unit in units]
+    assert [c.random_state for c in configs] == [1, 2]
+    assert {c.cv.random_state for c in configs} == {0}
+    assert configs[0].grids == {"reve_scratch_full": {"trainer__lr": [1e-4, 1e-3]}}
+    assert configs[0].tuning.enabled and configs[0].tuning.cv.group_key == "group_id"
+    assert str(units[1].output_dir).endswith("foundation_reve_scratch_full_seed2")
 
 
 def test_foundation_run_wires_sweep_and_capability_without_gpu(tmp_path, monkeypatch):
