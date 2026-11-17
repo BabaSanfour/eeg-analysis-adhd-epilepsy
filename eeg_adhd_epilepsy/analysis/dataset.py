@@ -414,6 +414,7 @@ def build_dataset(
                 container = container.isel(obs=keep_indices)
         container.meta = {**dict(container.meta), "qc_result": qc_result}
     elif effective_input_mode == "metadata":
+        # Complete columns only, so no row is lost to an undefined descriptor.
         container = metadata_container(
             load_descriptor_table(
                 table_path=Path(args.descriptor_table_path),
@@ -423,6 +424,8 @@ def build_dataset(
                 subjects=subjects,
                 subject_col=args.subject_col,
                 location_statistic=args.location_statistic,
+                drop_degenerate_columns=True,
+                max_missing_rate=0.0,
             ),
             match_covariates(args.group_filters, getattr(args, "match_covariates", None)),
         )
