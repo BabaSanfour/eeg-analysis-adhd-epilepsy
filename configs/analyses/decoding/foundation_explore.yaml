@@ -1,0 +1,148 @@
+# Exploration of stage 17 on the diagnosis (2026-11-17): the models of foundation.yaml in
+# their three modes, plus REVE and LUNA trained from random weights (full mode only), on
+# the ADHD target alone, EO and EC apart. The binomial test against the larger group's
+# share replaces the 100 permutations (one fine-tune each) until the comparisons to
+# report are chosen. Trains on epochs; every metric is also scored per recording.
+
+# --- Foundation model sweep -------------------------------------------------
+# Each entry defines one model + windowing strategy to run.
+models:
+  - model_key: cbramod
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: labram
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: reve
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+  - model_key: luna
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+
+  # From random weights (seed 0): what pretraining adds. Full training only, with a
+  # learning rate and epoch budget for training from scratch.
+  - model_key: reve
+    name: reve_scratch
+    train_modes: [full]
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {pretrained: false, seed: 0}
+    lora: {}
+    trainer:
+      full: {lr: 0.0005, max_epochs: 30, early_stopping_patience: 6}
+  - model_key: luna
+    name: luna_scratch
+    train_modes: [full]
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {pretrained: false, seed: 0}
+    lora: {}
+    trainer:
+      full: {lr: 0.0005, max_epochs: 30, early_stopping_patience: 6}
+
+# --- Training regime --------------------------------------------------------
+train_modes: [linear_probe, full, lora]
+training_defaults:
+  linear_probe:
+    max_epochs: 20
+    lr: 0.001
+    weight_decay: 0.01
+    batch_size: 16
+    early_stopping_patience: 5
+    validation_fraction: 0.1
+  full:
+    max_epochs: 10
+    lr: 0.00001
+    weight_decay: 0.01
+    batch_size: 8
+    early_stopping_patience: 3
+    validation_fraction: 0.1
+  lora:
+    max_epochs: 15
+    lr: 0.0001
+    weight_decay: 0.01
+    batch_size: 8
+    early_stopping_patience: 4
+    validation_fraction: 0.1
+
+# --- Evaluation -------------------------------------------------------------
+targets: [med_adhd_vs_ctrl]
+cv:
+  n_splits: 5
+
+chance_method: binomial
+n_permutations: 1  # unused with binomial
+store_null_distribution: false
+
+metrics:
+  - accuracy
+  - balanced_accuracy
+  - f1
+  - precision
+  - recall
+  - roc_auc
+
+# --- Hardware / runtime -----------------------------------------------------
+device: auto
+on_unsupported: skip
+# The models expect microvolts; the loader default is volts.
+units: uV
+
+# --- Column identity --------------------------------------------------------
+session_col: session
+subject_col: subject
+
+# --- Run controls -----------------------------------------------------------
+random_state: 42
+verbose: true
+overwrite: false
+n_jobs: 1
+class_weight: balanced
+run_pooled: false
+
+# --- Reporting --------------------------------------------------------------
+detailed_unit_reports: true
+report_asset_urls: inline

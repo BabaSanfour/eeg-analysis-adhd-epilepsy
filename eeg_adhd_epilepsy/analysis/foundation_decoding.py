@@ -127,7 +127,7 @@ def _build_foundation_unit(
         **model_cfg["trainer"][train_mode],
     }
     neural = NeuralFineTuneConfig(
-        model_key=model_key,
+        model_key=str(model_cfg["model_key"]),
         backend=model_cfg["backend"],
         train_mode=train_mode,
         trainer=TrainerConfig(**trainer),
@@ -157,6 +157,8 @@ def _build_foundation_unit(
             n_permutations=int(config["n_permutations"]),
             store_null=bool(config["store_null_distribution"]),
             unit_column="inference_unit",
+            # the accuracy of always predicting the larger group
+            p0="majority" if config["chance_method"] == "binomial" else "auto",
         ),
         metrics=config["metrics"],
         use_scaler=False,
@@ -198,6 +200,9 @@ def _enumerate_foundation_scope(
     )
 
     model_key = str(model_cfg["model_key"])
+    # A model entry may run under its own name (e.g. a random-init copy) and modes.
+    name = str(model_cfg.get("name", model_key))
+    train_modes = model_cfg.get("train_modes", train_modes)
     segment_duration = float(model_cfg["segment_duration"])
     # The rate of the data: the estimator resamples it to the model's.
     sfreq = float(container.meta["sfreq"])
@@ -260,7 +265,7 @@ def _enumerate_foundation_scope(
             yield _build_foundation_unit(
                 condition=condition,
                 target_name=target_name,
-                model_key=model_key,
+                model_key=name,
                 train_mode=train_mode,
                 model_cfg=model_cfg,
                 sfreq=sfreq,
@@ -333,6 +338,18 @@ def _load_capability_matrix(derivative_root: Path) -> list[dict[str, Any]]:
         return []
 
 
+def _selected_evals(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """The cohort's evals, or only those named in the analysis config's ``targets``."""
+    evals = require_config(config, "evals", expected_type=list)
+    targets = config.get("targets")
+    if not targets:
+        return evals
+    missing = set(targets) - {spec.get("name") for spec in evals}
+    if missing:
+        raise ValueError(f"targets {sorted(missing)} are not evals of the cohort.")
+    return [spec for spec in evals if spec.get("name") in targets]
+
+
 def _iter_foundation_unit_batches(
     config: dict[str, Any],
     metadata,
@@ -352,7 +369,7 @@ def _iter_foundation_unit_batches(
     conditions = require_config(config, "conditions", expected_type=list, cast_str=True)
     model_configs = require_config(config, "models", expected_type=list)
     train_modes = config["train_modes"]
-    evals = require_config(config, "evals", expected_type=list)
+    evals = _selected_evals(config)
     run_pooled = bool(config.get("run_pooled", False))
 
     for model_cfg in model_configs:
@@ -546,7 +563,7 @@ def main() -> None:
     parser.add_argument(
         "--model_key",
         default=None,
-        help="Run one model from the analysis config.",
+        help="Run one model of the analysis config, by its name (else its model_key).",
     )
     parser.add_argument(
         "--overwrite",
@@ -591,7 +608,9 @@ def main() -> None:
     )
     if args.model_key:
         config["models"] = [
-            model for model in config["models"] if str(model["model_key"]) == args.model_key
+            model
+            for model in config["models"]
+            if str(model.get("name", model["model_key"])) == args.model_key
         ]
         if not config["models"]:
             parser.error(f"model_key '{args.model_key}' is not declared in the analysis config.")

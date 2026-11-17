@@ -473,6 +473,66 @@ def test_classical_plan_requires_explicit_feature_selection(tmp_path):
         build_classical_plan(config)
 
 
+def test_foundation_targets_keep_only_the_named_evals():
+    from eeg_adhd_epilepsy.analysis import foundation_decoding as fdn
+
+    evals = [{"name": "adhd", "target_col": "a"}, {"name": "sex", "target_col": "s"}]
+    assert fdn._selected_evals({"evals": evals}) == evals
+    assert fdn._selected_evals({"evals": evals, "targets": ["sex"]}) == [evals[1]]
+    with pytest.raises(ValueError, match="age"):
+        fdn._selected_evals({"evals": evals, "targets": ["age"]})
+
+
+def test_foundation_model_entry_runs_under_its_name_and_modes(tmp_path, monkeypatch):
+    """A random-init copy keeps its own name in the outputs and only its modes."""
+    import coco_pipe.decoding.foundation_models as fm
+
+    from eeg_adhd_epilepsy.analysis import foundation_decoding as fdn
+
+    container = SimpleNamespace(meta={"sfreq": 200.0}, coords={"channel": ["Fz", "Cz"]})
+    monkeypatch.setattr(fm, "normalize_inclusive_endpoint", lambda c, **_: (c, None))
+    monkeypatch.setattr(
+        fm,
+        "check_capability",
+        lambda key, **kwargs: SimpleNamespace(
+            status="unavailable", reason=f"{key} {kwargs['backend_kwargs']}", to_dict=dict
+        ),
+    )
+    scope = (None, pd.Series([0, 1]), np.array([0, 1]), None, 2)
+    monkeypatch.setattr(fdn, "prepare_decoding_scope", lambda *args, **kwargs: scope)
+    model_cfg = {
+        "model_key": "reve",
+        "name": "reve_scratch",
+        "train_modes": ["full"],
+        "segment_duration": 10.0,
+        "window_mismatch_policy": "raise",
+        "backend": "auto",
+        "backend_kwargs": {"pretrained": False, "seed": 0},
+    }
+    records = list(
+        fdn._enumerate_foundation_scope(
+            condition="EO_baseline",
+            model_cfg=model_cfg,
+            container=container,
+            spec=None,
+            provenance={},
+            evals=[{"name": "adhd", "target_col": "a", "group_col": "g"}],
+            train_modes=["linear_probe", "full", "lora"],
+            config={
+                "session_col": "session",
+                "subject_col": "subject",
+                "cv": {"n_splits": 2},
+                "random_state": 0,
+                "on_unsupported": "skip",
+            },
+            derivative_root=tmp_path,
+        )
+    )
+    assert [(r["model_key"], r["train_mode"]) for r in records] == [("reve_scratch", "full")]
+    assert records[0]["reason"] == "reve {'pretrained': False, 'seed': 0}"
+    assert "foundation_reve_scratch_full" in records[0]["output_dir"]
+
+
 def test_foundation_run_wires_sweep_and_capability_without_gpu(tmp_path, monkeypatch):
     """Drive foundation_decoding.run() through the skip path (no neural training).
 
