@@ -422,9 +422,22 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
         },
     ]
     config["representation"] = "recording"
+    config["chance_method"] = "permutation"
+    config["permutation_modes"] = ["flat"]
     output = decoding.run(config)
     sweep = pd.read_csv(output / "sweep_results.csv")
     assert {"flat", "sensor", "descriptor_sensor"}.issubset(set(sweep["analysis_mode"]))
+    fits_root = output / "artifacts" / "fits"
+
+    def null_method(unit):
+        path = fits_root / f"fit_eo_baseline_adhd_{unit}" / "result.joblib"
+        assessment = ExperimentResult.load(path).get_statistical_assessment()
+        return set(pd.DataFrame(assessment)["NullMethod"])
+
+    # only flat units without feature selection are permuted
+    assert "binomial" not in null_method("flat_all_none_all_dimensions_baseline")
+    assert null_method("sensor_fz_none_all_dimensions_baseline") == {"binomial"}
+    assert null_method("sensor_fz_none_all_dimensions_sfs") == {"binomial"}
     sfs_result = ExperimentResult.load(
         output
         / "artifacts"
@@ -433,7 +446,6 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
         / "result.joblib"
     )
     assert not sfs_result.get_selected_features().empty
-    fits_root = output / "artifacts" / "fits"
     assert list(fits_root.glob("*descriptor_sensor*baseline*"))
     assert not list(fits_root.glob("*descriptor_sensor*sfs*"))
     # a variant limited to another representation is not run

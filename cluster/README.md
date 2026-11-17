@@ -75,7 +75,7 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 12 | `12_batch_run_dim_reduction_descriptors.sh` | descriptor dim-reduction | array (per cohort) |
 | 13 | `13_batch_run_dim_reduction_foundation.sh` | foundation dim-reduction | array (cohorts × raw/aligned spaces × representations) |
 | 14 | `14_submit_compare_foundation_dim_reduction.sh` | per-model dim-reduction runs → cross-model comparison report | single (run after 13) |
-| 14b | `14b_submit_archive_dim_reduction.sh` | finished dim-reduction run folders → one `.tar.zst` each on the project; their `artifacts/` deleted from scratch | single (after each 11-13 reports job) |
+| 14b | `14b_submit_archive_dim_reduction.sh` | finished dim-reduction (or, `RUNS=decoding`, decoding) run folders → one `.tar.zst` each on the project; their `artifacts/` deleted from scratch | single (after each 11-13 reports job; after 16) |
 | 15 | `15_submit_classical_decode.sh` | descriptor + saved-foundation classical decoding | array (descriptor + models × representations) |
 | 16 | `16_submit_compare_classical_decode.sh` | aggregate stage-15 decoding results | single (run after stage 15) |
 | 17 | `17_submit_foundation_decode.sh` | direct foundation decoding | array (per model, GPU) |
@@ -170,7 +170,11 @@ the method). See `../configs/README.md`.
   (`--dependency=afterany`). Every run folder of the variant with a `_RUN_SUCCESS` goes to
   the project as one `.tar.zst` at its path under the scratch root; once the archive lists
   as many files as the folder, the folder's `artifacts/` are deleted and its `runs/`
-  inventories stay on scratch. Unfinished folders (no `_RUN_SUCCESS`) are left alone.
+  inventories stay on scratch. Unfinished or partial folders are left alone.
+  With `RUNS=decoding RUN_DIRS='<dataset_name>/*'` it archives one cohort's decoding runs
+  the same way; submit it after 16, which reads the saved predictions. A decoding run with
+  a skipped unit ends partial, so `_PARTIAL` counts as finished there, and 15 writes
+  `_PARTIAL` while it runs, so `RUN_DIRS` is required.
 - **17 (direct foundation decoding)** trains on epochs and reports both levels
   from one run: every metric per epoch, and as `<metric>_by_recording` on the mean
   probability of each recording's test epochs.

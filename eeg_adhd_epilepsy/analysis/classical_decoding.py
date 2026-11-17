@@ -204,6 +204,37 @@ def _mode_models(
     return model_configs, model_grids
 
 
+def _chance_assessment(
+    config: Mapping[str, Any],
+    analysis_mode: str,
+    feature_selection: bool,
+    unit_y: pd.Series,
+    unit_metadata: pd.DataFrame,
+):
+    """Chance test of one unit, counted on recordings.
+
+    ``chance_method`` applies to the units of ``permutation_modes`` (every mode when
+    unset) without feature selection. The others get the binomial test of accuracy
+    against the majority class's share of recordings, which a classifier always
+    predicting that class reaches.
+    """
+    modes = config.get("permutation_modes")
+    if config["chance_method"] == "permutation" and (
+        feature_selection or (modes is not None and analysis_mode not in modes)
+    ):
+        labels = pd.Series(np.asarray(unit_y), index=unit_metadata.index)
+        per_recording = labels.groupby(unit_metadata["inference_unit"]).first()
+        assessment = grouped_chance_assessment("binomial", unit_column="inference_unit")
+        assessment.chance.p0 = float(per_recording.value_counts(normalize=True).max())
+        return assessment
+    return grouped_chance_assessment(
+        config["chance_method"],
+        n_permutations=int(config["n_permutations"]),
+        store_null=bool(config["store_null_distribution"]),
+        unit_column="inference_unit",
+    )
+
+
 def _build_selection_units(
     plan: ClassicalPlan,
     unit: dict[str, Any],
@@ -349,11 +380,8 @@ def _build_selection_units(
                     erasure=erasure,
                     reducer=reducer,
                     feature_selection=fs_config,
-                    statistical_assessment=grouped_chance_assessment(
-                        config["chance_method"],
-                        n_permutations=int(config["n_permutations"]),
-                        store_null=bool(config["store_null_distribution"]),
-                        unit_column="inference_unit",
+                    statistical_assessment=_chance_assessment(
+                        config, analysis_mode, fs_config.enabled, unit_y, unit_metadata
                     ),
                     metrics=list(plan.metrics),
                     use_scaler=True,

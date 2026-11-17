@@ -51,6 +51,7 @@ common_args=(
     --cohort_config "$COHORT_CONFIG" "${MATCHED_ARGS[@]}"
     --bids_root "$BIDS_ROOT"
     --derivative_root "$DECODING_ROOT"
+    --reports_root "$REPORTS_ROOT"
     --metadata "$METADATA_PATH"
     --desc "$EPOCHS_DESC"
     --n_jobs "$THREADS"
