@@ -118,15 +118,12 @@ def read_consolidated_epochs(
     path: Path,
     subjects: Sequence[str] | None = None,
     target_col: str | None = None,
-    units: str = "V",
 ) -> DataContainer:
     """Load a :func:`write_consolidated_epochs` file, only the rows of ``subjects`` if given.
 
     The ``participants.tsv`` columns of the epochs' dataset are attached as they are now.
     """
     container = DataContainer.load(path)
-    if set(container.meta["units"].values()) != {units}:
-        raise ValueError(f"{path.name} holds data in {container.meta['units']}, not {units}.")
     if subjects:
         container = container.select(subject=list(subjects))
     array = container.to_xarray()
@@ -380,11 +377,10 @@ def build_dataset(
         epochs_file = consolidated_epochs_path(
             Path(args.bids_root), args.desc, condition, args.task
         )
-        if args.use_derivatives and epochs_file.exists():
+        # The file holds SI units (V), what the loader gives when no other unit is asked.
+        if args.use_derivatives and args.units in (None, "V") and epochs_file.exists():
             logger.info(f"Loading saved epochs from {epochs_file}")
-            container = read_consolidated_epochs(
-                epochs_file, subjects, target_col=target_col, units=args.units
-            )
+            container = read_consolidated_epochs(epochs_file, subjects, target_col=target_col)
         else:
             container = build_container(
                 bids_root=Path(args.bids_root),
