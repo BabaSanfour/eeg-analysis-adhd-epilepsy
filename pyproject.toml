@@ -27,7 +27,8 @@ dependencies = [
   "filelock>=3.20.4",
   "pybv>=0.7.3",
   "bids-validator-deno",
-  "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@main",
+  # One file per dim-reduction fit and eval (coco-pipe #65), until it is merged.
+  "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@fix/dimred-one-file-artifacts",
   "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",
@@ -123,6 +124,11 @@ env = { SCRATCH = "$HOME/scratch" }
 # and needs, on the command line:
 #   --account=def-kjerbi --gres=gpu:nvidia_h100_80gb_hbm3_1g.10gb:1 --cpus-per-task=1 --mem=32G
 sbatch_args = { account = "rrg-kjerbi" }
+
+[tool.cluv.clusters.trillium]
+# CPU stages. Jobs get whole nodes (192 cores): submit cluster/pack.sh, which runs
+# several array tasks of a stage script at once on one node.
+sbatch_args = { account = "def-kjerbi" }
 
 [tool.cluv.clusters.trillium-gpu]
 # GPU stages only. One H100 comes with 24 cores; --mem is not accepted there.
