@@ -17,6 +17,9 @@
 # Once the archive lists as many files as the folder, the folder's artifacts/ (one entry
 # per fit) are deleted; its tables, config and status stay on scratch. A rerun into a
 # pruned folder fits again. Jobs running at once skip each other's folders.
+# Where compute nodes see the project read-only (trillium), the archives are staged
+# under $SCRATCH_ROOT/archive and the artifacts kept; cluster/14c_move_archives.sh, on a
+# login node, then moves them to the project and deletes the artifacts.
 
 set -euo pipefail
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
@@ -31,6 +34,7 @@ case ${RUNS:-dim_reduction} in
     *) echo "RUNS must be dim_reduction or decoding, not $RUNS" >&2; exit 1 ;;
 esac
 require_dir "$root"
+if [[ -w $DATA_ROOT ]]; then archive_root=$DATA_ROOT; else archive_root=$SCRATCH_ROOT/archive; fi
 
 runs=()
 for name in "${markers[@]}"; do
@@ -41,9 +45,11 @@ done
 
 status=0
 for run in ${runs[@]+"${runs[@]}"}; do
+    archive=$archive_root/${run#"$SCRATCH_ROOT"/}.tar.zst
     [[ -d $run/artifacts ]] || continue
+    # A staged archive waits for 14c.
+    if [[ $archive_root != "$DATA_ROOT" && -e $archive ]]; then continue; fi
     mkdir "$run/.archiving" 2>/dev/null || continue
-    archive=$DATA_ROOT/${run#"$SCRATCH_ROOT"/}.tar.zst
     tmp=$(dirname "$archive")/.$(basename "$archive").partial
     mkdir -p "$(dirname "$archive")"
     files=$(find "$run" -type f | wc -l)
@@ -52,7 +58,7 @@ for run in ${runs[@]+"${runs[@]}"}; do
     archived=$(zstd -q -dc "$tmp" | tar -tvf - | grep -c '^-')
     if (( files == archived )); then
         mv -f "$tmp" "$archive"
-        rm -rf "$run/artifacts"
+        if [[ $archive_root == "$DATA_ROOT" ]]; then rm -rf "$run/artifacts"; fi
         echo "$archive: $files files"
     else
         rm -f "$tmp"
