@@ -50,6 +50,5 @@ analysis_modes:
   subfamily:               {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
   sensor:                  {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
   sensor_within_family:    {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
-  sensor_within_subfamily: {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
   feature_within_family:   {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
   descriptor:              {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
