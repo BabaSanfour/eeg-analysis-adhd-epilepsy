@@ -14,6 +14,8 @@
 #       SCRIPT=cluster/11_batch_run_dim_reduction.sh PACK=4 EPOCHS_DESC=base ...
 
 set -euo pipefail
+# cluv passes VAR=value as arguments: export them for this script and the tasks.
+for assignment in "$@"; do export "$assignment"; done
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
 : "${SCRIPT:?Set SCRIPT=cluster/<stage script>.sh}" "${PACK:?Set PACK=<tasks per node>}"
 cpus=${SLURM_CPUS_ON_NODE:-$(nproc)}
