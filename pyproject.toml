@@ -27,8 +27,9 @@ dependencies = [
   "filelock>=3.20.4",
   "pybv>=0.7.3",
   "bids-validator-deno",
-  # One file per dim-reduction fit and eval (coco-pipe #65), until it is merged.
-  "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@fix/dimred-one-file-artifacts",
+  # coco-pipe #66 (ST-EEGFormer-largeV2 and from-scratch networks), stacked on #65 (one file
+  # per dim-reduction fit and eval), until they are merged.
+  "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@feat/decoding-new-models",
   "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",

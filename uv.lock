@@ -630,7 +630,7 @@ wheels = [
 [[package]]
 name = "coco-pipe"
 version = "0.0.3"
-source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=fix%2Fdimred-one-file-artifacts#2055a91dd8f43df398e51eaa5b7f548daf6b64ca" }
+source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=feat%2Fdecoding-new-models#162d0c72bb9f0343c86613b9bd9c66e00f5f223a" }
 dependencies = [
     { name = "filelock" },
     { name = "h5netcdf", extra = ["h5py"] },
@@ -1004,7 +1004,7 @@ requires-dist = [
     { name = "autoreject" },
     { name = "bids-validator-deno" },
     { name = "braindecode", git = "https://github.com/braindecode/braindecode.git?rev=master" },
-    { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=fix%2Fdimred-one-file-artifacts" },
+    { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=feat%2Fdecoding-new-models" },
     { name = "filelock", specifier = ">=3.20.4" },
     { name = "mne", specifier = ">=1.13" },
     { name = "mne-bids", git = "https://github.com/mne-tools/mne-bids.git?rev=main" },
