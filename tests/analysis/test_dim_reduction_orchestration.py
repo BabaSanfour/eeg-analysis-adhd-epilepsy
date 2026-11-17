@@ -65,8 +65,8 @@ def test_build_mode_specs_from_analysis_modes_mapping():
     specs, _ = build_and_validate_mode_specs(
         _mode_args(
             {
-                "flat": {"reducers": ["PCA", "UMAP"], "n_components": [2, 5, 10]},
-                "feature": {"reducers": ["PCA"], "n_components": [2, 3]},
+                "flat": {"PCA": [2, 5, 10], "UMAP": [2, 5, 10]},
+                "feature": {"PCA": [2, 3]},
             },
             input_mode="descriptors",
             representation="features",
@@ -74,49 +74,14 @@ def test_build_mode_specs_from_analysis_modes_mapping():
     )
     # Declaration order preserved; each mode fully declares its reducers + sweep.
     assert list(specs) == ["flat", "feature"]
-    assert specs["flat"] == {"reducers": ["PCA", "UMAP"], "n_components": [2, 5, 10]}
-    assert specs["feature"] == {"reducers": ["PCA"], "n_components": [2, 3]}
+    assert specs["flat"] == {"PCA": [2, 5, 10], "UMAP": [2, 5, 10]}
+    assert specs["feature"] == {"PCA": [2, 3]}
 
 
-def test_build_mode_specs_preserves_extra_spec_keys():
-    # Any extra key in a mode spec rides through verbatim (raw's averaging
-    # granularity is now top-level, not per-spec, but a per-spec override is still
-    # preserved on the returned spec).
-    specs, _ = build_and_validate_mode_specs(
-        _mode_args(
-            {
-                "flat": {"family": "band", "reducers": ["PCA", "UMAP"], "n_components": [2, 5, 10]},
-                "feature": {"family": "complexity", "reducers": ["PCA"], "n_components": [2, 3]},
-            },
-            input_mode="descriptors",
-            representation="features",
-        )
-    )
-    assert list(specs) == ["flat", "feature"]
-    assert specs["feature"]["family"] == "complexity"
-    assert specs["feature"]["reducers"] == ["PCA"]
-
-
-def test_build_mode_specs_requires_reducers_per_mode():
-    # A mode that names no reducers is a config error, not a silent skip.
-    with pytest.raises(ValueError, match="must list `reducers`"):
-        build_and_validate_mode_specs(
-            _mode_args(
-                {
-                    "flat": {"reducers": ["PCA"], "n_components": [2]},
-                    "family": {"n_components": [2]},
-                },
-                input_mode="descriptors",
-            )
-        )
-
-
-def test_build_mode_specs_requires_n_components_per_mode():
-    # n_components is the only source of truth for the sweep — every mode needs it.
-    with pytest.raises(ValueError, match="must list `n_components`"):
-        build_and_validate_mode_specs(
-            _mode_args({"flat": {"reducers": ["PCA"]}}, input_mode="descriptors")
-        )
+def test_build_mode_specs_requires_n_components_per_reducer():
+    # Every mode maps its reducers to the n_components to fit; an empty list is an error.
+    with pytest.raises(ValueError, match="must map reducers to n_components"):
+        build_and_validate_mode_specs(_mode_args({"flat": {"PCA": []}}, input_mode="descriptors"))
 
 
 def test_build_mode_specs_requires_a_source():
@@ -133,8 +98,8 @@ def test_resolve_mode_tasks_raw_uses_top_level_representation():
     _, tasks = build_and_validate_mode_specs(
         _mode_args(
             {
-                "flat": {"reducers": ["PCA"], "n_components": [2]},
-                "sensor": {"reducers": ["PCA"], "n_components": [2]},
+                "flat": {"PCA": [2]},
+                "sensor": {"PCA": [2]},
             },
             input_mode="raw",
             representation="subject",
@@ -148,9 +113,9 @@ def test_resolve_mode_tasks_descriptors_share_representation():
     _, tasks = build_and_validate_mode_specs(
         _mode_args(
             {
-                "flat": {"reducers": ["PCA"], "n_components": [2]},
-                "family": {"reducers": ["PCA"], "n_components": [2]},
-                "sensor": {"reducers": ["PCA"], "n_components": [2]},
+                "flat": {"PCA": [2]},
+                "family": {"PCA": [2]},
+                "sensor": {"PCA": [2]},
             },
             input_mode="descriptors",
             representation="features",
@@ -163,7 +128,7 @@ def test_validate_rejects_descriptor_mode_on_raw():
     with pytest.raises(ValueError, match="descriptor inputs"):
         build_and_validate_mode_specs(
             _mode_args(
-                {"family": {"reducers": ["PCA"], "n_components": [2]}},
+                {"family": {"PCA": [2]}},
                 input_mode="raw",
                 representation="subject",
             )
@@ -177,8 +142,8 @@ def test_validate_raw_axes_are_independent():
         _, tasks = build_and_validate_mode_specs(
             _mode_args(
                 {
-                    "flat": {"reducers": ["PCA"], "n_components": [2]},
-                    "sensor": {"reducers": ["PCA"], "n_components": [2]},
+                    "flat": {"PCA": [2]},
+                    "sensor": {"PCA": [2]},
                 },
                 input_mode="raw",
                 representation=representation,
@@ -189,7 +154,7 @@ def test_validate_raw_axes_are_independent():
     with pytest.raises(ValueError, match="epoch.*subject|subject.*epoch"):
         build_and_validate_mode_specs(
             _mode_args(
-                {"sensor": {"reducers": ["PCA"], "n_components": [2]}},
+                {"sensor": {"PCA": [2]}},
                 input_mode="raw",
                 representation="subject_native",
             )
@@ -200,7 +165,7 @@ def test_validate_foundation_flat_only():
     with pytest.raises(ValueError, match="flat"):
         build_and_validate_mode_specs(
             _mode_args(
-                {"sensor": {"reducers": ["PCA"], "n_components": [2]}},
+                {"sensor": {"PCA": [2]}},
                 input_mode="foundation_embeddings",
                 representation="foundation_recording",
             )
@@ -361,7 +326,6 @@ def _leaderboard_args():
         input_mode="descriptors",
         analysis_mode="flat",
         representation="features",
-        n_components_sweep=[5],
         conditions=["EO_baseline"],
         run_pooled=False,
         selection_metric=DEFAULT_DIM_REDUCTION_SELECTION_METRIC,
@@ -560,21 +524,21 @@ def _synthetic_descriptor_container():
     )
 
 
-def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch, caplog):
+def _smoke_run(tmp_path, monkeypatch, *, conditions="[EO_baseline]", run_pooled="false"):
+    """Stub inputs for an in-process dimensionality-reduction run; returns (argv, roots)."""
     bids_root = tmp_path / "BIDS"
-    bids_root.mkdir()
+    bids_root.mkdir(exist_ok=True)
     reports_root = tmp_path / "reports"
     metadata = tmp_path / "participants.tsv"
     pd.DataFrame({"participant_id": [f"sub-{i:04d}" for i in range(1, 7)]}).to_csv(
         metadata, sep="\t", index=False
     )
-
     cohort = tmp_path / "cohort.yaml"
     cohort.write_text(
         "dataset_name: smoke\n"
         "subject_col: participant_id\n"
-        "conditions: [EO_baseline]\n"
-        "run_pooled: false\n"
+        f"conditions: {conditions}\n"
+        f"run_pooled: {run_pooled}\n"
         "evals:\n"
         "  - name: med_adhd_vs_ctrl\n"
         "    target_col: combined_diagnosis\n"
@@ -587,34 +551,28 @@ def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch, c
         "input_mode: descriptors\n"
         "selection_metric: separation_rf_balanced_accuracy\n"
         "selection_eval_name: med_adhd_vs_ctrl\n"
-        # Mode-centric plan: each mode fully declares its run. flat sweeps [2, 3]
-        # over PCA + UMAP; family runs PCA only over [2]. Exercises build_mode_specs,
-        # the per-mode reducer set, and the per-mode sweep end-to-end.
+        # flat fits PCA and UMAP over [2, 3]; family PCA over [2].
         "analysis_modes:\n"
-        "  flat: {reducers: [PCA, UMAP], n_components: [2, 3]}\n"
-        "  family: {reducers: [PCA], n_components: [2]}\n"
-        # Descriptor input paths are config-driven (not CLI flags); build_dataset
-        # is stubbed below so these need only satisfy validation.
+        "  flat: {PCA: [2, 3], UMAP: [2, 3]}\n"
+        "  family: {PCA: [2]}\n"
+        # build_dataset is stubbed below, so the table path only satisfies validation.
         f"descriptor_table_path: {tmp_path / 'features.parquet'}\n"
         "qc: {}\n",
         encoding="utf-8",
     )
-
     load_calls = {"n": 0}
 
     def fake_build_dataset(args, meta_df, condition, target_col=None, **kwargs):
         load_calls["n"] += 1
         return _synthetic_descriptor_container()
 
-    # A descriptor base container is loaded once per condition and reused across
-    # modes; stub the heavy per-mode report so we test orchestration, not viz.
+    # Stub the heavy per-mode report: these tests check orchestration, not viz.
     monkeypatch.setattr(dim_reduction, "build_dataset", fake_build_dataset)
     monkeypatch.setattr(
         dim_reduction,
         "generate_dataset_report",
         lambda **kwargs: SimpleNamespace(save=lambda path: path.write_text("ok")),
     )
-
     argv = [
         "dimensionality_reduction",
         "--bids_root",
@@ -630,6 +588,11 @@ def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch, c
         "--n_jobs",
         "1",
     ]
+    return argv, bids_root, reports_root, load_calls
+
+
+def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch, caplog):
+    argv, bids_root, reports_root, load_calls = _smoke_run(tmp_path, monkeypatch)
     monkeypatch.setattr("sys.argv", argv)
     caplog.set_level(logging.INFO)
     dim_reduction.main()
@@ -661,10 +624,40 @@ def test_main_sweeps_modes_in_process_and_writes_rollup(tmp_path, monkeypatch, c
     assert ncomp_by_mode["flat"] == {2, 3}
     assert ncomp_by_mode["family"] == {2}
 
-    rollups = list(reports_root.rglob("rollup_leaderboard.html"))
+    rollups = list(reports_root.rglob("*_rollup_leaderboard.html"))
     assert len(rollups) == 1
     assert "Completed fit" in caplog.text
     assert "Completed eval" in caplog.text
+
+
+def test_scope_jobs_share_a_run_and_the_reports_run_merges_them(tmp_path, monkeypatch):
+    argv, bids_root, _, _ = _smoke_run(
+        tmp_path, monkeypatch, conditions="[EO_baseline, EC_baseline]", run_pooled="true"
+    )
+    for extra in (
+        ["--scope", "EO_baseline"],
+        ["--scope", "EC_baseline"],
+        ["--scope", "pooled_all"],
+    ):
+        monkeypatch.setattr("sys.argv", [*argv, *extra])
+        dim_reduction.main()
+    runs = get_results_root(bids_root, ResultStage.DIM_REDUCTION)
+    flat = next(path for path in runs.rglob("runs") if "_flat_" in str(path))
+    # Each scope job wrote only its own inventory, into the same run folder.
+    assert sorted(path.name for path in flat.glob("fit_runs*.json")) == [
+        "fit_runs_EC_baseline.json",
+        "fit_runs_EO_baseline.json",
+        "fit_runs_pooled_all.json",
+    ]
+    monkeypatch.setattr("sys.argv", [*argv, "--reports-only"])
+    dim_reduction.main()
+    merged = json.loads((flat / "fit_runs.json").read_text(encoding="utf-8"))
+    assert {record["condition"] for record in merged} == {
+        "EO_baseline",
+        "EC_baseline",
+        "pooled_all",
+    }
+    assert (flat / "run_summary.json").exists()
 
 
 def _fit_request(reducer, n_components):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -19,8 +20,11 @@ from coco_pipe.io import (
     embedding_path,
     load_data,
     load_embeddings,
+    normalize_subject_value,
 )
 from coco_pipe.io.quality import GROUP_BY_COLUMN, run_qc
+from coco_pipe.io.utils import load_participants_tsv
+from coco_pipe.utils import resolve_n_jobs
 
 from eeg_adhd_epilepsy.analysis.utils.common import qc_keys
 from eeg_adhd_epilepsy.io.bids import (
@@ -91,6 +95,51 @@ def build_container(
     return container
 
 
+def consolidated_epochs_path(
+    bids_root: Path, desc: str, condition: str, task: str = "clinical"
+) -> Path:
+    """The file holding one condition's saved epochs of every recording of variant ``desc``."""
+    root = get_derivative_root(bids_root, DerivativeStage.PREPROC)
+    return root / f"task-{task}_desc-{desc}_cond-{condition}_epo.joblib"
+
+
+def write_consolidated_epochs(container: DataContainer, path: Path) -> None:
+    """Save the epochs :func:`build_container` loaded, without their ``participants.tsv`` columns.
+
+    :func:`read_consolidated_epochs` attaches those columns from the current file.
+    """
+    participants = load_participants_tsv(Path(container.meta["source"]))
+    columns = {column for row in participants.values() for column in row}
+    array = container.to_xarray()
+    DataContainer(array.drop_vars(columns & set(array.coords))).save(path)
+
+
+def read_consolidated_epochs(
+    path: Path,
+    subjects: Sequence[str] | None = None,
+    target_col: str | None = None,
+    units: str = "V",
+) -> DataContainer:
+    """Load a :func:`write_consolidated_epochs` file, only the rows of ``subjects`` if given.
+
+    The ``participants.tsv`` columns of the epochs' dataset are attached as they are now.
+    """
+    container = DataContainer.load(path)
+    if set(container.meta["units"].values()) != {units}:
+        raise ValueError(f"{path.name} holds data in {container.meta['units']}, not {units}.")
+    if subjects:
+        container = container.select(subject=list(subjects))
+    array = container.to_xarray()
+    participants = load_participants_tsv(path.parent)
+    table = pd.DataFrame(
+        [participants.get(normalize_subject_value(s), {}) for s in array["subject"].values]
+    )
+    array = array.assign_coords({name: ("obs", table[name].to_numpy()) for name in table})
+    if target_col is not None:
+        array = array.assign_coords(y=("obs", array[target_col].values))
+    return DataContainer(array)
+
+
 def foundation_embedding_file(
     root: Path, space: str, desc: str, *, view: str = "window", task: str = "clinical"
 ) -> Path:
@@ -127,8 +176,6 @@ def attach_subject_metadata(
     Subjects with no metadata row get NaN, which the evals already treat as
     missing. A no-op if the container carries no recognizable subject coord.
     """
-    from coco_pipe.io import normalize_subject_value
-
     subject_key = subject_col if subject_col in container.coords else "subject"
     if subject_key not in container.coords:
         return container
@@ -314,9 +361,6 @@ def build_dataset(
         for col, vals in zip(args.filter_col, args.filter_val):
             if col in meta_df.columns:
                 mask &= meta_df[col].astype(str).isin(vals)
-
-        from coco_pipe.io import normalize_subject_value
-
         subjects = sorted(
             {
                 normalize_subject_value(subject)
@@ -333,20 +377,30 @@ def build_dataset(
         representation if representation is not None else getattr(args, "representation", "")
     )
     if effective_input_mode == "raw":
-        container = build_container(
-            bids_root=Path(args.bids_root),
-            use_derivatives=args.use_derivatives,
-            subjects=list(subjects) if subjects is not None else None,
-            task=args.task,
-            segment_duration=args.segment_duration,
-            overlap=args.overlap,
-            metadata_df=meta_df,
-            subject_col=args.subject_col,
-            target_col=target_col,
-            desc=args.desc,
-            condition=condition,
-            units=args.units,
+        epochs_file = consolidated_epochs_path(
+            Path(args.bids_root), args.desc, condition, args.task
         )
+        if args.use_derivatives and epochs_file.exists():
+            logger.info(f"Loading saved epochs from {epochs_file}")
+            container = read_consolidated_epochs(
+                epochs_file, subjects, target_col=target_col, units=args.units
+            )
+        else:
+            container = build_container(
+                bids_root=Path(args.bids_root),
+                use_derivatives=args.use_derivatives,
+                subjects=list(subjects) if subjects is not None else None,
+                task=args.task,
+                segment_duration=args.segment_duration,
+                overlap=args.overlap,
+                metadata_df=meta_df,
+                subject_col=args.subject_col,
+                target_col=target_col,
+                desc=args.desc,
+                condition=condition,
+                units=args.units,
+                n_jobs=resolve_n_jobs(args.n_jobs),
+            )
     elif effective_input_mode == "descriptors":
         qc_config = args.qc or {}
         column_prune = qc_config.get("column_prune", {})
@@ -453,11 +507,6 @@ def build_dataset(
         matched=bool(getattr(args, "matched", False)),
         covariates=getattr(args, "match_covariates", None),
     )
-    if args.balance_target:
-        container = container.balance(
-            target=args.balance_target,
-            strategy=args.balance_strategy,
-        )
 
     represented = container
     if effective_input_mode == "foundation_embeddings" and representation == "subject":

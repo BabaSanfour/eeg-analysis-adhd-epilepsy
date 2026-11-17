@@ -1,17 +1,10 @@
 # Analysis/method config — dimensionality reduction over raw EEG.
 # Pair with a cohort config via --cohort_config.
 #
-# Same `analysis_modes` mapping as every other input — raw modes just add a
-# `representation` to their spec, because they are representation-coupled (flat
-# needs a flattened layout, sensor a native one) whereas descriptor/foundation
-# modes share the input's single representation. Each mode fully declares its run
-# with `reducers` and `n_components` (no global default). PCA is the linear
-# baseline; UMAP adds a non-linear manifold and is feasible at epoch granularity
-# because it uses approximate-NN graphs (~O(n_samples·k), not dense), and the
-# co-ranking fit metrics are now subsampled (DEFAULT_MAX_CORANKING_SAMPLES). PHATE
-# stays parked — its diffusion operator is a dense O(n_samples^2) matrix that OOMs
-# at epoch level (see the matching note in descriptors.yaml/foundation.yaml); run
-# it only at subject/recording granularity.
+#
+# Each analysis mode maps its reducers to the n_components fitted: PCA (linear,
+# fitted once at its largest n and sliced) and UMAP (non-linear). More counts can be
+# added later: each fit is identified by its own n, so existing fits are reused.
 input_mode: raw
 
 # Run selection. `selection_eval_name` MUST name an eval declared in the paired
@@ -28,13 +21,11 @@ task: clinical
 segment_duration: 60.0
 overlap: 0.0
 
-# Two orthogonal axes for raw EEG:
-#   representation (top-level, one per run) = averaging granularity:
-#     'subject' averages every epoch to one row per subject, 'recording' to one
-#     row per recording; 'epoch' keeps each epoch.
-#   analysis_mode (per spec below) = sensor handling: flat concatenates all
-#     channels into one vector; sensor keeps the native per-channel layout.
-representation: subject
+# representation: epoch only. Averaging raw resting epochs (not time-locked) to a
+# recording cancels the signal, so raw has no recording level. analysis_mode = sensor
+# handling: flat concatenates all channels into one vector; sensor keeps each channel
+# as its own unit.
+representation: epoch
 analysis_modes:
-  flat:   {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100]}
-  sensor: {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50]}
+  flat:   {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
+  sensor: {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}

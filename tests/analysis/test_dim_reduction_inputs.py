@@ -74,7 +74,6 @@ def test_descriptor_analysis_attaches_family_qc(tmp_path):
         group_filters=None,
         filter_col=[],
         filter_val=[],
-        balance_target=None,
         qc={},
         location_statistic=None,
     )
@@ -119,7 +118,6 @@ def test_flat_descriptor_analysis_attaches_family_qc(tmp_path):
         group_filters=None,
         filter_col=[],
         filter_val=[],
-        balance_target=None,
         qc={},
         location_statistic=None,
     )
@@ -161,7 +159,6 @@ def test_family_scoped_qc_keeps_band_outlier_for_complexity(tmp_path):
         group_filters=None,
         filter_col=[],
         filter_val=[],
-        balance_target=None,
         location_statistic=None,
         qc={
             "column_prune": {"enabled": False},
@@ -225,7 +222,6 @@ def test_measure_grouping_keeps_alpha_outlier_for_beta(tmp_path):
         group_filters=None,
         filter_col=[],
         filter_val=[],
-        balance_target=None,
         location_statistic=None,
         qc={
             "column_prune": {"enabled": False},
@@ -280,7 +276,6 @@ def test_subfamily_grouping_keeps_logabs_outlier_for_relative(tmp_path):
         group_filters=None,
         filter_col=[],
         filter_val=[],
-        balance_target=None,
         location_statistic=None,
         qc={
             "column_prune": {"enabled": False},
@@ -366,7 +361,6 @@ def test_column_prune_removes_all_nan_feature_without_row_drop(tmp_path):
         group_filters=None,
         filter_col=[],
         filter_val=[],
-        balance_target=None,
         location_statistic=None,
         qc={
             "column_prune": {
@@ -405,7 +399,6 @@ def test_foundation_embedding_loader_reads_a_space_of_the_project_files(bids_roo
         group_filters=None,
         filter_col=[],
         filter_val=[],
-        balance_target=None,
         analysis_mode="flat",
         qc={},
         location_statistic=None,
@@ -426,22 +419,20 @@ def test_foundation_embedding_loader_reads_a_space_of_the_project_files(bids_roo
 
 
 def test_fit_request_collection_skips_invalid_n_components(tmp_path):
+    # Raw epochs arrive as (obs, channel, time); flat mode flattens them first.
     container = DataContainer(
-        X=np.zeros((3, 5)),
-        dims=("obs", "feature"),
-        coords={"feature": np.arange(5)},
+        X=np.zeros((3, 1, 5)),
+        dims=("obs", "channel", "time"),
+        coords={"channel": np.asarray(["Fz"], dtype=object), "time": np.arange(5.0)},
         ids=np.asarray(["obs1", "obs2", "obs3"], dtype=object),
     )
     args = SimpleNamespace(
         input_mode="raw",
         analysis_mode="flat",
         descriptor_families=None,
-        n_components_sweep=[2, 3, 4, 10],
         filter_col=[],
         filter_val=[],
         group_filters=None,
-        balance_target=None,
-        balance_strategy="undersample",
         representation="epoch",
         bids_root=str(tmp_path),
         use_derivatives=False,
@@ -462,7 +453,7 @@ def test_fit_request_collection_skips_invalid_n_components(tmp_path):
         condition="EO_baseline",
         container=container,
         args=args,
-        reducers=["PCA"],
+        reducer_dims={"PCA": [2, 3, 4, 10]},
         output_root=tmp_path,
         unit_containers_by_key={},
         data_availability=availability,
@@ -483,12 +474,9 @@ def test_fit_request_collection_passes_per_reducer_execution_params(tmp_path):
         input_mode="raw",
         analysis_mode="flat",
         descriptor_families=None,
-        n_components_sweep=[2],
         filter_col=[],
         filter_val=[],
         group_filters=None,
-        balance_target=None,
-        balance_strategy="undersample",
         representation="epoch",
         bids_root=str(tmp_path),
         use_derivatives=False,
@@ -509,7 +497,7 @@ def test_fit_request_collection_passes_per_reducer_execution_params(tmp_path):
         condition="EO_baseline",
         container=container,
         args=args,
-        reducers=["PCA", "UMAP"],
+        reducer_dims={"PCA": [2], "UMAP": [2]},
         output_root=tmp_path,
         unit_containers_by_key={},
         data_availability=[],
@@ -559,10 +547,10 @@ def test_raw_recording_representation_builds_recording_id(monkeypatch, tmp_path)
         subject_col="study_id",
         desc="base",
         units="V",
+        n_jobs=1,
         group_filters=None,
         filter_col=[],
         filter_val=[],
-        balance_target=None,
     )
 
     container = build_dataset(args, None, "EO_baseline")
@@ -738,8 +726,6 @@ def test_fit_identity_changes_with_matrix_content_and_qc(tmp_path):
         filter_col=[],
         filter_val=[],
         group_filters=None,
-        balance_target=None,
-        balance_strategy="undersample",
         descriptor_table_path=str(tmp_path / "features.parquet"),
         descriptor_max_abs_value=None,
         location_statistic=None,
@@ -747,7 +733,6 @@ def test_fit_identity_changes_with_matrix_content_and_qc(tmp_path):
         run_config_hash="cfg",
         overwrite=False,
         subject_col="study_id",
-        n_components_sweep=[1],
     )
 
     def fit_id(value, qc):
@@ -763,7 +748,7 @@ def test_fit_identity_changes_with_matrix_content_and_qc(tmp_path):
             "EO_baseline",
             container,
             args,
-            ["PCA"],
+            {"PCA": [1]},
             tmp_path,
             {},
             [],
@@ -795,8 +780,6 @@ def test_descriptor_sensor_units_have_distinct_fit_ids(tmp_path):
         filter_col=[],
         filter_val=[],
         group_filters=None,
-        balance_target=None,
-        balance_strategy="undersample",
         descriptor_table_path=str(tmp_path / "features.parquet"),
         descriptor_max_abs_value=None,
         location_statistic=None,
@@ -804,7 +787,6 @@ def test_descriptor_sensor_units_have_distinct_fit_ids(tmp_path):
         run_config_hash="cfg",
         overwrite=False,
         subject_col="study_id",
-        n_components_sweep=[1],
         qc={},
     )
 
@@ -813,7 +795,7 @@ def test_descriptor_sensor_units_have_distinct_fit_ids(tmp_path):
         "EO_baseline",
         container,
         args,
-        ["PCA"],
+        {"PCA": [1]},
         tmp_path,
         {},
         [],
@@ -840,8 +822,6 @@ def test_foundation_fit_request_records_embedding_provenance(tmp_path):
         filter_col=[],
         filter_val=[],
         group_filters=None,
-        balance_target=None,
-        balance_strategy="undersample",
         qc=None,
         embedding_derivative_root=str(tmp_path / "embeddings"),
         representation="recording",
@@ -851,7 +831,6 @@ def test_foundation_fit_request_records_embedding_provenance(tmp_path):
         run_config_hash="cfg",
         overwrite=True,
         subject_col="study_id",
-        n_components_sweep=[2],
     )
 
     requests = _collect_scope_fit_requests(
@@ -859,7 +838,7 @@ def test_foundation_fit_request_records_embedding_provenance(tmp_path):
         condition="EO_baseline",
         container=container,
         args=args,
-        reducers=["PCA"],
+        reducer_dims={"PCA": [2]},
         output_root=tmp_path,
         unit_containers_by_key={},
         data_availability=[],

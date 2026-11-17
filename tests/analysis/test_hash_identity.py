@@ -22,14 +22,11 @@ def _descriptor_dim_args(bids_root: Path, representation: str) -> SimpleNamespac
         analysis_mode="flat",
         conditions=["EO_baseline"],
         run_pooled=True,
-        n_components_sweep=[2, 5],
         subject_col="study_id",
         subjects=None,
         filter_col=[],
         filter_val=[],
         group_filters=None,
-        balance_target=None,
-        balance_strategy="undersample",
         qc={},
         bids_root=str(bids_root),
         use_derivatives=True,
@@ -126,10 +123,6 @@ def test_descriptor_launchers_share_epoch_recording_defaults():
         contents = (project_root / relative_path).read_text(encoding="utf-8")
         assert declaration in contents
 
-    dimred_main = (project_root / "cluster/19_submit_main_dim_reduction.sh").read_text(
-        encoding="utf-8"
-    )
-    assert "for rep in epoch recording; do" in dimred_main
     decoding_main = (project_root / "cluster/20_submit_main_decoding.sh").read_text(
         encoding="utf-8"
     )

@@ -17,16 +17,10 @@ overwrite: false
 scaling:
   method: standard
 
-# Foundation embeddings are a single dense space per model, its window vectors (the
-# all-recordings window file of each space) -> flat mode only, so
-# the whole plan is one mode running every reducer over its n_components sweep.
-# `representation` is one of the canonical levels epoch/recording/subject;
-# it defaults to 'recording' here for local runs, and the cluster overrides it per
-# array task (epoch, recording, subject) via the CLI.
+# Foundation embeddings are one dense space per model (its window vectors), so flat
+# mode only. `representation` is epoch or recording; the cluster runs both.
 representation: recording
+# PCA (fitted once at its largest n and sliced) and UMAP; more counts can be added
+# later: each fit is identified by its own n, so existing fits are reused.
 analysis_modes:
-  # PCA (linear baseline) + UMAP (non-linear manifold; approximate-NN graph, so
-  # feasible at epoch level now that the co-ranking fit metrics are subsampled via
-  # DEFAULT_MAX_CORANKING_SAMPLES). PHATE stays parked — its dense O(n_samples^2)
-  # diffusion operator is the OOM driver; re-add it only at recording/subject.
-  flat: {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100]}
+  flat: {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}

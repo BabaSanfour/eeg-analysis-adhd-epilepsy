@@ -363,9 +363,8 @@ def build_loader_args(
         filter_val=filter_val,
         group_filters=config.get("group_filters"),
         matched=bool(config.get("matched", False)),
+        n_jobs=config.get("n_jobs", 1),
         match_covariates=config.get("match_covariates"),
-        balance_target=None,
-        balance_strategy="undersample",
         representation=config.get("representation", "subject"),
     )
 

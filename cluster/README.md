@@ -62,6 +62,7 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 02 | `02_tar_raw_data.sh` | archive raw data | single |
 | 03 | `03_submit_base_cleaning.sh` | BIDS → `desc-base` derivatives + QC | single (all subjects) |
 | 04 | `04_submit_epochs.sh` | `desc-base` → condition epochs | single |
+| 04b | `04b_submit_consolidate_epochs.sh` | epochs of one variant → one `task-clinical_desc-<variant>_cond-<condition>_epo.joblib` per condition in `derivatives/preproc` (project), read by 11 and 17 instead of the FIF files when it exists; rerun after 04 | single (per variant) |
 | 05 | `05_submit_extract_descriptors_array.sh` | epochs → descriptor shards (scratch) | array (per metadata row) |
 | 06 | `06_verify_descriptors.sh` | audit shard completeness + QC before merge | single |
 | 07 | `07_submit_merge_descriptors.sh` | shards → combined tables (project) | single |
@@ -79,7 +80,6 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 16 | `16_submit_compare_classical_decode.sh` | aggregate stage-15 decoding results | single (run after stage 15) |
 | 17 | `17_submit_foundation_decode.sh` | direct foundation decoding | array (per model, GPU) |
 | 18 | `18_submit_compare_foundation_decode.sh` | aggregate stage-17 decoding results | single (run after stage 17) |
-| 19 | `19_submit_main_dim_reduction.sh` | main-cohort dim-reduction smoke runner | single (raw/descriptors/foundation) |
 | 20 | `20_submit_main_decoding.sh` | stages 15–18 one-cohort integration runner | single (CPU/GPU branches via `sbatch`) |
 
 Stages 01, 03, 04, 07 and 10 end by running the BIDS validator on the dataset they
@@ -101,7 +101,7 @@ derivative tree has a `.bidsignore` for the files BIDS does not define.
 | `SCRATCH_ROOT` | scratch root for outputs | `$SCRATCH/eeg-epilepsy-adhd` |
 | `HF_HOME` | model weights cache | `$SCRATCH_ROOT/hf_home` |
 | `REPORTS_ROOT` | generated reports | `$SCRATCH_ROOT/reports` |
-| `EPOCHS_DESC` | epoch variant of stages 05-20: `base` or `baserejected` (required) | — |
+| `EPOCHS_DESC` | epoch variant of stages 04b-20: `base` or `baserejected` (required) | — |
 | `DESCRIPTOR_SHARDS_ROOT` | per-subject descriptor shards (05, 06) | `$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
 | `DESCRIPTORS_ROOT` | merged descriptor tables and shard archive (07, 07b) | `$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
 | `EMBEDDING_SCRATCH_ROOT` | per-recording embedding files (08), in `coco-pipe-<model>/` | `$SCRATCH_ROOT/BIDS/derivatives` |
