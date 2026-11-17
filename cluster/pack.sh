@@ -5,33 +5,44 @@
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
-# For clusters that give whole nodes (trillium): run PACK array tasks of a stage
-# script at once on one node, each with an equal share of its cores. Array task i of
-# this job runs tasks (i-1)*PACK+1 .. i*PACK of SCRIPT; the stage scripts skip
-# task ids past their range. Without --array it runs tasks 1..PACK. Each line of
-# the log starts with its task id. Fails if any task fails.
+# For clusters that give whole nodes (trillium): run TASKS array tasks of a stage script on
+# one node, PACK at a time, each with an equal share of the cores (TASK_CPUS overrides the
+# share, e.g. the whole node for tasks of very different lengths). When a task ends the next
+# starts, so a slow task does not leave the node idle. Array task i of this job runs tasks
+# (i-1)*TASKS+1 .. i*TASKS of SCRIPT; the stage scripts skip task ids past their range.
+# TASKS defaults to PACK; without --array it runs tasks 1..TASKS. Each line of the log
+# starts with its task id. Fails if any task fails.
 #   cluv submit trillium cluster/pack.sh --array=1-5 -- \
-#       SCRIPT=cluster/11_batch_run_dim_reduction.sh PACK=4 EPOCHS_DESC=base ...
+#       SCRIPT=cluster/11_batch_run_dim_reduction.sh PACK=4 TASKS=8 EPOCHS_DESC=base ...
 
 set -euo pipefail
 # cluv passes VAR=value as arguments: export them for this script and the tasks.
 for assignment in "$@"; do export "$assignment"; done
 PROJECT_ROOT=${PROJECT_ROOT:-$PWD}
-: "${SCRIPT:?Set SCRIPT=cluster/<stage script>.sh}" "${PACK:?Set PACK=<tasks per node>}"
+: "${SCRIPT:?Set SCRIPT=cluster/<stage script>.sh}" "${PACK:?Set PACK=<tasks at once>}"
+TASKS=${TASKS:-$PACK}
 cpus=${SLURM_CPUS_ON_NODE:-$(nproc)}
-first=$(( (${SLURM_ARRAY_TASK_ID:-1} - 1) * PACK + 1 ))
+task_cpus=${TASK_CPUS:-$((cpus / PACK))}
+first=$(( (${SLURM_ARRAY_TASK_ID:-1} - 1) * TASKS + 1 ))
 # The stage scripts check the array size against their task count: this job covers
-# its array size x PACK tasks.
+# its array size x TASKS tasks.
 if [[ -n ${SLURM_ARRAY_TASK_COUNT:-} ]]; then
-    export SLURM_ARRAY_TASK_COUNT=$((SLURM_ARRAY_TASK_COUNT * PACK))
+    export SLURM_ARRAY_TASK_COUNT=$((SLURM_ARRAY_TASK_COUNT * TASKS))
 fi
 
-pids=()
-for task in $(seq "$first" $((first + PACK - 1))); do
-    SLURM_ARRAY_TASK_ID=$task SLURM_CPUS_PER_TASK=$((cpus / PACK)) \
-        bash "$PROJECT_ROOT/$SCRIPT" > >(sed -u "s/^/[$task] /") 2>&1 &
-    pids+=($!)
-done
 status=0
-for pid in "${pids[@]}"; do wait "$pid" || status=1; done
+running=0
+for task in $(seq "$first" $((first + TASKS - 1))); do
+    if (( running == PACK )); then
+        wait -n || status=1
+        running=$((running - 1))
+    fi
+    SLURM_ARRAY_TASK_ID=$task SLURM_CPUS_PER_TASK=$task_cpus \
+        bash "$PROJECT_ROOT/$SCRIPT" > >(sed -u "s/^/[$task] /") 2>&1 &
+    running=$((running + 1))
+done
+while (( running > 0 )); do
+    wait -n || status=1
+    running=$((running - 1))
+done
 exit $status

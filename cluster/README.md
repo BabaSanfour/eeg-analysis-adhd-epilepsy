@@ -23,10 +23,11 @@ cluv submit fir cluster/17_submit_foundation_decode.sh --account=def-kjerbi \
 cluv submit trillium-gpu cluster/17_submit_foundation_decode.sh -- FOUNDATION_N_JOBS=4
 
 # CPU stage, on trillium (def-kjerbi): jobs get whole 192-core nodes, so
-# cluster/pack.sh runs PACK array tasks of a stage script at once on one node
-# (array task i of pack.sh = tasks (i-1)*PACK+1 .. i*PACK of SCRIPT)
+# cluster/pack.sh runs TASKS array tasks of a stage script on one node, PACK at a time
+# (array task i of pack.sh = tasks (i-1)*TASKS+1 .. i*TASKS of SCRIPT; the next starts
+# when one ends; TASK_CPUS gives each task more than its share of the cores)
 cluv submit trillium cluster/pack.sh --array=1-5 -- \
-    SCRIPT=cluster/11_batch_run_dim_reduction.sh PACK=4 EPOCHS_DESC=base
+    SCRIPT=cluster/11_batch_run_dim_reduction.sh PACK=4 TASKS=8 EPOCHS_DESC=base
 
 # variables of a script go after `--`; paths are relative to the project root
 cluv submit fir cluster/17_submit_foundation_decode.sh --array=1 ... \
