@@ -204,34 +204,26 @@ def _mode_models(
     return model_configs, model_grids
 
 
-def _chance_assessment(
-    config: Mapping[str, Any],
-    analysis_mode: str,
-    feature_selection: bool,
-    unit_y: pd.Series,
-    unit_metadata: pd.DataFrame,
-):
+def _chance_assessment(config: Mapping[str, Any], analysis_mode: str, feature_selection: bool):
     """Chance test of one unit, counted on recordings.
 
     ``chance_method`` applies to the units of ``permutation_modes`` (every mode when
-    unset) without feature selection. The others get the binomial test of accuracy
-    against the majority class's share of recordings, which a classifier always
-    predicting that class reaches.
+    unset) without feature selection; the others get the binomial test. The binomial
+    test compares accuracy with the majority class's share of recordings, which a
+    classifier always predicting that class reaches.
     """
+    method = config["chance_method"]
     modes = config.get("permutation_modes")
-    if config["chance_method"] == "permutation" and (
+    if method == "permutation" and (
         feature_selection or (modes is not None and analysis_mode not in modes)
     ):
-        labels = pd.Series(np.asarray(unit_y), index=unit_metadata.index)
-        per_recording = labels.groupby(unit_metadata["inference_unit"]).first()
-        assessment = grouped_chance_assessment("binomial", unit_column="inference_unit")
-        assessment.chance.p0 = float(per_recording.value_counts(normalize=True).max())
-        return assessment
+        method = "binomial"
     return grouped_chance_assessment(
-        config["chance_method"],
+        method,
         n_permutations=int(config["n_permutations"]),
         store_null=bool(config["store_null_distribution"]),
         unit_column="inference_unit",
+        p0="majority" if method == "binomial" else "auto",
     )
 
 
@@ -381,7 +373,7 @@ def _build_selection_units(
                     reducer=reducer,
                     feature_selection=fs_config,
                     statistical_assessment=_chance_assessment(
-                        config, analysis_mode, fs_config.enabled, unit_y, unit_metadata
+                        config, analysis_mode, fs_config.enabled
                     ),
                     metrics=list(plan.metrics),
                     use_scaler=True,
