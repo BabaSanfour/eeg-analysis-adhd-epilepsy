@@ -336,12 +336,13 @@ wheels = [
 
 [[package]]
 name = "braindecode"
-version = "2.0.0"
-source = { registry = "https://pypi.org/simple" }
+version = "2.1.0.dev0"
+source = { git = "https://github.com/braindecode/braindecode.git?rev=master#abb98b2d94ee49fdbac24c1fbc2ba9d6ef48f1c6" }
 dependencies = [
     { name = "docstring-inheritance" },
     { name = "einops" },
     { name = "h5py" },
+    { name = "jinja2" },
     { name = "joblib" },
     { name = "mne" },
     { name = "mne-bids" },
@@ -352,10 +353,6 @@ dependencies = [
     { name = "torchaudio" },
     { name = "torchinfo" },
     { name = "wfdb" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/2f/59/0906473c1846f269fcd4f45f459c2dac22061839e17224edf8c94bc0fbb0/braindecode-2.0.0.tar.gz", hash = "sha256:14bb2155a20b243522e2ff7c097d8464cbe7f0e1484f60ff2c0b8d72bc036628", size = 934813, upload-time = "2026-11-02T19:54:10.708Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/4b/57/6cec41b92bf4b28879894f632cab822a24c79d27d240ce2dce1b2017844e/braindecode-2.0.0-py3-none-any.whl", hash = "sha256:0e5e40281a9dff796ac4adec6c960338be5a27ed3ec245ff4c0c1948a88f7b68", size = 927804, upload-time = "2026-11-02T19:54:08.904Z" },
 ]
 
 [[package]]
@@ -633,7 +630,7 @@ wheels = [
 [[package]]
 name = "coco-pipe"
 version = "0.0.3"
-source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#a6019fd3926da872221dcae80464c9f248bf67c9" }
+source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main#f272645f896c5b7e9a7efcc79cf0e43b1ad5f1b7" }
 dependencies = [
     { name = "filelock" },
     { name = "h5netcdf", extra = ["h5py"] },
@@ -982,6 +979,7 @@ dependencies = [
     { name = "asrpy" },
     { name = "autoreject" },
     { name = "bids-validator-deno" },
+    { name = "braindecode" },
     { name = "coco-pipe", extra = ["decoding", "descriptors", "foundation"] },
     { name = "filelock" },
     { name = "mne" },
@@ -1005,6 +1003,7 @@ requires-dist = [
     { name = "asrpy" },
     { name = "autoreject" },
     { name = "bids-validator-deno" },
+    { name = "braindecode", git = "https://github.com/braindecode/braindecode.git?rev=master" },
     { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=main" },
     { name = "filelock", specifier = ">=3.20.4" },
     { name = "mne", specifier = ">=1.13" },
