@@ -657,7 +657,10 @@ def test_scope_jobs_share_a_run_and_the_reports_run_merges_them(tmp_path, monkey
         "EC_baseline",
         "pooled_all",
     }
-    assert (flat / "run_summary.json").exists()
+    # The reports run loads the inputs again for the cohort summary.
+    summary = json.loads((flat / "run_summary.json").read_text(encoding="utf-8"))
+    stats = summary["dataset_stats"]
+    assert {stat["condition"] for stat in stats} == {"EO_baseline", "EC_baseline", "pooled_all"}
 
 
 def _fit_request(reducer, n_components):

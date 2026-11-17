@@ -386,50 +386,48 @@ def execute_analysis_mode(
                     f"--reports-only requested but {fit_runs_path} does not exist."
                 )
             fit_runs = read_json(fit_runs_path)
-            if run_summary_path.exists():
-                summary_data = read_json(run_summary_path)
-                dataset_stats = summary_data.get("run_metadata", {}).get("dataset_stats", [])
-        else:
-            fit_requests: list[dict[str, Any]] = []
-            pooled_needed = args.run_pooled and args.scope in (None, POOLED_CONDITION)
-            loaded = args.conditions if args.scope is None or pooled_needed else [args.scope]
-            for condition in loaded:
-                logger.info(
-                    "Loading input for condition '%s' (%s / %s).",
+        fit_requests: list[dict[str, Any]] = []
+        pooled_needed = args.run_pooled and args.scope in (None, POOLED_CONDITION)
+        loaded = args.conditions if args.scope is None or pooled_needed else [args.scope]
+        for condition in loaded:
+            logger.info(
+                "Loading input for condition '%s' (%s / %s).",
+                condition,
+                args.input_mode,
+                mode,
+            )
+            base_container = _get_base_container(
+                base_cache,
+                args,
+                condition=condition,
+                meta_df=meta_df,
+                load_mode=base_load_mode,
+                representation=representation,
+            )
+            base_containers_by_scope[("condition", condition)] = base_container
+            # The reports job loads the inputs only for the cohort summary.
+            if args.reports_only or args.scope not in (None, condition):
+                continue
+            fit_requests.extend(
+                _collect_scope_fit_requests(
+                    "condition",
                     condition,
-                    args.input_mode,
-                    mode,
-                )
-                base_container = _get_base_container(
-                    base_cache,
+                    base_container,
                     args,
-                    condition=condition,
-                    meta_df=meta_df,
-                    load_mode=base_load_mode,
-                    representation=representation,
+                    reducer_dims,
+                    output_root,
+                    unit_containers_by_key,
+                    data_availability,
                 )
-                base_containers_by_scope[("condition", condition)] = base_container
-                if args.scope not in (None, condition):
-                    continue
-                fit_requests.extend(
-                    _collect_scope_fit_requests(
-                        "condition",
-                        condition,
-                        base_container,
-                        args,
-                        reducer_dims,
-                        output_root,
-                        unit_containers_by_key,
-                        data_availability,
-                    )
-                )
+            )
 
-            if pooled_needed:
-                source_containers = [
-                    base_containers_by_scope[("condition", cond)] for cond in args.conditions
-                ]
-                pooled_container = pool_containers(source_containers)
-                base_containers_by_scope[("pooled", POOLED_CONDITION)] = pooled_container
+        if pooled_needed:
+            source_containers = [
+                base_containers_by_scope[("condition", cond)] for cond in args.conditions
+            ]
+            pooled_container = pool_containers(source_containers)
+            base_containers_by_scope[("pooled", POOLED_CONDITION)] = pooled_container
+            if not args.reports_only:
                 fit_requests.extend(
                     _collect_scope_fit_requests(
                         "pooled",
@@ -443,6 +441,7 @@ def execute_analysis_mode(
                     )
                 )
 
+        if not args.reports_only:
             logger.info(
                 "Queued %d fit request(s) across %d loaded scope(s) for mode '%s'.",
                 len(fit_requests),
@@ -554,7 +553,7 @@ def execute_analysis_mode(
         if args.scope:
             return {"analysis_mode": mode, "representation": representation, "scope": args.scope}
 
-        if not args.reports_only and base_containers_by_scope:
+        if base_containers_by_scope:
             import pandas as pd
 
             for (scope, condition), container in base_containers_by_scope.items():
