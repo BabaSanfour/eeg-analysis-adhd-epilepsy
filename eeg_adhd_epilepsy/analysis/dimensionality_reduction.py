@@ -167,7 +167,7 @@ def _collect_scope_fit_requests(
                 container_signature=container_signature,
                 reducer_params=dict(getattr(args, "reducer_params", {}).get(reducer_name, {})),
             )
-            if (request["out_path"] / "_SUCCESS").exists() and not request["overwrite"]:
+            if request["out_path"].exists() and not request["overwrite"]:
                 num_skipped += 1
             else:
                 logger.info(
