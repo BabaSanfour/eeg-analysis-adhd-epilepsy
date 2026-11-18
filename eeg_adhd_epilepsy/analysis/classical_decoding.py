@@ -262,7 +262,20 @@ def _build_selection_units(
         if str(spec.get("method", "none")) == "none" or X.shape[1] > 1
     ]
 
-    reduction_modes = [False, True] if plan.reducer_enabled else [False]
+    # Fold-local PCA: `reducer.n_components` is one size (mode "pca") or a list of sizes
+    # (modes "pca_<n>"), each decoded next to all dimensions unless
+    # `reducer.keep_all_dimensions` is false; a size of at least the unit's width is skipped.
+    reductions = [("all_dimensions", None)]
+    if plan.reducer_enabled:
+        sizes = plan.reducer_cfg.get("n_components")
+        sizes = sizes if isinstance(sizes, list) else [sizes]
+        if not plan.reducer_cfg.get("keep_all_dimensions", True):
+            reductions = []
+        reductions += [
+            ("pca" if len(sizes) == 1 else f"pca_{size}", size)
+            for size in sizes
+            if not (isinstance(size, int) and size >= X.shape[1])
+        ]
     for transform_name in plan.transforms:
         params = dict(plan.transform_params.get(transform_name, {}))
         erasure = (
@@ -275,12 +288,11 @@ def _build_selection_units(
             if transform_name == "leace"
             else ErasureConfig(enabled=False)
         )
-        for reduced in reduction_modes:
-            reduction_mode = "pca" if reduced else "all_dimensions"
+        for reduction_mode, size in reductions:
             reducer = ReducerConfig(
-                enabled=reduced,
+                enabled=size is not None,
                 method="pca",
-                n_components=plan.reducer_cfg.get("n_components"),
+                n_components=size,
                 whiten=bool(plan.reducer_cfg.get("whiten", False)),
                 svd_solver=plan.reducer_cfg.get("svd_solver", "auto"),
                 random_state=random_state,
@@ -313,7 +325,7 @@ def _build_selection_units(
                     "transform": transform_name,
                     "reduction_mode": reduction_mode,
                     "primary": (
-                        analysis_mode == "flat" and transform_name == "none" and not reduced
+                        analysis_mode == "flat" and transform_name == "none" and size is None
                     ),
                 }
                 cv_config = CVConfig(

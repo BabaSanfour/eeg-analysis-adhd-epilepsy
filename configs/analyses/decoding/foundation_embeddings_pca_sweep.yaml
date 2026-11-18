@@ -1,0 +1,68 @@
+# Dim reduction x decoding (2026-11-17): the decoding of foundation_embeddings.yaml (frozen embeddings, no LEACE) after fold-local PCA at
+# the sizes the dim-reduction sweep uses (2-50 components) and at 95 % of the variance; the
+# all-dimensions decoding is the main run's. Exploration: no feature selection, and the
+# binomial test against the larger group's share instead of permutations.
+
+input_mode: foundation_embeddings
+representation: epoch
+alignment_diagnostics_population: clinical_task_subset
+
+analysis_modes:
+  - flat
+
+transforms:
+  - none
+
+transform_params:
+  # Fold-local LEACE erases the directions whose subject eta^2 is at least eta2, fitted
+  # with the condition of each training window.
+  leace:
+    eta2: 0.5
+    condition_column: condition
+
+reducer:
+  enabled: true
+  n_components: [2, 3, 5, 10, 20, 50, 0.95]
+  keep_all_dimensions: false
+  whiten: false
+
+feature_selection:
+  - name: baseline
+    method: none
+
+tuning:
+  enabled: true
+  scoring: balanced_accuracy
+  n_splits: 3
+
+models:
+  logreg:
+    estimator: LogisticRegression
+    params:
+      penalty: l2
+      solver: lbfgs  # liblinear fits two classes only; age has three
+      class_weight: balanced
+      max_iter: 2000
+    grid:
+      C: [0.01, 0.1, 1.0, 10.0]
+  random_forest:
+    estimator: RandomForestClassifier
+    params:
+      n_estimators: 300
+      class_weight: balanced
+      n_jobs: 1
+
+cv:
+  n_splits: 5
+
+# Labels are shuffled within groups and the whole pipeline is refit
+# `n_permutations` times, so the smallest p-value is 1 / (n_permutations + 1).
+chance_method: binomial
+n_permutations: 100
+store_null_distribution: false
+
+metrics:
+  - balanced_accuracy
+  - f1
+
+random_state: 42

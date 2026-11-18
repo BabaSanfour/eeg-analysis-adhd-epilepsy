@@ -373,6 +373,24 @@ def test_foundation_plan_builds_transform_and_reduction_axes(tmp_path):
     assert leace.experiment_config.erasure.enabled
     assert leace.experiment_config.erasure.condition_column == "condition"
 
+    # a list of sizes: one mode each, sizes as wide as the unit skipped, all dimensions dropped
+    config["reducer"] = {"enabled": True, "n_components": [2, 8, 0.9], "keep_all_dimensions": False}
+    config["transforms"] = ["none"]
+    units = decoding._classical_scope_units(
+        build_classical_plan(config),
+        "EO_baseline",
+        container,
+        config=config,
+        derivative_root=tmp_path,
+        failures=failures,
+    )
+    assert {
+        u.context["reduction_mode"]: u.experiment_config.reducer.n_components for u in units
+    } == {
+        "pca_2": 2,
+        "pca_0.9": 0.9,
+    }
+
 
 def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
     groups, labels, coords = _observation_coords()
