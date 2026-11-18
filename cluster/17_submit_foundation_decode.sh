@@ -23,6 +23,8 @@ require_file "$ANALYSIS_CONFIG"
 dra_activate
 
 # MODELS (names or model keys) defaults to every model of the analysis config, in order.
+# One model alone: MODELS=<name> with --array=1. A submit without --array still runs the
+# header's array, and the guard fails when it doesn't match the number of models.
 if [[ -z ${MODELS:-} ]]; then
     MODELS=$(python -c 'import sys, yaml
 print(" ".join(m.get("name", m["model_key"]) for m in yaml.safe_load(open(sys.argv[1]))["models"]))' "$ANALYSIS_CONFIG")
