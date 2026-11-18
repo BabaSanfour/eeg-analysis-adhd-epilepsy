@@ -119,9 +119,21 @@ def test_drug_transfer_tells_a_shared_signal_from_a_drug_specific_one():
             n_repeats=1,
             seed=0,
             n_jobs=1,
+            covariates=COVARIATES,
         )
         return summary["methylphenidate_on_lisdexamfetamine_axis_index"]["median"]
 
     # the same shift for both drugs transfers; methylphenidate without an effect does not
     assert indices((1.5, 1.5)) > 0.6
     assert indices((0.0, 1.5)) < 0.3
+
+
+def test_unmatched_draws_are_random_draws_of_the_reference_size():
+    _, meta = _children()
+    reference = meta[meta.psychostimulant_category == "unmedicated"]
+    pool = meta[meta.psychostimulant == "1"]
+    chosen = matched_draw(pool, reference, np.random.default_rng(0), covariates=(), ratio=2)
+    assert len(chosen) == 2 * len(reference) and chosen.is_unique
+    blocks, meta = _children()
+    summary, _ = run(blocks, meta, n_draws=2, n_repeats=1, covariates=())
+    assert summary["matched_on"] == [] and "difference" in summary["unmedicated_vs_control"]

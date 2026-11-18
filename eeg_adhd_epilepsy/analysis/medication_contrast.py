@@ -118,8 +118,10 @@ def matched_draw(
     cell.
 
     Drops the last covariate (and so on) while a cell of the reference has more children
-    than the pool has in it.
+    than the pool has in it. Without covariates it is a random draw of that size.
     """
+    if not covariates:
+        return pd.Index(rng.choice(pool.index, size=len(reference) * ratio, replace=False))
     for k in range(len(covariates), 0, -1):
         cols = list(covariates[:k])
         need = reference.groupby(cols).size() * ratio
@@ -216,7 +218,9 @@ def _interval(values) -> dict:
     }
 
 
-def _against_draws(blocks, meta, reference, pool, control, n_draws, n_repeats, seed, n_jobs):
+def _against_draws(
+    blocks, meta, reference, pool, control, n_draws, n_repeats, seed, n_jobs, covariates
+):
     """Per draw, controls matched to ``reference`` and a matched draw of ``pool``: AUC of
     ``reference`` and of the drawn ``pool`` children, each vs those controls, and of the
     covariates alone."""
@@ -225,14 +229,14 @@ def _against_draws(blocks, meta, reference, pool, control, n_draws, n_repeats, s
     def one(draw):
         rng = np.random.default_rng(seed + 1000 + draw)
         ref = meta.loc[reference]
-        controls = matched_draw(meta.loc[control], ref, rng, ratio=CONTROL_RATIO)
-        chosen = matched_draw(meta.loc[pool], ref, rng)
+        controls = matched_draw(meta.loc[control], ref, rng, covariates, ratio=CONTROL_RATIO)
+        chosen = matched_draw(meta.loc[pool], ref, rng, covariates)
         y_ref, y_pool = _labels(reference, controls), _labels(chosen, controls)
-        covariates = {"covariates": covariate_block(meta)}
+        floor = {"covariates": covariate_block(meta)}
         return (
             auc(y_ref, contrast_scores(blocks, y_ref, n_repeats, seed)),
             auc(y_pool, contrast_scores(blocks, y_pool, n_repeats, seed)),
-            auc(y_ref, contrast_scores(covariates, y_ref, n_repeats, seed)),
+            auc(y_ref, contrast_scores(floor, y_ref, n_repeats, seed)),
         )
 
     draws = np.array(Parallel(n_jobs=n_jobs)(delayed(one)(d) for d in range(n_draws)))
@@ -249,14 +253,14 @@ def _against_draws(blocks, meta, reference, pool, control, n_draws, n_repeats, s
     }, draws[:, :2]
 
 
-def _direct(blocks, meta, positive, pool, n_draws, n_repeats, seed, n_jobs):
+def _direct(blocks, meta, positive, pool, n_draws, n_repeats, seed, n_jobs, covariates):
     """Matched draws of ``pool`` (label 0) vs ``positive`` (label 1): AUC per draw, and
     of the covariates alone."""
     _check_size(positive, pool)
 
     def one(draw):
         rng = np.random.default_rng(seed + 2000 + draw)
-        chosen = matched_draw(meta.loc[pool], meta.loc[positive], rng)
+        chosen = matched_draw(meta.loc[pool], meta.loc[positive], rng, covariates)
         y = pd.Series(1, index=positive).combine_first(pd.Series(0, index=chosen)).astype(int)
         return (
             auc(y, contrast_scores(blocks, y, n_repeats, seed)),
@@ -274,7 +278,10 @@ def _direct(blocks, meta, positive, pool, n_draws, n_repeats, seed, n_jobs):
     }, draws[:, 0]
 
 
-def run(blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1) -> tuple[dict, pd.DataFrame]:
+def run(
+    blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1, covariates=COVARIATES
+) -> tuple[dict, pd.DataFrame]:
+    """Every contrast, its draws matched on ``covariates`` (none: random draws)."""
     group = child_groups(meta)
     control, unmedicated, medicated = (
         group.index[group == g] for g in ("control", "unmedicated", "medicated")
@@ -289,7 +296,7 @@ def run(blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1) -> tuple[dict,
         len(mph),
         len(ldx),
     )
-    args = (n_draws, n_repeats, seed, n_jobs)
+    args = (n_draws, n_repeats, seed, n_jobs, tuple(covariates))
     summary, draws = {}, {}
 
     def attempt(name, columns, fn, *fn_args):
@@ -362,6 +369,7 @@ def run(blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1) -> tuple[dict,
         control,
         *args,
     )
+    summary["matched_on"] = list(covariates)
     summary["n_children"] = {
         "control": len(control),
         "unmedicated": len(unmedicated),
@@ -372,7 +380,9 @@ def run(blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1) -> tuple[dict,
     return summary, pd.DataFrame(draws)
 
 
-def _axis(blocks, meta, unmedicated, medicated, control, n_draws, n_repeats, seed, n_jobs):
+def _axis(
+    blocks, meta, unmedicated, medicated, control, n_draws, n_repeats, seed, n_jobs, covariates
+):
     """Normalisation index of matched draws of medicated children on the axis of
     unmedicated ADHD vs matched controls."""
     _check_size(unmedicated, medicated, control)
@@ -380,8 +390,8 @@ def _axis(blocks, meta, unmedicated, medicated, control, n_draws, n_repeats, see
     def axis(draw):
         rng = np.random.default_rng(seed + 3000 + draw)
         ref = meta.loc[unmedicated]
-        controls = matched_draw(meta.loc[control], ref, rng, ratio=CONTROL_RATIO)
-        chosen = matched_draw(meta.loc[medicated], ref, rng)
+        controls = matched_draw(meta.loc[control], ref, rng, covariates, ratio=CONTROL_RATIO)
+        chosen = matched_draw(meta.loc[medicated], ref, rng, covariates)
         score = axis_scores(blocks, _labels(unmedicated, controls), chosen, seed)
         return (
             normalisation_index(score, controls, unmedicated, chosen),
@@ -397,7 +407,9 @@ def _axis(blocks, meta, unmedicated, medicated, control, n_draws, n_repeats, see
     }, axes[:, 0]
 
 
-def _transfer(blocks, meta, unmedicated, medicated, control, n_draws, n_repeats, seed, n_jobs):
+def _transfer(
+    blocks, meta, unmedicated, medicated, control, n_draws, n_repeats, seed, n_jobs, covariates
+):
     """ADHD index of the unmedicated children on the axis of medicated ADHD vs controls,
     both drawn with the unmedicated children's make-up."""
     _check_size(unmedicated, medicated, control)
@@ -405,8 +417,8 @@ def _transfer(blocks, meta, unmedicated, medicated, control, n_draws, n_repeats,
     def transfer(draw):
         rng = np.random.default_rng(seed + 4000 + draw)
         ref = meta.loc[unmedicated]
-        controls = matched_draw(meta.loc[control], ref, rng, ratio=CONTROL_RATIO)
-        chosen = matched_draw(meta.loc[medicated], ref, rng, ratio=CONTROL_RATIO)
+        controls = matched_draw(meta.loc[control], ref, rng, covariates, ratio=CONTROL_RATIO)
+        chosen = matched_draw(meta.loc[medicated], ref, rng, covariates, ratio=CONTROL_RATIO)
         score = axis_scores(blocks, _labels(chosen, controls), unmedicated, seed)
         return (
             normalisation_index(score, controls, chosen, unmedicated),
@@ -422,7 +434,7 @@ def _transfer(blocks, meta, unmedicated, medicated, control, n_draws, n_repeats,
     }, values[:, 0]
 
 
-def _drug_transfer(blocks, meta, ldx, mph, control, n_draws, n_repeats, seed, n_jobs):
+def _drug_transfer(blocks, meta, ldx, mph, control, n_draws, n_repeats, seed, n_jobs, covariates):
     """Each drug's classifier (vs controls) scoring the other drug's children, all drawn with
     the lisdexamfetamine children's make-up."""
     _check_size(ldx, mph, control)
@@ -430,8 +442,8 @@ def _drug_transfer(blocks, meta, ldx, mph, control, n_draws, n_repeats, seed, n_
     def transfer(draw):
         rng = np.random.default_rng(seed + 5000 + draw)
         ref = meta.loc[ldx]
-        controls = matched_draw(meta.loc[control], ref, rng, ratio=CONTROL_RATIO)
-        chosen = matched_draw(meta.loc[mph], ref, rng)
+        controls = matched_draw(meta.loc[control], ref, rng, covariates, ratio=CONTROL_RATIO)
+        chosen = matched_draw(meta.loc[mph], ref, rng, covariates)
         on_ldx = axis_scores(blocks, _labels(ldx, controls), chosen, seed)
         on_mph = axis_scores(blocks, _labels(chosen, controls), ldx, seed)
         return (
@@ -503,13 +515,24 @@ def main() -> None:
     parser.add_argument("--n_draws", type=int, default=100)
     parser.add_argument("--n_repeats", type=int, default=3)
     parser.add_argument("--n_jobs", type=int, default=1)
+    parser.add_argument(
+        "--match",
+        default=",".join(COVARIATES),
+        help=f"Covariates the draws are matched on, comma-separated from {COVARIATES}, or "
+        "'none' for random draws.",
+    )
     parser.add_argument("--output_dir", type=Path, required=True)
     args = parser.parse_args()
+    covariates = () if args.match == "none" else tuple(args.match.split(","))
+    if unknown := set(covariates) - set(COVARIATES):
+        parser.error(f"--match names unknown covariates {sorted(unknown)}.")
     logging.basicConfig(level=logging.INFO)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     args.cohort_config = str(widen_cohort(args.cohort_config, args.output_dir))
     blocks, meta = load_children(args)
-    summary, draws = run(blocks, meta, args.n_draws, args.n_repeats, n_jobs=args.n_jobs)
+    summary, draws = run(
+        blocks, meta, args.n_draws, args.n_repeats, n_jobs=args.n_jobs, covariates=covariates
+    )
     draws.to_csv(args.output_dir / "draws.csv", index=False)
     text = json.dumps(summary, indent=2)
     (args.output_dir / "summary.json").write_text(text + "\n")
