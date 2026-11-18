@@ -29,6 +29,9 @@ from eeg_adhd_epilepsy.analysis.ensemble import evaluate
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = {"cbramod": 256, "luna": 256, "reve": 64}
+# The saved epochs hold volts; the models expect microvolts, as the embeddings were
+# extracted (``units="uV"``).
+MICROVOLTS = 1e6
 
 
 def child_folds(labels: pd.Series, n_folds: int = 5) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -81,7 +84,7 @@ def load_cohort(args):
         subject = meta[config["subject_col"]].astype(str).to_numpy()
         parts.append(
             (
-                np.asarray(selected.X, dtype=np.float32),
+                np.asarray(selected.X, dtype=np.float32) * MICROVOLTS,
                 child,
                 subject,
                 np.full(len(child), condition),
@@ -116,7 +119,7 @@ def load_pool(config, exclude_subjects: set[str], exclude_children: set[str], ch
             group = np.asarray(container.coords["patient_group_id"]).astype(str)
             keep &= ~np.isin(group, sorted(exclude_children))
         order = [list(map(str, container.coords["channel"])).index(c) for c in channels]
-        X.append(np.asarray(container.X, dtype=np.float32)[keep][:, order])
+        X.append(np.asarray(container.X, dtype=np.float32)[keep][:, order] * MICROVOLTS)
         subjects.append(subject[keep])
     return np.concatenate(X), np.concatenate(subjects)
 
