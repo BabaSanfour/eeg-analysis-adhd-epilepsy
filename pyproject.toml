@@ -27,10 +27,11 @@ dependencies = [
   "filelock>=3.20.4",
   "pybv>=0.7.3",
   "bids-validator-deno",
-  # coco-pipe #67 (dropout, head weight decay, saved fine-tuned features), stacked on #66
-  # (ST-EEGFormer-largeV2 and from-scratch networks) and #65 (one file
-  # per dim-reduction fit and eval), until they are merged.
-  "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@feat/finetune-regularisation",
+  # coco-pipe #68 (CBraMod reads its encoder, frozen LaBraM its patch tokens), stacked on
+  # #67 (dropout, head weight decay, saved fine-tuned features), #66 (ST-EEGFormer-largeV2
+  # and from-scratch networks) and #65 (one file per dim-reduction fit and eval), until
+  # they are merged.
+  "coco-pipe[decoding,descriptors,foundation] @ git+https://github.com/BabaSanfour/coco-pipe.git@fix/cbramod-encoder-features",
   "mne-denoise @ git+https://github.com/mne-tools/mne-denoise.git@main",
   "torch",
   "tqdm",
