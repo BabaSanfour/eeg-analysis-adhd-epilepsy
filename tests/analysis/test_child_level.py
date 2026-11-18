@@ -68,5 +68,6 @@ def test_run_scores_each_method_on_every_child_with_its_inputs():
     assert n["mean|EO|desc-summary"] == 30 and n["early|EO|m+desc-summary"] == 30
     assert n["late|EO|m+desc-summary"] == 40  # each child's available scores
     assert n["attention|EO+EC|m"] == 40 and n["late|headline|every-input"] == 40
+    assert n["stack|EO+EC+diff|embeddings"] == 40 and n["stack|EO+EC+diff|every-input"] == 40
     assert {"late|EC-EO|m+desc-summary", "attention|EC|m"} <= set(summary) and "m" in attention
     assert summary["mean|EC|m"]["auc"] > summary["mean|EO|m"]["auc"]  # the signal is in EC

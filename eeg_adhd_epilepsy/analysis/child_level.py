@@ -100,6 +100,64 @@ def late_fusion(scores: dict[str, pd.Series]) -> pd.Series:
     return pd.concat([s.rank(pct=True) for s in scores.values()], axis=1).mean(axis=1)
 
 
+def stacked_scores(
+    inputs: dict[str, dict[str, pd.DataFrame]],
+    widths: dict[str, int | None],
+    labels: pd.Series,
+    fold: pd.Series,
+    seed: int = 0,
+) -> pd.Series:
+    """Out-of-fold scores of a combiner learnt on the inputs' own out-of-fold scores.
+
+    For each outer fold, every input (a set of blocks, scored by :func:`linear_scores`) is
+    scored on the training children by an inner 5-fold CV, and a shallow gradient-boosting
+    combiner learns from those scores; it sends a child without an input down its own branch
+    (nothing is filled in). The inputs refit on all training children score the test
+    children, which the combiner then scores. Children are those of ``labels``; ``fold``
+    gives their outer fold.
+    """
+    from sklearn.ensemble import HistGradientBoostingClassifier
+
+    def score(blocks, width, train_children, test_children, inner=None):
+        have = labels.index
+        for frame in blocks.values():
+            have = have.intersection(frame.index)
+        train, test = train_children.intersection(have), test_children.intersection(have)
+        if inner is not None:  # out-of-fold on the training children
+            y, f = labels.loc[train], inner.loc[train].to_numpy()
+            folds = [(np.flatnonzero(f != j), np.flatnonzero(f == j)) for j in range(5)]
+            return linear_scores(blocks, y, folds, width, seed)
+        y = labels.loc[train.append(test)]
+        folds = [(np.arange(len(train)), np.arange(len(train), len(y)))]
+        return linear_scores(blocks, y, folds, width, seed).loc[test]
+
+    out = pd.Series(np.nan, index=labels.index)
+    for k in sorted(fold.unique()):
+        train_children, test_children = labels.index[fold != k], labels.index[fold == k]
+        inner = pd.Series(-1, index=train_children)
+        splitter = StratifiedKFold(5, shuffle=True, random_state=seed + 1)
+        y_train = labels.loc[train_children]
+        for j, (_, rows) in enumerate(splitter.split(np.zeros(len(y_train)), y_train)):
+            inner.iloc[rows] = j
+        meta_train = pd.DataFrame(index=train_children, columns=list(inputs), dtype=float)
+        meta_test = pd.DataFrame(index=test_children, columns=list(inputs), dtype=float)
+        for name, blocks in inputs.items():
+            oof = score(blocks, widths[name], train_children, test_children, inner)
+            meta_train.loc[oof.index, name] = oof
+            fitted = score(blocks, widths[name], train_children, test_children)
+            meta_test.loc[fitted.index, name] = fitted
+        combiner = HistGradientBoostingClassifier(
+            max_depth=2,
+            learning_rate=0.05,
+            max_iter=200,
+            l2_regularization=1.0,
+            class_weight="balanced",
+            random_state=seed,
+        ).fit(meta_train, y_train)
+        out.loc[test_children] = combiner.predict_proba(meta_test)[:, 1]
+    return out
+
+
 # ---------------------------------------------------------------- attention pooling
 
 
@@ -428,6 +486,27 @@ def run(labels, windows, blocks, descriptors, n_permutations=1000, seeds=(0, 1, 
     headline = {f"{s}-{c}": single[s, c] for s in sources if s != "desc-pca" for c in ("EO", "EC")}
     headline |= {f"attention-{m}": scores[f"attention|EO+EC|{m}"] for m in models}
     scores["late|headline|every-input"] = late_fusion(headline)
+
+    # stacking: a combiner learns how much each input is worth (nested CV)
+    per_condition = {
+        f"{s}-{c}": (pick(s, (c,)), width(s))
+        for s in sources
+        if s != "desc-pca"
+        for c in ("EO", "EC", "EC-EO")
+    }
+    for label, names in (
+        ("embeddings", [n for n in per_condition if not n.startswith("desc-")]),
+        ("every-input", list(per_condition)),
+    ):
+        if label == "every-input" and not descriptors:
+            continue
+        scores[f"stack|EO+EC+diff|{label}"] = stacked_scores(
+            {n: per_condition[n][0] for n in names},
+            {n: per_condition[n][1] for n in names},
+            labels,
+            fold,
+        )
+        logger.info("stacking %s done", label)
 
     table = pd.DataFrame(scores).assign(y=labels).dropna(how="all", subset=list(scores))
     summary = {}
