@@ -12,9 +12,17 @@ dra_epochs_variant
 
 # Medication contrasts from the saved frozen embeddings: unmedicated vs medicated ADHD,
 # each against controls at equal size and covariate make-up, the normalisation axis, and
-# methylphenidate vs lisdexamfetamine. Writes summary.json and draws.csv under
-# $DECODING_ROOT/contrast_adhd_medication/.
-COHORT_CONFIG=${COHORT_CONFIG:-$PROJECT_ROOT/configs/contrasts/adhd_medication.yaml}
+# methylphenidate vs lisdexamfetamine. One array task per family / stratum config of
+# pooled ADHD vs controls (or COHORT_CONFIG alone). Writes summary.json and draws.csv under
+# $DECODING_ROOT/medication_contrasts/<cohort>/.
+mapfile -t CONFIGS < <(find "$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled" -name "*.yaml" | sort)
+[[ -n ${COHORT_CONFIG:-} ]] && CONFIGS=("$COHORT_CONFIG")
+TASK_ID=${SLURM_ARRAY_TASK_ID:-1}
+if (( TASK_ID > ${#CONFIGS[@]} )); then
+    echo "Task $TASK_ID past the ${#CONFIGS[@]} configs; nothing to do."
+    exit 0
+fi
+COHORT_CONFIG=${CONFIGS[$((TASK_ID - 1))]}
 read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna}"
 
 require_dir "$EMBEDDING_PROJECT_ROOT"
@@ -25,7 +33,8 @@ dra_activate
 THREADS=${SLURM_CPUS_PER_TASK:-16}
 dra_pin_threads 1
 
-out="$DECODING_ROOT/contrast_adhd_medication"
+name=$(python -c 'import sys, yaml; print(yaml.safe_load(open(sys.argv[1]))["dataset_name"])' "$COHORT_CONFIG")
+out="$DECODING_ROOT/medication_contrasts/$name"
 echo "Cohort: $COHORT_CONFIG  Output: $out"
 
 python -m eeg_adhd_epilepsy.analysis.medication_contrast \

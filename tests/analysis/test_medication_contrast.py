@@ -1,7 +1,13 @@
 import numpy as np
 import pandas as pd
+import yaml
 
-from eeg_adhd_epilepsy.analysis.medication_contrast import COVARIATES, matched_draw, run
+from eeg_adhd_epilepsy.analysis.medication_contrast import (
+    COVARIATES,
+    matched_draw,
+    run,
+    widen_cohort,
+)
 
 
 def _children(seed=0):
@@ -61,3 +67,32 @@ def test_run_finds_that_medication_brings_children_towards_controls():
     # both drugs shift equally: no consistent difference between them
     assert abs(summary["lisdexamfetamine_vs_control"]["difference"]["median"]) < 0.1
     assert len(draws) == 5 and "normalisation_index" in draws
+
+
+def test_widen_cohort_keeps_every_adhd_child_and_the_family_filters(tmp_path):
+    source = tmp_path / "family.yaml"
+    source.write_text(
+        yaml.safe_dump(
+            {
+                "dataset_name": "pooled_02",
+                "group_filters": [
+                    {"adhd": [0], "psychostimulant": [0], "epilepsy": [0]},
+                    {"adhd": [1], "psychostimulant": [1], "epilepsy": [0]},
+                ],
+            }
+        )
+    )
+    out = yaml.safe_load(widen_cohort(source, tmp_path).read_text())
+    assert out["group_filters"] == [
+        {"adhd": [0], "psychostimulant": [0], "epilepsy": [0]},
+        {"adhd": [1], "epilepsy": [0]},
+    ]
+    assert out["dataset_name"] == "contrast_pooled_02"
+
+
+def test_run_skips_contrasts_whose_groups_are_too_small():
+    blocks, meta = _children()
+    meta = meta.drop(meta.index[meta.psychostimulant_category == "unmedicated"][5:])
+    summary, _ = run(blocks, meta, n_draws=2, n_repeats=1)
+    assert "skipped" in summary["unmedicated_vs_control"] and "skipped" in summary["axis"]
+    assert "difference" in summary["lisdexamfetamine_vs_control"]

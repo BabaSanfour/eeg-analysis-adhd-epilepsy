@@ -91,7 +91,7 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 19 | `19_submit_child_level.sh` | child-level decoding (mean / attention pooling, descriptor fusion) | single (after stages 08 and 06) |
 | 20 | `20_submit_main_decoding.sh` | stages 15–18 one-cohort integration runner | single (CPU/GPU branches via `sbatch`) |
 | 21 | `21_submit_continued_pretraining.sh` | continued self-supervised pretraining per fold, child-level score | array (per fold, GPU) |
-| 22 | `22_submit_medication_contrast.sh` | medication contrasts (unmedicated vs medicated ADHD against controls, normalisation axis, drugs) | single (after stage 09) |
+| 22 | `22_submit_medication_contrast.sh` | medication contrasts (unmedicated vs medicated ADHD against controls, normalisation axis, drugs) | array (per pooled family / stratum config) |
 
 Stages 01, 03, 04, 07 and 10 end by running the BIDS validator on the dataset they
 wrote (`validate_bids` in `env.sh`); the job fails when it reports an error. Each

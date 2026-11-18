@@ -28,7 +28,13 @@ Contrasts:
 - ``lisdexamfetamine_vs_control`` against ``methylphenidate_vs_control`` draws matched to
   the lisdexamfetamine children, and ``methylphenidate_vs_lisdexamfetamine`` directly.
 
-Each contrast also gets the AUC of the covariates alone, its floor.
+Each contrast also gets the AUC of the covariates alone, its floor. A contrast whose
+groups are too small in the cohort (fewer than :data:`MIN_GROUP` children, or too few to
+draw from) is recorded as skipped.
+
+The cohort is any ADHD-vs-controls config (a family or stratum of
+``configs/cohorts/medicated_adhd_vs_controls/pooled``) with its ADHD group widened to
+every ADHD child, medicated or not (:func:`widen_cohort`).
 """
 
 from __future__ import annotations
@@ -59,7 +65,29 @@ logger = logging.getLogger(__name__)
 
 COVARIATES = ("epilepsy", "autism", "age_group", "sex")
 CONTROL_RATIO = 2
+MIN_GROUP = 20
 DRUGS = {"Methylphenidate": "methylphenidate", "Lisdexamfetamine": "lisdexamfetamine"}
+
+
+def widen_cohort(config_path: Path, out_dir: Path) -> Path:
+    """The cohort config with its ADHD group(s) no longer filtered on medication, written
+    to ``out_dir``."""
+    import yaml
+
+    config = yaml.safe_load(Path(config_path).read_text())
+    for group in config["group_filters"]:
+        if [str(v) for v in group.get("adhd", [])] == ["1"]:
+            group.pop("psychostimulant", None)
+            group.pop("psychostimulant_category", None)
+    config["dataset_name"] = f"contrast_{config['dataset_name']}"
+    path = Path(out_dir) / "cohort.yaml"
+    path.write_text(yaml.safe_dump(config, sort_keys=False))
+    return path
+
+
+def _check_size(*groups) -> None:
+    if min(len(g) for g in groups) < MIN_GROUP:
+        raise ValueError(f"A group has fewer than {MIN_GROUP} children: {[len(g) for g in groups]}")
 
 
 def child_groups(meta: pd.DataFrame) -> pd.Series:
@@ -183,6 +211,7 @@ def _against_draws(blocks, meta, reference, pool, control, n_draws, n_repeats, s
     """Per draw, controls matched to ``reference`` and a matched draw of ``pool``: AUC of
     ``reference`` and of the drawn ``pool`` children, each vs those controls, and of the
     covariates alone."""
+    _check_size(reference, pool, control)
 
     def one(draw):
         rng = np.random.default_rng(seed + 1000 + draw)
@@ -214,6 +243,7 @@ def _against_draws(blocks, meta, reference, pool, control, n_draws, n_repeats, s
 def _direct(blocks, meta, positive, pool, n_draws, n_repeats, seed, n_jobs):
     """Matched draws of ``pool`` (label 0) vs ``positive`` (label 1): AUC per draw, and
     of the covariates alone."""
+    _check_size(positive, pool)
 
     def one(draw):
         rng = np.random.default_rng(seed + 2000 + draw)
@@ -252,20 +282,77 @@ def run(blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1) -> tuple[dict,
     )
     args = (n_draws, n_repeats, seed, n_jobs)
     summary, draws = {}, {}
-    summary["unmedicated_vs_control"], pair = _against_draws(
-        blocks, meta, unmedicated, medicated, control, *args
+
+    def attempt(name, columns, fn, *fn_args):
+        try:
+            summary[name], values = fn(*fn_args)
+        except ValueError as error:
+            logger.warning("%s skipped: %s", name, error)
+            summary[name] = {"skipped": str(error)}
+            return
+        values = np.asarray(values).reshape(len(values), -1)
+        for column, value in zip(columns, values.T):
+            draws[column] = value
+
+    attempt(
+        "unmedicated_vs_control",
+        ["unmedicated_vs_control", "medicated_vs_control"],
+        _against_draws,
+        blocks,
+        meta,
+        unmedicated,
+        medicated,
+        control,
+        *args,
     )
-    draws["unmedicated_vs_control"], draws["medicated_vs_control"] = pair.T
-    summary["lisdexamfetamine_vs_control"], pair = _against_draws(
-        blocks, meta, ldx, mph, control, *args
+    attempt(
+        "lisdexamfetamine_vs_control",
+        ["lisdexamfetamine_vs_control", "methylphenidate_vs_control"],
+        _against_draws,
+        blocks,
+        meta,
+        ldx,
+        mph,
+        control,
+        *args,
     )
-    draws["lisdexamfetamine_vs_control"], draws["methylphenidate_vs_control"] = pair.T
-    summary["medicated_vs_unmedicated"], draws["medicated_vs_unmedicated"] = _direct(
-        blocks, meta, unmedicated, medicated, *args
+    attempt(
+        "medicated_vs_unmedicated",
+        ["medicated_vs_unmedicated"],
+        _direct,
+        blocks,
+        meta,
+        unmedicated,
+        medicated,
+        *args,
     )
-    summary["methylphenidate_vs_lisdexamfetamine"], draws["methylphenidate_vs_lisdexamfetamine"] = (
-        _direct(blocks, meta, ldx, mph, *args)
+    attempt(
+        "methylphenidate_vs_lisdexamfetamine",
+        ["methylphenidate_vs_lisdexamfetamine"],
+        _direct,
+        blocks,
+        meta,
+        ldx,
+        mph,
+        *args,
     )
+    attempt(
+        "axis", ["normalisation_index"], _axis, blocks, meta, unmedicated, medicated, control, *args
+    )
+    summary["n_children"] = {
+        "control": len(control),
+        "unmedicated": len(unmedicated),
+        "medicated": len(medicated),
+        "methylphenidate": len(mph),
+        "lisdexamfetamine": len(ldx),
+    }
+    return summary, pd.DataFrame(draws)
+
+
+def _axis(blocks, meta, unmedicated, medicated, control, n_draws, n_repeats, seed, n_jobs):
+    """Normalisation index of matched draws of medicated children on the axis of
+    unmedicated ADHD vs matched controls."""
+    _check_size(unmedicated, medicated, control)
 
     def axis(draw):
         rng = np.random.default_rng(seed + 3000 + draw)
@@ -280,13 +367,11 @@ def run(blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1) -> tuple[dict,
         )
 
     axes = np.array(Parallel(n_jobs=n_jobs)(delayed(axis)(d) for d in range(n_draws)))
-    summary["axis"] = {
+    return {
         "normalisation_index": _interval(axes[:, 0]),
         "unmedicated_vs_control_auc": _interval(axes[:, 1]),
         "medicated_vs_control_auc": _interval(axes[:, 2]),
-    }
-    draws["normalisation_index"] = axes[:, 0]
-    return summary, pd.DataFrame(draws)
+    }, axes[:, 0]
 
 
 def load_children(args) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
@@ -326,8 +411,11 @@ def load_children(args) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--cohort_config", default="configs/contrasts/adhd_medication.yaml")
-    parser.add_argument("--target", default="adhd_vs_ctrl")
+    parser.add_argument(
+        "--cohort_config",
+        default="configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml",
+    )
+    parser.add_argument("--target", default="med_adhd_vs_ctrl")
     parser.add_argument("--desc", default="base", choices=["base", "baserejected"])
     parser.add_argument("--models", nargs="+", default=["cbramod", "labram", "reve", "luna"])
     parser.add_argument("--bids_root", default=None)
@@ -343,6 +431,7 @@ def main() -> None:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    args.cohort_config = str(widen_cohort(args.cohort_config, args.output_dir))
     blocks, meta = load_children(args)
     summary, draws = run(blocks, meta, args.n_draws, args.n_repeats, n_jobs=args.n_jobs)
     draws.to_csv(args.output_dir / "draws.csv", index=False)
