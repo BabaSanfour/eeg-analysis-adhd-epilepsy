@@ -9,19 +9,21 @@ way: a logistic regression per model and condition (fold-local scaling, PCA,
 fold over repeated stratified 5-fold splits.
 
 Groups of different size or make-up are never compared directly. Where a contrast is
-set against a smaller group (``reference``), the larger group is drawn many times at the
-reference's size with the same make-up in every cell of :data:`COVARIATES` (epilepsy,
-autism, age group, sex), so the draws differ from the reference only in medication.
+set against a smaller group (``reference``), each of many draws takes controls with the
+reference's make-up in every cell of :data:`COVARIATES` (epilepsy, autism, age group, sex),
+:data:`CONTROL_RATIO` times its size, and the larger ADHD group at the reference's size and
+make-up; the reference and the drawn group are each set against the same drawn controls,
+so they differ only in medication and the covariates carry nothing.
 
 Contrasts:
 
-- ``unmedicated_vs_control`` against ``medicated_vs_control`` draws matched to the
-  unmedicated children: if medication normalises the EEG, unmedicated children separate
-  from controls better than most draws.
-- ``axis``: a classifier trained on unmedicated ADHD vs controls places the medicated
-  children (never seen in training) on that axis; the normalisation index is their mean
-  score's distance from the controls', relative to the unmedicated children's (0: like
-  controls, 1: like unmedicated ADHD), per matched draw.
+- ``unmedicated_vs_control`` against ``medicated_vs_control``: if medication normalises
+  the EEG, unmedicated children separate from the controls better than medicated ones
+  (difference per draw, same controls).
+- ``axis``: a classifier trained on unmedicated ADHD vs the drawn controls places the drawn
+  medicated children (never seen in training) on that axis; the normalisation index is
+  their mean score's distance from the controls', relative to the unmedicated children's
+  (0: like controls, 1: like unmedicated ADHD).
 - ``medicated_vs_unmedicated``: the two ADHD groups directly, medicated drawn matched.
 - ``lisdexamfetamine_vs_control`` against ``methylphenidate_vs_control`` draws matched to
   the lisdexamfetamine children, and ``methylphenidate_vs_lisdexamfetamine`` directly.
@@ -56,6 +58,7 @@ from eeg_adhd_epilepsy.analysis.child_level import (
 logger = logging.getLogger(__name__)
 
 COVARIATES = ("epilepsy", "autism", "age_group", "sex")
+CONTROL_RATIO = 2
 DRUGS = {"Methylphenidate": "methylphenidate", "Lisdexamfetamine": "lisdexamfetamine"}
 
 
@@ -68,16 +71,21 @@ def child_groups(meta: pd.DataFrame) -> pd.Series:
 
 
 def matched_draw(
-    pool: pd.DataFrame, reference: pd.DataFrame, rng: np.random.Generator, covariates=COVARIATES
+    pool: pd.DataFrame,
+    reference: pd.DataFrame,
+    rng: np.random.Generator,
+    covariates=COVARIATES,
+    ratio: int = 1,
 ) -> pd.Index:
-    """Children of ``pool``, as many as ``reference`` has in every covariate cell.
+    """Children of ``pool``, ``ratio`` times as many as ``reference`` has in every covariate
+    cell.
 
     Drops the last covariate (and so on) while a cell of the reference has more children
     than the pool has in it.
     """
     for k in range(len(covariates), 0, -1):
         cols = list(covariates[:k])
-        need = reference.groupby(cols).size()
+        need = reference.groupby(cols).size() * ratio
         have = pool.groupby(cols).size().reindex(need.index, fill_value=0)
         if (have >= need).all():
             break
@@ -159,30 +167,48 @@ def normalisation_index(score: pd.Series, control, unmedicated, medicated) -> fl
     return float((score.loc[medicated].mean() - c) / (u - c))
 
 
-def _against_draws(blocks, meta, reference, pool, others, n_draws, n_repeats, seed, n_jobs):
-    """AUC of ``reference`` vs ``others`` and of matched draws of ``pool`` vs ``others``."""
-    y = pd.Series(1, index=reference).combine_first(pd.Series(0, index=others)).astype(int)
-    ref_auc = auc(y, contrast_scores(blocks, y, n_repeats, seed))
-    cov_auc = auc(y, contrast_scores({"covariates": covariate_block(meta)}, y, n_repeats, seed))
+def _labels(positive, negative) -> pd.Series:
+    return pd.Series(1, index=positive).combine_first(pd.Series(0, index=negative)).astype(int)
+
+
+def _interval(values) -> dict:
+    values = np.asarray(values)
+    return {
+        "median": float(np.median(values)),
+        "95": [float(np.quantile(values, 0.025)), float(np.quantile(values, 0.975))],
+    }
+
+
+def _against_draws(blocks, meta, reference, pool, control, n_draws, n_repeats, seed, n_jobs):
+    """Per draw, controls matched to ``reference`` and a matched draw of ``pool``: AUC of
+    ``reference`` and of the drawn ``pool`` children, each vs those controls, and of the
+    covariates alone."""
 
     def one(draw):
         rng = np.random.default_rng(seed + 1000 + draw)
-        chosen = matched_draw(meta.loc[pool], meta.loc[reference], rng)
-        yd = pd.Series(1, index=chosen).combine_first(pd.Series(0, index=others)).astype(int)
-        return auc(yd, contrast_scores(blocks, yd, n_repeats, seed))
+        ref = meta.loc[reference]
+        controls = matched_draw(meta.loc[control], ref, rng, ratio=CONTROL_RATIO)
+        chosen = matched_draw(meta.loc[pool], ref, rng)
+        y_ref, y_pool = _labels(reference, controls), _labels(chosen, controls)
+        covariates = {"covariates": covariate_block(meta)}
+        return (
+            auc(y_ref, contrast_scores(blocks, y_ref, n_repeats, seed)),
+            auc(y_pool, contrast_scores(blocks, y_pool, n_repeats, seed)),
+            auc(y_ref, contrast_scores(covariates, y_ref, n_repeats, seed)),
+        )
 
     draws = np.array(Parallel(n_jobs=n_jobs)(delayed(one)(d) for d in range(n_draws)))
+    difference = draws[:, 0] - draws[:, 1]
     return {
-        "reference_auc": ref_auc,
-        "covariates_auc": cov_auc,
-        "draws_auc_median": float(np.median(draws)),
-        "draws_auc_95": [float(np.quantile(draws, 0.025)), float(np.quantile(draws, 0.975))],
-        # one-sided: how often a matched draw separates at least as well as the reference
-        "p_draws_at_least_reference": float((1 + (draws >= ref_auc).sum()) / (1 + len(draws))),
+        "reference_auc": _interval(draws[:, 0]),
+        "drawn_auc": _interval(draws[:, 1]),
+        "difference": _interval(difference),
+        "share_of_draws_reference_higher": float((difference > 0).mean()),
+        "covariates_auc": _interval(draws[:, 2]),
         "n_reference": int(len(reference)),
-        "n_others": int(len(others)),
+        "n_controls": int(CONTROL_RATIO * len(reference)),
         "n_draws": int(len(draws)),
-    }, draws
+    }, draws[:, :2]
 
 
 def _direct(blocks, meta, positive, pool, n_draws, n_repeats, seed, n_jobs):
@@ -226,12 +252,14 @@ def run(blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1) -> tuple[dict,
     )
     args = (n_draws, n_repeats, seed, n_jobs)
     summary, draws = {}, {}
-    summary["unmedicated_vs_control"], draws["medicated_vs_control"] = _against_draws(
+    summary["unmedicated_vs_control"], pair = _against_draws(
         blocks, meta, unmedicated, medicated, control, *args
     )
-    summary["lisdexamfetamine_vs_control"], draws["methylphenidate_vs_control"] = _against_draws(
+    draws["unmedicated_vs_control"], draws["medicated_vs_control"] = pair.T
+    summary["lisdexamfetamine_vs_control"], pair = _against_draws(
         blocks, meta, ldx, mph, control, *args
     )
+    draws["lisdexamfetamine_vs_control"], draws["methylphenidate_vs_control"] = pair.T
     summary["medicated_vs_unmedicated"], draws["medicated_vs_unmedicated"] = _direct(
         blocks, meta, unmedicated, medicated, *args
     )
@@ -239,28 +267,25 @@ def run(blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1) -> tuple[dict,
         _direct(blocks, meta, ldx, mph, *args)
     )
 
-    y = pd.Series(1, index=unmedicated).combine_first(pd.Series(0, index=control)).astype(int)
-    score = axis_scores(blocks, y, medicated, seed)
-    rng = np.random.default_rng(seed + 3000)
-    index = []
-    for _ in range(n_draws):
-        chosen = matched_draw(meta.loc[medicated], meta.loc[unmedicated], rng)
-        index.append(normalisation_index(score, control, unmedicated, chosen))
-    index = np.array(index)
-    ym = pd.Series(1, index=medicated).combine_first(pd.Series(0, index=control)).astype(int)
+    def axis(draw):
+        rng = np.random.default_rng(seed + 3000 + draw)
+        ref = meta.loc[unmedicated]
+        controls = matched_draw(meta.loc[control], ref, rng, ratio=CONTROL_RATIO)
+        chosen = matched_draw(meta.loc[medicated], ref, rng)
+        score = axis_scores(blocks, _labels(unmedicated, controls), chosen, seed)
+        return (
+            normalisation_index(score, controls, unmedicated, chosen),
+            auc(_labels(unmedicated, controls), score),
+            auc(_labels(chosen, controls), score),
+        )
+
+    axes = np.array(Parallel(n_jobs=n_jobs)(delayed(axis)(d) for d in range(n_draws)))
     summary["axis"] = {
-        "unmedicated_vs_control_auc": auc(y, score),
-        "medicated_vs_control_auc": auc(ym, score),
-        "normalisation_index_all_medicated": normalisation_index(
-            score, control, unmedicated, medicated
-        ),
-        "normalisation_index_matched_median": float(np.median(index)),
-        "normalisation_index_matched_95": [
-            float(np.quantile(index, 0.025)),
-            float(np.quantile(index, 0.975)),
-        ],
+        "normalisation_index": _interval(axes[:, 0]),
+        "unmedicated_vs_control_auc": _interval(axes[:, 1]),
+        "medicated_vs_control_auc": _interval(axes[:, 2]),
     }
-    draws["normalisation_index"] = index
+    draws["normalisation_index"] = axes[:, 0]
     return summary, pd.DataFrame(draws)
 
 

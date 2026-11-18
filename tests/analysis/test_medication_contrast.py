@@ -53,11 +53,11 @@ def test_run_finds_that_medication_brings_children_towards_controls():
     blocks, meta = _children()
     summary, draws = run(blocks, meta, n_draws=5, n_repeats=1)
     unmedicated = summary["unmedicated_vs_control"]
-    assert unmedicated["reference_auc"] > 0.8 > unmedicated["draws_auc_95"][1]
-    assert abs(unmedicated["covariates_auc"] - 0.5) < 0.15  # covariates carry nothing here
+    assert unmedicated["reference_auc"]["median"] > 0.8 > unmedicated["drawn_auc"]["95"][1]
+    assert unmedicated["share_of_draws_reference_higher"] == 1.0
+    assert unmedicated["covariates_auc"]["median"] < 0.65  # matched: covariates carry nothing
     assert summary["medicated_vs_unmedicated"]["auc_median"] > 0.6
-    assert 0.0 < summary["axis"]["normalisation_index_matched_median"] < 0.5
-    # both drugs shift equally: lisdexamfetamine is inside the methylphenidate draws
-    drugs = summary["lisdexamfetamine_vs_control"]
-    assert drugs["draws_auc_95"][0] - 0.1 < drugs["reference_auc"] < drugs["draws_auc_95"][1] + 0.1
+    assert 0.0 < summary["axis"]["normalisation_index"]["median"] < 0.5
+    # both drugs shift equally: no consistent difference between them
+    assert abs(summary["lisdexamfetamine_vs_control"]["difference"]["median"]) < 0.1
     assert len(draws) == 5 and "normalisation_index" in draws
