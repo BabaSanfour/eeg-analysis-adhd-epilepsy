@@ -29,8 +29,8 @@ from eeg_adhd_epilepsy.analysis.ensemble import evaluate
 logger = logging.getLogger(__name__)
 
 BATCH_SIZE = {"cbramod": 256, "luna": 256, "reve": 64}
-# The saved epochs hold volts; the models expect microvolts, as the embeddings were
-# extracted (``units="uV"``).
+# The saved epochs hold volts; the models expect microvolts, as the cohort is loaded
+# (``units: uV``) and the embeddings were extracted.
 MICROVOLTS = 1e6
 
 
@@ -65,6 +65,8 @@ def load_cohort(args):
         config, input_mode="raw", layout_mode="sensor", segment_duration=10.0, overlap=0.0
     )
     loader_args.representation = "epoch"
+    if loader_args.units != "uV":
+        raise ValueError(f"The cohort must be loaded in microvolts, not {loader_args.units}.")
     eval_spec = next(e for e in config["evals"] if e["name"] == args.target)
     parts, labels = [], {}
     for condition in CONDITIONS:
@@ -84,7 +86,7 @@ def load_cohort(args):
         subject = meta[config["subject_col"]].astype(str).to_numpy()
         parts.append(
             (
-                np.asarray(selected.X, dtype=np.float32) * MICROVOLTS,
+                np.asarray(selected.X, dtype=np.float32),
                 child,
                 subject,
                 np.full(len(child), condition),
