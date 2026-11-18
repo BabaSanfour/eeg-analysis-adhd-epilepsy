@@ -602,6 +602,13 @@ def main() -> None:
         help="Run one model of the analysis config, by its name (else its model_key).",
     )
     parser.add_argument(
+        "--targets",
+        nargs="+",
+        default=None,
+        help="Evals to decode, in place of the analysis config's targets (e.g. the clinical "
+        "question of a cohort whose eval has another name).",
+    )
+    parser.add_argument(
         "--pooled_only",
         action="store_true",
         help="Fit EO and EC pooled only (the single-condition fits ran in a run of their own).",
@@ -649,6 +656,8 @@ def main() -> None:
     )
     if args.pooled_only:
         config["pooled_only"] = True
+    if args.targets:
+        config["targets"] = list(args.targets)
     if args.model_key:
         config["models"] = [
             model

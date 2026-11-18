@@ -40,6 +40,8 @@ fi
 model=${MODELS[$((TASK_ID - 1))]}
 
 # POOLED_ONLY=1 fits EO and EC pooled only (a run of its own next to the per-condition one).
+# TARGETS=<eval> decodes that eval in place of the analysis config's targets (a cohort
+# whose clinical question has another name, e.g. ldx_vs_mph).
 # FOUNDATION_N_JOBS is how many fits share the GPU at once: 1 on a 10 or 20 GB
 # slice, more on a full H100 (each fit also needs one core and its own memory).
 # GPU job (training runs on-device); no BLAS pinning.
@@ -60,4 +62,5 @@ python -m eeg_adhd_epilepsy.analysis.foundation_decoding \
     --model_key "$model" \
     --n_jobs "${FOUNDATION_N_JOBS:-1}" \
     ${POOLED_ONLY:+--pooled_only} \
+    ${TARGETS:+--targets $TARGETS} \
     --no-write-shared-comparison-report
