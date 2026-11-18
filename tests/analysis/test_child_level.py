@@ -51,28 +51,22 @@ def test_linear_and_attention_scores_find_a_child_level_signal():
     assert np.allclose(weights.groupby("child")["attention"].sum(), 1.0, atol=1e-5)
 
 
-def test_run_scores_every_combination_on_two_sets_of_children():
+def test_run_scores_each_method_on_every_child_with_its_inputs():
     X, child, condition, y = _windows(n_children=40)
+    # c00-c04 have no EC window, and only c00-c29 have descriptors
+    keep = ~(np.isin(child, y.index[:5]) & (condition == CONDITIONS[1]))
+    X, child, condition = X[keep], child[keep], condition[keep]
     windows = {"m": (X, child, condition)}
     blocks = child_blocks(X, child, condition, "m")
-    # descriptors for 30 of the 40 children
     has_desc = np.isin(child, y.index[:30])
     descriptors = {
         "summary": child_blocks(X[has_desc, :3], child[has_desc], condition[has_desc], "desc")
     }
-    tables, summary, attention = run(y, windows, blocks, descriptors, n_permutations=9, seeds=(0,))
-    assert len(tables["embeddings"]) == 40 and len(tables["descriptors"]) == 30
-    expected = {
-        "embeddings:mean|EO|m",
-        "embeddings:attention|EO+EC|m",
-        "embeddings:late|headline|embeddings",
-        "descriptors:mean|EO+EC+diff|desc-summary",
-        "descriptors:early|EO+EC|m+desc-summary",
-        "descriptors:late|EC-EO|m+desc-summary",
-        "descriptors:late|headline|descriptors",
-    }
-    assert expected <= set(summary)
-    assert all(t.drop(columns="y").notna().all().all() for t in tables.values())
-    assert summary["embeddings:mean|EC|m"]["n_children"] == 40 and "m" in attention
-    # the signal is in EC only
-    assert summary["embeddings:mean|EC|m"]["auc"] > summary["embeddings:mean|EO|m"]["auc"]
+    table, summary, attention = run(y, windows, blocks, descriptors, n_permutations=9, seeds=(0,))
+    n = {name: r["n_children"] for name, r in summary.items()}
+    assert n["mean|EO|m"] == 40 and n["mean|EC|m"] == 35 and n["mean|EO+EC|m"] == 35
+    assert n["mean|EO|desc-summary"] == 30 and n["early|EO|m+desc-summary"] == 30
+    assert n["late|EO|m+desc-summary"] == 40  # each child's available scores
+    assert n["attention|EO+EC|m"] == 40 and n["late|headline|every-input"] == 40
+    assert {"late|EC-EO|m+desc-summary", "attention|EC|m"} <= set(summary) and "m" in attention
+    assert summary["mean|EC|m"]["auc"] > summary["mean|EO|m"]["auc"]  # the signal is in EC
