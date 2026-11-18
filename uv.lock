@@ -630,7 +630,7 @@ wheels = [
 [[package]]
 name = "coco-pipe"
 version = "0.0.3"
-source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=fix%2Fcbramod-encoder-features#fab1a8a91065f3a4e6edf491004f3fcd42e15ba7" }
+source = { git = "https://github.com/BabaSanfour/coco-pipe.git?rev=feat%2Fcontinued-pretraining#7b88803f31dcf35453a40594b84aa792f3b4d5e0" }
 dependencies = [
     { name = "filelock" },
     { name = "h5netcdf", extra = ["h5py"] },
@@ -1004,7 +1004,7 @@ requires-dist = [
     { name = "autoreject" },
     { name = "bids-validator-deno" },
     { name = "braindecode", git = "https://github.com/braindecode/braindecode.git?rev=master" },
-    { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=fix%2Fcbramod-encoder-features" },
+    { name = "coco-pipe", extras = ["decoding", "descriptors", "foundation"], git = "https://github.com/BabaSanfour/coco-pipe.git?rev=feat%2Fcontinued-pretraining" },
     { name = "filelock", specifier = ">=3.20.4" },
     { name = "mne", specifier = ">=1.13" },
     { name = "mne-bids", git = "https://github.com/mne-tools/mne-bids.git?rev=main" },
