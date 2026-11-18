@@ -64,22 +64,24 @@ def linear_scores(
     blocks: dict[str, pd.DataFrame],
     y: pd.Series,
     folds: list[tuple[np.ndarray, np.ndarray]],
-    n_components: int | None = 10,
+    n_components: int | None | dict[str, int | None] = 10,
     seed: int = 0,
 ) -> pd.Series:
     """Out-of-fold scores of a logistic regression on standardised (and PCA-reduced) blocks.
 
-    Each block is scaled, and reduced to ``n_components`` (``None``: kept whole) on the
-    training children only; the inverse regularisation is chosen by inner CV on the AUC.
+    Each block is scaled, and reduced to ``n_components`` (``None``: kept whole; a dict gives
+    it per block name) on the training children only; the inverse regularisation is chosen
+    by inner CV on the AUC.
     """
     scores = pd.Series(np.nan, index=y.index)
     for train, test in folds:
         parts_train, parts_test = [], []
-        for block in blocks.values():
+        for name, block in blocks.items():
             block = block.loc[y.index].to_numpy()
+            k = n_components.get(name) if isinstance(n_components, dict) else n_components
             steps = [StandardScaler()]
-            if n_components is not None and block.shape[1] > n_components:
-                steps.append(PCA(n_components, random_state=seed))
+            if k is not None and block.shape[1] > k:
+                steps.append(PCA(k, random_state=seed))
             pipe = make_pipeline(*steps)
             parts_train.append(pipe.fit_transform(block[train]))
             parts_test.append(pipe.transform(block[test]))
@@ -334,8 +336,26 @@ def load_inputs(args) -> tuple[pd.Series, dict, dict, dict]:
 # ---------------------------------------------------------------- run
 
 
+CONDITION_SETS = {
+    "EO": ("EO",),
+    "EC": ("EC",),
+    "EC-EO": ("EC-EO",),
+    "EO+EC": ("EO", "EC"),
+    "EO+EC+diff": ("EO", "EC", "EC-EO"),
+}
+
+
 def run(labels, windows, blocks, descriptors, n_permutations=1000, seeds=(0, 1, 2)):
-    """Every method on the children common to all inputs; returns scores and summary."""
+    """Every combination on the children common to all inputs; returns scores and summary.
+
+    For each condition set (EO, EC, EC - EO, EO + EC, EO + EC + difference) and each source
+    (one model's embeddings, the descriptors): a logistic regression on that source; then
+    each model and all models together, alone or with the descriptors, by early fusion (one
+    logistic regression on all blocks) and late fusion (rank average of the sources' scores).
+    Attention pooling runs per model on EO, EC and EO + EC bags. The headline is fixed in
+    advance: the late fusion of every model and the summary descriptors (EO + EC + difference)
+    with every model's EO + EC attention scores.
+    """
     children = labels.index
     for frame in [*blocks.values(), *(b for d in descriptors.values() for b in d.values())]:
         children = children.intersection(frame.index)
@@ -343,40 +363,54 @@ def run(labels, windows, blocks, descriptors, n_permutations=1000, seeds=(0, 1, 
     folds = list(StratifiedKFold(5, shuffle=True, random_state=0).split(np.zeros(len(y)), y))
     logger.info("%d children (%.2f positive)", len(y), y.mean())
 
-    scores, attention = {}, {}
-    for model in windows:
-        mine = {k: v for k, v in blocks.items() if k.startswith(f"{model}_")}
-        scores[f"mean_{model}_EO"] = linear_scores(
-            {k: mine[k] for k in mine if k.endswith("_EO")}, y, folds
-        )
-        scores[f"mean_{model}_EC"] = linear_scores(
-            {k: mine[k] for k in mine if k.endswith("_EC")}, y, folds
-        )
-        scores[f"mean_{model}"] = linear_scores(mine, y, folds)
-        X, child, condition = windows[model]
-        keep = np.isin(np.asarray(child).astype(str), y.index)
-        scores[f"attention_{model}"], attention[model] = attention_scores(
-            X[keep], child[keep], condition[keep], y, folds, seeds=seeds
-        )
-        logger.info("%s done", model)
-    scores["mean_all_models"] = linear_scores(blocks, y, folds)
+    models = list(windows)
+    sources = {
+        m: {k.removeprefix(f"{m}_"): v for k, v in blocks.items() if k.startswith(f"{m}_")}
+        for m in models
+    }
     for kind, desc in descriptors.items():
-        n = None if kind == "summary" else 10
-        scores[f"descriptors_{kind}"] = linear_scores(desc, y, folds, n_components=n)
-        # early fusion: summary blocks enter whole, the embedding blocks reduced by PCA
-        fused = {**desc, **blocks}
-        scores[f"early_fusion_{kind}"] = (
-            linear_scores(fused, y, folds) if n else _mixed(desc, blocks, y, folds)
-        )
-    late = {k: v for k, v in scores.items() if k.startswith("mean_") and k.count("_") == 1}
-    scores["late_fusion_embeddings"] = late_fusion(late)
-    scores["late_fusion_embeddings_attention"] = late_fusion(
-        {**late, **{k: v for k, v in scores.items() if k.startswith("attention_")}}
-    )
-    for kind in descriptors:
-        scores[f"late_fusion_{kind}"] = late_fusion(
-            {**late, "descriptors": scores[f"descriptors_{kind}"]}
-        )
+        sources[f"desc-{kind}"] = {k.removeprefix("desc_"): v for k, v in desc.items()}
+
+    def width(source):  # the summary descriptors enter whole, the rest reduced by PCA
+        return None if source == "desc-summary" else 10
+
+    def pick(source, conditions):
+        return {f"{source}_{c}": sources[source][c] for c in conditions}
+
+    groups = [[m] for m in models] + ([models] if len(models) > 1 else [])
+    scores, single = {}, {}
+    for cname, conditions in CONDITION_SETS.items():
+        for source in sources:
+            single[source, cname] = linear_scores(pick(source, conditions), y, folds, width(source))
+            scores[f"mean|{cname}|{source}"] = single[source, cname]
+        for kind in [None, *descriptors]:
+            for group in groups:
+                if kind is None and len(group) == 1:
+                    continue
+                parts = group + ([f"desc-{kind}"] if kind else [])
+                label = (group[0] if len(group) == 1 else "all") + (f"+desc-{kind}" if kind else "")
+                fused = {k: v for part in parts for k, v in pick(part, conditions).items()}
+                widths = {k: width(part) for part in parts for k in pick(part, conditions)}
+                scores[f"early|{cname}|{label}"] = linear_scores(fused, y, folds, widths)
+                scores[f"late|{cname}|{label}"] = late_fusion({p: single[p, cname] for p in parts})
+        logger.info("%s done", cname)
+
+    attention = {}
+    bags = {"EO": CONDITIONS[:1], "EC": CONDITIONS[1:], "EO+EC": CONDITIONS}
+    for model in models:
+        X, child, condition = windows[model]
+        child = np.asarray(child).astype(str)
+        for bag, conditions in bags.items():
+            rows = np.isin(child, y.index) & np.isin(condition, conditions)
+            scores[f"attention|{bag}|{model}"], weights = attention_scores(
+                X[rows], child[rows], condition[rows], y, folds, seeds=seeds
+            )
+            if bag == "EO+EC":
+                attention[model] = weights
+        logger.info("attention %s done", model)
+    headline = {s: single[s, "EO+EC+diff"] for s in sources if s != "desc-pca"}
+    headline |= {f"attention-{m}": scores[f"attention|EO+EC|{m}"] for m in models}
+    scores["late|headline|everything"] = late_fusion(headline)
 
     table = pd.DataFrame(scores).assign(y=y)
     summary = {}
@@ -386,22 +420,6 @@ def run(labels, windows, blocks, descriptors, n_permutations=1000, seeds=(0, 1, 
         )
         summary[name] = evaluate(children_frame, n_permutations=n_permutations)
     return table, summary, attention
-
-
-def _mixed(desc, blocks, y, folds):
-    """Early fusion with the summary descriptors whole and the embeddings reduced by PCA."""
-    scores = pd.Series(np.nan, index=y.index)
-    for train, test in folds:
-        reduced = {}
-        for name, block in blocks.items():
-            pipe = make_pipeline(StandardScaler(), PCA(min(10, block.shape[1]), random_state=0))
-            values = block.loc[y.index].to_numpy()
-            pipe.fit(values[train])
-            reduced[name] = pd.DataFrame(pipe.transform(values), index=y.index)
-        scores.iloc[test] = linear_scores(
-            {**desc, **reduced}, y, [(train, test)], n_components=None
-        ).iloc[test]
-    return scores
 
 
 def main() -> None:
@@ -438,12 +456,12 @@ def main() -> None:
         frame.to_csv(args.output_dir / f"attention_{model}.csv", index=False)
     text = json.dumps(summary, indent=2)
     (args.output_dir / "summary.json").write_text(text + "\n")
-    for name, r in summary.items():
+    for name, r in sorted(summary.items(), key=lambda item: -item[1]["auc"]):
         auc = (
             f"AUC {r['auc']:.3f} [{r['auc_ci_low']:.3f}-{r['auc_ci_high']:.3f}] p {r['auc_p']:.4f}"
         )
         ba = r["balanced_accuracy_median_split"]
-        print(f"{name:40s} {auc} BA {ba:.3f} n {r['n_children']}")
+        print(f"{name:45s} {auc} BA {ba:.3f} n {r['n_children']}")
 
 
 if __name__ == "__main__":

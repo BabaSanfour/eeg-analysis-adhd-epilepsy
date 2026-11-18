@@ -57,7 +57,17 @@ def test_run_scores_every_method_on_the_same_children():
     blocks = child_blocks(X, child, condition, "m")
     descriptors = {"summary": child_blocks(X[:, :3], child, condition, "desc")}
     table, summary, attention = run(y, windows, blocks, descriptors, n_permutations=9, seeds=(0,))
-    assert {"mean_m", "attention_m", "descriptors_summary", "early_fusion_summary"} <= set(table)
-    assert {"late_fusion_embeddings", "late_fusion_summary"} <= set(summary)
+    expected = {
+        "mean|EO|m",
+        "mean|EO+EC+diff|desc-summary",
+        "early|EO+EC|m+desc-summary",
+        "late|EC-EO|m+desc-summary",
+        "attention|EC|m",
+        "attention|EO+EC|m",
+        "late|headline|everything",
+    }
+    assert expected <= set(table) and set(table) - {"y"} == set(summary)
     assert table.drop(columns="y").notna().all().all() and len(table) == 40
-    assert summary["mean_m"]["n_children"] == 40 and "m" in attention
+    assert summary["mean|EC|m"]["n_children"] == 40 and "m" in attention
+    # the signal is in EC only
+    assert summary["mean|EC|m"]["auc"] > summary["mean|EO|m"]["auc"]
