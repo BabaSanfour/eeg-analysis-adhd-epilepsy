@@ -4,17 +4,19 @@ import yaml
 
 from eeg_adhd_epilepsy.analysis.medication_contrast import (
     COVARIATES,
+    _drug_transfer,
     matched_draw,
     run,
     widen_cohort,
 )
 
 
-def _children(seed=0):
-    """Controls, unmedicated ADHD shifted far from them, medicated ADHD shifted a little."""
+def _children(seed=0, drug_shift=(0.3, 0.3)):
+    """Controls, unmedicated ADHD shifted far from them, medicated ADHD shifted a little
+    (methylphenidate, lisdexamfetamine)."""
     rng = np.random.default_rng(seed)
     groups = [("control", 200, 0.0), ("unmedicated", 40, 1.5)]
-    groups += [("Methylphenidate", 110, 0.3), ("Lisdexamfetamine", 40, 0.3)]
+    groups += [("Methylphenidate", 110, drug_shift[0]), ("Lisdexamfetamine", 40, drug_shift[1])]
     rows, X = [], []
     for name, n, shift in groups:
         for _ in range(n):
@@ -66,6 +68,7 @@ def test_run_finds_that_medication_brings_children_towards_controls():
     assert 0.0 < summary["axis"]["normalisation_index"]["median"] < 0.5
     # unmedicated children lie beyond the medicated ones on the medicated-vs-control axis
     assert summary["transfer"]["adhd_index"]["median"] > 1.0
+    assert "methylphenidate_on_lisdexamfetamine_axis_index" in summary["drug_transfer"]
     # both drugs shift equally: no consistent difference between them
     assert abs(summary["lisdexamfetamine_vs_control"]["difference"]["median"]) < 0.1
     assert len(draws) == 5 and "normalisation_index" in draws
@@ -99,3 +102,26 @@ def test_run_skips_contrasts_whose_groups_are_too_small():
     assert "skipped" in summary["unmedicated_vs_control"] and "skipped" in summary["axis"]
     assert "skipped" in summary["transfer"]
     assert "difference" in summary["lisdexamfetamine_vs_control"]
+
+
+def test_drug_transfer_tells_a_shared_signal_from_a_drug_specific_one():
+    def indices(drug_shift):
+        blocks, meta = _children(drug_shift=drug_shift)
+        drug = meta["psychostimulant_category"]
+        ids = {name: meta.index[drug == name] for name in drug.unique()}
+        summary, _ = _drug_transfer(
+            blocks,
+            meta,
+            ids["Lisdexamfetamine"],
+            ids["Methylphenidate"],
+            ids["control"],
+            n_draws=3,
+            n_repeats=1,
+            seed=0,
+            n_jobs=1,
+        )
+        return summary["methylphenidate_on_lisdexamfetamine_axis_index"]["median"]
+
+    # the same shift for both drugs transfers; methylphenidate without an effect does not
+    assert indices((1.5, 1.5)) > 0.6
+    assert indices((0.0, 1.5)) < 0.3

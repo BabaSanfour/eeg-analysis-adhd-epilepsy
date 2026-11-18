@@ -29,6 +29,10 @@ Contrasts:
   the unmedicated children (never seen in training); the ADHD index is their mean score's
   distance from the controls', relative to the medicated children's (1: like medicated
   ADHD, so the classifier finds ADHD itself; 0: like controls, so it finds the drug).
+- ``drug_transfer``: the same between the drugs. Per draw, controls and methylphenidate
+  children are drawn with the lisdexamfetamine children's make-up; a classifier trained on
+  one drug vs the controls scores the other drug's children (index 1: like the training drug,
+  a shared signal; 0: like controls, a drug-specific one).
 - ``medicated_vs_unmedicated``: the two ADHD groups directly, medicated drawn matched.
 - ``lisdexamfetamine_vs_control`` against ``methylphenidate_vs_control`` draws matched to
   the lisdexamfetamine children, and ``methylphenidate_vs_lisdexamfetamine`` directly.
@@ -347,6 +351,17 @@ def run(blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1) -> tuple[dict,
     attempt(
         "transfer", ["adhd_index"], _transfer, blocks, meta, unmedicated, medicated, control, *args
     )
+    attempt(
+        "drug_transfer",
+        ["methylphenidate_on_lisdexamfetamine_axis", "lisdexamfetamine_on_methylphenidate_axis"],
+        _drug_transfer,
+        blocks,
+        meta,
+        ldx,
+        mph,
+        control,
+        *args,
+    )
     summary["n_children"] = {
         "control": len(control),
         "unmedicated": len(unmedicated),
@@ -405,6 +420,34 @@ def _transfer(blocks, meta, unmedicated, medicated, control, n_draws, n_repeats,
         "medicated_vs_control_auc": _interval(values[:, 1]),
         "unmedicated_vs_control_auc": _interval(values[:, 2]),
     }, values[:, 0]
+
+
+def _drug_transfer(blocks, meta, ldx, mph, control, n_draws, n_repeats, seed, n_jobs):
+    """Each drug's classifier (vs controls) scoring the other drug's children, all drawn with
+    the lisdexamfetamine children's make-up."""
+    _check_size(ldx, mph, control)
+
+    def transfer(draw):
+        rng = np.random.default_rng(seed + 5000 + draw)
+        ref = meta.loc[ldx]
+        controls = matched_draw(meta.loc[control], ref, rng, ratio=CONTROL_RATIO)
+        chosen = matched_draw(meta.loc[mph], ref, rng)
+        on_ldx = axis_scores(blocks, _labels(ldx, controls), chosen, seed)
+        on_mph = axis_scores(blocks, _labels(chosen, controls), ldx, seed)
+        return (
+            normalisation_index(on_ldx, controls, ldx, chosen),
+            normalisation_index(on_mph, controls, chosen, ldx),
+            auc(_labels(ldx, controls), on_ldx),
+            auc(_labels(chosen, controls), on_mph),
+        )
+
+    values = np.array(Parallel(n_jobs=n_jobs)(delayed(transfer)(d) for d in range(n_draws)))
+    return {
+        "methylphenidate_on_lisdexamfetamine_axis_index": _interval(values[:, 0]),
+        "lisdexamfetamine_on_methylphenidate_axis_index": _interval(values[:, 1]),
+        "lisdexamfetamine_vs_control_auc": _interval(values[:, 2]),
+        "methylphenidate_vs_control_auc": _interval(values[:, 3]),
+    }, values[:, :2]
 
 
 def load_children(args) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
