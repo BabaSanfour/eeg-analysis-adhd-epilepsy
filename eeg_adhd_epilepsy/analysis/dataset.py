@@ -159,19 +159,25 @@ def foundation_embedding_file(
     return embedding_path(Path(root) / f"coco-pipe-{model}", label, view, task=task).fpath
 
 
+IDENTITY_COORDS = frozenset(
+    {"subject", "session", "run", "task", "condition", "recording_id", "obs_id", "channel"}
+)
+
+
 def attach_subject_metadata(
     container: DataContainer,
     meta_df: pd.DataFrame,
     subject_col: str,
 ) -> DataContainer:
-    """Join cohort metadata columns onto an embedding container, keyed by subject.
+    """Set the container's metadata columns from ``meta_df``, keyed by subject.
 
-    Foundation embeddings arrive with only identity coords; this adds every
-    ``meta_df`` column not already present (e.g. ``combined_diagnosis``,
-    ``patient_group_id``) so downstream evals can read their target/group columns,
-    as coco-pipe's BIDS loader does from ``participants.tsv`` for epochs.
-    Subjects with no metadata row get NaN, which the evals already treat as
-    missing. A no-op if the container carries no recognizable subject coord.
+    Every ``meta_df`` column (e.g. ``combined_diagnosis``, ``patient_group_id``) is
+    written onto the container, replacing the copy a saved table or epochs file
+    carries: that copy dates from when the file was written, and surrogate ids such
+    as ``patient_group_id`` are renumbered whenever the metadata is rebuilt, so only
+    the current metadata joins across sources. Identity coords are kept. Subjects
+    with no metadata row get NaN, which the evals already treat as missing. A no-op
+    if the container carries no recognizable subject coord.
     """
     subject_key = subject_col if subject_col in container.coords else "subject"
     if subject_key not in container.coords:
@@ -186,7 +192,7 @@ def attach_subject_metadata(
     )
     new_coords = dict(container.coords)
     for column in lookup.columns:
-        if column in new_coords:
+        if column in IDENTITY_COORDS:
             continue
         new_coords[column] = np.asarray(
             lookup[column].reindex(obs_subjects).to_numpy(), dtype=object
@@ -415,6 +421,8 @@ def build_dataset(
             max_row_drop_rate=column_prune.get("max_row_drop_rate"),
             location_statistic=args.location_statistic,
         )
+        if meta_df is not None:
+            container = attach_subject_metadata(container, meta_df, args.subject_col)
         scoring_container = container
         feature_names = (
             np.asarray(scoring_container.coords.get("feature", []), dtype=object)

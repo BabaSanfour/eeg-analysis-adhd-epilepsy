@@ -326,6 +326,14 @@ def _load_scope(config: dict, input_mode: str, condition: str, eval_spec: dict):
     return selected, meta["group_id"].astype(str).to_numpy(), label
 
 
+def _add_labels(labels: dict, children, label) -> None:
+    """Add children's labels, refusing a child whose label differs between sources (their
+    ids would then name different children)."""
+    for child, value in zip(children, label):
+        if labels.setdefault(child, value) != value:
+            raise ValueError(f"Child {child} has two labels: its ids differ between inputs.")
+
+
 def load_inputs(args) -> tuple[pd.Series, dict, dict, dict]:
     """Labels per child, embedding windows per model, embedding and descriptor blocks."""
     from eeg_adhd_epilepsy.utils.config import resolve_cli_config
@@ -353,7 +361,7 @@ def load_inputs(args) -> tuple[pd.Series, dict, dict, dict]:
             container, child, label = _load_scope(
                 config, "foundation_embeddings", condition, eval_spec
             )
-            labels.update(zip(child, label))
+            _add_labels(labels, child, label)
             X = np.asarray(container.X, dtype=np.float32).reshape(len(child), -1)
             parts.append((X, child, np.full(len(child), condition)))
             logger.info(
@@ -377,7 +385,7 @@ def load_inputs(args) -> tuple[pd.Series, dict, dict, dict]:
             columns = container.coords["feature"]
             frames.append(pd.DataFrame(container.X, columns=columns))
             measure.update(zip(columns, container.coords["feature_measure"]))
-            labels.update(zip(ids, label))
+            _add_labels(labels, ids, label)
             child.append(ids)
             condition.append(np.full(len(ids), cond))
         flat = pd.concat(frames, ignore_index=True)
