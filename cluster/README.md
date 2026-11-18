@@ -88,6 +88,7 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 16 | `16_submit_compare_classical_decode.sh` | aggregate stage-15 decoding results | single (run after stage 15) |
 | 17 | `17_submit_foundation_decode.sh` | direct foundation decoding | array (per model, GPU) |
 | 18 | `18_submit_compare_foundation_decode.sh` | aggregate stage-17 decoding results | single (run after stage 17) |
+| 19 | `19_submit_child_level.sh` | child-level decoding (mean / attention pooling, descriptor fusion) | single (after stages 08 and 06) |
 | 20 | `20_submit_main_decoding.sh` | stages 15–18 one-cohort integration runner | single (CPU/GPU branches via `sbatch`) |
 
 Stages 01, 03, 04, 07 and 10 end by running the BIDS validator on the dataset they
