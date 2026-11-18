@@ -473,18 +473,21 @@ def build_dataset(
         container.meta = {**dict(container.meta), "qc_result": qc_result}
     elif effective_input_mode == "metadata":
         # Complete columns only, so no row is lost to an undefined descriptor.
+        container = load_descriptor_table(
+            table_path=Path(args.descriptor_table_path),
+            known_families=KNOWN_FAMILY_TOKENS,
+            condition=condition,
+            target_col=target_col,
+            subjects=subjects,
+            subject_col=args.subject_col,
+            location_statistic=args.location_statistic,
+            drop_degenerate_columns=True,
+            max_missing_rate=0.0,
+        )
+        if meta_df is not None:
+            container = attach_subject_metadata(container, meta_df, args.subject_col)
         container = metadata_container(
-            load_descriptor_table(
-                table_path=Path(args.descriptor_table_path),
-                known_families=KNOWN_FAMILY_TOKENS,
-                condition=condition,
-                target_col=target_col,
-                subjects=subjects,
-                subject_col=args.subject_col,
-                location_statistic=args.location_statistic,
-                drop_degenerate_columns=True,
-                max_missing_rate=0.0,
-            ),
+            container,
             match_covariates(args.group_filters, getattr(args, "match_covariates", None)),
         )
     elif effective_input_mode == "foundation_embeddings":

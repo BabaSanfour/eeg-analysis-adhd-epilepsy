@@ -322,7 +322,8 @@ def _load_scope(config: dict, input_mode: str, condition: str, eval_spec: dict):
         subject_col=config["subject_col"],
         requested_splits=5,
     )
-    label = (np.asarray(y).astype(str) == str(eval_spec["positive_class"])).astype(int)
+    # binary targets are encoded with the positive class as 1
+    label = (np.asarray(y) == 1).astype(int)
     return selected, meta["group_id"].astype(str).to_numpy(), label
 
 
@@ -336,6 +337,7 @@ def _add_labels(labels: dict, children, label) -> None:
 
 def load_inputs(args) -> tuple[pd.Series, dict, dict, dict]:
     """Labels per child, embedding windows per model, embedding and descriptor blocks."""
+    from eeg_adhd_epilepsy.analysis.utils.common import apply_family_qc_mask
     from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 
     common = dict(
@@ -382,6 +384,11 @@ def load_inputs(args) -> tuple[pd.Series, dict, dict, dict]:
         frames, child, condition, measure = [], [], [], {}
         for cond in CONDITIONS:
             container, ids, label = _load_scope(config, "descriptors", cond, eval_spec)
+            # the descriptor QC, as for a flat unit of the classical decoding
+            container, keep = apply_family_qc_mask(
+                container, list(container.meta.get("family_qc_bad_ids", {})), config.get("qc")
+            )
+            ids, label = ids[keep], label[keep]
             columns = container.coords["feature"]
             frames.append(pd.DataFrame(container.X, columns=columns))
             measure.update(zip(columns, container.coords["feature_measure"]))

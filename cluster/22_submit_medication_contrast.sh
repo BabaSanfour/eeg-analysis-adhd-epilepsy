@@ -16,6 +16,10 @@ dra_epochs_variant
 # pooled ADHD vs controls (or COHORT_CONFIG alone). Writes summary.json and draws.csv under
 # $DECODING_ROOT/medication_contrasts/<cohort>/.
 mapfile -t CONFIGS < <(find "$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled" -name "*.yaml" | sort)
+# Outside an array (and without COHORT_CONFIG), the main cohort only.
+if [[ -z ${COHORT_CONFIG:-} && -z ${SLURM_ARRAY_TASK_ID:-} ]]; then
+    COHORT_CONFIG=$PROJECT_ROOT/configs/cohorts/medicated_adhd_vs_controls/pooled/01_all_subjects/total.yaml
+fi
 [[ -n ${COHORT_CONFIG:-} ]] && CONFIGS=("$COHORT_CONFIG")
 TASK_ID=${SLURM_ARRAY_TASK_ID:-1}
 if (( TASK_ID > ${#CONFIGS[@]} )); then

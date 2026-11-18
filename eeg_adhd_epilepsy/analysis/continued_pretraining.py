@@ -81,7 +81,8 @@ def load_cohort(args):
             requested_splits=5,
         )
         child = meta["group_id"].astype(str).to_numpy()
-        label = (np.asarray(y).astype(str) == str(eval_spec["positive_class"])).astype(int)
+        # binary targets are encoded with the positive class as 1
+        label = (np.asarray(y) == 1).astype(int)
         labels.update(zip(child, label))
         subject = meta[config["subject_col"]].astype(str).to_numpy()
         parts.append(

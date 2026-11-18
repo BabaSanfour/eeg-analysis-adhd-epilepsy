@@ -94,8 +94,12 @@ def main() -> None:
     for path in args.features:
         data = np.load(path, allow_pickle=True)
         split = data["split"].astype(str)
-        # validation children were held out of the fit, like the test children
-        results[str(path)] = check(data["features"], data["group"], data["y"], split == "train")
+        # validation children chose the stopping epoch, so they are neither
+        # training nor held-out children
+        keep = split != "valid"
+        results[str(path)] = check(
+            data["features"][keep], data["group"][keep], data["y"][keep], split[keep] == "train"
+        )
     text = json.dumps(results, indent=2)
     print(text)
     if args.output:
