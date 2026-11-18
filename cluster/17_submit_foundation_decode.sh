@@ -39,6 +39,7 @@ if (( TASK_ID < 1 || TASK_ID > MODEL_COUNT )); then
 fi
 model=${MODELS[$((TASK_ID - 1))]}
 
+# POOLED_ONLY=1 fits EO and EC pooled only (a run of its own next to the per-condition one).
 # FOUNDATION_N_JOBS is how many fits share the GPU at once: 1 on a 10 or 20 GB
 # slice, more on a full H100 (each fit also needs one core and its own memory).
 # GPU job (training runs on-device); no BLAS pinning.
@@ -58,4 +59,5 @@ python -m eeg_adhd_epilepsy.analysis.foundation_decoding \
     --reports_root "$REPORTS_ROOT" \
     --model_key "$model" \
     --n_jobs "${FOUNDATION_N_JOBS:-1}" \
+    ${POOLED_ONLY:+--pooled_only} \
     --no-write-shared-comparison-report

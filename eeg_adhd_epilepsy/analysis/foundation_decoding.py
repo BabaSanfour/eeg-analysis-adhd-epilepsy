@@ -404,7 +404,9 @@ def _iter_foundation_unit_batches(
     model_configs = require_config(config, "models", expected_type=list)
     train_modes = config["train_modes"]
     evals = _selected_evals(config)
-    run_pooled = bool(config.get("run_pooled", False))
+    # pooled_only: only the EO+EC fit (the single-condition fits of the same config ran)
+    pooled_only = bool(config.get("pooled_only", False))
+    run_pooled = pooled_only or bool(config.get("run_pooled", False))
 
     for model_cfg in model_configs:
         model_key = str(model_cfg["model_key"])
@@ -425,18 +427,6 @@ def _iter_foundation_unit_batches(
         pool_loaders: list[Any] = []
         for condition in conditions:
             container = build_dataset(loader_args, metadata, condition, target_col=None)
-            units = _foundation_scope_units(
-                condition,
-                model_cfg,
-                container,
-                spec,
-                provenance,
-                evals=evals,
-                train_modes=train_modes,
-                config=config,
-                derivative_root=derivative_root,
-                failures=failures,
-            )
             if run_pooled and len(conditions) > 1:
                 pool_specs.append(container_pool_spec(container))
                 pool_loaders.append(
@@ -444,8 +434,20 @@ def _iter_foundation_unit_batches(
                         args, metadata, cond, target_col=None
                     )
                 )
-            yield units
-            del container, units
+            if not pooled_only:
+                yield _foundation_scope_units(
+                    condition,
+                    model_cfg,
+                    container,
+                    spec,
+                    provenance,
+                    evals=evals,
+                    train_modes=train_modes,
+                    config=config,
+                    derivative_root=derivative_root,
+                    failures=failures,
+                )
+            del container
             gc.collect()
         if len(pool_specs) > 1:
             pooled = pool_containers_streaming(pool_specs, pool_loaders)
@@ -600,6 +602,11 @@ def main() -> None:
         help="Run one model of the analysis config, by its name (else its model_key).",
     )
     parser.add_argument(
+        "--pooled_only",
+        action="store_true",
+        help="Fit EO and EC pooled only (the single-condition fits ran in a run of their own).",
+    )
+    parser.add_argument(
         "--overwrite",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -640,6 +647,8 @@ def main() -> None:
         compare_only=args.compare_only,
         write_shared_comparison_report=args.write_shared_comparison_report,
     )
+    if args.pooled_only:
+        config["pooled_only"] = True
     if args.model_key:
         config["models"] = [
             model

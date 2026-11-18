@@ -597,6 +597,37 @@ def test_foundation_model_entry_runs_under_its_name_and_modes(tmp_path, monkeypa
     assert str(units[1].output_dir).endswith("foundation_reve_scratch_full_seed2")
 
 
+def test_foundation_pooled_only_runs_only_the_pooled_scope(tmp_path, monkeypatch):
+    """pooled_only loads every condition but builds units for the pooled scope alone."""
+    from eeg_adhd_epilepsy.analysis import foundation_decoding as fdn
+
+    monkeypatch.setattr(fdn, "build_loader_args", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(fdn, "get_foundation_model_spec", lambda key: None)
+    monkeypatch.setattr(fdn, "foundation_provenance", lambda *a, **k: {})
+    monkeypatch.setattr(fdn, "build_dataset", lambda args, meta, cond, **k: cond)
+    monkeypatch.setattr(fdn, "container_pool_spec", lambda container: container)
+    monkeypatch.setattr(fdn, "pool_containers_streaming", lambda specs, loaders: "+".join(specs))
+    monkeypatch.setattr(
+        fdn, "_foundation_scope_units", lambda cond, model, data, *a, **k: [(cond, data)]
+    )
+    config = {
+        "conditions": ["EO", "EC"],
+        "models": [
+            {"model_key": "reve", "segment_duration": 10, "overlap": 0, "use_derivatives": False}
+        ],
+        "train_modes": ["full"],
+        "evals": [{"name": "adhd"}],
+    }
+
+    def scopes(cfg):
+        return list(fdn._iter_foundation_unit_batches(cfg, None, "h", tmp_path, []))
+
+    eo, ec, pooled = [("EO", "EO")], [("EC", "EC")], [("pooled", "EO+EC")]
+    assert scopes(config) == [eo, ec]
+    assert scopes({**config, "run_pooled": True}) == [eo, ec, pooled]
+    assert scopes({**config, "pooled_only": True}) == [pooled]
+
+
 def test_foundation_run_wires_sweep_and_capability_without_gpu(tmp_path, monkeypatch):
     """Drive foundation_decoding.run() through the skip path (no neural training).
 
