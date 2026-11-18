@@ -66,7 +66,7 @@ from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 
 LOGGER = logging.getLogger(__name__)
 
-_FS_METADATA_KEYS = {"name", "analysis_modes", "representations"}
+_FS_METADATA_KEYS = {"name", "analysis_modes", "representations", "models"}
 _MAX_FAILURE_REASONS_TO_LOG = 8
 
 
@@ -298,6 +298,16 @@ def _build_selection_units(
                 random_state=random_state,
             )
             for selection_spec in valid_selection_specs:
+                # an entry may name the models it runs with (e.g. SFS around a fast model only)
+                spec_models = selection_spec.get("models")
+                unit_models = {
+                    name: value
+                    for name, value in model_configs.items()
+                    if spec_models is None or name in spec_models
+                }
+                if not unit_models:
+                    continue
+                unit_grids = {name: g for name, g in model_grids.items() if name in unit_models}
                 selection_mode = str(
                     selection_spec.get("name") or selection_spec.get("method") or "fs"
                 )
@@ -357,7 +367,7 @@ def _build_selection_units(
                             plan.tuning_cfg.get("allow_nongroup_inner_cv", False)
                         ),
                     )
-                    if model_grids and bool(plan.tuning_cfg.get("enabled", True))
+                    if unit_grids and bool(plan.tuning_cfg.get("enabled", True))
                     else TuningConfig(enabled=False)
                 )
                 fs_kwargs = {
@@ -377,8 +387,8 @@ def _build_selection_units(
                         f"{transform_name}_{reduction_mode}_{selection_mode}"
                     ),
                     random_state=random_state,
-                    models=model_configs,
-                    grids=model_grids or None,
+                    models=unit_models,
+                    grids=unit_grids or None,
                     cv=cv_config,
                     tuning=tuning,
                     erasure=erasure,

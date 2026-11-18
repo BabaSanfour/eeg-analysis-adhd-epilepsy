@@ -422,6 +422,11 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
         input_mode="descriptors",
         analysis_modes=["flat", "sensor", "descriptor_sensor"],
     )
+    config["models"]["logreg_l2"] = {
+        "estimator": "LogisticRegression",
+        "analysis_modes": ["flat", "sensor", "descriptor_sensor"],
+        "params": {"max_iter": 200},
+    }
     config["feature_selection"] = [
         {"name": "baseline", "method": "none"},
         {
@@ -430,6 +435,7 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
             "direction": "forward",
             "tol": 0.0,
             "analysis_modes": ["sensor"],
+            "models": ["logreg"],
         },
         {
             "name": "sfsepoch",
@@ -464,6 +470,12 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
         / "result.joblib"
     )
     assert not sfs_result.get_selected_features().empty
+    # the SFS entry runs with the model it names only
+    assert set(sfs_result.raw) == {"logreg"}
+    baseline_result = ExperimentResult.load(
+        fits_root / "fit_eo_baseline_adhd_sensor_fz_none_all_dimensions_baseline" / "result.joblib"
+    )
+    assert set(baseline_result.raw) == {"logreg", "logreg_l2"}
     assert list(fits_root.glob("*descriptor_sensor*baseline*"))
     assert not list(fits_root.glob("*descriptor_sensor*sfs*"))
     # a variant limited to another representation is not run

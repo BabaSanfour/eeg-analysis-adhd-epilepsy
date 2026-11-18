@@ -34,11 +34,15 @@ analysis_modes:
 feature_selection:
   - name: baseline
     method: none
+  # SFS picks 10 features, around the logistic regression only (with a 300-tree forest
+  # inside, the search does not finish); with no tuning grid around it.
   - name: sfs
     method: sfs
     direction: forward
     scoring: balanced_accuracy
-    tol: 0.001
+    n_features: 10
+    models:
+      - logreg_enet
     analysis_modes:
       - flat
       - sensor
@@ -49,7 +53,8 @@ feature_selection:
       - recording
 
 tuning:
-  enabled: true
+  # off for now: a grid around the SFS search multiplies its cost by 36
+  enabled: false
   scoring: balanced_accuracy
   n_splits: 3
 
