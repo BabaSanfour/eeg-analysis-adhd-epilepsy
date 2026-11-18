@@ -139,7 +139,12 @@ def _build_foundation_unit(
         train_mode=train_mode,
         trainer=TrainerConfig(**trainer),
         device=DeviceConfig(device=model_cfg.get("device", config["device"])),
-        checkpoints=CheckpointConfig(output_dir=output_dir / "checkpoints"),
+        # save_features: each fold's fine-tuned window vectors (train, valid and test rows),
+        # for the child-identification check
+        checkpoints=CheckpointConfig(
+            output_dir=output_dir / "checkpoints",
+            save_features=bool(config.get("save_features", False)),
+        ),
         lora=(LoRAConfig(**model_cfg["lora"]) if train_mode == "lora" else None),
         sfreq=sfreq,
         ch_names=channels,

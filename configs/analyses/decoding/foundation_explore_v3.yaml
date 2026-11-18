@@ -1,0 +1,147 @@
+# Round 4 of stage 17 on the diagnosis (2026-11-17), after rounds 1-2 overfit the training
+# children: full and LoRA fine-tuning with a grid over backbone and head dropout (REVE has no
+# backbone dropout: head only) on 3 inner folds grouped by child, head weight decay 0.1 against
+# 0.01 for the backbone, 20 % validation, LP-FT; EO and EC also pooled (EO recordings hold ~10
+# epochs); each fold's fine-tuned window vectors saved for the child-identification check.
+
+# --- Foundation model sweep -------------------------------------------------
+models:
+  - model_key: cbramod
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      full: {}
+      lora: {}
+    grid:
+      full: {trainer__backbone_dropout: [0.1, 0.3], trainer__head_dropout: [0.2, 0.5]}
+      lora: {trainer__backbone_dropout: [0.1, 0.3], trainer__head_dropout: [0.2, 0.5]}
+  - model_key: labram
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      full: {}
+      lora: {}
+    grid:
+      full: {trainer__backbone_dropout: [0.1, 0.3], trainer__head_dropout: [0.2, 0.5]}
+      lora: {trainer__backbone_dropout: [0.1, 0.3], trainer__head_dropout: [0.2, 0.5]}
+  - model_key: luna
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      full: {}
+      lora: {}
+    grid:
+      full: {trainer__backbone_dropout: [0.1, 0.3], trainer__head_dropout: [0.2, 0.5]}
+      lora: {trainer__backbone_dropout: [0.1, 0.3], trainer__head_dropout: [0.2, 0.5]}
+  - model_key: steegformer_largev2
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      full: {}
+      lora: {}
+    grid:
+      full: {trainer__backbone_dropout: [0.1, 0.3], trainer__head_dropout: [0.2, 0.5]}
+      lora: {trainer__backbone_dropout: [0.1, 0.3], trainer__head_dropout: [0.2, 0.5]}
+  - model_key: reve
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      full: {}
+      lora: {}
+    grid:
+      full: {trainer__head_dropout: [0.2, 0.5]}
+      lora: {trainer__head_dropout: [0.2, 0.5]}
+
+# --- Training regime --------------------------------------------------------
+train_modes: [full, lora]
+training_defaults:
+  full:
+    max_epochs: 15
+    lr: 0.00001
+    weight_decay: 0.01
+    head_weight_decay: 0.1
+    batch_size: 8
+    early_stopping_patience: 5
+    validation_fraction: 0.2
+    lr_warmup_epochs: 1
+    probe_epochs: 2
+  lora:
+    max_epochs: 20
+    lr: 0.0001
+    weight_decay: 0.01
+    head_weight_decay: 0.1
+    batch_size: 8
+    early_stopping_patience: 6
+    validation_fraction: 0.2
+    lr_warmup_epochs: 1
+    probe_epochs: 2
+
+tuning:
+  scoring: balanced_accuracy
+  n_splits: 3
+
+save_features: true
+
+# --- Evaluation -------------------------------------------------------------
+targets: [med_adhd_vs_ctrl]
+cv:
+  n_splits: 5
+
+chance_method: binomial
+n_permutations: 1  # unused with binomial
+store_null_distribution: false
+
+metrics:
+  - accuracy
+  - balanced_accuracy
+  - f1
+  - precision
+  - recall
+  - roc_auc
+
+# --- Hardware / runtime -----------------------------------------------------
+device: auto
+on_unsupported: skip
+# The models expect microvolts; the loader default is volts.
+units: uV
+
+# --- Column identity --------------------------------------------------------
+session_col: session
+subject_col: subject
+
+# --- Run controls -----------------------------------------------------------
+random_state: 42
+verbose: true
+overwrite: false
+n_jobs: 1
+class_weight: balanced
+run_pooled: true
+
+# --- Reporting --------------------------------------------------------------
+detailed_unit_reports: true
+report_asset_urls: inline
