@@ -51,23 +51,28 @@ def test_linear_and_attention_scores_find_a_child_level_signal():
     assert np.allclose(weights.groupby("child")["attention"].sum(), 1.0, atol=1e-5)
 
 
-def test_run_scores_every_method_on_the_same_children():
+def test_run_scores_every_combination_on_two_sets_of_children():
     X, child, condition, y = _windows(n_children=40)
     windows = {"m": (X, child, condition)}
     blocks = child_blocks(X, child, condition, "m")
-    descriptors = {"summary": child_blocks(X[:, :3], child, condition, "desc")}
-    table, summary, attention = run(y, windows, blocks, descriptors, n_permutations=9, seeds=(0,))
-    expected = {
-        "mean|EO|m",
-        "mean|EO+EC+diff|desc-summary",
-        "early|EO+EC|m+desc-summary",
-        "late|EC-EO|m+desc-summary",
-        "attention|EC|m",
-        "attention|EO+EC|m",
-        "late|headline|everything",
+    # descriptors for 30 of the 40 children
+    has_desc = np.isin(child, y.index[:30])
+    descriptors = {
+        "summary": child_blocks(X[has_desc, :3], child[has_desc], condition[has_desc], "desc")
     }
-    assert expected <= set(table) and set(table) - {"y"} == set(summary)
-    assert table.drop(columns="y").notna().all().all() and len(table) == 40
-    assert summary["mean|EC|m"]["n_children"] == 40 and "m" in attention
+    tables, summary, attention = run(y, windows, blocks, descriptors, n_permutations=9, seeds=(0,))
+    assert len(tables["embeddings"]) == 40 and len(tables["descriptors"]) == 30
+    expected = {
+        "embeddings:mean|EO|m",
+        "embeddings:attention|EO+EC|m",
+        "embeddings:late|headline|embeddings",
+        "descriptors:mean|EO+EC+diff|desc-summary",
+        "descriptors:early|EO+EC|m+desc-summary",
+        "descriptors:late|EC-EO|m+desc-summary",
+        "descriptors:late|headline|descriptors",
+    }
+    assert expected <= set(summary)
+    assert all(t.drop(columns="y").notna().all().all() for t in tables.values())
+    assert summary["embeddings:mean|EC|m"]["n_children"] == 40 and "m" in attention
     # the signal is in EC only
-    assert summary["mean|EC|m"]["auc"] > summary["mean|EO|m"]["auc"]
+    assert summary["embeddings:mean|EC|m"]["auc"] > summary["embeddings:mean|EO|m"]["auc"]

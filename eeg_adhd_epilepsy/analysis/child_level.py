@@ -346,23 +346,22 @@ CONDITION_SETS = {
 
 
 def run(labels, windows, blocks, descriptors, n_permutations=1000, seeds=(0, 1, 2)):
-    """Every combination on the children common to all inputs; returns scores and summary.
+    """Every combination; returns per-child scores, summary and attention weights.
+
+    Two sets of children: the embedding methods use every child with EO and EC embeddings,
+    the methods with descriptors the children that also have EO and EC descriptors (the
+    embedding-only methods are scored there too, for comparison). Within a set, every method
+    has the same children and folds.
 
     For each condition set (EO, EC, EC - EO, EO + EC, EO + EC + difference) and each source
     (one model's embeddings, the descriptors): a logistic regression on that source; then
     each model and all models together, alone or with the descriptors, by early fusion (one
     logistic regression on all blocks) and late fusion (rank average of the sources' scores).
-    Attention pooling runs per model on EO, EC and EO + EC bags. The headline is fixed in
-    advance: the late fusion of every model and the summary descriptors (EO + EC + difference)
-    with every model's EO + EC attention scores.
+    Attention pooling runs per model on EO, EC and EO + EC bags (embedding set). The headline
+    of each set is fixed in advance: the late fusion of every model (EO + EC + difference)
+    with every model's EO + EC attention scores (embedding set), and of every model with the
+    summary descriptors (descriptor set).
     """
-    children = labels.index
-    for frame in [*blocks.values(), *(b for d in descriptors.values() for b in d.values())]:
-        children = children.intersection(frame.index)
-    y = labels.loc[sorted(children)].astype(int)
-    folds = list(StratifiedKFold(5, shuffle=True, random_state=0).split(np.zeros(len(y)), y))
-    logger.info("%d children (%.2f positive)", len(y), y.mean())
-
     models = list(windows)
     sources = {
         m: {k.removeprefix(f"{m}_"): v for k, v in blocks.items() if k.startswith(f"{m}_")}
@@ -370,6 +369,48 @@ def run(labels, windows, blocks, descriptors, n_permutations=1000, seeds=(0, 1, 
     }
     for kind, desc in descriptors.items():
         sources[f"desc-{kind}"] = {k.removeprefix("desc_"): v for k, v in desc.items()}
+    for source, frames in sources.items():
+        logger.info("%s: %d children with EO and EC", source, len(next(iter(frames.values()))))
+
+    def common(names):
+        children = labels.index
+        for name in names:
+            for frame in sources[name].values():
+                children = children.intersection(frame.index)
+        return labels.loc[sorted(children)].astype(int)
+
+    y_emb = common(models)
+    tables, summary, attention = {}, {}, {}
+    scores = _combinations(y_emb, {m: sources[m] for m in models}, [], "embeddings")
+    for model in models:
+        scores |= _attention_all(model, windows[model], y_emb, seeds, attention)
+    scores["late|headline|embeddings"] = late_fusion(
+        {m: scores[f"mean|EO+EC+diff|{m}"] for m in models}
+        | {f"attention-{m}": scores[f"attention|EO+EC|{m}"] for m in models}
+    )
+    tables["embeddings"] = pd.DataFrame(scores).assign(y=y_emb)
+    if descriptors:
+        y_desc = common(list(sources))
+        kinds = list(descriptors)
+        scores = _combinations(y_desc, sources, kinds, "descriptors")
+        scores["late|headline|descriptors"] = late_fusion(
+            {s: scores[f"mean|EO+EC+diff|{s}"] for s in [*models, "desc-summary"] if s in sources}
+        )
+        tables["descriptors"] = pd.DataFrame(scores).assign(y=y_desc)
+    for set_name, table in tables.items():
+        for name in table.columns.drop("y"):
+            frame = pd.DataFrame(
+                {"child": table.index, "y": table["y"].to_numpy(), "score": table[name].to_numpy()}
+            )
+            summary[f"{set_name}:{name}"] = evaluate(frame, n_permutations=n_permutations)
+    return tables, summary, attention
+
+
+def _combinations(y, sources, kinds, set_name):
+    """Every condition set x source / fusion of ``sources`` on children ``y``."""
+    folds = list(StratifiedKFold(5, shuffle=True, random_state=0).split(np.zeros(len(y)), y))
+    logger.info("%s set: %d children (%.2f positive)", set_name, len(y), y.mean())
+    models = [s for s in sources if not s.startswith("desc-")]
 
     def width(source):  # the summary descriptors enter whole, the rest reduced by PCA
         return None if source == "desc-summary" else 10
@@ -383,7 +424,7 @@ def run(labels, windows, blocks, descriptors, n_permutations=1000, seeds=(0, 1, 
         for source in sources:
             single[source, cname] = linear_scores(pick(source, conditions), y, folds, width(source))
             scores[f"mean|{cname}|{source}"] = single[source, cname]
-        for kind in [None, *descriptors]:
+        for kind in [None, *kinds]:
             for group in groups:
                 if kind is None and len(group) == 1:
                     continue
@@ -393,33 +434,29 @@ def run(labels, windows, blocks, descriptors, n_permutations=1000, seeds=(0, 1, 
                 widths = {k: width(part) for part in parts for k in pick(part, conditions)}
                 scores[f"early|{cname}|{label}"] = linear_scores(fused, y, folds, widths)
                 scores[f"late|{cname}|{label}"] = late_fusion({p: single[p, cname] for p in parts})
-        logger.info("%s done", cname)
+        logger.info("%s set: %s done", set_name, cname)
+    return scores
 
-    attention = {}
-    bags = {"EO": CONDITIONS[:1], "EC": CONDITIONS[1:], "EO+EC": CONDITIONS}
-    for model in models:
-        X, child, condition = windows[model]
-        child = np.asarray(child).astype(str)
-        for bag, conditions in bags.items():
-            rows = np.isin(child, y.index) & np.isin(condition, conditions)
-            scores[f"attention|{bag}|{model}"], weights = attention_scores(
-                X[rows], child[rows], condition[rows], y, folds, seeds=seeds
-            )
-            if bag == "EO+EC":
-                attention[model] = weights
-        logger.info("attention %s done", model)
-    headline = {s: single[s, "EO+EC+diff"] for s in sources if s != "desc-pca"}
-    headline |= {f"attention-{m}": scores[f"attention|EO+EC|{m}"] for m in models}
-    scores["late|headline|everything"] = late_fusion(headline)
 
-    table = pd.DataFrame(scores).assign(y=y)
-    summary = {}
-    for name in scores:
-        children_frame = pd.DataFrame(
-            {"child": y.index, "y": y.to_numpy(), "score": table[name].to_numpy()}
+def _attention_all(model, model_windows, y, seeds, attention):
+    """Attention pooling of one model on EO, EC and EO + EC bags of the children ``y``."""
+    folds = list(StratifiedKFold(5, shuffle=True, random_state=0).split(np.zeros(len(y)), y))
+    X, child, condition = model_windows
+    child = np.asarray(child).astype(str)
+    scores = {}
+    for bag, conditions in {
+        "EO": CONDITIONS[:1],
+        "EC": CONDITIONS[1:],
+        "EO+EC": CONDITIONS,
+    }.items():
+        rows = np.isin(child, y.index) & np.isin(condition, conditions)
+        scores[f"attention|{bag}|{model}"], weights = attention_scores(
+            X[rows], child[rows], condition[rows], y, folds, seeds=seeds
         )
-        summary[name] = evaluate(children_frame, n_permutations=n_permutations)
-    return table, summary, attention
+        if bag == "EO+EC":
+            attention[model] = weights
+    logger.info("attention %s done", model)
+    return scores
 
 
 def main() -> None:
@@ -450,8 +487,9 @@ def main() -> None:
 
         torch.set_num_threads(args.n_threads)
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    table, summary, attention = run(*load_inputs(args), args.n_permutations, tuple(args.seeds))
-    table.to_csv(args.output_dir / "scores.csv", index_label="child")
+    tables, summary, attention = run(*load_inputs(args), args.n_permutations, tuple(args.seeds))
+    for set_name, table in tables.items():
+        table.to_csv(args.output_dir / f"scores_{set_name}.csv", index_label="child")
     for model, frame in attention.items():
         frame.to_csv(args.output_dir / f"attention_{model}.csv", index=False)
     text = json.dumps(summary, indent=2)
