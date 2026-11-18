@@ -64,6 +64,8 @@ def test_run_finds_that_medication_brings_children_towards_controls():
     assert unmedicated["covariates_auc"]["median"] < 0.65  # matched: covariates carry nothing
     assert summary["medicated_vs_unmedicated"]["auc_median"] > 0.6
     assert 0.0 < summary["axis"]["normalisation_index"]["median"] < 0.5
+    # unmedicated children lie beyond the medicated ones on the medicated-vs-control axis
+    assert summary["transfer"]["adhd_index"]["median"] > 1.0
     # both drugs shift equally: no consistent difference between them
     assert abs(summary["lisdexamfetamine_vs_control"]["difference"]["median"]) < 0.1
     assert len(draws) == 5 and "normalisation_index" in draws
@@ -95,4 +97,5 @@ def test_run_skips_contrasts_whose_groups_are_too_small():
     meta = meta.drop(meta.index[meta.psychostimulant_category == "unmedicated"][5:])
     summary, _ = run(blocks, meta, n_draws=2, n_repeats=1)
     assert "skipped" in summary["unmedicated_vs_control"] and "skipped" in summary["axis"]
+    assert "skipped" in summary["transfer"]
     assert "difference" in summary["lisdexamfetamine_vs_control"]

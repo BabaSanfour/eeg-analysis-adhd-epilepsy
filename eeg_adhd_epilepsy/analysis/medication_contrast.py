@@ -24,6 +24,11 @@ Contrasts:
   medicated children (never seen in training) on that axis; the normalisation index is
   their mean score's distance from the controls', relative to the unmedicated children's
   (0: like controls, 1: like unmedicated ADHD).
+- ``transfer``: the reverse, a classifier trained on medicated ADHD vs controls (both drawn
+  with the unmedicated children's make-up, :data:`CONTROL_RATIO` times their size) scores
+  the unmedicated children (never seen in training); the ADHD index is their mean score's
+  distance from the controls', relative to the medicated children's (1: like medicated
+  ADHD, so the classifier finds ADHD itself; 0: like controls, so it finds the drug).
 - ``medicated_vs_unmedicated``: the two ADHD groups directly, medicated drawn matched.
 - ``lisdexamfetamine_vs_control`` against ``methylphenidate_vs_control`` draws matched to
   the lisdexamfetamine children, and ``methylphenidate_vs_lisdexamfetamine`` directly.
@@ -339,6 +344,9 @@ def run(blocks, meta, n_draws=100, n_repeats=3, seed=0, n_jobs=1) -> tuple[dict,
     attempt(
         "axis", ["normalisation_index"], _axis, blocks, meta, unmedicated, medicated, control, *args
     )
+    attempt(
+        "transfer", ["adhd_index"], _transfer, blocks, meta, unmedicated, medicated, control, *args
+    )
     summary["n_children"] = {
         "control": len(control),
         "unmedicated": len(unmedicated),
@@ -372,6 +380,31 @@ def _axis(blocks, meta, unmedicated, medicated, control, n_draws, n_repeats, see
         "unmedicated_vs_control_auc": _interval(axes[:, 1]),
         "medicated_vs_control_auc": _interval(axes[:, 2]),
     }, axes[:, 0]
+
+
+def _transfer(blocks, meta, unmedicated, medicated, control, n_draws, n_repeats, seed, n_jobs):
+    """ADHD index of the unmedicated children on the axis of medicated ADHD vs controls,
+    both drawn with the unmedicated children's make-up."""
+    _check_size(unmedicated, medicated, control)
+
+    def transfer(draw):
+        rng = np.random.default_rng(seed + 4000 + draw)
+        ref = meta.loc[unmedicated]
+        controls = matched_draw(meta.loc[control], ref, rng, ratio=CONTROL_RATIO)
+        chosen = matched_draw(meta.loc[medicated], ref, rng, ratio=CONTROL_RATIO)
+        score = axis_scores(blocks, _labels(chosen, controls), unmedicated, seed)
+        return (
+            normalisation_index(score, controls, chosen, unmedicated),
+            auc(_labels(chosen, controls), score),
+            auc(_labels(unmedicated, controls), score),
+        )
+
+    values = np.array(Parallel(n_jobs=n_jobs)(delayed(transfer)(d) for d in range(n_draws)))
+    return {
+        "adhd_index": _interval(values[:, 0]),
+        "medicated_vs_control_auc": _interval(values[:, 1]),
+        "unmedicated_vs_control_auc": _interval(values[:, 2]),
+    }, values[:, 0]
 
 
 def load_children(args) -> tuple[dict[str, pd.DataFrame], pd.DataFrame]:
