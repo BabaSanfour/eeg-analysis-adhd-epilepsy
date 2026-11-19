@@ -41,6 +41,18 @@ def test_attach_subject_metadata_joins_eval_columns():
     assert list(out.coords["subject"]) == ["0001", "0001", "0002"]
 
 
+def test_attach_subject_metadata_replaces_a_stale_copy():
+    # A descriptor table or epochs file keeps the metadata of when it was written;
+    # the current metadata's (renumbered) group ids must win.
+    container = _embedding_container(["0001", "0002"])
+    container = container.replace(
+        coords={**container.coords, "patient_group_id": np.asarray(["old1", "old2"])}
+    )
+    meta = pd.DataFrame({"study_id": [1, 2], "patient_group_id": ["g1", "g2"]})
+    out = attach_subject_metadata(container, meta, "study_id")
+    assert list(out.coords["patient_group_id"]) == ["g1", "g2"]
+
+
 def test_attach_subject_metadata_missing_subject_is_nan():
     container = _embedding_container(["9999"])
     meta = pd.DataFrame({"study_id": [1], "combined_diagnosis": ["ADHD"]})

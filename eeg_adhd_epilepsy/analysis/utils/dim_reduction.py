@@ -86,18 +86,17 @@ def build_and_validate_mode_specs(
         raise ValueError(
             "The analysis config must declare `analysis_modes` (a mode -> spec mapping)."
         )
-    specs = {str(mode): dict(spec or {}) for mode, spec in analysis_modes.items()}
-    for key in ("reducers", "n_components"):
-        missing = [mode for mode, spec in specs.items() if not spec.get(key)]
-        if missing:
-            raise ValueError(
-                f"Every analysis mode must list `{key}`; none configured for: {sorted(missing)}."
-            )
-
-    tasks = [
-        (mode, str(spec.get("representation") or args.representation or ""))
-        for mode, spec in specs.items()
-    ]
+    # mode -> {reducer: [n_components, ...]}
+    specs = {
+        str(mode): {str(reducer): [int(n) for n in dims] for reducer, dims in (spec or {}).items()}
+        for mode, spec in analysis_modes.items()
+    }
+    empty = [mode for mode, spec in specs.items() if not spec or not all(spec.values())]
+    if empty:
+        raise ValueError(
+            f"Every analysis mode must map reducers to n_components; empty for: {sorted(empty)}."
+        )
+    tasks = [(mode, str(args.representation or "")) for mode in specs]
 
     input_mode = getattr(args, "input_mode", None)
     for mode, representation in tasks:
@@ -202,8 +201,6 @@ def build_input_signature(
         "run_config_hash": args.run_config_hash,
         "filters": filter_specs,
         "group_filters": args.group_filters,
-        "balance_target": args.balance_target,
-        "balance_strategy": args.balance_strategy if args.balance_target else None,
         "unit_type": unit_spec["unit_type"],
         "unit_name": unit_spec["unit_name"],
         "run_label": args.run_label,
@@ -265,14 +262,12 @@ def build_run_config_payload(
         "conditions": list(args.conditions),
         "run_pooled": bool(args.run_pooled),
         "reducers": list(reducers),
-        "n_components_sweep": list(args.n_components_sweep),
         "subject_col": args.subject_col,
         "subjects": list(args.subjects or []),
         "filter_col": list(args.filter_col),
         "filter_val": list(args.filter_val),
         "group_filters": args.group_filters,
-        "balance_target": args.balance_target,
-        "balance_strategy": args.balance_strategy if args.balance_target else None,
+        "match_covariates": getattr(args, "match_covariates", None),
         "qc": args.qc,
         "scaling": getattr(args, "scaling", None),
         "bids_root": args.bids_root,

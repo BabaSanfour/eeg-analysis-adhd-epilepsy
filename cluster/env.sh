@@ -40,6 +40,17 @@ MATCHED_ARGS=()
 if [[ "${MATCHED:-0}" == 1 ]]; then
     MATCHED_ARGS=(--matched)
 fi
+# Dimensionality reduction runs each scope as its own array task (SCOPES); REPORTS_ONLY=1
+# then rebuilds each run's reports from the scopes' inventories (submit it after them).
+if [[ "${REPORTS_ONLY:-0}" == 1 ]]; then
+    SCOPES=(reports)
+else
+    read -r -a SCOPES <<< "${SCOPES:-EO_baseline EC_baseline pooled_all}"
+fi
+# Sets SCOPE_ARGS for one entry of SCOPES.
+dra_scope_args() {
+    if [[ "$1" == reports ]]; then SCOPE_ARGS=(--reports-only); else SCOPE_ARGS=(--scope "$1"); fi
+}
 : "${PATIENTS_CSV:=$DATA_ROOT/csv/patients_metadata_clean.csv}"
 : "${RAW_ROOT:=$DATA_ROOT/raw_data}"
 : "${SCRATCH_ROOT:=$SCRATCH/eeg-epilepsy-adhd}"

@@ -7,7 +7,7 @@ the project root on your own machine.
 
 ```bash
 uv tool install cluster-uv      # once
-cluv login fir trillium-gpu     # opens the SSH connections (asks for MFA)
+cluv login fir trillium trillium-gpu   # opens the SSH connections (asks for MFA)
 
 # CPU stage, on fir; every stage from 05 runs once per epoch variant
 cluv submit fir cluster/07_submit_merge_descriptors.sh -- EPOCHS_DESC=base
@@ -21,6 +21,13 @@ cluv submit fir cluster/17_submit_foundation_decode.sh --account=def-kjerbi \
 # GPU stage, on trillium: one full H100 with 24 cores (from [tool.cluv]), shared
 # by several fits at once
 cluv submit trillium-gpu cluster/17_submit_foundation_decode.sh -- FOUNDATION_N_JOBS=4
+
+# CPU stage, on trillium (def-kjerbi): jobs get whole 192-core nodes, so
+# cluster/pack.sh runs TASKS array tasks of a stage script on one node, PACK at a time
+# (array task i of pack.sh = tasks (i-1)*TASKS+1 .. i*TASKS of SCRIPT; the next starts
+# when one ends; TASK_CPUS gives each task more than its share of the cores)
+cluv submit trillium cluster/pack.sh --array=1-5 -- \
+    SCRIPT=cluster/11_batch_run_dim_reduction.sh PACK=4 TASKS=8 EPOCHS_DESC=base
 
 # variables of a script go after `--`; paths are relative to the project root
 cluv submit fir cluster/17_submit_foundation_decode.sh --array=1 ... \
@@ -36,8 +43,8 @@ to `logs/` here by `cluv sync`.
 
 Every cluster has the same layout: inputs under
 `/project/rrg-kjerbi/shared/eeg-adhdh-epilepsy` (`BIDS/`, `csv/`), outputs under
-`$SCRATCH/eeg-epilepsy-adhd`. trillium-gpu takes GPU stages only (08, 17), and
-its compute nodes have no internet. Jobs on every cluster read model weights
+`$SCRATCH/eeg-epilepsy-adhd`. trillium-gpu takes GPU stages only (08, 17), trillium
+the CPU stages through `pack.sh`; their compute nodes have no internet. Jobs on every cluster read model weights
 from `$HF_HOME` and the report scripts from a cache on scratch; fill both once per
 cluster, on a login node:
 
@@ -62,6 +69,7 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 02 | `02_tar_raw_data.sh` | archive raw data | single |
 | 03 | `03_submit_base_cleaning.sh` | BIDS → `desc-base` derivatives + QC | single (all subjects) |
 | 04 | `04_submit_epochs.sh` | `desc-base` → condition epochs | single |
+| 04b | `04b_submit_consolidate_epochs.sh` | epochs of one variant → one `task-clinical_desc-<variant>_cond-<condition>_epo.joblib` per condition in `derivatives/preproc` (project), read by 11 and 17 instead of the FIF files when it exists; rerun after 04 | single (per variant) |
 | 05 | `05_submit_extract_descriptors_array.sh` | epochs → descriptor shards (scratch) | array (per metadata row) |
 | 06 | `06_verify_descriptors.sh` | audit shard completeness + QC before merge | single |
 | 07 | `07_submit_merge_descriptors.sh` | shards → combined tables (project) | single |
@@ -74,13 +82,16 @@ COCO_PIPE_REPORT_ASSET_CACHE=$SCRATCH/eeg-epilepsy-adhd/coco_pipe_report_assets 
 | 12 | `12_batch_run_dim_reduction_descriptors.sh` | descriptor dim-reduction | array (per cohort) |
 | 13 | `13_batch_run_dim_reduction_foundation.sh` | foundation dim-reduction | array (cohorts × raw/aligned spaces × representations) |
 | 14 | `14_submit_compare_foundation_dim_reduction.sh` | per-model dim-reduction runs → cross-model comparison report | single (run after 13) |
-| 14b | `14b_submit_archive_dim_reduction.sh` | finished dim-reduction run-variant folders → one consolidated `.tar.zst` | single (run per group, after 11-13) |
+| 14b | `14b_submit_archive_dim_reduction.sh` | finished dim-reduction (or, `RUNS=decoding`, decoding) run folders → one `.tar.zst` each on the project; their `artifacts/` deleted from scratch | single (after each 11-13 reports job; after 16) |
+| 14c | `14c_move_archives.sh` | archives 14b staged on scratch (trillium) → the project; their `artifacts/` deleted | login node, `bash`, not submitted |
 | 15 | `15_submit_classical_decode.sh` | descriptor + saved-foundation classical decoding | array (descriptor + models × representations) |
 | 16 | `16_submit_compare_classical_decode.sh` | aggregate stage-15 decoding results | single (run after stage 15) |
 | 17 | `17_submit_foundation_decode.sh` | direct foundation decoding | array (per model, GPU) |
 | 18 | `18_submit_compare_foundation_decode.sh` | aggregate stage-17 decoding results | single (run after stage 17) |
-| 19 | `19_submit_main_dim_reduction.sh` | main-cohort dim-reduction smoke runner | single (raw/descriptors/foundation) |
+| 19 | `19_submit_child_level.sh` | child-level decoding (mean / attention pooling, descriptor fusion) | single (after stages 08 and 06) |
 | 20 | `20_submit_main_decoding.sh` | stages 15–18 one-cohort integration runner | single (CPU/GPU branches via `sbatch`) |
+| 21 | `21_submit_continued_pretraining.sh` | continued self-supervised pretraining per fold, child-level score | array (per fold, GPU) |
+| 22 | `22_submit_medication_contrast.sh` | medication contrasts (unmedicated vs medicated ADHD against controls, normalisation axis, drugs) | array (per pooled family / stratum config × matching scheme) |
 
 Stages 01, 03, 04, 07 and 10 end by running the BIDS validator on the dataset they
 wrote (`validate_bids` in `env.sh`); the job fails when it reports an error. Each
@@ -101,7 +112,7 @@ derivative tree has a `.bidsignore` for the files BIDS does not define.
 | `SCRATCH_ROOT` | scratch root for outputs | `$SCRATCH/eeg-epilepsy-adhd` |
 | `HF_HOME` | model weights cache | `$SCRATCH_ROOT/hf_home` |
 | `REPORTS_ROOT` | generated reports | `$SCRATCH_ROOT/reports` |
-| `EPOCHS_DESC` | epoch variant of stages 05-20: `base` or `baserejected` (required) | — |
+| `EPOCHS_DESC` | epoch variant of stages 04b-20: `base` or `baserejected` (required) | — |
 | `DESCRIPTOR_SHARDS_ROOT` | per-subject descriptor shards (05, 06) | `$SCRATCH_ROOT/BIDS/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
 | `DESCRIPTORS_ROOT` | merged descriptor tables and shard archive (07, 07b) | `$BIDS_ROOT/derivatives/signal_features/descriptors_$EPOCHS_DESC` |
 | `EMBEDDING_SCRATCH_ROOT` | per-recording embedding files (08), in `coco-pipe-<model>/` | `$SCRATCH_ROOT/BIDS/derivatives` |
@@ -166,24 +177,20 @@ the method). See `../configs/README.md`.
   It writes `foundation_model_comparison.html` and
   `foundation_model_comparison.csv` for every discovered cohort, or only
   `DATASET_NAME` when that environment variable is set.
-- **14b (dim-reduction archive)** consolidates a *finished* group of 11-13
-  run-variant folders (e.g. every `foundation_*` or `raw_*` folder for one
-  cohort) into a single `.tar.zst`, the same non-destructive tar+zstd pattern
-  as `07b`. `DIRS_FILE` names a text file listing the folders to bundle (one
-  relative name per line, relative to `$BASE`, default the dataset's folder
-  under `DIM_REDUCTION_ROOT`); `ARCHIVE_NAME` names the output. It refuses to
-  run if any listed folder is missing or the archive already exists, and
-  validates the archive by decompressing and listing it back before the final
-  `mv`. It never deletes the source folders — only delete them yourself once
-  the reported entry count looks right, and never for a group still being
-  written by a live 11/12/13 job (per-fit `_SUCCESS` resumability depends on
-  the live directory, not the archive). Example:
-  ```bash
-  printf '%s\n' foundation_cbramod_flat_epoch_cfg-... foundation_labram_flat_epoch_cfg-... \
-      > /home/hamza97/foundation_all.txt
-  sbatch --export=ALL,DIRS_FILE=/home/hamza97/foundation_all.txt,ARCHIVE_NAME=foundation_all \
-      cluster/14b_submit_archive_dim_reduction.sh
-  ```
+- **14b (dim-reduction archive)** runs after each `REPORTS_ONLY=1` job of 11-13
+  (`--dependency=afterany`). Every run folder of the variant with a `_RUN_SUCCESS` goes to
+  the project as one `.tar.zst` at its path under the scratch root; once the archive lists
+  as many files as the folder, the folder's `artifacts/` are deleted and its `runs/`
+  inventories stay on scratch. Unfinished or partial folders are left alone.
+  With `RUNS=decoding RUN_DIRS='<dataset_name>/*'` it archives one cohort's decoding runs
+  the same way; submit it after 16, which reads the saved predictions. A decoding run with
+  a skipped unit ends partial, so `_PARTIAL` counts as finished there, and 15 writes
+  `_PARTIAL` while it runs, so `RUN_DIRS` is required.
+  On trillium, compute nodes see the project read-only: 14b stages the archives under
+  `$SCRATCH_ROOT/archive` and keeps the artifacts. Then run `bash cluster/14c_move_archives.sh`
+  on a login node: it rsyncs them to the project and, for each archive whose project copy
+  has the same size, deletes the staged file and the folder's `artifacts/`. Rerun it to
+  finish a cut-off move.
 - **17 (direct foundation decoding)** trains on epochs and reports both levels
   from one run: every metric per epoch, and as `<metric>_by_recording` on the mean
   probability of each recording's test epochs.

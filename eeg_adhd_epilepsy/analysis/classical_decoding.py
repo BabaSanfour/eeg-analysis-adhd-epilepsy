@@ -66,7 +66,7 @@ from eeg_adhd_epilepsy.utils.config import resolve_cli_config
 
 LOGGER = logging.getLogger(__name__)
 
-_FS_METADATA_KEYS = {"name", "analysis_modes", "representations"}
+_FS_METADATA_KEYS = {"name", "analysis_modes", "representations", "models"}
 _MAX_FAILURE_REASONS_TO_LOG = 8
 
 
@@ -204,6 +204,29 @@ def _mode_models(
     return model_configs, model_grids
 
 
+def _chance_assessment(config: Mapping[str, Any], analysis_mode: str, feature_selection: bool):
+    """Chance test of one unit, counted on recordings.
+
+    ``chance_method`` applies to the units of ``permutation_modes`` (every mode when
+    unset) without feature selection; the others get the binomial test. The binomial
+    test compares accuracy with the majority class's share of recordings, which a
+    classifier always predicting that class reaches.
+    """
+    method = config["chance_method"]
+    modes = config.get("permutation_modes")
+    if method == "permutation" and (
+        feature_selection or (modes is not None and analysis_mode not in modes)
+    ):
+        method = "binomial"
+    return grouped_chance_assessment(
+        method,
+        n_permutations=int(config["n_permutations"]),
+        store_null=bool(config["store_null_distribution"]),
+        unit_column="inference_unit",
+        p0="majority" if method == "binomial" else "auto",
+    )
+
+
 def _build_selection_units(
     plan: ClassicalPlan,
     unit: dict[str, Any],
@@ -239,7 +262,20 @@ def _build_selection_units(
         if str(spec.get("method", "none")) == "none" or X.shape[1] > 1
     ]
 
-    reduction_modes = [False, True] if plan.reducer_enabled else [False]
+    # Fold-local PCA: `reducer.n_components` is one size (mode "pca") or a list of sizes
+    # (modes "pca_<n>"), each decoded next to all dimensions unless
+    # `reducer.keep_all_dimensions` is false; a size of at least the unit's width is skipped.
+    reductions = [("all_dimensions", None)]
+    if plan.reducer_enabled:
+        sizes = plan.reducer_cfg.get("n_components")
+        sizes = sizes if isinstance(sizes, list) else [sizes]
+        if not plan.reducer_cfg.get("keep_all_dimensions", True):
+            reductions = []
+        reductions += [
+            ("pca" if len(sizes) == 1 else f"pca_{size}", size)
+            for size in sizes
+            if not (isinstance(size, int) and size >= X.shape[1])
+        ]
     for transform_name in plan.transforms:
         params = dict(plan.transform_params.get(transform_name, {}))
         erasure = (
@@ -252,17 +288,26 @@ def _build_selection_units(
             if transform_name == "leace"
             else ErasureConfig(enabled=False)
         )
-        for reduced in reduction_modes:
-            reduction_mode = "pca" if reduced else "all_dimensions"
+        for reduction_mode, size in reductions:
             reducer = ReducerConfig(
-                enabled=reduced,
+                enabled=size is not None,
                 method="pca",
-                n_components=plan.reducer_cfg.get("n_components"),
+                n_components=size,
                 whiten=bool(plan.reducer_cfg.get("whiten", False)),
                 svd_solver=plan.reducer_cfg.get("svd_solver", "auto"),
                 random_state=random_state,
             )
             for selection_spec in valid_selection_specs:
+                # an entry may name the models it runs with (e.g. SFS around a fast model only)
+                spec_models = selection_spec.get("models")
+                unit_models = {
+                    name: value
+                    for name, value in model_configs.items()
+                    if spec_models is None or name in spec_models
+                }
+                if not unit_models:
+                    continue
+                unit_grids = {name: g for name, g in model_grids.items() if name in unit_models}
                 selection_mode = str(
                     selection_spec.get("name") or selection_spec.get("method") or "fs"
                 )
@@ -290,7 +335,7 @@ def _build_selection_units(
                     "transform": transform_name,
                     "reduction_mode": reduction_mode,
                     "primary": (
-                        analysis_mode == "flat" and transform_name == "none" and not reduced
+                        analysis_mode == "flat" and transform_name == "none" and size is None
                     ),
                 }
                 cv_config = CVConfig(
@@ -322,7 +367,7 @@ def _build_selection_units(
                             plan.tuning_cfg.get("allow_nongroup_inner_cv", False)
                         ),
                     )
-                    if model_grids and bool(plan.tuning_cfg.get("enabled", True))
+                    if unit_grids and bool(plan.tuning_cfg.get("enabled", True))
                     else TuningConfig(enabled=False)
                 )
                 fs_kwargs = {
@@ -342,18 +387,15 @@ def _build_selection_units(
                         f"{transform_name}_{reduction_mode}_{selection_mode}"
                     ),
                     random_state=random_state,
-                    models=model_configs,
-                    grids=model_grids or None,
+                    models=unit_models,
+                    grids=unit_grids or None,
                     cv=cv_config,
                     tuning=tuning,
                     erasure=erasure,
                     reducer=reducer,
                     feature_selection=fs_config,
-                    statistical_assessment=grouped_chance_assessment(
-                        config["chance_method"],
-                        n_permutations=int(config["n_permutations"]),
-                        store_null=bool(config["store_null_distribution"]),
-                        unit_column="inference_unit",
+                    statistical_assessment=_chance_assessment(
+                        config, analysis_mode, fs_config.enabled
                     ),
                     metrics=list(plan.metrics),
                     use_scaler=True,

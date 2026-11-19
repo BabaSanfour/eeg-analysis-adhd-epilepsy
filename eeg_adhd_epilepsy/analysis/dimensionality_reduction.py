@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import gc
 import logging
-from itertools import product
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -89,7 +88,7 @@ def _collect_scope_fit_requests(
     condition: str,
     container,
     args,
-    reducers: list[str],
+    reducer_dims: dict[str, list[int]],
     output_root: Path,
     unit_containers_by_key: dict,
     data_availability: list,
@@ -97,6 +96,9 @@ def _collect_scope_fit_requests(
     """Enumerate analysis units and build fit requests for one scope/condition pair."""
     requests: list[dict[str, Any]] = []
     num_skipped = 0
+    if args.input_mode == "raw" and args.analysis_mode == "flat":
+        # Raw epochs load as (obs, channel, time); a flat unit is one vector per row.
+        container = container.flatten(preserve="obs")
     for unit_spec in iter_analysis_units(
         container,
         args.analysis_mode,
@@ -123,14 +125,15 @@ def _collect_scope_fit_requests(
         unit_spec = {**unit_spec, "container": unit_container}
         unit_containers_by_key[(scope, condition, unit_spec["unit_key"])] = unit_container
         X = np.asarray(unit_container.X)
-        valid_components = valid_component_sweep(unit_container, args.n_components_sweep)
+        requested = sorted({n for dims in reducer_dims.values() for n in dims})
+        valid_components = valid_component_sweep(unit_container, requested)
         data_availability.append(
             build_availability_record(
                 scope=scope,
                 condition=condition,
                 unit_spec=unit_spec,
                 container=unit_container,
-                requested_components=args.n_components_sweep,
+                requested_components=requested,
                 valid_components=valid_components,
             )
         )
@@ -145,7 +148,11 @@ def _collect_scope_fit_requests(
         input_signature = build_input_signature(args, unit_spec)
         container_signature = fingerprint_container(unit_container)
 
-        for reducer_name, n_components in product(reducers, valid_components):
+        for reducer_name, n_components in (
+            (reducer, n) for reducer, dims in reducer_dims.items() for n in dims
+        ):
+            if n_components not in valid_components:
+                continue
             request = build_fit_request(
                 container=unit_container,
                 scope=scope,
@@ -160,7 +167,7 @@ def _collect_scope_fit_requests(
                 container_signature=container_signature,
                 reducer_params=dict(getattr(args, "reducer_params", {}).get(reducer_name, {})),
             )
-            if (request["out_path"] / "_SUCCESS").exists() and not request["overwrite"]:
+            if request["out_path"].exists() and not request["overwrite"]:
                 num_skipped += 1
             else:
                 logger.info(
@@ -318,8 +325,7 @@ def execute_analysis_mode(
     args: Any,
     mode: str,
     representation: str,
-    reducers: list[str],
-    n_components_sweep: list[int],
+    reducer_dims: dict[str, list[int]],
     meta_df: Any,
     eval_specs: list[dict[str, Any]],
     resolved_n_jobs: int,
@@ -331,7 +337,7 @@ def execute_analysis_mode(
     """Run one analysis mode end-to-end (fits, evals, per-mode report) and report back."""
     args.analysis_mode = mode
     args.representation = representation
-    args.n_components_sweep = list(n_components_sweep)
+    reducers = list(reducer_dims)
 
     run_config = build_run_config_payload(args, reducers, eval_specs)
     args.run_config_hash = stable_hash(run_config, length=12)
@@ -342,14 +348,27 @@ def execute_analysis_mode(
     output_root.mkdir(parents=True, exist_ok=True)
     runs_dir = output_root / "runs"
     runs_dir.mkdir(parents=True, exist_ok=True)
-    config_snapshot = {key: value for key, value in vars(args).items() if key != "config"}
+    config_snapshot = {
+        key: value for key, value in vars(args).items() if key not in ("config", "scope")
+    }
     if eval_specs:
         config_snapshot["evals"] = eval_specs
     freeze_config_used(config_snapshot, output_root, overwrite=True)
-    fit_runs_path = runs_dir / "fit_runs.json"
-    eval_runs_path = runs_dir / "eval_runs.json"
+    # A --scope job keeps its own inventory; the reports job merges them.
+    suffix = f"_{slug(args.scope)}" if args.scope else ""
+    fit_runs_path = runs_dir / f"fit_runs{suffix}.json"
+    eval_runs_path = runs_dir / f"eval_runs{suffix}.json"
     run_summary_path = runs_dir / "run_summary.json"
-    if not args.reports_only:
+    if args.reports_only:
+        for name in ("fit_runs", "eval_runs"):
+            parts = sorted(runs_dir.glob(f"{name}_*.json"))
+            if parts:
+                write_json(
+                    runs_dir / f"{name}.json",
+                    [record for part in parts for record in read_json(part)],
+                    indent=2,
+                )
+    else:
         write_json(fit_runs_path, [], indent=2)
         write_json(eval_runs_path, [], indent=2)
 
@@ -367,59 +386,62 @@ def execute_analysis_mode(
                     f"--reports-only requested but {fit_runs_path} does not exist."
                 )
             fit_runs = read_json(fit_runs_path)
-            if run_summary_path.exists():
-                summary_data = read_json(run_summary_path)
-                dataset_stats = summary_data.get("run_metadata", {}).get("dataset_stats", [])
-        else:
-            fit_requests: list[dict[str, Any]] = []
-            for condition in args.conditions:
-                logger.info(
-                    "Loading input for condition '%s' (%s / %s).",
+        fit_requests: list[dict[str, Any]] = []
+        pooled_needed = args.run_pooled and args.scope in (None, POOLED_CONDITION)
+        loaded = args.conditions if args.scope is None or pooled_needed else [args.scope]
+        for condition in loaded:
+            logger.info(
+                "Loading input for condition '%s' (%s / %s).",
+                condition,
+                args.input_mode,
+                mode,
+            )
+            base_container = _get_base_container(
+                base_cache,
+                args,
+                condition=condition,
+                meta_df=meta_df,
+                load_mode=base_load_mode,
+                representation=representation,
+            )
+            base_containers_by_scope[("condition", condition)] = base_container
+            # The reports job loads the inputs only for the cohort summary.
+            if args.reports_only or args.scope not in (None, condition):
+                continue
+            fit_requests.extend(
+                _collect_scope_fit_requests(
+                    "condition",
                     condition,
-                    args.input_mode,
-                    mode,
-                )
-                base_container = _get_base_container(
-                    base_cache,
+                    base_container,
                     args,
-                    condition=condition,
-                    meta_df=meta_df,
-                    load_mode=base_load_mode,
-                    representation=representation,
+                    reducer_dims,
+                    output_root,
+                    unit_containers_by_key,
+                    data_availability,
                 )
-                base_containers_by_scope[("condition", condition)] = base_container
-                fit_requests.extend(
-                    _collect_scope_fit_requests(
-                        "condition",
-                        condition,
-                        base_container,
-                        args,
-                        reducers,
-                        output_root,
-                        unit_containers_by_key,
-                        data_availability,
-                    )
-                )
+            )
 
-            if args.run_pooled:
-                source_containers = [
-                    base_containers_by_scope[("condition", cond)] for cond in args.conditions
-                ]
-                pooled_container = pool_containers(source_containers)
-                base_containers_by_scope[("pooled", POOLED_CONDITION)] = pooled_container
+        if pooled_needed:
+            source_containers = [
+                base_containers_by_scope[("condition", cond)] for cond in args.conditions
+            ]
+            pooled_container = pool_containers(source_containers)
+            base_containers_by_scope[("pooled", POOLED_CONDITION)] = pooled_container
+            if not args.reports_only:
                 fit_requests.extend(
                     _collect_scope_fit_requests(
                         "pooled",
                         POOLED_CONDITION,
                         pooled_container,
                         args,
-                        reducers,
+                        reducer_dims,
                         output_root,
                         unit_containers_by_key,
                         data_availability,
                     )
                 )
 
+        if not args.reports_only:
             logger.info(
                 "Queued %d fit request(s) across %d loaded scope(s) for mode '%s'.",
                 len(fit_requests),
@@ -528,8 +550,10 @@ def execute_analysis_mode(
                 f"No fit runs found in {fit_runs_path}. "
                 "Dim reduction produced no successful fit inventory."
             )
+        if args.scope:
+            return {"analysis_mode": mode, "representation": representation, "scope": args.scope}
 
-        if not args.reports_only and base_containers_by_scope:
+        if base_containers_by_scope:
             import pandas as pd
 
             for (scope, condition), container in base_containers_by_scope.items():
@@ -584,34 +608,36 @@ def execute_analysis_mode(
         fatal_error = str(exc)
         raise
     finally:
-        run_summary_path.parent.mkdir(parents=True, exist_ok=True)
-        write_run_status(
-            output_root,
-            fit_runs_path,
-            eval_runs_path,
-            run_summary_path=run_summary_path,
-            fatal_error=fatal_error,
-            report_path=report_path,
-            run_metadata={
-                "dataset_name": args.dataset_name,
-                "run_label": args.run_label,
-                "input_mode": args.input_mode,
-                "analysis_mode": mode,
-                "representation": representation,
-                "run_variant": run_variant,
-                "run_config_hash": args.run_config_hash,
-                "output_dataset_name": output_dataset_name,
-                "conditions_requested": list(args.conditions),
-                "subjects_resolved": (
-                    len(base_containers_by_scope[("condition", args.conditions[0])].ids)
-                    if args.conditions
-                    and ("condition", args.conditions[0]) in base_containers_by_scope
-                    else 0
-                ),
-                "data_availability": data_availability,
-                "dataset_stats": dataset_stats,
-            },
-        )
+        # A --scope job leaves the run-level files to the reports job.
+        if not args.scope:
+            run_summary_path.parent.mkdir(parents=True, exist_ok=True)
+            write_run_status(
+                output_root,
+                fit_runs_path,
+                eval_runs_path,
+                run_summary_path=run_summary_path,
+                fatal_error=fatal_error,
+                report_path=report_path,
+                run_metadata={
+                    "dataset_name": args.dataset_name,
+                    "run_label": args.run_label,
+                    "input_mode": args.input_mode,
+                    "analysis_mode": mode,
+                    "representation": representation,
+                    "run_variant": run_variant,
+                    "run_config_hash": args.run_config_hash,
+                    "output_dataset_name": output_dataset_name,
+                    "conditions_requested": list(args.conditions),
+                    "subjects_resolved": (
+                        len(base_containers_by_scope[("condition", args.conditions[0])].ids)
+                        if args.conditions
+                        and ("condition", args.conditions[0]) in base_containers_by_scope
+                        else 0
+                    ),
+                    "data_availability": data_availability,
+                    "dataset_stats": dataset_stats,
+                },
+            )
     return {
         "analysis_mode": mode,
         "representation": representation,
@@ -627,9 +653,8 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
 
     Every field is sourced via ``config.get`` with a default — the run no longer
     depends on argparse defaults (mirrors ``classical_decoding.run``). Per-mode
-    fields (``analysis_mode``, ``representation``, ``n_components_sweep``) and
-    derived provenance (``run_config_hash``, ``run_variant``, ``run_label``) are
-    set later at runtime.
+    fields (``analysis_mode``, ``representation``) and derived provenance
+    (``run_config_hash``, ``run_variant``, ``run_label``) are set later at runtime.
     """
     return SimpleNamespace(
         # Identity / selection
@@ -670,11 +695,9 @@ def _run_args_from_config(config: dict[str, Any]) -> SimpleNamespace:
         group_filters=config.get("group_filters"),
         matched=bool(config.get("matched", False)),
         match_covariates=config.get("match_covariates"),
-        balance_target=config.get("balance_target"),
-        balance_strategy=config.get("balance_strategy", "undersample"),
         # Reduction plan (per-mode sweep overrides happen in execute_analysis_mode)
         analysis_modes=config.get("analysis_modes"),
-        n_components_sweep=list(config.get("n_components_sweep", []) or []),
+        scope=config.get("scope"),
         # Execution / reporting
         n_jobs=config.get("n_jobs", 1),
         reducer_params={
@@ -874,17 +897,13 @@ def run(config: dict[str, Any]) -> None:
     summaries: list[dict[str, Any]] = []
     task_failures: list[dict[str, str]] = []
     for mode, representation in mode_tasks:
-        spec = mode_specs[mode]
-        reducers_for_this_mode = spec["reducers"]
-        sweep_for_this_mode = [int(value) for value in spec["n_components"]]
         base_load_mode = "sensor" if args.input_mode == "raw" else "flat"
         try:
             summary = execute_analysis_mode(
                 args=args,
                 mode=mode,
                 representation=representation,
-                reducers=reducers_for_this_mode,
-                n_components_sweep=sweep_for_this_mode,
+                reducer_dims=mode_specs[mode],
                 meta_df=meta_df,
                 eval_specs=eval_specs,
                 resolved_n_jobs=resolved_n_jobs,
@@ -905,7 +924,7 @@ def run(config: dict[str, Any]) -> None:
     if not summaries:
         raise RuntimeError("All dimensionality-reduction tasks failed; see the errors above.")
 
-    if len(mode_tasks) > 1:
+    if len(mode_tasks) > 1 and not args.scope:
         rollup_report = generate_rollup_report(
             args=args,
             summaries=summaries,
@@ -914,11 +933,12 @@ def run(config: dict[str, Any]) -> None:
         summary_dir = summary_report_dir(reports_root, ReportStage.DIM_REDUCTION, create=True)
         summary_dir = summary_dir / slug(args.run_label or args.dataset_name)
         summary_dir.mkdir(parents=True, exist_ok=True)
-        rollup_filename = (
-            f"foundation_{slug(str(args.embedding_model_key))}_rollup_leaderboard.html"
+        prefix = (
+            f"foundation_{slug(str(args.embedding_model_key))}_"
             if args.input_mode == "foundation_embeddings"
-            else "rollup_leaderboard.html"
+            else ""
         )
+        rollup_filename = f"{prefix}{slug(args.representation)}_rollup_leaderboard.html"
         rollup_path = summary_dir / rollup_filename
         rollup_report.save(rollup_path)
         logger.info("Roll-up leaderboard saved to: %s", rollup_path)
@@ -1000,6 +1020,12 @@ def main() -> None:
         help="Regenerate reports from existing fit/eval inventories without refitting.",
     )
     parser.add_argument(
+        "--scope",
+        default=None,
+        help="Run one scope only: a condition (e.g. EO_baseline) or pooled_all; the fits "
+        "of each scope go to their own inventory, merged by a later --reports-only run.",
+    )
+    parser.add_argument(
         "--compare_only",
         action="store_true",
         help="Skip reduction and generate cross-model foundation comparison reports.",
@@ -1051,6 +1077,7 @@ def main() -> None:
         overwrite=args.overwrite,
         reports_only=args.reports_only,
         representation=args.representation,
+        scope=args.scope,
         compare_only=args.compare_only,
         descriptor_table_path=args.descriptor_table_path,
         embedding_derivative_root=args.embedding_derivative_root,

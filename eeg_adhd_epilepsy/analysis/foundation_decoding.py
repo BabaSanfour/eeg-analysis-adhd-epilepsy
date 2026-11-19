@@ -70,13 +70,17 @@ def _build_foundation_unit(
     capability: Any,
     config: dict[str, Any],
     derivative_root: Path,
+    seed: int | None = None,
 ) -> Any:
+    """One fit. ``seed`` (from the config's ``seeds``) seeds the training (head, dropout,
+    batch order) and names the output; the CV split keeps ``random_state``."""
     from coco_pipe.decoding import (
         CheckpointConfig,
         DeviceConfig,
         LoRAConfig,
         NeuralFineTuneConfig,
         TrainerConfig,
+        TuningConfig,
     )
 
     segment_duration = float(model_cfg["segment_duration"])
@@ -96,6 +100,7 @@ def _build_foundation_unit(
         "target": target_name,
         "model_key": model_key,
         "train_mode": train_mode,
+        "seed": seed,
         "primary": train_mode == "linear_probe",
         "segment_duration": segment_duration,
         "window_mismatch_policy": str(model_cfg["window_mismatch_policy"]),
@@ -109,6 +114,8 @@ def _build_foundation_unit(
     stem = (
         f"fit_{slug(condition)}_{slug(target_name)}_foundation_{slug(model_key)}_{slug(train_mode)}"
     )
+    if seed is not None:
+        stem += f"_seed{seed}"
     output_dir = derivative_root / "artifacts" / "fits" / stem
 
     if capability.status != "available":
@@ -127,23 +134,48 @@ def _build_foundation_unit(
         **model_cfg["trainer"][train_mode],
     }
     neural = NeuralFineTuneConfig(
-        model_key=model_key,
+        model_key=str(model_cfg["model_key"]),
         backend=model_cfg["backend"],
         train_mode=train_mode,
         trainer=TrainerConfig(**trainer),
         device=DeviceConfig(device=model_cfg.get("device", config["device"])),
-        checkpoints=CheckpointConfig(output_dir=output_dir / "checkpoints"),
+        # save_features: each fold's fine-tuned window vectors (train, valid and test rows),
+        # for the child-identification check
+        checkpoints=CheckpointConfig(
+            output_dir=output_dir / "checkpoints",
+            save_features=bool(config.get("save_features", False)),
+        ),
         lora=(LoRAConfig(**model_cfg["lora"]) if train_mode == "lora" else None),
         sfreq=sfreq,
         ch_names=channels,
         backend_kwargs=model_cfg["backend_kwargs"],
         class_weight=config["class_weight"],
     )
+    # `grid` (per model and mode, e.g. {full: {trainer__lr: [...]}}) is searched on inner
+    # folds grouped like the outer ones, scored with `tuning.scoring`.
+    grid = (model_cfg.get("grid") or {}).get(train_mode)
+    tuning_cfg = config.get("tuning") or {}
+    tuning = TuningConfig(enabled=False)
+    if grid:
+        tuning = TuningConfig(
+            enabled=True,
+            scoring=tuning_cfg.get("scoring", "balanced_accuracy"),
+            cv=CVConfig(
+                strategy="stratified_group_kfold",
+                n_splits=min(int(tuning_cfg.get("n_splits", 3)), n_splits),
+                shuffle=True,
+                random_state=int(config["random_state"]),
+                group_key="group_id",
+            ),
+        )
+    model_name = f"{model_key}_{train_mode}"
     experiment_config = ExperimentConfig(
         task="classification",
         tag=f"{target_name}_{model_key}_{train_mode}",
-        random_state=int(config["random_state"]),
-        models={f"{model_key}_{train_mode}": neural},
+        random_state=int(config["random_state"] if seed is None else seed),
+        models={model_name: neural},
+        grids={model_name: grid} if grid else None,
+        tuning=tuning,
         cv=CVConfig(
             strategy="stratified_group_kfold",
             n_splits=n_splits,
@@ -157,6 +189,8 @@ def _build_foundation_unit(
             n_permutations=int(config["n_permutations"]),
             store_null=bool(config["store_null_distribution"]),
             unit_column="inference_unit",
+            # the accuracy of always predicting the larger group
+            p0="majority" if config["chance_method"] == "binomial" else "auto",
         ),
         metrics=config["metrics"],
         use_scaler=False,
@@ -198,6 +232,9 @@ def _enumerate_foundation_scope(
     )
 
     model_key = str(model_cfg["model_key"])
+    # A model entry may run under its own name (e.g. a random-init copy) and modes.
+    name = str(model_cfg.get("name", model_key))
+    train_modes = model_cfg.get("train_modes", train_modes)
     segment_duration = float(model_cfg["segment_duration"])
     # The rate of the data: the estimator resamples it to the model's.
     sfreq = float(container.meta["sfreq"])
@@ -257,24 +294,26 @@ def _enumerate_foundation_scope(
                 backend=model_cfg["backend"],
                 backend_kwargs=model_cfg["backend_kwargs"],
             )
-            yield _build_foundation_unit(
-                condition=condition,
-                target_name=target_name,
-                model_key=model_key,
-                train_mode=train_mode,
-                model_cfg=model_cfg,
-                sfreq=sfreq,
-                channels=channels,
-                target_container=target_container,
-                y=y,
-                groups=groups,
-                sample_metadata=sample_metadata,
-                n_splits=n_splits,
-                provenance=provenance,
-                capability=capability,
-                config=config,
-                derivative_root=derivative_root,
-            )
+            for seed in config.get("seeds") or [None]:
+                yield _build_foundation_unit(
+                    condition=condition,
+                    target_name=target_name,
+                    model_key=name,
+                    train_mode=train_mode,
+                    model_cfg=model_cfg,
+                    sfreq=sfreq,
+                    channels=channels,
+                    target_container=target_container,
+                    y=y,
+                    groups=groups,
+                    sample_metadata=sample_metadata,
+                    n_splits=n_splits,
+                    provenance=provenance,
+                    capability=capability,
+                    config=config,
+                    derivative_root=derivative_root,
+                    seed=seed,
+                )
 
 
 def _foundation_scope_units(
@@ -333,6 +372,18 @@ def _load_capability_matrix(derivative_root: Path) -> list[dict[str, Any]]:
         return []
 
 
+def _selected_evals(config: dict[str, Any]) -> list[dict[str, Any]]:
+    """The cohort's evals, or only those named in the analysis config's ``targets``."""
+    evals = require_config(config, "evals", expected_type=list)
+    targets = config.get("targets")
+    if not targets:
+        return evals
+    missing = set(targets) - {spec.get("name") for spec in evals}
+    if missing:
+        raise ValueError(f"targets {sorted(missing)} are not evals of the cohort.")
+    return [spec for spec in evals if spec.get("name") in targets]
+
+
 def _iter_foundation_unit_batches(
     config: dict[str, Any],
     metadata,
@@ -352,8 +403,10 @@ def _iter_foundation_unit_batches(
     conditions = require_config(config, "conditions", expected_type=list, cast_str=True)
     model_configs = require_config(config, "models", expected_type=list)
     train_modes = config["train_modes"]
-    evals = require_config(config, "evals", expected_type=list)
-    run_pooled = bool(config.get("run_pooled", False))
+    evals = _selected_evals(config)
+    # pooled_only: only the EO+EC fit (the single-condition fits of the same config ran)
+    pooled_only = bool(config.get("pooled_only", False))
+    run_pooled = pooled_only or bool(config.get("run_pooled", False))
 
     for model_cfg in model_configs:
         model_key = str(model_cfg["model_key"])
@@ -374,18 +427,6 @@ def _iter_foundation_unit_batches(
         pool_loaders: list[Any] = []
         for condition in conditions:
             container = build_dataset(loader_args, metadata, condition, target_col=None)
-            units = _foundation_scope_units(
-                condition,
-                model_cfg,
-                container,
-                spec,
-                provenance,
-                evals=evals,
-                train_modes=train_modes,
-                config=config,
-                derivative_root=derivative_root,
-                failures=failures,
-            )
             if run_pooled and len(conditions) > 1:
                 pool_specs.append(container_pool_spec(container))
                 pool_loaders.append(
@@ -393,8 +434,20 @@ def _iter_foundation_unit_batches(
                         args, metadata, cond, target_col=None
                     )
                 )
-            yield units
-            del container, units
+            if not pooled_only:
+                yield _foundation_scope_units(
+                    condition,
+                    model_cfg,
+                    container,
+                    spec,
+                    provenance,
+                    evals=evals,
+                    train_modes=train_modes,
+                    config=config,
+                    derivative_root=derivative_root,
+                    failures=failures,
+                )
+            del container
             gc.collect()
         if len(pool_specs) > 1:
             pooled = pool_containers_streaming(pool_specs, pool_loaders)
@@ -546,7 +599,19 @@ def main() -> None:
     parser.add_argument(
         "--model_key",
         default=None,
-        help="Run one model from the analysis config.",
+        help="Run one model of the analysis config, by its name (else its model_key).",
+    )
+    parser.add_argument(
+        "--targets",
+        nargs="+",
+        default=None,
+        help="Evals to decode, in place of the analysis config's targets (e.g. the clinical "
+        "question of a cohort whose eval has another name).",
+    )
+    parser.add_argument(
+        "--pooled_only",
+        action="store_true",
+        help="Fit EO and EC pooled only (the single-condition fits ran in a run of their own).",
     )
     parser.add_argument(
         "--overwrite",
@@ -589,9 +654,15 @@ def main() -> None:
         compare_only=args.compare_only,
         write_shared_comparison_report=args.write_shared_comparison_report,
     )
+    if args.pooled_only:
+        config["pooled_only"] = True
+    if args.targets:
+        config["targets"] = list(args.targets)
     if args.model_key:
         config["models"] = [
-            model for model in config["models"] if str(model["model_key"]) == args.model_key
+            model
+            for model in config["models"]
+            if str(model.get("name", model["model_key"])) == args.model_key
         ]
         if not config["models"]:
             parser.error(f"model_key '{args.model_key}' is not declared in the analysis config.")

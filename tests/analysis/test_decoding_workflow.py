@@ -373,6 +373,24 @@ def test_foundation_plan_builds_transform_and_reduction_axes(tmp_path):
     assert leace.experiment_config.erasure.enabled
     assert leace.experiment_config.erasure.condition_column == "condition"
 
+    # a list of sizes: one mode each, sizes as wide as the unit skipped, all dimensions dropped
+    config["reducer"] = {"enabled": True, "n_components": [2, 8, 0.9], "keep_all_dimensions": False}
+    config["transforms"] = ["none"]
+    units = decoding._classical_scope_units(
+        build_classical_plan(config),
+        "EO_baseline",
+        container,
+        config=config,
+        derivative_root=tmp_path,
+        failures=failures,
+    )
+    assert {
+        u.context["reduction_mode"]: u.experiment_config.reducer.n_components for u in units
+    } == {
+        "pca_2": 2,
+        "pca_0.9": 0.9,
+    }
+
 
 def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
     groups, labels, coords = _observation_coords()
@@ -404,6 +422,11 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
         input_mode="descriptors",
         analysis_modes=["flat", "sensor", "descriptor_sensor"],
     )
+    config["models"]["logreg_l2"] = {
+        "estimator": "LogisticRegression",
+        "analysis_modes": ["flat", "sensor", "descriptor_sensor"],
+        "params": {"max_iter": 200},
+    }
     config["feature_selection"] = [
         {"name": "baseline", "method": "none"},
         {
@@ -412,6 +435,7 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
             "direction": "forward",
             "tol": 0.0,
             "analysis_modes": ["sensor"],
+            "models": ["logreg"],
         },
         {
             "name": "sfsepoch",
@@ -422,9 +446,22 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
         },
     ]
     config["representation"] = "recording"
+    config["chance_method"] = "permutation"
+    config["permutation_modes"] = ["flat"]
     output = decoding.run(config)
     sweep = pd.read_csv(output / "sweep_results.csv")
     assert {"flat", "sensor", "descriptor_sensor"}.issubset(set(sweep["analysis_mode"]))
+    fits_root = output / "artifacts" / "fits"
+
+    def null_method(unit):
+        path = fits_root / f"fit_eo_baseline_adhd_{unit}" / "result.joblib"
+        assessment = ExperimentResult.load(path).get_statistical_assessment()
+        return set(pd.DataFrame(assessment)["NullMethod"])
+
+    # only flat units without feature selection are permuted
+    assert "binomial" not in null_method("flat_all_none_all_dimensions_baseline")
+    assert null_method("sensor_fz_none_all_dimensions_baseline") == {"binomial"}
+    assert null_method("sensor_fz_none_all_dimensions_sfs") == {"binomial"}
     sfs_result = ExperimentResult.load(
         output
         / "artifacts"
@@ -433,7 +470,12 @@ def test_grouped_descriptor_sweeps(tmp_path, monkeypatch):
         / "result.joblib"
     )
     assert not sfs_result.get_selected_features().empty
-    fits_root = output / "artifacts" / "fits"
+    # the SFS entry runs with the model it names only
+    assert set(sfs_result.raw) == {"logreg"}
+    baseline_result = ExperimentResult.load(
+        fits_root / "fit_eo_baseline_adhd_sensor_fz_none_all_dimensions_baseline" / "result.joblib"
+    )
+    assert set(baseline_result.raw) == {"logreg", "logreg_l2"}
     assert list(fits_root.glob("*descriptor_sensor*baseline*"))
     assert not list(fits_root.glob("*descriptor_sensor*sfs*"))
     # a variant limited to another representation is not run
@@ -459,6 +501,143 @@ def test_classical_plan_requires_explicit_feature_selection(tmp_path):
     config.pop("feature_selection")
     with pytest.raises(ValueError, match="feature_selection"):
         build_classical_plan(config)
+
+
+def test_foundation_targets_keep_only_the_named_evals():
+    from eeg_adhd_epilepsy.analysis import foundation_decoding as fdn
+
+    evals = [{"name": "adhd", "target_col": "a"}, {"name": "sex", "target_col": "s"}]
+    assert fdn._selected_evals({"evals": evals}) == evals
+    assert fdn._selected_evals({"evals": evals, "targets": ["sex"]}) == [evals[1]]
+    with pytest.raises(ValueError, match="age"):
+        fdn._selected_evals({"evals": evals, "targets": ["age"]})
+
+
+def test_foundation_model_entry_runs_under_its_name_and_modes(tmp_path, monkeypatch):
+    """A model entry runs under its name and modes; seeds and a grid set each fit."""
+    import coco_pipe.decoding.foundation_models as fm
+
+    from eeg_adhd_epilepsy.analysis import foundation_decoding as fdn
+
+    container = SimpleNamespace(meta={"sfreq": 200.0}, coords={"channel": ["Fz", "Cz"]})
+    monkeypatch.setattr(fm, "normalize_inclusive_endpoint", lambda c, **_: (c, None))
+    monkeypatch.setattr(
+        fm,
+        "check_capability",
+        lambda key, **kwargs: SimpleNamespace(
+            status="unavailable", reason=f"{key} {kwargs['backend_kwargs']}", to_dict=dict
+        ),
+    )
+    scope = (None, pd.Series([0, 1]), np.array([0, 1]), None, 2)
+    monkeypatch.setattr(fdn, "prepare_decoding_scope", lambda *args, **kwargs: scope)
+    model_cfg = {
+        "model_key": "reve",
+        "name": "reve_scratch",
+        "train_modes": ["full"],
+        "segment_duration": 10.0,
+        "window_mismatch_policy": "raise",
+        "backend": "auto",
+        "backend_kwargs": {"pretrained": False, "seed": 0},
+    }
+    records = list(
+        fdn._enumerate_foundation_scope(
+            condition="EO_baseline",
+            model_cfg=model_cfg,
+            container=container,
+            spec=None,
+            provenance={},
+            evals=[{"name": "adhd", "target_col": "a", "group_col": "g"}],
+            train_modes=["linear_probe", "full", "lora"],
+            config={
+                "session_col": "session",
+                "subject_col": "subject",
+                "cv": {"n_splits": 2},
+                "random_state": 0,
+                "on_unsupported": "skip",
+            },
+            derivative_root=tmp_path,
+        )
+    )
+    assert [(r["model_key"], r["train_mode"]) for r in records] == [("reve_scratch", "full")]
+    assert records[0]["reason"] == "reve {'pretrained': False, 'seed': 0}"
+    assert "foundation_reve_scratch_full" in records[0]["output_dir"]
+
+    # seeds: one fit each on the same split; a mode's grid is searched on inner folds
+    monkeypatch.setattr(
+        fm,
+        "check_capability",
+        lambda key, **kwargs: SimpleNamespace(status="available", to_dict=dict),
+    )
+    container = SimpleNamespace(X=np.zeros((2, 2, 2000)), **vars(container))
+    metadata = pd.DataFrame({"sample_id": ["a", "b"]})
+    scope = (container, pd.Series([0, 1]), np.array([0, 1]), metadata, 2)
+    model_cfg |= {"grid": {"full": {"trainer__lr": [1e-4, 1e-3]}}, "trainer": {"full": {}}}
+    units = list(
+        fdn._enumerate_foundation_scope(
+            condition="EO_baseline",
+            model_cfg=model_cfg,
+            container=container,
+            spec=None,
+            provenance={},
+            evals=[{"name": "adhd", "target_col": "a", "group_col": "g"}],
+            train_modes=["full"],
+            config={
+                "session_col": "session",
+                "subject_col": "subject",
+                "cv": {"n_splits": 2},
+                "random_state": 0,
+                "seeds": [1, 2],
+                "training_defaults": {"full": {}},
+                "device": "cpu",
+                "class_weight": "balanced",
+                "chance_method": "binomial",
+                "n_permutations": 1,
+                "store_null_distribution": False,
+                "metrics": ["balanced_accuracy"],
+                "verbose": False,
+                "overwrite": False,
+                "on_unsupported": "skip",
+            },
+            derivative_root=tmp_path,
+        )
+    )
+    configs = [unit.experiment_config for unit in units]
+    assert [c.random_state for c in configs] == [1, 2]
+    assert {c.cv.random_state for c in configs} == {0}
+    assert configs[0].grids == {"reve_scratch_full": {"trainer__lr": [1e-4, 1e-3]}}
+    assert configs[0].tuning.enabled and configs[0].tuning.cv.group_key == "group_id"
+    assert str(units[1].output_dir).endswith("foundation_reve_scratch_full_seed2")
+
+
+def test_foundation_pooled_only_runs_only_the_pooled_scope(tmp_path, monkeypatch):
+    """pooled_only loads every condition but builds units for the pooled scope alone."""
+    from eeg_adhd_epilepsy.analysis import foundation_decoding as fdn
+
+    monkeypatch.setattr(fdn, "build_loader_args", lambda *a, **k: SimpleNamespace())
+    monkeypatch.setattr(fdn, "get_foundation_model_spec", lambda key: None)
+    monkeypatch.setattr(fdn, "foundation_provenance", lambda *a, **k: {})
+    monkeypatch.setattr(fdn, "build_dataset", lambda args, meta, cond, **k: cond)
+    monkeypatch.setattr(fdn, "container_pool_spec", lambda container: container)
+    monkeypatch.setattr(fdn, "pool_containers_streaming", lambda specs, loaders: "+".join(specs))
+    monkeypatch.setattr(
+        fdn, "_foundation_scope_units", lambda cond, model, data, *a, **k: [(cond, data)]
+    )
+    config = {
+        "conditions": ["EO", "EC"],
+        "models": [
+            {"model_key": "reve", "segment_duration": 10, "overlap": 0, "use_derivatives": False}
+        ],
+        "train_modes": ["full"],
+        "evals": [{"name": "adhd"}],
+    }
+
+    def scopes(cfg):
+        return list(fdn._iter_foundation_unit_batches(cfg, None, "h", tmp_path, []))
+
+    eo, ec, pooled = [("EO", "EO")], [("EC", "EC")], [("pooled", "EO+EC")]
+    assert scopes(config) == [eo, ec]
+    assert scopes({**config, "run_pooled": True}) == [eo, ec, pooled]
+    assert scopes({**config, "pooled_only": True}) == [pooled]
 
 
 def test_foundation_run_wires_sweep_and_capability_without_gpu(tmp_path, monkeypatch):

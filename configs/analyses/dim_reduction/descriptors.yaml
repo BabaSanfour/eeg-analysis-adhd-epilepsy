@@ -41,23 +41,14 @@ scaling:
   method: robust
   clip: 8.0
 
-# Tiered analysis plan, organized around the analysis mode (the unit of work:
-# each mode is loaded once, then swept over reducers × n_components). `feature`
-# (redundant with feature_within_family) and `descriptor_sensor` (too granular
-# once only mean/variance/IQR remain) are intentionally omitted. Each mode fully
-# declares its own run — the `reducers` to fit and the `n_components` to sweep
-# (there is no global default). PCA is the cheap linear baseline that yields
-# component loadings and is stable at every granularity; UMAP adds a non-linear
-# manifold and is feasible at epoch level because it uses approximate-NN graphs
-# (~O(n_samples·k), not dense) and the co-ranking fit metrics are now subsampled
-# (DEFAULT_MAX_CORANKING_SAMPLES). PHATE stays parked — its dense O(n_samples^2)
-# diffusion operator is the OOM driver — and can be re-added per mode later.
+# Each analysis mode maps its reducers to the n_components fitted: PCA (linear,
+# fitted once at its largest n and sliced) and UMAP (non-linear). More counts can be
+# added later: each fit is identified by its own n, so existing fits are reused.
 analysis_modes:
-  flat:                  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100]}
-  family:                {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100]}
-  subfamily:             {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50, 75, 100]}
-  sensor:                {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20, 25, 30, 40, 50]}
-  sensor_within_family:  {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
-  sensor_within_subfamily: {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10]}
-  feature_within_family: {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10]}
-  descriptor:            {reducers: [PCA, UMAP], n_components: [2, 3, 5, 10, 15, 20]}
+  flat:                    {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
+  family:                  {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
+  subfamily:               {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
+  sensor:                  {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
+  sensor_within_family:    {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
+  feature_within_family:   {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}
+  descriptor:              {PCA: [2, 3, 5, 10, 20, 50], UMAP: [2, 3, 5, 10]}

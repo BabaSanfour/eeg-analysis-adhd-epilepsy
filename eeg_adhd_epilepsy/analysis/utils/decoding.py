@@ -276,6 +276,11 @@ def build_classical_plan(config: Mapping[str, Any]) -> ClassicalPlan:
         if method == "sfs" and spec.get("n_features") is None and spec.get("tol") is None:
             name = spec.get("name", "sfs")
             raise ValueError(f"feature_selection entry '{name}' must set either n_features or tol.")
+        if unknown := sorted(set(spec.get("models") or []) - set(model_specs)):
+            raise ValueError(
+                f"feature_selection entry '{spec.get('name', method)}' names unknown "
+                f"models {unknown}."
+            )
 
     metrics = require_config(dict(config), "metrics", expected_type=list)
     transforms = [str(value) for value in config.get("transforms", ["none"])]
@@ -363,9 +368,8 @@ def build_loader_args(
         filter_val=filter_val,
         group_filters=config.get("group_filters"),
         matched=bool(config.get("matched", False)),
+        n_jobs=config.get("n_jobs", 1),
         match_covariates=config.get("match_covariates"),
-        balance_target=None,
-        balance_strategy="undersample",
         representation=config.get("representation", "subject"),
     )
 

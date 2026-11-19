@@ -1,0 +1,39 @@
+# Derived from the pooled family config of the same path (medication contrast).
+dataset_name: medunmed_01_all_subjects_age_13-18
+subject_col: subject
+conditions:
+- EO_baseline
+- EC_baseline
+run_pooled: true
+match_covariates:
+- epilepsy
+- autism
+group_filters:
+- adhd:
+  - 1
+  psychostimulant:
+  - 0
+- adhd:
+  - 1
+  psychostimulant:
+  - 1
+filter_col:
+- age_group
+filter_val:
+- - 13-18
+evals:
+- name: med_vs_unmed_adhd
+  target_col: psychostimulant
+  group_col: patient_group_id
+  positive_class: '1'
+  label_map:
+    '0': '0'
+    '1': '1'
+- name: sex_separation
+  target_col: sex
+  group_col: patient_group_id
+  positive_class: M
+- name: condition_separation
+  target_col: condition
+  group_col: patient_group_id
+  positive_class: EC_baseline

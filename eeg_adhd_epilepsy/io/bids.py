@@ -111,8 +111,8 @@ def get_results_root(bids_root: Path, stage: ResultStage) -> Path:
 # Authors of the raw dataset and of the derivatives this repo writes.
 DATASET_AUTHORS = ["Hamza Abdelhedi"]
 # What the preproc tree holds that BIDS does not define: FIF is not a BIDS EEG
-# format and saved epochs have no standard yet.
-PREPROC_BIDSIGNORE = ("*_eeg.fif", "*_epo.fif", "*_epo.json", "*_provenance.json")
+# format and saved epochs have no standard yet (``*_epo.joblib``: one condition, all recordings).
+PREPROC_BIDSIGNORE = ("*_eeg.fif", "*_epo.fif", "*_epo.json", "*_epo.joblib", "*_provenance.json")
 # For a tree where BIDS defines nothing but the dataset description.
 DESCRIPTION_ONLY_BIDSIGNORE = ("/*", "!/dataset_description.json")
 

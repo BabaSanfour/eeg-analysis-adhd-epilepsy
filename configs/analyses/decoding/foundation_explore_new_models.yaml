@@ -1,0 +1,158 @@
+# Stage 17 on the diagnosis with the models of coco-pipe #66 (2026-11-17), settings of
+# foundation_explore_v2.yaml (20 % validation grouped by child, LP-FT, a learning-rate grid on
+# 3 inner folds): ST-EEGFormer-largeV2 (ViT-MAE, further pretrained on HBN children) in the
+# three modes, and four small supervised networks from random weights (full training only),
+# each from three weight seeds, as the baseline a foundation model has to beat.
+
+# --- Foundation model sweep -------------------------------------------------
+x-scratch: &scratch
+  train_modes: [full]
+  segment_duration: 10.0
+  overlap: 0.0
+  use_derivatives: true
+  window_mismatch_policy: raise
+  backend: auto
+  lora: {}
+  trainer:
+    full: {lr: 0.001, max_epochs: 40, early_stopping_patience: 8, batch_size: 64,
+           lr_warmup_epochs: 0, probe_epochs: 0}
+  grid:
+    full: {trainer__lr: [0.0003, 0.001, 0.003]}
+
+models:
+  - model_key: steegformer_largev2
+    segment_duration: 10.0
+    overlap: 0.0
+    use_derivatives: true
+    window_mismatch_policy: raise
+    backend: auto
+    backend_kwargs: {}
+    lora: {}
+    trainer:
+      linear_probe: {}
+      full: {}
+      lora: {}
+    grid:
+      linear_probe: {trainer__lr: [0.0003, 0.001, 0.003]}
+      full: {trainer__lr: [0.000003, 0.00001, 0.00003]}
+      lora: {trainer__lr: [0.00003, 0.0001, 0.0003]}
+  - <<: *scratch
+    model_key: ctnet
+    name: ctnet_seed0
+    backend_kwargs: {pretrained: false, seed: 0}
+  - <<: *scratch
+    model_key: ctnet
+    name: ctnet_seed1
+    backend_kwargs: {pretrained: false, seed: 1}
+  - <<: *scratch
+    model_key: ctnet
+    name: ctnet_seed2
+    backend_kwargs: {pretrained: false, seed: 2}
+  - <<: *scratch
+    model_key: deep4net
+    name: deep4net_seed0
+    backend_kwargs: {pretrained: false, seed: 0}
+  - <<: *scratch
+    model_key: deep4net
+    name: deep4net_seed1
+    backend_kwargs: {pretrained: false, seed: 1}
+  - <<: *scratch
+    model_key: deep4net
+    name: deep4net_seed2
+    backend_kwargs: {pretrained: false, seed: 2}
+  - <<: *scratch
+    model_key: shallowfbcspnet
+    name: shallowfbcspnet_seed0
+    backend_kwargs: {pretrained: false, seed: 0}
+  - <<: *scratch
+    model_key: shallowfbcspnet
+    name: shallowfbcspnet_seed1
+    backend_kwargs: {pretrained: false, seed: 1}
+  - <<: *scratch
+    model_key: shallowfbcspnet
+    name: shallowfbcspnet_seed2
+    backend_kwargs: {pretrained: false, seed: 2}
+  - <<: *scratch
+    model_key: eegnet
+    name: eegnet_seed0
+    backend_kwargs: {pretrained: false, seed: 0}
+  - <<: *scratch
+    model_key: eegnet
+    name: eegnet_seed1
+    backend_kwargs: {pretrained: false, seed: 1}
+  - <<: *scratch
+    model_key: eegnet
+    name: eegnet_seed2
+    backend_kwargs: {pretrained: false, seed: 2}
+
+# --- Training regime --------------------------------------------------------
+train_modes: [linear_probe, full, lora]
+training_defaults:
+  linear_probe:
+    max_epochs: 30
+    lr: 0.001
+    weight_decay: 0.01
+    batch_size: 16
+    early_stopping_patience: 8
+    validation_fraction: 0.2
+  full:
+    max_epochs: 15
+    lr: 0.00001
+    weight_decay: 0.01
+    batch_size: 8
+    early_stopping_patience: 5
+    validation_fraction: 0.2
+    lr_warmup_epochs: 1
+    probe_epochs: 2
+  lora:
+    max_epochs: 20
+    lr: 0.0001
+    weight_decay: 0.01
+    batch_size: 8
+    early_stopping_patience: 6
+    validation_fraction: 0.2
+    lr_warmup_epochs: 1
+    probe_epochs: 2
+
+tuning:
+  scoring: balanced_accuracy
+  n_splits: 3
+
+# --- Evaluation -------------------------------------------------------------
+targets: [med_adhd_vs_ctrl]
+cv:
+  n_splits: 5
+
+chance_method: binomial
+n_permutations: 1  # unused with binomial
+store_null_distribution: false
+
+metrics:
+  - accuracy
+  - balanced_accuracy
+  - f1
+  - precision
+  - recall
+  - roc_auc
+
+# --- Hardware / runtime -----------------------------------------------------
+device: auto
+on_unsupported: skip
+# The models expect microvolts; the loader default is volts.
+units: uV
+
+# --- Column identity --------------------------------------------------------
+session_col: session
+subject_col: subject
+
+# --- Run controls -----------------------------------------------------------
+random_state: 42
+verbose: true
+overwrite: false
+n_jobs: 1
+class_weight: balanced
+run_pooled: false
+
+# --- Reporting --------------------------------------------------------------
+detailed_unit_reports: true
+report_asset_urls: inline

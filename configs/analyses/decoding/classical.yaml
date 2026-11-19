@@ -29,30 +29,32 @@ analysis_modes:
   - flat
   - sensor
   - subfamily
-  - sensor_within_subfamily
   - descriptor
-  - descriptor_sensor
 
 feature_selection:
   - name: baseline
     method: none
+  # SFS picks 10 features, around the logistic regression only (with a 300-tree forest
+  # inside, the search does not finish); with no tuning grid around it.
   - name: sfs
     method: sfs
     direction: forward
     scoring: balanced_accuracy
-    tol: 0.001
+    n_features: 10
+    models:
+      - logreg_enet
     analysis_modes:
       - flat
       - sensor
       - subfamily
-      - sensor_within_subfamily
     # SFS refits every candidate feature on every fold; at epoch level one unit
     # took 5.7 days (fix 6), so it runs on recording-level data only.
     representations:
       - recording
 
 tuning:
-  enabled: true
+  # off for now: a grid around the SFS search multiplies its cost by 36
+  enabled: false
   scoring: balanced_accuracy
   n_splits: 3
 
@@ -73,18 +75,6 @@ models:
     grid:
       C: [0.01, 0.1, 1.0, 10.0]
       l1_ratio: [0.2, 0.5, 0.8]
-  logreg_enet_fixed:
-    estimator: LogisticRegression
-    analysis_modes:
-      - sensor_within_subfamily
-      - descriptor_sensor
-    params:
-      penalty: elasticnet
-      solver: saga
-      C: 1.0
-      l1_ratio: 0.5
-      class_weight: balanced
-      max_iter: 5000
   random_forest:
     estimator: RandomForestClassifier
     analysis_modes:
@@ -96,32 +86,19 @@ models:
       n_estimators: 300
       class_weight: balanced
       n_jobs: 1
-  random_forest_medium:
-    estimator: RandomForestClassifier
-    analysis_modes:
-      - sensor_within_subfamily
-    params:
-      n_estimators: 150
-      max_depth: 5
-      class_weight: balanced
-      n_jobs: 1
-  random_forest_light:
-    estimator: RandomForestClassifier
-    analysis_modes:
-      - descriptor_sensor
-    params:
-      n_estimators: 100
-      max_depth: 3
-      class_weight: balanced
-      n_jobs: 1
 
 cv:
   n_splits: 5
 
 # Labels are shuffled within groups and the whole pipeline is refit
 # `n_permutations` times, so the smallest p-value is 1 / (n_permutations + 1).
+# Only the units of `permutation_modes` without feature selection are permuted; the
+# others get the binomial test of accuracy over recordings, against the majority
+# class's share (exploratory units, ranked by their cross-validated score).
 chance_method: permutation
 n_permutations: 100
+permutation_modes:
+  - flat
 store_null_distribution: false
 
 metrics:

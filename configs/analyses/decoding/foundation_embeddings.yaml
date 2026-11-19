@@ -38,7 +38,7 @@ models:
     estimator: LogisticRegression
     params:
       penalty: l2
-      solver: liblinear
+      solver: lbfgs  # liblinear fits two classes only; age has three
       class_weight: balanced
       max_iter: 2000
     grid:

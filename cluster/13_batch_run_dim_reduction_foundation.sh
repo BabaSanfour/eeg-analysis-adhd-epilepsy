@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=128G
 # array = cohorts x representation spaces x granularities; 72 x 9 x 3.
-#SBATCH --array=1-1890
+#SBATCH --array=1-3780
 #SBATCH --mail-type=FAIL,END
 #SBATCH --mail-user=hamza.abdelhedi@umontreal.ca
 
@@ -24,11 +24,9 @@ read -r -a BASE_MODELS <<< "${BASE_MODELS:-cbramod labram reve luna}"
 read -r -a ALIGNMENT_TRANSFORMS <<< "${ALIGNMENT_TRANSFORMS:-none leace}"
 read -r -a RAW_ONLY_MODELS <<< "${RAW_ONLY_MODELS:-reve_pool-attention}"
 
-# Embedding representations (canonical granularity ladder) to reduce, each as a
-# SEPARATE run so they can be compared: epoch (1 row/epoch — most points for the
-# manifold reducers), recording (1 row/recording), subject (1 row/subject).
-# Override to narrow, e.g. REPRESENTATIONS="recording subject".
-REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording subject})
+# Representations reduced, each as its own run: epoch (1 row per epoch) and recording
+# (1 row per recording, so per child).
+REPRESENTATIONS=(${REPRESENTATIONS:-epoch recording})
 
 require_dir "$BIDS_ROOT"
 require_file "$METADATA_PATH"
@@ -61,12 +59,12 @@ for raw_model in "${RAW_ONLY_MODELS[@]}"; do
     SPACE_KEYS+=("$raw_model")
 done
 
-# Map this array task to one (cohort, representation space, granularity) triple.
+# One array task = one (scope, cohort, representation space, granularity).
 mapfile -t CONFIGS < <(find "$CONFIGS_DIR" -name "*.yaml" | sort)
 CONFIG_COUNT=${#CONFIGS[@]}
 SPACE_COUNT=${#SPACE_KEYS[@]}
 REP_COUNT=${#REPRESENTATIONS[@]}
-TOTAL_TASKS=$((CONFIG_COUNT * SPACE_COUNT * REP_COUNT))
+TOTAL_TASKS=$((${#SCOPES[@]} * CONFIG_COUNT * SPACE_COUNT * REP_COUNT))
 TASK_ID=${SLURM_ARRAY_TASK_ID:-1}
 guard_array_size "$TOTAL_TASKS"
 
@@ -75,8 +73,11 @@ if (( TASK_ID < 1 || TASK_ID > TOTAL_TASKS )); then
     exit 0
 fi
 
-# Innermost axis is cohort, then representation space, then granularity.
+# Innermost axis is scope, then cohort, then representation space, then granularity.
 task_index=$((TASK_ID - 1))
+scope="${SCOPES[$((task_index % ${#SCOPES[@]}))]}"
+dra_scope_args "$scope"
+task_index=$((task_index / ${#SCOPES[@]}))
 config_index=$((task_index % CONFIG_COUNT))
 rest=$((task_index / CONFIG_COUNT))
 space_index=$((rest % SPACE_COUNT))
@@ -87,13 +88,10 @@ space_key="${SPACE_KEYS[$space_index]}"
 config="${CONFIGS[$config_index]}"
 representation="${REPRESENTATIONS[$rep_index]}"
 
-# Epoch runs use all workers like every other representation: the co-ranking
-# subsample cap in coco_pipe (DEFAULT_MAX_CORANKING_SAMPLES) bounds the dominant
-# per-fit allocation, so the old epoch-specific worker cap is no longer needed.
-
 echo "================================================================================"
 echo "FOUNDATION DIM REDUCTION ARRAY TASK $TASK_ID / $TOTAL_TASKS"
 echo "Config:        $config"
+echo "Scope:         $scope"
 echo "Base model:    $model"
 echo "Transform:     $transform"
 echo "Saved key:     $space_key"
@@ -113,7 +111,7 @@ cmd=(
     --embedding_derivative_root "$EMBEDDING_PROJECT_ROOT"
     --embedding_model_key "$model"
     --alignment_transform "$transform"
-    --representation "$representation"
+    --representation "$representation" "${SCOPE_ARGS[@]}"
     --n_jobs "$THREADS"
 )
 
